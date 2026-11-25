@@ -28,7 +28,7 @@ use super::super::error::{
 use super::super::fee_estimator::{FeeEstimationContext, FeeEstimator};
 use super::super::fee_snapshot::FeeSnapshotSource;
 use super::super::network::Network;
-use super::super::output_selector::{OutputSelector, SelectedOutputs};
+use super::super::output_selector::{OutputSelector, SelectedInputs, SelectedOutputs};
 use super::super::pending::{
     InFlightSubmit, PendingTx, ReservationId, ReservationTTLConfig, SubmitReceipt, TxHash,
     TxRecipient, TxRecipientSummary, TxRequest,
@@ -443,6 +443,11 @@ where
                         selector_subset_violation(),
                         BuildErrorKind::SelectorContractViolation,
                     ),
+                    // Shortest cover past one transaction: the signer's fault, unreserved.
+                    OutputSelectorError::TooManyInputs { count } => (
+                        SendError::Sign(shekyl_tx_builder::SignFault::TooManyInputs { count }),
+                        BuildErrorKind::TransactionTooLarge,
+                    ),
                     OutputSelectorError::InsufficientFunds { .. }
                     | OutputSelectorError::NoEligibleOutputs => {
                         let mapped = resolve_insufficiency(needed_raw);
@@ -468,6 +473,7 @@ where
 
         let ledger_snapshot = self.ledger.with_ledger_block(LedgerSnapshot::from_ledger);
         let payment_count = request.recipients.len();
+        let group_payees = request.group_payee_sizes();
         let rate = fee_snapshot.rate(request.priority);
 
         let estimate = |input_count: usize, output_count: usize| {
@@ -481,6 +487,7 @@ where
                         output_count: OutputCount::clamped(output_count),
                         fee_snapshot,
                         tree_depth,
+                        group_payees: &group_payees,
                     },
                 )
                 .map_err(|err| map_fee_estimator_error(&err.into()))
@@ -542,6 +549,7 @@ where
             InputCount::clamped(selected.indices.len()),
             OutputCount::clamped(payment_count),
             tree_depth,
+            &group_payees,
         )
         .ok_or(SendError::BuildInvariant {
             reason: "the fee does not fit in u64",
@@ -650,7 +658,7 @@ where
     /// (indistinguishable from any post-return spend).
     fn revalidate_selected_inputs(
         ledger: &LedgerBlock,
-        indices: &[usize],
+        indices: &SelectedInputs,
         assemble_inputs: &[AssembleInput],
     ) -> Result<(), SendError> {
         // Parallel arrays in transaction-input order, built in lockstep by
@@ -940,6 +948,7 @@ where
             // a fee the current inputs cannot cover escalates to reselection.
             let ledger_snapshot = self.ledger.with_ledger_block(LedgerSnapshot::from_ledger);
             let payment_count = request.recipients.len();
+            let group_payees = request.group_payee_sizes();
             let rate = fee_snapshot.rate(request.priority);
             let fee = self
                 .fee_estimator
@@ -952,6 +961,7 @@ where
                         output_count: OutputCount::clamped(payment_count.saturating_add(1)),
                         fee_snapshot,
                         tree_depth: depth,
+                        group_payees: &group_payees,
                     },
                 )
                 .map_err(|err| ReanchorError::Failed(map_fee_estimator_error(&err.into())))?;
@@ -1001,6 +1011,7 @@ where
                 InputCount::clamped(selected_indices.len()),
                 OutputCount::clamped(payment_count),
                 depth,
+                &group_payees,
             )
             .ok_or(ReanchorError::Failed(SendError::BuildInvariant {
                 reason: "the fee does not fit in u64",
@@ -1287,16 +1298,7 @@ where
                 tx_bytes: held.tx_bytes.clone(),
                 selected,
                 retained: shekyl_engine_state::TxSecretKey::new(held.tx_key.store()),
-                recipients: held
-                    .request
-                    .recipients
-                    .iter()
-                    .map(|r| shekyl_engine_state::SendRecipient {
-                        destination: r.destination.recorded(),
-                        amount: r.amount_atomic_units.to_raw(),
-                        rid: r.rid,
-                    })
-                    .collect(),
+                recipients: held.request.journal_recipients(),
             };
             state.in_flight.insert(
                 id,

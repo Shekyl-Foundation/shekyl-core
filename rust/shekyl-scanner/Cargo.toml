@@ -56,6 +56,9 @@ std = ["shekyl-curve-io/std", "shekyl-curve-generators/std", "shekyl-curve-primi
 test-utils = ["dep:shekyl-archival-retention"]
 
 [dev-dependencies]
+# R-34: tests read one output position at a time (`TxKey::output_positions`),
+# which exists only under TEST_ONLY `test-utils`.
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq", features = ["test-utils"] }
 shekyl-archival-retention = { path = "../shekyl-archival-retention" }
 # `BoundTx::modify` for the PQC leaf-verdict tests' edited bodies. A
 # TEST_ONLY feature (check_test_only_features.py): this dev edge and the

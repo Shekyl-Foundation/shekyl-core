@@ -6,7 +6,7 @@ rust-version.workspace = true
 license = "BSD-3-Clause"
 description = "Shekyl engine core: orchestrator and transaction builders for stake, unstake, and claim operations"
 # Build script reads `config/consensus_constants.json` (the same JSON
-# the C++ generator at `cmake/generate_consensus_constants.py` reads)
+# every crate's generated constants come from)
 # and emits a Rust constants module. Closes the C++/Rust drift class
 # that produced Bug 3 of the 2026-05-05 FFI constant-drift audit;
 # see `docs/audit_trail/2026-05-ffi-constant-drift-audit.md`.
@@ -70,7 +70,6 @@ shekyl-units = { path = "../shekyl-units" }
 shekyl-types = { path = "../shekyl-types" }
 shekyl-engine-file = { path = "../shekyl-engine-file" }
 shekyl-engine-state = { path = "../shekyl-engine-state" }
-shekyl-engine-prefs = { path = "../shekyl-engine-prefs" }
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 # WI-RPC-3 (Phase 2c proofs): DLEQ tx-proof / reserve-proof primitives the
 # proofs workflow orchestrates, and the Bech32m codec for proof strings
@@ -146,7 +145,7 @@ shekyl-operator-alarm = { path = "../shekyl-operator-alarm" }
 shekyl-fcmp-proofs = { path = "../shekyl-fcmp-proofs", default-features = false, features = ["std", "compile-time-generators"] }
 ec-divisors = { path = "../shekyl-oxide/crypto/divisors", features = ["ed25519"] }
 helioselene = { path = "../shekyl-oxide/crypto/helioselene" }
-multiexp = "0.4"
+multiexp = { workspace = true, features = ["std"] }
 # `std` is required for `rand_core::Error: std::error::Error` (the `#[source]` of
 # `StakeEngineError::RngSourceFailed`); declared explicitly rather than relying on
 # transitive feature unification from sibling crypto deps.
@@ -222,11 +221,8 @@ tokio = { version = "1", features = ["time", "macros", "sync", "rt", "rt-multi-t
 tokio-util = { version = "0.7" }
 
 # Free-space probe for the serving task's disk-headroom alarm
-# (`statvfs`; COMPLETETREE_ACTIVATION.md Q-2). Mirrors the line
-# `shekyl-engine-prefs` already carries for its directory-fsync shim —
-# same crate, same version, same `fs` feature, already locked and in the
-# build graph, so this is a direct edge onto a vetted dependency rather
-# than a new one. `deny(unsafe_code)` on this crate is unaffected: the
+# (`statvfs`; COMPLETETREE_ACTIVATION.md Q-2): a direct edge onto a
+# vetted dependency, already locked and in the build graph. `deny(unsafe_code)` on this crate is unaffected: the
 # attribute governs this crate's own code, and the syscall wrapper's
 # `unsafe` stays inside rustix.
 rustix = { version = "1", features = ["fs"] }
@@ -282,6 +278,10 @@ shekyl-noise = { path = "../shekyl-noise" }
 # network id derivation. Both are workspace crates already in the graph.
 shekyl-levin = { path = "../shekyl-levin" }
 shekyl-p2p-transport = { path = "../shekyl-p2p-transport" }
+# The regtest harness makes a spawned daemon's data directory the way the
+# daemon does (owner-only on Unix), which the daemon requires of an existing
+# one (`config.data-dir.exposed`).
+shekyl-os-account = { path = "../shekyl-os-account", features = ["test-fixture"] }
 # Self dev-dep (the scanner crate's own bench idiom): enables `test-helpers`
 # for this crate's integration tests, so `tests/sp_r0_arm1_fire.rs` compiles
 # the DQ-F fire harness into the lib-under-test on a plain `cargo test`
@@ -443,7 +443,7 @@ proptest = "1"
 #     `ec-divisors`, `helioselene`. All are first-party Shekyl /
 #     Shekyl-vendored crates.
 #   - **Crates.io versions reused from the workspace lockfile:**
-#     `multiexp = "0.4"`, `ciphersuite = "0.4"`,
+#     `multiexp` (workspace), `ciphersuite = "0.4"`,
 #     `dalek-ff-group = "0.5"`, `rand_core = "0.6"`. Each is
 #     already present at the same pin in `shekyl-fcmp`,
 #     `shekyl-tx-builder`, and/or `shekyl-crypto-pq`;
@@ -470,7 +470,7 @@ shekyl-curve-primitives = { path = "../shekyl-curve-primitives" }
 # crates are non-optional production `[dependencies]` above (promoted when
 # the `SignBond` handler landed), so tests reach them through the single
 # production edge — no duplicate dev-dep entries here.
-multiexp = "0.4"
+multiexp = { workspace = true, features = ["std"] }
 ec-divisors = { path = "../shekyl-oxide/crypto/divisors", features = ["ed25519"] }
 ciphersuite = "0.4"
 helioselene = { path = "../shekyl-oxide/crypto/helioselene" }

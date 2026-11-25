@@ -295,6 +295,7 @@ async fn production_legs_are_registered_and_invoked_each_tick() {
     let legs: Vec<Box<dyn CadenceLeg>> = production_legs(
         dead,
         &shekyl_rpc_transport::DaemonTarget::address("http://127.0.0.1:1"),
+        &crate::TorFile::discover(),
         &ServingSlot::default(),
         &Arc::new(OperatorAlarms::new()),
         &crate::engine::body_reconcile::ShardAlarms::default(),
@@ -487,6 +488,7 @@ async fn serving_liveness_leg_starts_and_restarts_a_dead_serving_task() {
     let legs = production_legs(
         Arc::downgrade(&arc),
         &shekyl_rpc_transport::DaemonTarget::address("http://127.0.0.1:1"),
+        &crate::TorFile::discover(),
         &slot,
         &alarms,
         &crate::engine::body_reconcile::ShardAlarms::default(),

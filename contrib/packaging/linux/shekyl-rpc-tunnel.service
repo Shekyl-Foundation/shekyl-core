@@ -7,18 +7,26 @@ Wants=network-online.target
 # RPC to this host's consumers in plaintext on loopback, and reaches the
 # node over the channel as its own key (Rick, 2026-11-16).
 #
-# Installed, not enabled: it needs a configuration and a key first.
+# Installed, not enabled: it needs a configuration and a key first. The
+# package declares its account, shekyl-tunnel (shekyl.sysusers: no home, no
+# login, never the daemon's account or in its group), and makes its
+# configuration directory /etc/shekyl-tunnel, root:shekyl-tunnel 0750
+# (shekyl.tmpfiles). The configuration and the node's bundle live there as
+# root:shekyl-tunnel 0640: the tunnel reads them and cannot write them.
 #
-#   useradd --system --home-dir /nonexistent --shell /usr/sbin/nologin shekyl-tunnel
+#   write the node's bundle (the node's `rpc bundle show`) and the
+#     configuration: daemon-endpoint, daemon-bundle-file =
+#     "/etc/shekyl-tunnel/node.bundle", and listen, a loopback address and
+#     port; rpc-grant if the default `view` is not what the consumers need
+#   install -m 0640 -o root -g shekyl-tunnel node.bundle /etc/shekyl-tunnel/node.bundle
+#   install -m 0640 -o root -g shekyl-tunnel shekyl-rpc-tunnel.toml \
+#       /etc/shekyl-tunnel/shekyl-rpc-tunnel.toml
 #   install -d -o shekyl-tunnel -g shekyl-tunnel -m 0700 /var/lib/shekyl-tunnel
 #   runuser -u shekyl-tunnel -- shekyl-rpc-tunnel --rpc-key-create \
+#       --config-file /etc/shekyl-tunnel/shekyl-rpc-tunnel.toml \
 #       --rpc-key-file /var/lib/shekyl-tunnel/rpc-shekyl-rpc-tunnel.key
 #     (prints the fingerprint; enroll it on the node with
 #      `shekyl-cli rpc client add FINGERPRINT --ceiling GRANTS`)
-#   write /etc/shekyl/shekyl-rpc-tunnel.toml: daemon-endpoint,
-#     daemon-bundle-file (the node's `rpc bundle show`), and listen, a
-#     loopback address and port; rpc-grant if the default `view` is not
-#     what the consumers need
 #   systemctl enable --now shekyl-rpc-tunnel
 #
 # Another network: a drop-in whose ExecStart adds `--network testnet`.
@@ -26,7 +34,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/shekyl-rpc-tunnel --config-file /etc/shekyl/shekyl-rpc-tunnel.toml --rpc-key-file /var/lib/shekyl-tunnel/rpc-shekyl-rpc-tunnel.key --log-file /var/log/shekyl-tunnel/shekyl-rpc-tunnel.log
+ExecStart=/usr/local/bin/shekyl-rpc-tunnel --config-file /etc/shekyl-tunnel/shekyl-rpc-tunnel.toml --rpc-key-file /var/lib/shekyl-tunnel/rpc-shekyl-rpc-tunnel.key --log-file /var/log/shekyl-tunnel/shekyl-rpc-tunnel.log
 
 # Its own account: never the daemon's `shekyl`, never root.
 User=shekyl-tunnel

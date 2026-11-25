@@ -69,7 +69,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN echo 'Acquire::http { Proxy "http://172.17.0.1:3142"; };' > /etc/apt/apt.conf.d/50cacher
 RUN apt-get update && apt-get --no-install-recommends -y install build-essential git language-pack-en \
   wget lsb-release curl gcc g++ binutils-gold pkg-config autoconf libtool automake faketime \
-  bsdmainutils ca-certificates python3 cmake gperf
+  bsdmainutils ca-certificates python3 gperf
 
 RUN useradd -ms /bin/bash -U ubuntu
 USER ubuntu:ubuntu

@@ -67,12 +67,14 @@ fn build_paid_to_self(
     use shekyl_crypto_pq::kem::HybridCiphertext;
 
     let constructed = construct_output(
-        &shekyl_crypto_pq::TxKey::seeded(TEST_TX_KEY_SECRET),
+        shekyl_crypto_pq::TxKey::seeded(TEST_TX_KEY_SECRET)
+            .output_positions(usize::try_from(output_index).unwrap() + 1)
+            .at(output_index)
+            .unwrap(),
         &keys.keys.x25519_pk,
         &keys.keys.ml_kem_ek,
         keys.keys.spend_pk.as_canonical_bytes(),
         amount,
-        output_index,
     )
     .expect("construct_output succeeds for self-paid synthetic output");
 
@@ -138,12 +140,14 @@ fn make_recipient_output_info(
     use shekyl_tx_builder::types::OutputInfo;
 
     let constructed = construct_output(
-        &shekyl_crypto_pq::TxKey::seeded(TEST_TX_KEY_SECRET),
+        shekyl_crypto_pq::TxKey::seeded(TEST_TX_KEY_SECRET)
+            .output_positions(usize::try_from(output_index).unwrap() + 1)
+            .at(output_index)
+            .unwrap(),
         &keys.keys.x25519_pk,
         &keys.keys.ml_kem_ek,
         keys.keys.spend_pk.as_canonical_bytes(),
         amount,
-        output_index,
     )
     .expect("construct_output succeeds for synthetic recipient");
     OutputInfo {
@@ -271,12 +275,14 @@ async fn try_claim_output_for_derived_spend_point_returns_not_mine() {
     );
 
     let constructed = construct_output(
-        &shekyl_crypto_pq::TxKey::seeded(TEST_TX_KEY_SECRET),
+        shekyl_crypto_pq::TxKey::seeded(TEST_TX_KEY_SECRET)
+            .output_positions(1)
+            .at(0)
+            .unwrap(),
         &keys.keys.x25519_pk,
         &keys.keys.ml_kem_ek,
         &derived_spend_pk,
         999,
-        0,
     )
     .expect("construct_output succeeds against derived spend pk");
 
@@ -319,12 +325,14 @@ fn derive_primary_source_secrets_bundle_returns_deterministic_bundle() {
     let keys = LocalKeys::from_test_seed(TEST_SEED);
     let output_index = 3u64;
     let constructed = construct_output(
-        &shekyl_crypto_pq::TxKey::seeded(TEST_TX_KEY_SECRET),
+        shekyl_crypto_pq::TxKey::seeded(TEST_TX_KEY_SECRET)
+            .output_positions(usize::try_from(output_index).unwrap() + 1)
+            .at(output_index)
+            .unwrap(),
         &keys.keys.x25519_pk,
         &keys.keys.ml_kem_ek,
         keys.keys.spend_pk.as_canonical_bytes(),
         12345,
-        output_index,
     )
     .unwrap();
     let ciphertext = HybridCiphertext {
@@ -358,12 +366,14 @@ fn derive_primary_source_secrets_bundle_rejects_low_order_x25519_component() {
 
     let keys = LocalKeys::from_test_seed(TEST_SEED);
     let constructed = construct_output(
-        &shekyl_crypto_pq::TxKey::seeded(TEST_TX_KEY_SECRET),
+        shekyl_crypto_pq::TxKey::seeded(TEST_TX_KEY_SECRET)
+            .output_positions(1)
+            .at(0)
+            .unwrap(),
         &keys.keys.x25519_pk,
         &keys.keys.ml_kem_ek,
         keys.keys.spend_pk.as_canonical_bytes(),
         1,
-        0,
     )
     .unwrap();
     let tampered = HybridCiphertext {
@@ -460,12 +470,11 @@ fn derive_primary_source_secrets_bundle_byte_identical_against_legacy_chain() {
     // bundle arithmetic — `construct_output` is unaware of it.
     for (output_index, tx_hash) in inputs.iter().copied() {
         let constructed = construct_output(
-            &shekyl_crypto_pq::TxKey::seeded(TEST_TX_KEY_SECRET),
+            shekyl_crypto_pq::TxKey::seeded(TEST_TX_KEY_SECRET).position_at_any_index(output_index),
             &keys.keys.x25519_pk,
             &keys.keys.ml_kem_ek,
             keys.keys.spend_pk.as_canonical_bytes(),
             12_345u64.wrapping_add(output_index),
-            output_index,
         )
         .expect("construct_output succeeds for self-paid synthetic output");
 
@@ -773,12 +782,14 @@ fn engine_derived_bundle_signs_through_tx_builder_end_to_end() {
             input_amounts.push(amount);
 
             let constructed = construct_output(
-                &shekyl_crypto_pq::TxKey::seeded(TEST_TX_KEY_SECRET),
+                shekyl_crypto_pq::TxKey::seeded(TEST_TX_KEY_SECRET)
+                    .output_positions(usize::try_from(output_index).unwrap() + 1)
+                    .at(output_index)
+                    .unwrap(),
                 &keys.keys.x25519_pk,
                 &keys.keys.ml_kem_ek,
                 &recipient_spend_pk,
                 amount,
-                output_index,
             )
             .expect("construct_output succeeds for synthetic recipient");
 
@@ -1045,12 +1056,18 @@ fn engine_derived_bundle_signs_through_tx_builder_end_to_end() {
                      `sum(input_amounts) >= fee`"
             )
         });
+        // Two outputs, the fewest a transaction carries (CEN-I1), paying
+        // `output_total` between them.
         let recipient_output_index: u64 = (n_in as u64) + 100;
-        let outputs = vec![make_recipient_output_info(
-            &keys,
-            output_total,
-            recipient_output_index,
-        )];
+        assert!(
+            output_total >= 2,
+            "fixture invariant violated: output_total ({output_total}) must pay two nonzero outputs ({context})"
+        );
+        let first = output_total / 2;
+        let outputs = vec![
+            make_recipient_output_info(&keys, first, recipient_output_index),
+            make_recipient_output_info(&keys, output_total - first, recipient_output_index + 1),
+        ];
 
         // ── Sign engine path (sole sign call; legacy parallel
         //    sign call removed per the Trim-1 disposition) ───
@@ -1238,12 +1255,14 @@ fn join_market_bond_post_signs_and_verifies_through_prover() {
     let input_amount: u64 = floor + fee + 1_000_000;
 
     let constructed = construct_output(
-        &shekyl_crypto_pq::TxKey::seeded(TEST_TX_KEY_SECRET),
+        shekyl_crypto_pq::TxKey::seeded(TEST_TX_KEY_SECRET)
+            .output_positions(usize::try_from(input_index).unwrap() + 1)
+            .at(input_index)
+            .unwrap(),
         &keys.keys.x25519_pk,
         &keys.keys.ml_kem_ek,
         &recipient_spend_pk,
         input_amount,
-        input_index,
     )
     .expect("construct_output succeeds for synthetic funding output");
     let ciphertext = HybridCiphertext {
@@ -1284,17 +1303,24 @@ fn join_market_bond_post_signs_and_verifies_through_prover() {
         c2_layers: vec![],
     }];
 
-    // ── One change output: change = funding - fee - bond_credit ──────
-    // The change output's index is offset so it never collides with the
-    // input index (a matching (combined_ss, output_index) collapses the
-    // FCMP++ rerandomization scalar to zero — see the M3c fixture note).
+    // ── Two change outputs: change = funding - fee - bond_credit ─────
+    // Split as production's bond post splits it (`[change_lo, change_hi]`;
+    // CEN-I1 admits no fewer). The indices are offset so neither collides
+    // with the input index (a matching (combined_ss, output_index) collapses
+    // the FCMP++ rerandomization scalar to zero — see the M3c fixture note).
     let change: u64 = input_amount - fee - floor;
+    assert!(
+        change >= 3,
+        "fixture invariant violated: change ({change}) must pay two nonzero outputs, the second \
+         still nonzero one unit short (the self-check below)"
+    );
+    let change_lo = change / 2;
+    let change_hi = change - change_lo;
     let change_output_index: u64 = input_index + 100;
-    let outputs = vec![make_recipient_output_info(
-        &keys,
-        change,
-        change_output_index,
-    )];
+    let outputs = vec![
+        make_recipient_output_info(&keys, change_lo, change_output_index),
+        make_recipient_output_info(&keys, change_hi, change_output_index + 1),
+    ];
 
     // Amount-level credit funding rule (§7.3): funding == change+fee+credit.
     verify_credit_funding(
@@ -1320,17 +1346,16 @@ fn join_market_bond_post_signs_and_verifies_through_prover() {
     .expect("sign_transaction_with_terms must succeed for the bond post");
 
     // ── Negative: the construct-side balance self-verify (Path-1) ────
-    // Re-sign the same real-tree inputs with the change output one atomic
+    // Re-sign the same real-tree inputs with the change one atomic
     // unit short. `validate_inputs` only checks funds *sufficiency*
     // (available >= required), so an over-funded construct passes it and
     // reaches the post-prove self-verify — which runs the exact daemon
     // balance equation over the built commitments and rejects it locally
     // (fail-fast) rather than leaving a malformed tx for a daemon rejection.
-    let short_change = vec![make_recipient_output_info(
-        &keys,
-        change - 1,
-        change_output_index,
-    )];
+    let short_change = vec![
+        make_recipient_output_info(&keys, change_lo, change_output_index),
+        make_recipient_output_info(&keys, change_hi - 1, change_output_index + 1),
+    ];
     let self_check_err = sign_transaction_with_terms(
         &shekyl_network::HARNESS_NETWORK_ID,
         signable_tx_hash,
@@ -1494,12 +1519,14 @@ fn derive_primary_source_secrets_bundle_diverges_across_distinct_seeds() {
     let keys_b = LocalKeys::from_test_seed([0xAAu8; 32]);
 
     let constructed = construct_output(
-        &shekyl_crypto_pq::TxKey::seeded(TEST_TX_KEY_SECRET),
+        shekyl_crypto_pq::TxKey::seeded(TEST_TX_KEY_SECRET)
+            .output_positions(6)
+            .at(5)
+            .unwrap(),
         &keys_a.keys.x25519_pk,
         &keys_a.keys.ml_kem_ek,
         keys_a.keys.spend_pk.as_canonical_bytes(),
         777,
-        5,
     )
     .unwrap();
     let ciphertext_for_a = HybridCiphertext {

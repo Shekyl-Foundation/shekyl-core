@@ -30,9 +30,10 @@
 //! driver's chain in `scenario_archival_tests`; the store's own
 //! `archival_write_tests` for the claim, whose emission body the driver
 //! does not produce; a settled claim that pays has a corpus witness again
-//! when SO-D12 4b captures `emission-claim`, `docs/FOLLOWUPS.md`).
+//! on Chain L, `CHAIN_FORGE.md` §12.2).
 
 use super::*;
+use crate::archival::final_close_height;
 use crate::harness::assert_refused;
 use crate::harness::fixture::{candidate_on, chain_of, listed, recorded, root};
 use crate::rules::miner::closed_shards_before;
@@ -509,6 +510,45 @@ fn closed_and_final_is_false_through_the_cap_and_true_from_it() {
             BlockCount::from_raw(u64::MAX),
         )
         .expect("recorded"));
+    });
+}
+
+/// [`final_close_height`] is the height that closed the shard exactly when
+/// the close is at least `reorg_cap` below `at`, and `None` otherwise —
+/// against [`chain_closing_two_shards`]'s known closes (shard 0 at 1,
+/// shard 1 at 3, shard 2 never), at every height, under caps before, on
+/// and after each close and one no height can carry. [`closed_and_final`]
+/// is its `is_some`. CEN-J15 ages the height it returns, the one placement
+/// it makes. Red edit: return the close without the cap test.
+#[test]
+fn the_final_close_height_is_the_close_once_it_is_a_cap_deep() {
+    const CLOSES: [Option<u64>; 3] = [Some(1), Some(3), None];
+    let chain = chain_closing_two_shards();
+    chain.with_view(|view| {
+        for cap in [0u64, 1, 2, 3, 7, u64::MAX] {
+            for at in 0..5u64 {
+                for (shard, close) in (0u64..).zip(CLOSES) {
+                    let expected = close.filter(|&c| c.checked_add(cap).is_some_and(|f| f <= at));
+                    let (shard_id, at_height, reorg_cap) = (
+                        ShardId::from_raw(shard),
+                        BlockHeight::from_raw(at),
+                        BlockCount::from_raw(cap),
+                    );
+                    let height = final_close_height(&view, shard_id, at_height, reorg_cap)
+                        .expect("recorded");
+                    assert_eq!(
+                        height,
+                        expected.map(BlockHeight::from_raw),
+                        "shard {shard} at {at}, cap {cap}"
+                    );
+                    assert_eq!(
+                        closed_and_final(&view, shard_id, at_height, reorg_cap).expect("recorded"),
+                        expected.is_some(),
+                        "shard {shard} at {at}, cap {cap}"
+                    );
+                }
+            }
+        }
     });
 }
 

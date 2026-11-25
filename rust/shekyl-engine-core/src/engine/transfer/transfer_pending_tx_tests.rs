@@ -205,12 +205,14 @@ fn make_recovered_output(seed: u8, global_index: u64, amount: u64) -> RecoveredW
     tx_hash[8] = seed;
     let output_index = u64::from(seed);
     let constructed = construct_output(
-        &shekyl_crypto_pq::TxKey::seeded(TEST_OUTPUT_TX_KEY),
+        shekyl_crypto_pq::TxKey::seeded(TEST_OUTPUT_TX_KEY)
+            .output_positions(usize::try_from(output_index).unwrap() + 1)
+            .at(output_index)
+            .unwrap(),
         &blob.x25519_pk,
         &blob.ml_kem_ek,
         &test_recipient_spend_pk(),
         amount,
-        output_index,
     )
     .expect("construct_output for test wallet output");
     let key = CompressedEdwardsY(constructed.output_key)
@@ -301,12 +303,14 @@ fn populate_ledger(
         let amount = td.amount().to_raw();
         let output_index = td.internal_output_index.to_raw();
         let constructed = construct_output(
-            &shekyl_crypto_pq::TxKey::seeded(TEST_OUTPUT_TX_KEY),
+            shekyl_crypto_pq::TxKey::seeded(TEST_OUTPUT_TX_KEY)
+                .output_positions(usize::try_from(output_index).unwrap() + 1)
+                .at(output_index)
+                .unwrap(),
             &blob.x25519_pk,
             &blob.ml_kem_ek,
             &test_recipient_spend_pk(),
             amount,
-            output_index,
         )
         .expect("construct_output for test ledger output");
 
@@ -510,7 +514,8 @@ impl crate::engine::output_selector::OutputSelector for OutOfSetSelector {
         target: AtomicUnits,
     ) -> Result<crate::engine::output_selector::SelectedOutputs, Self::Error> {
         Ok(crate::engine::output_selector::SelectedOutputs {
-            indices: vec![usize::MAX],
+            indices: crate::engine::output_selector::SelectedInputs::within_cap(vec![usize::MAX])
+                .expect("one index fits in a transaction"),
             total_covered: target,
         })
     }
@@ -559,6 +564,89 @@ async fn an_out_of_set_selection_is_the_wallets_fault() {
         "the build reports the selector-contract violation"
     );
     assert_eq!(pending.outstanding(), 0, "nothing is reserved");
+}
+
+/// Each of the fragmented ledger's outputs: the amount a miner's wallet
+/// holds as many like-sized coinbases.
+const FRAGMENT_ATOMIC: u64 = 1_000_000;
+
+/// A ledger of more like-sized outputs than one transaction spends, as a
+/// miner's wallet holds its coinbases.
+fn fragmented_ledger() -> Arc<LocalLedger> {
+    let count = u8::try_from(shekyl_tx_builder::MAX_INPUTS + 4)
+        .expect("the FCMP generator tables bound the cap at 128, so this fits a seed");
+    let ledger = Arc::new(test_ledger());
+    let outputs = (1..=count)
+        .map(|seed| make_recovered_output(seed, 100 + u64::from(seed), FRAGMENT_ATOMIC))
+        .collect();
+    populate_ledger(ledger.as_ref(), 1, outputs, 20);
+    ledger
+}
+
+/// A send the wallet holds enough for, but only across more inputs than one
+/// transaction spends, is refused as too many inputs with the count it needs
+/// and the cap named, with the request-shape diagnostic and nothing reserved.
+/// Bites if the build lets the batch through to the curve-tree actor, whose
+/// own bound reports it as an outage (the forged chain's coinbase spend,
+/// 2026-11-22: 240 inputs reached it).
+#[tokio::test]
+async fn a_send_past_the_input_cap_is_refused_with_the_cap_named() {
+    use crate::engine::diagnostics::BuildErrorKind;
+    use shekyl_tx_builder::{SignFault, MAX_INPUTS};
+
+    let sink = Arc::new(AssertionSink::new());
+    let pending = test_pending_tx_with_sink(
+        fragmented_ledger(),
+        Arc::clone(&sink) as Arc<dyn DiagnosticSink>,
+    );
+
+    // The cap's worth of outputs and half of one more: covered by the
+    // balance, never by `MAX_INPUTS` of its outputs.
+    let ask = FRAGMENT_ATOMIC * MAX_INPUTS as u64 + FRAGMENT_ATOMIC / 2;
+    let err = pending.build(standard_request(ask)).await.unwrap_err();
+    assert!(
+        matches!(
+            err,
+            SendError::Sign(SignFault::TooManyInputs { count }) if count == MAX_INPUTS + 1
+        ),
+        "the send needs one input past the cap: {err:?}"
+    );
+    assert!(
+        sink.recorded_pending().iter().any(|event| matches!(
+            event,
+            PendingTxDiagnostic::BuildFailed {
+                kind: BuildErrorKind::TransactionTooLarge
+            }
+        )),
+        "the build reports the request's shape against the cap"
+    );
+    assert_eq!(pending.outstanding(), 0, "no reservation is held");
+    // `outstanding` does not count these: a refusal that locked its inputs
+    // would block every later send while the count above still read zero.
+    let state = pending.state.lock().expect("state lock not poisoned");
+    assert!(state.output_locks.is_empty(), "no input is locked");
+    assert_eq!(state.next_id, 0, "no reservation id was minted");
+}
+
+/// A send that takes exactly the cap's inputs clears selection: with no
+/// curve tree configured it is refused for the tree, the step after
+/// selection, never as too many inputs. The cover's length is pinned on
+/// the selector (`wallet_greedy_accepts_a_cover_of_exactly_the_cap`); this
+/// bites on a build-layer check that refuses the cap itself.
+#[tokio::test]
+async fn a_send_of_exactly_the_input_cap_clears_selection() {
+    use shekyl_tx_builder::MAX_INPUTS;
+
+    let pending = test_pending_tx(fragmented_ledger());
+    let ask = FRAGMENT_ATOMIC * (MAX_INPUTS as u64 - 1) + FRAGMENT_ATOMIC / 2;
+    let err = pending
+        .build(standard_request(ask))
+        .await
+        .expect_err("no curve tree is configured");
+    assert!(
+        matches!(err, SendError::BuildInvariant { reason } if reason.contains("curve tree")),
+        "the cap's own count clears selection: {err:?}"
+    );
 }
 
 // --- CT-5a commit 4b-1: curve-tree spend-gate KATs (D1/D3) --------------
@@ -637,12 +725,14 @@ async fn funded_ledger_and_tree(
     for &(seed, amt) in specs {
         let output_index = u64::from(seed);
         let c = construct_output(
-            &shekyl_crypto_pq::TxKey::seeded(TEST_OUTPUT_TX_KEY),
+            shekyl_crypto_pq::TxKey::seeded(TEST_OUTPUT_TX_KEY)
+                .output_positions(usize::try_from(output_index).unwrap() + 1)
+                .at(output_index)
+                .unwrap(),
             &blob.x25519_pk,
             &blob.ml_kem_ek,
             &test_recipient_spend_pk(),
             amt,
-            output_index,
         )
         .expect("construct_output for consistent tree leaf");
         let commitment = Commitment {
@@ -2764,12 +2854,14 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
     let blob = test_account_blob();
     let output_index = u64::from(spend_seed);
     let constructed = construct_output(
-        &shekyl_crypto_pq::TxKey::seeded(TEST_OUTPUT_TX_KEY),
+        shekyl_crypto_pq::TxKey::seeded(TEST_OUTPUT_TX_KEY)
+            .output_positions(usize::try_from(output_index).unwrap() + 1)
+            .at(output_index)
+            .unwrap(),
         &blob.x25519_pk,
         &blob.ml_kem_ek,
         &test_recipient_spend_pk(),
         input_amount,
-        output_index,
     )
     .expect("construct funding output");
     let ciphertext = HybridCiphertext {
@@ -2858,32 +2950,47 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
         c2_layers: path.c2_layers().to_vec(),
     }];
 
-    // ── Build the bond vin + the change output ───────────────────────
+    // ── Build the bond vin + the two change outputs ──────────────────
     let built = build_join_market_vin(p_keys.bond_post_keys(), holdings.clone(), [0xEE; 32])
         .expect("build JoinMarket vin");
     assert_eq!(built.vin().bond_credit, floor);
     assert_eq!(built.vin().bond_debit, 0);
 
     let change: u64 = input_amount - fee - floor;
-    // Offset the change index so (combined_ss, output_index) never collides
-    // with the input (a collision zeroes the FCMP++ rerandomization scalar).
+    assert!(
+        change >= 2,
+        "fixture invariant violated: change ({change}) must pay two nonzero outputs"
+    );
+    // Split as production's bond post splits it (`[change_lo, change_hi]`;
+    // CEN-I1 admits no fewer than two outputs). Offset the change indices so
+    // (combined_ss, output_index) never collides with the input (a collision
+    // zeroes the FCMP++ rerandomization scalar).
+    let change_lo = change / 2;
     let change_output_index: u64 = output_index + 100;
-    let change_out = construct_output(
-        &shekyl_crypto_pq::TxKey::seeded(TEST_OUTPUT_TX_KEY),
-        &blob.x25519_pk,
-        &blob.ml_kem_ek,
-        &test_recipient_spend_pk(),
-        change,
-        change_output_index,
-    )
-    .expect("construct change output");
-    let outputs = vec![OutputInfo {
-        dest_key: change_out.output_key,
-        amount: AtomicUnits::from_raw(change),
-        commitment_mask: change_out.commitment_mask(),
-        enc_amount: change_out.enc_amount_wire(),
-        enc_label: change_out.enc_label_wire(),
-    }];
+    let outputs: Vec<OutputInfo> = [change_lo, change - change_lo]
+        .into_iter()
+        .zip(change_output_index..)
+        .map(|(amount, index)| {
+            let change_out = construct_output(
+                shekyl_crypto_pq::TxKey::seeded(TEST_OUTPUT_TX_KEY)
+                    .output_positions(usize::try_from(index).unwrap() + 1)
+                    .at(index)
+                    .unwrap(),
+                &blob.x25519_pk,
+                &blob.ml_kem_ek,
+                &test_recipient_spend_pk(),
+                amount,
+            )
+            .expect("construct change output");
+            OutputInfo {
+                dest_key: change_out.output_key,
+                amount: AtomicUnits::from_raw(amount),
+                commitment_mask: change_out.commitment_mask(),
+                enc_amount: change_out.enc_amount_wire(),
+                enc_label: change_out.enc_label_wire(),
+            }
+        })
+        .collect();
 
     // Amount-level credit-funding rule (§7.3): funding == change + fee + credit.
     verify_credit_funding(
@@ -3813,6 +3920,7 @@ fn assemble_tx_to_sign_rejects_missing_key_image() {
         InputCount::clamped(1),
         OutputCount::clamped(request.recipients.len()),
         1,
+        &[],
     )
     .expect("the fee fits");
     // The `gindex` must equal the output's `global_output_index` (100) so the
@@ -3895,6 +4003,7 @@ async fn build_then_submit_via_test_daemon_uses_daemon_fee() {
         InputCount::clamped(n_in),
         OutputCount::clamped(n_out),
         2,
+        &[],
         seed,
     )
     .expect("the built shape's fee fits");
@@ -4129,4 +4238,172 @@ async fn a_crash_between_the_dispatch_save_and_the_send_reopens_held() {
         !WatchdogHost::dispatched_this_session(&host, &tx_hash),
         "and it is not this session's, so resending is the user's decision"
     );
+}
+
+/// R-37's gate (4a-2a brief §2.5): a solo wallet pays a 3-of-5 group.
+///
+/// The send is priced at the group-aware weight (the group payee's `0x0D`
+/// entry included), and that weight equals the built transaction's; the
+/// journal records the group by fingerprint and stores its address once;
+/// and all five members' scanners find the same coin. Without the group
+/// payee in the fee, the build would price a solo shape and underpay.
+#[tokio::test]
+async fn a_solo_wallet_pays_a_three_of_five_group() {
+    use crate::engine::pending::GroupDestination;
+    use crate::engine::test_support::{TestDaemon, DEFAULT_TEST_SEED};
+    use crate::engine::tx_fee_model::{
+        converge_fee, predict_weight, GroupSize, Signer, SpendShape,
+    };
+    use shekyl_crypto_pq::multisig_receive::GroupReceived;
+    use shekyl_scanner::bench_fixtures::scannable_block_carrying;
+    use shekyl_scanner::group_fixtures::test_group;
+
+    const PAID: u64 = 7_000;
+    let group = test_group(Network::Mainnet, 5, 3);
+    let size = GroupSize::new(5, 3).expect("a 3-of-5 group");
+
+    let daemon = Arc::new(TestDaemon::with_seed(DEFAULT_TEST_SEED));
+    let (ledger, _tree_dir, tree) =
+        funded_ledger_and_tree(&[(1, 500_000), (2, 300_000)], 1, 20).await;
+    let pending = daemon_backed_pending_tx(Arc::clone(&daemon), Arc::clone(&ledger), tree);
+    let destination = GroupDestination::new(group.address.clone());
+    let fingerprint = destination.fingerprint();
+    let built = pending
+        .build(TxRequest {
+            recipients: vec![TxRecipient {
+                destination: TxDestination::Group(destination),
+                amount_atomic_units: AtomicUnits::from_raw(PAID),
+                rid: None,
+            }],
+            priority: FeePriority::Standard,
+        })
+        .await
+        .expect("build ok");
+
+    let tx = shekyl_wire::Transaction::from_bytes(&built.tx_bytes).expect("built tx parses");
+    let n_in = InputCount::clamped(tx.prefix.inputs.len());
+    let n_out = OutputCount::clamped(tx.prefix.outputs.len());
+    let (depth, fee) = match &tx.ct {
+        shekyl_wire::Ct::Fcmp {
+            prunable: Some(p),
+            fee,
+            ..
+        } => (
+            u8::try_from(p.tree_depth + 1).expect("tree_depth + 1 fits u8"),
+            *fee,
+        ),
+        _ => panic!("a spend is Fcmp with prunable"),
+    };
+    let shape = SpendShape {
+        n_in,
+        n_out,
+        tree_depth: depth,
+        signer: Signer::Solo,
+        group_payees: &[size],
+    };
+    assert_eq!(
+        shekyl_tx_weight::predict_spend_weight(&shape, fee),
+        Some(tx.weight()),
+        "the group-aware weight is the built transaction's"
+    );
+    assert!(
+        predict_weight(n_in, n_out, depth, fee) < tx.weight(),
+        "a solo shape underweighs a payment to a group"
+    );
+    let snapshot =
+        crate::engine::fee_policy::ValidatedFeeEstimates::try_new(daemon_fee_estimates_distinct())
+            .expect("test daemon tiers are well-formed");
+    let rate = snapshot.rate(FeePriority::Standard);
+    assert_eq!(
+        Some(built.fee_atomic_units.to_raw()),
+        converge_fee(&rate, n_in, n_out, depth, &[size], 0),
+        "the fee is the group-aware shape's"
+    );
+
+    // Every member finds the one output paid to the group, as a coin, and
+    // all five find the same one.
+    let block = scannable_block_carrying(&tx);
+    let mut found = Vec::new();
+    for i in 0..5u8 {
+        let outputs = group
+            .member_scanner(i)
+            .scan(block.clone())
+            .expect("scan")
+            .into_inner();
+        assert_eq!(outputs.len(), 1, "member {i} finds the group's output");
+        let output = &outputs[0];
+        let GroupReceived::Coin(receipt) = output.received() else {
+            panic!("member {i} refused the group's output");
+        };
+        assert_eq!(receipt.amount(), PAID, "member {i}");
+        found.push((
+            output.tx_hash(),
+            output.global_index(),
+            *receipt.output_key(),
+            *receipt.key_image(),
+        ));
+    }
+    assert!(
+        found.windows(2).all(|pair| pair[0] == pair[1]),
+        "all five members find one coin: its place, its key and its key image"
+    );
+
+    // The journal names the group and stores its address once.
+    let txid = pending
+        .submit(built.id, built.content_gen, &NoSaveCommit)
+        .await
+        .expect("submit ok")
+        .hash();
+    let guard = pending.ledger.read();
+    let journal = &guard.ledger.send_journal;
+    let row = journal.rows.get(&txid.to_bytes()).expect("the row");
+    assert_eq!(
+        row.recipients[0].destination,
+        shekyl_engine_state::SendDestination::Group(fingerprint)
+    );
+    assert_eq!(
+        journal
+            .group_address(&fingerprint)
+            .expect("the group's address is stored")
+            .address()
+            .expect("parses"),
+        group.address
+    );
+    assert_eq!(journal.group_payees().count(), 1);
+}
+
+/// A group on another network is refused before any selection, and so is
+/// a payment request answered to a group, whose output's label is always
+/// the sentinel.
+#[test]
+fn a_group_payment_the_wallet_cannot_make_is_refused_at_the_request() {
+    use crate::engine::pending::GroupDestination;
+    use shekyl_scanner::group_fixtures::test_group;
+
+    let pay = |group: &shekyl_scanner::group_fixtures::TestGroup, rid| TxRequest {
+        recipients: vec![TxRecipient {
+            destination: TxDestination::Group(GroupDestination::new(group.address.clone())),
+            amount_atomic_units: AtomicUnits::from_raw(1_000),
+            rid,
+        }],
+        priority: FeePriority::Standard,
+    };
+    let here = test_group(Network::Mainnet, 3, 2);
+    pay(&here, None)
+        .check_recipients(Network::Mainnet)
+        .expect("a group on the wallet's network is paid");
+    let elsewhere = test_group(Network::Testnet, 3, 2);
+    assert!(matches!(
+        pay(&elsewhere, None).check_recipients(Network::Mainnet),
+        Err(SendError::InvalidRecipient {
+            reason: "recipient group address is for another network"
+        })
+    ));
+    assert!(matches!(
+        pay(&here, Some(shekyl_engine_state::PaymentRequestId(5)))
+            .check_recipients(Network::Mainnet),
+        Err(SendError::InvalidRecipient {
+            reason: "a payment to a group cannot answer a payment request"
+        })
+    ));
 }

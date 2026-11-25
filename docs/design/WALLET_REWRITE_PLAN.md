@@ -93,7 +93,6 @@ This is "we're pretty far, tbh." The phase plan below assumes this baseline. Dis
 
 - [shekyl-engine-state](../../rust/shekyl-engine-state): `TransferDetails`, `RuntimeWalletState`, `SubaddressIndex`, `PaymentId`, `StakerPoolState`, `LedgerBlock`, `BookkeepingBlock`, `TxMetaBlock`, `SyncStateBlock`, `WalletLedger` aggregator. Postcard round-trip proptests in place.
 - [shekyl-engine-file](../../rust/shekyl-engine-file): orchestrator with `Wallet::{create,open,save,change_password,verify_password}`. Advisory locking, atomic tmp→fsync→rename→fsync-parent. Per-block ledger payload framing.
-- [shekyl-engine-prefs](../../rust/shekyl-engine-prefs): plaintext-with-HMAC user prefs (layer 2 of [WALLET_PREFS.md](../WALLET_PREFS.md)).
 - [shekyl-scanner](../../rust/shekyl-scanner): chain scan, output identification, key-image computation.
 - [shekyl-tx-builder](../../rust/shekyl-tx-builder): BP+ range proofs, FCMP++ sign, hybrid PQC auth. `transfer_e2e_1in_2out` benched.
 - [shekyl-proofs](../../rust/shekyl-proofs): tx_proof, reserve_proof.
@@ -127,7 +126,6 @@ flowchart TB
     subgraph State[State + IO]
       WFile["shekyl-engine-file (envelope + atomic IO)"]
       WState["shekyl-engine-state (WalletLedger types)"]
-      WPrefs["shekyl-engine-prefs (plaintext+HMAC prefs)"]
     end
 
     subgraph Net[Network]
@@ -150,7 +148,6 @@ flowchart TB
     Rpc --> WalletCore
     WalletCore --> WFile
     WalletCore --> WState
-    WalletCore --> WPrefs
     WalletCore --> Scanner
     WalletCore --> TxB
     WalletCore --> Proofs

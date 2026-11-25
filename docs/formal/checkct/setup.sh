@@ -14,12 +14,15 @@
 #   subject-noslp  the same, x86_64 only, with SLP vectorisation off (see README)
 #   helio          the vendored helioselene (rust/shekyl-oxide/crypto/helioselene)
 #   fpprobe        CA-3's probe: can BINSEC model FN-DSA's SSE2 floating point?
+#   fips204-tag    CA-3: fips204's coefficient helpers at tag v0.5.0 (the control)
+#   fips204-fix    the same driver on the Shekyl fork, which must be secure
 #   ctl75, ctl76   crypto-bigint =0.7.5 / =0.7.6 with drivers/ctl.rs (controls)
 #   ctlpre         upstream's own checkct driver against the crypto-bigint tree
 #                  just before the 0.7.6 constant-time fixes (#1358's parent)
 #
 # Usage:  ./setup.sh            # build image, clone pins, create workspaces
 #         CHECKCT_NIGHTLY=nightly-2025-12-04 ./setup.sh   # pin another nightly
+#         CHECKCT_ONLY="fips204-tag fips204-fix" ./setup.sh   # only these workspaces
 #
 # The nightly override installs that toolchain into .build/rustup-home with
 # rust-src and the bare-metal targets; run.sh then passes the same home.
@@ -35,6 +38,11 @@ CRYPTO_BIGINT_PREFIX=eeaabbe
 # that the ctlpre workspace runs against the pre-fix tree. Pinned so a fresh
 # setup tests the same entrypoints the records name.
 CRYPTO_BIGINT_DRIVER_REV=f8d9dfcc06c9cc2b69890fed5d2cabad44d3d1d0
+# fips204 for CA-3's helper row. One clone serves the control and the fork.
+# The control is upstream tag v0.5.0, at this commit. The fork revision is
+# rust/Cargo.toml's [patch], the same source the crypto-closure record holds.
+FIPS204_REPO=https://github.com/Shekyl-Foundation/fips204
+FIPS204_TAG=66129c49273f3daa1338f9634acdf84ee8d1faf8
 IMAGE=shekyl-checkct:85271e5
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -93,6 +101,7 @@ rand_core_06 = { package = "rand_core", version = "0.6" }'
 #   PROFILE_PANIC      abort | immediate-abort
 #   DRIVER:DEPS        driver crate name (drivers/<name>.rs) and its Cargo deps
 mkws() {
+    if [ -n "${CHECKCT_ONLY:-}" ] && [[ " $CHECKCT_ONLY " != *" $1 "* ]]; then return 0; fi
     local name=$1 targets=$2 x86extra=$3 panic=$4; shift 4
     local ws=$BUILD/$name
     rm -rf "$ws"
@@ -159,7 +168,14 @@ EOF
     if [ -n "${CHECKCT_NIGHTLY:-}" ]; then
         sed -i "s/^channel = .*/channel = \"$CHECKCT_NIGHTLY\"/" "$ws/checkct/rust-toolchain.toml"
     fi
-    inctr "cd /repo/docs/formal/checkct/.build/$name/checkct && cargo generate-lockfile >/dev/null 2>&1"
+    # fips204 adds a path member after mkws and locks itself.
+    if [ -z "${MKWS_SKIP_LOCK:-}" ]; then
+        lock_ws "$name"
+    fi
+}
+
+lock_ws() {
+    inctr "cd /repo/docs/formal/checkct/.build/$1/checkct && cargo generate-lockfile >/dev/null 2>&1"
 }
 
 CB055='crypto-bigint = { version = "=0.5.5", default-features = false, features = ["zeroize"] }
@@ -178,6 +194,140 @@ mkws helio         "$ALL3" "" abort "helio:$HELIO"
 # CA-3 probe: SSE2 double-precision instructions on secret operands, x86_64
 # only (the instructions are x86's). No dependency beyond the template's.
 mkws fpprobe       "x86_64-unknown-linux-gnu" "" abort "fpprobe:"
+# CA-3: the helpers are pub(crate), so each workspace compiles fips204's own
+# helpers.rs, high_low.rs and types.rs, unchanged, as their own crate. The
+# driver's crate root is the checkct harness, and `crate::` in those files
+# would not name it. Q, D and ZETA are read from that revision's lib.rs.
+fips204_fix_rev() {
+    python3 - "$REPO" <<'PY'
+import re
+import sys
+import tomllib
+from pathlib import Path
+
+root = Path(sys.argv[1])
+spec = tomllib.loads((root / "rust/Cargo.toml").read_text()).get("patch", {}).get("crates-io", {}).get("fips204")
+if not isinstance(spec, dict):
+    raise SystemExit("fips204: rust/Cargo.toml has no [patch] for fips204")
+rev, git = str(spec.get("rev", "")), str(spec.get("git", ""))
+if not re.fullmatch(r"[0-9a-f]{40}", rev) or not git.startswith("https://"):
+    raise SystemExit("fips204: the patch must be an https git URL and one full rev")
+want = f"git+{git}?rev={rev}#{rev}"
+record = tomllib.loads((root / "rust/.cargo/crypto-closure.toml").read_text())
+got = [str(e.get("source", "")) for e in record.get("package", [])
+       if e.get("name") == "fips204" and e.get("version") == "0.5.0"]
+if got != [want]:
+    raise SystemExit(f"fips204: the crypto-closure source is {got}, not {want}")
+print(rev)
+PY
+}
+fips204_wanted() {
+    [ -z "${CHECKCT_ONLY:-}" ] || [[ " $CHECKCT_ONLY " == *" fips204-tag "* || " $CHECKCT_ONLY " == *" fips204-fix "* ]]
+}
+if fips204_wanted; then
+    FIPS204_FIX=$(fips204_fix_rev)
+    if [ ! -d "$BUILD/fips204/.git" ]; then
+        git clone -q "$FIPS204_REPO" "$BUILD/fips204"
+    fi
+    git -C "$BUILD/fips204" fetch -q origin tag v0.5.0
+    tag=$(git -C "$BUILD/fips204" rev-parse "v0.5.0^{commit}")
+    if [ "$tag" != "$FIPS204_TAG" ]; then
+        echo "fips204: tag v0.5.0 is $tag; the recorded control is $FIPS204_TAG" >&2
+        exit 1
+    fi
+    for rev in "$FIPS204_TAG" "$FIPS204_FIX"; do
+        if ! git -C "$BUILD/fips204" cat-file -e "$rev^{commit}" 2>/dev/null; then
+            git -C "$BUILD/fips204" fetch -q origin "$rev"
+        fi
+    done
+fi
+fips204_ws() {
+    local name=$1 rev=$2
+    if [ -n "${CHECKCT_ONLY:-}" ] && [[ " $CHECKCT_ONLY " != *" $name "* ]]; then return 0; fi
+    MKWS_SKIP_LOCK=1 mkws "$name" "x86_64-unknown-linux-gnu" "" abort 'fips204ct:fips204_coeff = { path = "../fips204_coeff" }'
+    local coeff=$BUILD/$name/checkct/fips204_coeff
+    mkdir -p "$coeff/src"
+    git -C "$BUILD/fips204" archive "$rev" src/helpers.rs src/high_low.rs src/types.rs src/lib.rs Cargo.toml \
+        | tar -x -C "$coeff"
+    python3 - "$coeff" "$rev" <<'PY'
+import re
+import sys
+import tomllib
+from pathlib import Path
+
+coeff, rev = Path(sys.argv[1]), sys.argv[2]
+lib = (coeff / "src/lib.rs").read_text()
+constants = {}
+for name, kind in (("Q", "i32"), ("ZETA", "i32"), ("D", "u32")):
+    found = re.findall(rf"^const {name}: {kind} = ([0-9_]+);", lib, re.M)
+    if len(found) != 1:
+        raise SystemExit(f"fips204 {rev}: const {name} was found {len(found)} times")
+    constants[name] = found[0]
+zeroize = tomllib.loads((coeff / "Cargo.toml").read_text())["dependencies"]["zeroize"]
+if not isinstance(zeroize, dict) or "version" not in zeroize:
+    raise SystemExit(f"fips204 {rev}: zeroize is not a table with a version")
+features = ", ".join(f'"{feature}"' for feature in zeroize.get("features", []))
+default = "false" if zeroize.get("default-features") is False else "true"
+(coeff / "Cargo.toml").write_text(
+    "[package]\n"
+    'name = "fips204_coeff"\n'
+    'version = "0.0.0"\n'
+    "publish = false\n"
+    'edition = "2021"\n'
+    "\n"
+    "[dependencies]\n"
+    f'zeroize = {{ version = "{zeroize["version"]}", default-features = {default}, features = [{features}] }}\n'
+)
+(coeff / "src/lib.rs").write_text(
+    "#![no_std]\n"
+    "// Generated by setup.sh from this revision of fips204. helpers.rs,\n"
+    "// high_low.rs and types.rs are that revision's files, unchanged.\n"
+    "// The functions with no caller here are the library's: their callers\n"
+    "// live in modules this analysis crate does not compile.\n"
+    "#![allow(dead_code, unused_imports, unused_macros)]\n"
+    "\n"
+    f"pub const Q: i32 = {constants['Q']};\n"
+    f"pub const ZETA: i32 = {constants['ZETA']};\n"
+    f"pub const D: u32 = {constants['D']};\n"
+    "\n"
+    "mod helpers;\n"
+    "mod high_low;\n"
+    "mod types;\n"
+    "\n"
+    "// `#[inline(always)]` puts the helper body in the driver's entrypoint.\n"
+    "// The real items are `pub(crate)`, so this crate cannot re-export them.\n"
+    "#[inline(always)]\n"
+    "pub fn infinity_norm(coefficients: &[i32; 256]) -> i32 {\n"
+    "    let w = [types::R(*coefficients)];\n"
+    "    helpers::infinity_norm(&w)\n"
+    "}\n"
+    "#[inline(always)]\n"
+    "pub fn decompose(gamma2: i32, coefficient: i32) -> (i32, i32) {\n"
+    "    high_low::decompose(gamma2, coefficient)\n"
+    "}\n"
+    "#[inline(always)]\n"
+    "pub fn make_hint(gamma2: i32, hint_offset: i32, coefficient: i32) -> bool {\n"
+    "    high_low::make_hint(gamma2, hint_offset, coefficient)\n"
+    "}\n"
+)
+PY
+    python3 - "$BUILD/$name/checkct/Cargo.toml" <<'PY'
+import sys
+from pathlib import Path
+path = Path(sys.argv[1])
+text = path.read_text()
+old = 'members = ["fips204ct"]'
+new = 'members = ["fips204ct", "fips204_coeff"]'
+if old not in text:
+    raise SystemExit("fips204: the checkct workspace members were not where setup expects them")
+path.write_text(text.replace(old, new, 1))
+PY
+    lock_ws "$name"
+}
+if fips204_wanted; then
+    fips204_ws fips204-tag "$FIPS204_TAG"
+    fips204_ws fips204-fix "$FIPS204_FIX"
+fi
 # Controls mirror upstream's checkct profile (panic-immediate-abort).
 CTL_TARGETS="x86_64-unknown-linux-gnu thumbv6m-none-eabi riscv32imac-unknown-none-elf"
 mkws ctl75  "$CTL_TARGETS" "" immediate-abort 'ctl:crypto-bigint = { version = "=0.7.5", default-features = false }'

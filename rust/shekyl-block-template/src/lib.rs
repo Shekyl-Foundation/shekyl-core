@@ -100,6 +100,7 @@
 use core::fmt;
 
 use shekyl_crypto_pq::output::construct_output;
+use shekyl_crypto_pq::output_order::OutputPosition;
 use shekyl_crypto_pq::{CryptoError, TxKey};
 use shekyl_difficulty::is_timestamp_below_ftl;
 use shekyl_economics::{
@@ -554,13 +555,14 @@ fn coinbase(cx: &TemplateContext<'_>, amount: u64) -> Result<Transaction, Templa
     // CEN-F4: one output. CEN-F9/F10 hold by construction of the output
     // — a canonical key and a mask derived from the shared secret, which
     // is not `zeroCommit(amount)`.
+    // R-34: a coinbase's one output sits at position 0, fixed; it has no
+    // change to hide.
     let od = construct_output(
-        cx.tx_key,
+        OutputPosition::for_block_producer(cx.tx_key, 0),
         &cx.miner.x25519_pk,
         &cx.miner.ml_kem_ek,
         &cx.miner.spend_public,
         amount,
-        0,
     )
     .map_err(TemplateError::Output)?;
 
@@ -606,10 +608,7 @@ fn coinbase(cx: &TemplateContext<'_>, amount: u64) -> Result<Transaction, Templa
 fn listed_fees(listed: &[Transaction]) -> Result<AtomicUnits, TemplateError> {
     let mut total = AtomicUnits::ZERO;
     for (index, tx) in listed.iter().enumerate() {
-        let fee = match &tx.ct {
-            Ct::Fcmp { fee, .. } => *fee,
-            Ct::Null(_) => return Err(TemplateError::ListedWithoutFee { index }),
-        };
+        let fee = tx.fee().ok_or(TemplateError::ListedWithoutFee { index })?;
         total = total
             .checked_add(AtomicUnits::from_raw(fee))
             .ok_or(TemplateError::FeeOverflow)?;

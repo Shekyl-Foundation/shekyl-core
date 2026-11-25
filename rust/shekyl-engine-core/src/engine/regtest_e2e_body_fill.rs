@@ -63,9 +63,6 @@ const SCHEDULE: RegtestSchedule = RegtestSchedule {
 };
 /// Persona funding above `floor + bond fee`.
 const FUNDING_CUSHION: u64 = 12_000_000_000;
-/// A P-scan over some fifteen hundred blocks in a debug build, with room:
-/// it bounds a hang, it does not time the scan.
-const LONG_SCAN: Duration = Duration::from_secs(3600);
 
 fn shard(n: u64) -> ShardId {
     ShardId::from_raw(n)
@@ -155,13 +152,9 @@ async fn holds(arc: &Shared, target: ShardId) -> bool {
 async fn scan_to_the_horizon(daemon: &RegtestDaemon, arc: &Shared, pscan_seal: &std::path::Path) {
     let needed = daemon.height().await.saturating_sub(REORG_CAP);
     refresh(arc).await;
-    pscan_until_within(
-        arc,
-        pscan_seal,
-        "the finality horizon",
-        |s| s.synced_height().to_raw() >= needed,
-        LONG_SCAN,
-    )
+    pscan_until(arc, pscan_seal, "the finality horizon", |s| {
+        s.synced_height().to_raw() >= needed
+    })
     .await;
 }
 
@@ -399,7 +392,7 @@ impl Draws {
 ///    shard; the refusal names the node's recovery fetch, the only way the
 ///    bodies come back (§6.5.4). The reconcile's alarm says the same.
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "slow lane (run_live_daemon_gates.sh ARMED_SLOW): requires SHEKYLD_BIN; closes two shards with some four hundred real spends, stakes, and walks past the discard boundary"]
+#[ignore = "body-fill-complete-tree lane (run_live_daemon_gates.sh ARMED_BODY_FILL_COMPLETE_TREE): requires SHEKYLD_BIN; closes two shards with some four hundred real spends, stakes, and walks past the discard boundary"]
 async fn e2e_complete_tree_bond_fills_serves_pulls_and_reconciles() {
     let seed = [0x5Au8; shekyl_crypto_pq::account::SEED_BYTES];
     let daemon = armed_daemon(&seed).await;
@@ -665,7 +658,7 @@ async fn e2e_complete_tree_bond_fills_serves_pulls_and_reconciles() {
 /// while the node holds it, posts at its first admissible join (§6.5.2) and
 /// is served.
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "slow lane (run_live_daemon_gates.sh ARMED_SLOW): requires SHEKYLD_BIN; closes a shard with some two hundred real spends and stakes a market bond onto it"]
+#[ignore = "body-fill-market lane (run_live_daemon_gates.sh ARMED_BODY_FILL_MARKET): requires SHEKYLD_BIN; closes a shard with some two hundred real spends and stakes a market bond onto it"]
 async fn e2e_market_bond_refuses_a_shard_that_is_not_final_then_fills_posts_and_serves() {
     let seed = [0x5Bu8; shekyl_crypto_pq::account::SEED_BYTES];
     let daemon = armed_daemon(&seed).await;

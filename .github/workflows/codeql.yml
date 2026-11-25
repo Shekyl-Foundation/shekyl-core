@@ -7,7 +7,7 @@ on:
   push:
     branches: [dev]
   schedule:
-    - cron: "30 4 * * 1"   # Every Monday at 4:30 AM UTC
+    - cron: "29 4 * * 1"   # Every Monday at 04:29 UTC
   workflow_dispatch:
 
 # A push run on `dev` is never cancelled once it runs (ruled 2026-11-19):
@@ -42,7 +42,7 @@ jobs:
           set -u
           base=""
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            base="${{ github.event.pull_request.base.sha }}"
+            base=$(python3 scripts/ci/change_scope.py --pr-base "${{ github.sha }}" "${{ github.event.pull_request.head.sha }}")
           fi
           head="${{ github.sha }}"
           if [ -z "$base" ]; then
@@ -77,11 +77,9 @@ jobs:
         uses: github/codeql-action/init@v4
         with:
           languages: rust
-          # The Rust extractor indexes source at the analyse step. A cargo
-          # build in this job is untraced, and linking shekyld needs the
-          # C++ remnant's archives, which only the CMake build supplies
-          # (rust/shekyld/build.rs). build-mode: none is that choice,
-          # declared. The C/C++ job below uses the same mode.
+          # The Rust extractor indexes source at the analyse step, and a
+          # cargo build in this job is untraced, so build-mode: none is that
+          # choice, declared. The C/C++ job below uses the same mode.
           build-mode: none
           config-file: ./.github/codeql/config.yml
 

@@ -1689,12 +1689,11 @@ fn transaction_paying_the_hybrid_wallet(amount: u64) -> shekyl_wire::Transaction
         .expect("account_from_seed for the hybrid wallet seed (stagenet)");
     let tx_key = shekyl_crypto_pq::TxKey::seeded([0x2du8; 32]);
     let constructed = construct_output(
-        &tx_key,
+        tx_key.output_positions(1).at(0).unwrap(),
         &blob.x25519_pk,
         &blob.ml_kem_ek,
         blob.spend_pk.as_canonical_bytes(),
         amount,
-        0,
     )
     .expect("construct an output to the hybrid wallet");
 

@@ -122,7 +122,7 @@ pub async fn run(
         }
         #[cfg(unix)]
         Listen::Socket(path) => {
-            let listener = bind_socket(path).await?;
+            let listener = bind_socket(path)?;
             say(&format!("Listening on {}.", path.display()));
             let served = accept_loop(
                 || async { listener.accept().await.map(|(io, _)| io) },
@@ -274,50 +274,33 @@ fn answer(status: StatusCode, text: &str) -> Response<Full<Bytes>> {
 }
 
 /// A socket at `path`, in a directory only this account can enter (R0
-/// §1.1's construction). A socket there that a tunnel answers on, or one
-/// whose server cannot be shown gone, is not taken over; one left by a
-/// stopped tunnel (the connection refused) is replaced.
+/// §1.1's construction), bound through the listeners' shared bind
+/// (`shekyl_rpc_transport::listen::bind_owner_only_socket`): 0600 from
+/// before it listens. A socket there that a tunnel answers on, or one whose
+/// server cannot be shown gone, is not taken over; one left by a stopped
+/// tunnel (the connection refused) is replaced.
 #[cfg(unix)]
-async fn bind_socket(path: &std::path::Path) -> Result<tokio::net::UnixListener, String> {
-    use shekyl_rpc_transport::listen::{
-        clear_replaceable_socket, owner_only_socket_dir, SocketDirRefusal, SocketRefusal,
-    };
-    let dir = path
+fn bind_socket(path: &std::path::Path) -> Result<tokio::net::UnixListener, String> {
+    use shekyl_rpc_transport::listen::{bind_owner_only_socket, ListenerLine};
+    let directory = path
         .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .ok_or_else(|| format!("{} names no directory", path.display()))?;
-    match owner_only_socket_dir(dir) {
-        Ok(()) => {}
-        Err(SocketDirRefusal::Missing | SocketDirRefusal::NotOwnerOnly) => {
-            return Err(format!(
-                "{} must be a directory only this account can enter (owned by uid {}, mode 0700)",
-                dir.display(),
-                shekyl_os_account::effective_uid()
-            ));
-        }
-        Err(SocketDirRefusal::Unreadable(why)) => return Err(format!("{}: {why}", dir.display())),
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| std::path::Path::new("."));
+    match bind_owner_only_socket(path) {
+        Ok(bound) => bound
+            .into_tokio()
+            .map_err(|e| format!("{}: {e}", path.display())),
+        Err(refusal) => Err(refusal.line(
+            path,
+            directory,
+            &ListenerLine {
+                listener: "the tunnel's socket",
+                holder: "a tunnel",
+                answers: &format!("another tunnel answers on {}", path.display()),
+                no_directory: &format!("{} names no directory", path.display()),
+            },
+        )),
     }
-    match clear_replaceable_socket(path).await {
-        Ok(()) => {}
-        Err(SocketRefusal::Answers) => {
-            return Err(format!("another tunnel answers on {}", path.display()));
-        }
-        Err(SocketRefusal::NotASocket) => {
-            return Err(format!(
-                "{} is not a socket; it is not replaced",
-                path.display()
-            ));
-        }
-        Err(SocketRefusal::Unknown(why)) => {
-            return Err(format!(
-                "{}: whether a tunnel still holds this socket is not known ({why}); it is not \
-                 replaced",
-                path.display()
-            ));
-        }
-        Err(SocketRefusal::NotRemoved(why)) => return Err(format!("{}: {why}", path.display())),
-    }
-    tokio::net::UnixListener::bind(path).map_err(|e| format!("{}: {e}", path.display()))
 }
 
 /// Header-read bound for a local consumer: the channel's message-1
@@ -461,5 +444,37 @@ mod tests {
         for bad in ["0.0.0.0:1", "[::]:1", "192.0.2.7:1"] {
             assert!(listen_check(bad.parse().unwrap()).is_err(), "{bad}");
         }
+    }
+
+    /// **The tunnel's socket is never bound in a directory others can
+    /// enter**, and the refusal names the directory; in an owner-only one
+    /// it is bound 0600 (Rick, 2026-11-22). Red edit: bind without the
+    /// shared bind's directory check.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_socket_is_bound_only_in_an_owner_only_directory() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().expect("a directory");
+        let path = dir.path().join("tunnel.sock");
+        for mode in [0o750, 0o755, 0o770] {
+            std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(mode))
+                .expect("chmod");
+            let refused = bind_socket(&path).expect_err("refused");
+            assert!(
+                refused.contains(&dir.path().display().to_string())
+                    && refused.contains("other accounts can enter")
+                    && refused.contains("the tunnel's socket is not bound there"),
+                "mode {mode:o}: {refused}"
+            );
+            assert!(!path.exists(), "nothing was bound under mode {mode:o}");
+        }
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700))
+            .expect("chmod 700");
+        let _listener = bind_socket(&path).expect("bound in an owner-only directory");
+        let mode = std::fs::metadata(&path)
+            .expect("the socket")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600, "the tunnel's socket is the owner's");
     }
 }

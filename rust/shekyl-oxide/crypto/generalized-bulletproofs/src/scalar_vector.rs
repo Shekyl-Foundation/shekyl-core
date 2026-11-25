@@ -5,10 +5,12 @@ use zeroize::Zeroize;
 
 use ciphersuite::group::ff::PrimeField;
 
+use crate::zip_exact;
+
 /// A scalar vector struct with the functionality necessary for Bulletproofs.
 ///
-/// The math operations for this may panic upon any invalid operation, such as if vectors of
-/// different lengths are added.
+/// Every elementwise operation between two vectors requires equal lengths, in every build
+/// ([`zip_exact`]); a mismatch panics rather than computing over a truncated vector.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub(crate) struct ScalarVector<F: PrimeField>(pub(crate) Vec<F>);
 
@@ -61,42 +63,21 @@ impl<F: PrimeField> Mul<F> for ScalarVector<F> {
 impl<F: PrimeField> Add<&ScalarVector<F>> for ScalarVector<F> {
     type Output = ScalarVector<F>;
     fn add(mut self, other: &ScalarVector<F>) -> Self {
-        debug_assert_eq!(
-            self.len(),
-            other.len(),
-            "adding scalar vectors of different lengths"
-        );
-        for (s, o) in self.0.iter_mut().zip(other.0.iter()) {
-            *s += o;
-        }
+        zip_exact(&mut self.0, &other.0, "addition", |s, o| *s += o);
         self
     }
 }
 impl<F: PrimeField> Sub<&ScalarVector<F>> for ScalarVector<F> {
     type Output = ScalarVector<F>;
     fn sub(mut self, other: &ScalarVector<F>) -> Self {
-        debug_assert_eq!(
-            self.len(),
-            other.len(),
-            "subtracting scalar vectors of different lengths"
-        );
-        for (s, o) in self.0.iter_mut().zip(other.0.iter()) {
-            *s -= o;
-        }
+        zip_exact(&mut self.0, &other.0, "subtraction", |s, o| *s -= o);
         self
     }
 }
 impl<F: PrimeField> Mul<&ScalarVector<F>> for ScalarVector<F> {
     type Output = ScalarVector<F>;
     fn mul(mut self, other: &ScalarVector<F>) -> Self {
-        debug_assert_eq!(
-            self.len(),
-            other.len(),
-            "multiplying scalar vectors of different lengths"
-        );
-        for (s, o) in self.0.iter_mut().zip(other.0.iter()) {
-            *s *= o;
-        }
+        zip_exact(&mut self.0, &other.0, "multiplication", |s, o| *s *= o);
         self
     }
 }
@@ -107,19 +88,13 @@ impl<F: PrimeField> ScalarVector<F> {
         ScalarVector(vec![F::ZERO; len])
     }
 
-    /// Create a new scalar vector of length `len` containing the powers of `x`.
-    ///
-    /// May panic if `len == 0`.
+    /// The first `len` powers of `x`, `x^0` through `x^(len - 1)`; empty when `len == 0`.
     pub(crate) fn powers(x: F, len: usize) -> Self {
-        debug_assert!(len != 0);
-        let mut res = Vec::with_capacity(len);
-        res.push(F::ONE);
-        res.push(x);
-        for i in 2..len {
-            res.push(res[i - 1] * x);
-        }
-        res.truncate(len); // Handle the edge case where `len == 1`
-        ScalarVector(res)
+        ScalarVector(
+            core::iter::successors(Some(F::ONE), |power| Some(*power * x))
+                .take(len)
+                .collect(),
+        )
     }
 
     /// If this scalar vector is empty.
@@ -132,38 +107,27 @@ impl<F: PrimeField> ScalarVector<F> {
         self.0.len()
     }
 
-    /// The inner, or dot, product of two scalar vectors.
+    /// The inner, or dot, product of two scalar vectors of the same length.
     ///
-    /// If one vector is shorter, its non-present values are considered `0`.
-    pub(crate) fn inner_product_without_length_checks<'a, V: Iterator<Item = &'a F>>(
-        &self,
-        mut vector: V,
-    ) -> F {
-        let mut res = F::ZERO;
-        for (a, b) in self.0.iter().zip(&mut vector) {
-            res += *a * b;
-        }
-        res
+    /// A different length is refused in every build: a `zip` would drop the longer vector's tail.
+    pub(crate) fn inner_product<'a, V: ExactSizeIterator<Item = &'a F>>(&self, vector: V) -> F {
+        assert_eq!(
+            self.len(),
+            vector.len(),
+            "inner product of vectors of different lengths"
+        );
+        self.inner_product_zero_extended(vector)
     }
 
-    /// The inner, or dot, product of two scalar vectors.
-    pub(crate) fn inner_product<'a, V: Iterator<Item = &'a F>>(&self, mut vector: V) -> F {
-        let mut count = 0;
-        let mut res = F::ZERO;
-        for (a, b) in self.0.iter().zip(&mut vector) {
-            res += *a * b;
-            count += 1;
-        }
-        debug_assert_eq!(
-            self.len(),
-            count,
-            "ScalarVector::inner_product where the rhs was shorter than the lhs"
-        );
-        debug_assert!(
-            vector.next().is_none(),
-            "ScalarVector::inner_product where lhs was shorter than the rhs"
-        );
-        res
+    /// The inner, or dot, product where the shorter vector is read as zero past its end.
+    ///
+    /// For polynomial coefficient vectors whose trailing zero coefficients are not stored, such as a
+    /// vector commitment's opening, which holds its values without their zero padding.
+    pub(crate) fn inner_product_zero_extended<'a, V: Iterator<Item = &'a F>>(
+        &self,
+        vector: V,
+    ) -> F {
+        self.0.iter().zip(vector).map(|(a, b)| *a * b).sum()
     }
 
     /// Split this scalar vector into two parts.
@@ -171,9 +135,8 @@ impl<F: PrimeField> ScalarVector<F> {
     /// `at` represents the index split at, with all elements before `at` being in the first vector
     /// and all elements at and after `at` being in the second vector.
     ///
-    /// May panic if `self.len() <= 1` or `at > self.len()`.
+    /// Panics if `at > self.len()`.
     pub(crate) fn split(mut self, at: usize) -> (Self, Self) {
-        debug_assert!(self.len() > 1);
         let r = self.0.split_off(at);
         (self, ScalarVector(r))
     }

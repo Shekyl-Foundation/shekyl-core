@@ -28,7 +28,7 @@
 //! (eviction) — are `shekyl-mempool`'s, held there and cited by the
 //! registry.
 
-use shekyl_wire::transaction::{Ct, Transaction, MAX_TX_EXTRA};
+use shekyl_wire::transaction::{Transaction, MAX_TX_EXTRA};
 
 use crate::census::PolicyRow;
 use crate::coverage::PolicyCoverage;
@@ -89,13 +89,9 @@ impl PolicyRule for M3 {
 
 impl M3 {
     fn admits(tx: &Transaction, floors: &[u64]) -> bool {
-        // A `Null` ct pays no fee; at `TxSlot::Lone` CEN-H15 has refused it
-        // before policy runs, and if it were not, a fee of zero is below
-        // every floor.
-        let fee = match &tx.ct {
-            Ct::Fcmp { fee, .. } => *fee,
-            Ct::Null(_) => 0,
-        };
+        // A `Null` ct has no fee field. CEN-H15 refused that shape before
+        // policy runs; a missing field pays nothing, which is below every floor.
+        let fee = tx.fee().unwrap_or(0);
         // The consensus weight (serialized size plus the BP+ clawback), the
         // value block weight and the wallet's fee estimate both charge.
         let weight = u64::try_from(tx.weight()).unwrap_or(u64::MAX);

@@ -5,8 +5,8 @@
 # BSD-3-Clause
 #
 # The economics sim's `#[ignore]`d tests, run by nightly.yml's
-# economics-sim-ignored job. The set lives here, in the tree under test,
-# and not in the workflow file: a scheduled workflow runs the default
+# economics-sim-ignored job, one leg per lane. The set lives here, in the
+# tree under test, and not in the workflow file: a scheduled workflow runs the default
 # branch's copy of nightly.yml over every branch in its matrix, so a set
 # written there judged `dev` by `main`'s list (#1110: a test deleted on dev
 # on 2026-10-15 stayed named on main's copy). Each branch now judges
@@ -30,7 +30,10 @@
 # 2's instruments (`--eup4`, §5.32) are pinned the same way: the full
 # narration on demand, its nightly scope here. So is the J x G grid
 # (`--jg-grid`, §5.33 and §5.34): the full grid, about 160 000 fold-years,
-# on demand on a fleet host; its nightly slice here.
+# on demand on a fleet host; its nightly slice here. So is EUP-4 prep 3's
+# whole-economy table (`--economies`, §5.37): the full table, 2 880 folds
+# to year 135, on demand on a fleet host, after its pre-flight (every
+# scenario but the baseline, at seed 1) has folded to its stops; its nightly slice (`--economies-slice`) here.
 #
 # Rule 47: the lane asserts its subject before running it. The crate's
 # ignored set must be EXACTLY the tests run here, the helpers and the
@@ -38,9 +41,12 @@
 # new ignored test fails too, until someone decides here whether it is run,
 # is a helper, or runs on demand.
 # The tests are passed by exact name, so the helpers cannot be reached by a
-# filter. Rule 46: the run's log is written and its exit kept, then the log
-# shown; no verdict travels through a pipe, and every pipe below carries
-# data to a consumer that reads to the end of its input.
+# filter. Rule 46: the run's output streams through `tee` and a line stamper,
+# both of which read to the end of their input, and the verdict is cargo's
+# own exit from PIPESTATUS, never the pipe's. Each line carries the UTC date
+# and time it arrived, so a run its job's timeout cuts still names the tests
+# that finished and when (libtest prints `test <name> ... ok` as each one
+# ends).
 #
 # `--check` (ignored_set_mode.sh) stops after this judgement. The per-PR
 # Rust job uses it; the run below is the nightly lane.
@@ -53,20 +59,52 @@
 # green and turned this lane red for three nights
 # (ECONOMICS_SIM_PRODUCTION_REBASE.md §5.31).
 #
+# The nightly lanes, each a leg of economics-sim-ignored with its own runner
+# and budget, so one slow test cannot cut the others and a test that grows
+# shows in its own leg:
+#   --pins    the narration pins, the steady control's pins and the ESR-11
+#             timing set;
+#   --reader  the per-mode reader test alone: about half the set's wall
+#             time, measured one test at a time on a 16-vCPU build host at
+#             dev 46f266ac08, 2026-11-22;
+#   --economies  the whole-economy table's nightly slice: 34 folds to year
+#             135, 645 to 936 s on the same host (#1476), and 621 s
+#             (a 13.5-minute leg) on a GitHub runner at ddf679f89c.
+# With no lane it runs the whole nightly set, as the jobs did before the
+# split; the schedule runs main's copy of nightly.yml, which calls it that
+# way until the split reaches main.
+#
 # The crate is a binary with no library target: the tests are in
 # `--bin shekyl-economics-sim`.
 set -euo pipefail
 . "$(dirname "$0")/ignored_set_mode.sh"
 lane=nightly
 budget='180m, the nightly job'
-if [ "${1:-}" = --narrations ]; then
-  lane=narrations
-  budget='55m, the per-PR narrations job'
-  shift
-fi
+case "${1:-}" in
+  --narrations)
+    lane=narrations
+    budget='55m, the per-PR narrations job'
+    shift
+    ;;
+  --pins)
+    lane=pins
+    budget="180m, the economics-sim-ignored job's pins leg"
+    shift
+    ;;
+  --reader)
+    lane=reader
+    budget="180m, the economics-sim-ignored job's reader leg"
+    shift
+    ;;
+  --economies)
+    lane=economies
+    budget="180m, the economics-sim-ignored job's economies leg"
+    shift
+    ;;
+esac
 ignored_set_mode "$@"
-if [ "$lane" = narrations ] && [ "$ignored_set_check" -eq 1 ]; then
-  echo "usage: $0 [--check | --narrations]" >&2
+if [ "$lane" != nightly ] && [ "$ignored_set_check" -eq 1 ]; then
+  echo "usage: $0 [--check | --narrations | --pins | --reader | --economies]" >&2
   exit 2
 fi
 cd "$(dirname "$0")/../../rust"
@@ -88,30 +126,48 @@ jg_grid::tests::jg_grid_nightly_narration_matches_the_committed_fixture'
 steady_pins='stage2::tests::stage2_steady_narrations_match_the_committed_fixtures
 esr10::tests::esr10_steady_nightly_narration_matches_the_committed_fixture
 eup4::tests::eup4_steady_nightly_narration_matches_the_committed_fixture'
-run_tests="$narration_pins
+pins="$narration_pins
 $steady_pins
-secret_draw_production::tests::the_esr11_timing_set_runs_and_the_table_renders
-baseline::tests::every_declared_reader_moves_its_report"
+secret_draw_production::tests::the_esr11_timing_set_runs_and_the_table_renders"
+reader='baseline::tests::every_declared_reader_moves_its_report'
+# The whole-economy table's nightly slice (§5.37): every economy under both
+# template rules on the baseline at N = 90, and the inherited zone's
+# A-honest and B, each to year 135. Nightly, not per PR: the narration pins
+# above already fold the fill and the composition its arms extend.
+economies='whole_economy::tests::economies_nightly_slice_matches_its_narration_and_table'
+run_tests="$pins
+$reader
+$economies"
 helpers='record::tests::regen_baseline_fixture
 stage2::tests::regen_stage2_narration_fixtures
 esr10::tests::regen_esr10_narration_fixtures
 eup4::tests::regen_eup4_narration_fixtures
 jg_grid::tests::regen_jg_grid_narration_fixtures
-growth_trace::tests::regen_growth_trace_narration_fixture'
+growth_trace::tests::regen_growth_trace_narration_fixture
+whole_economy::tests::regen_economies_nightly_fixtures
+whole_economy::tests::regen_economies_full_fixtures
+whole_economy::tests::regen_economies_table_fixture
+whole_economy::tests::regen_economies_full_narration_digest'
 on_demand='esr10::tests::esr10_narration_matches_the_committed_fixture
 eup4::tests::eup4_narration_matches_the_committed_fixture
 jg_grid::tests::jg_grid_narration_matches_the_committed_fixture
-growth_trace::tests::growth_trace_narration_matches_the_committed_fixture'
+growth_trace::tests::growth_trace_narration_matches_the_committed_fixture
+whole_economy::tests::every_preflight_cell_ends_at_the_horizon_or_a_named_edge
+whole_economy::tests::economies_table_matches_the_recorded_summary
+whole_economy::tests::economies_narration_renders_from_the_recorded_summary
+calibration::tests::stuffer_calibration_by_depth'
 
 # Rule 47 for this script's own list: it must name at least one test to
 # run. Counted by awk, which exits 0 on an empty list where `grep -c`
 # would not; the refusal below is then this script's words, not `set -e`'s
 # silence.
-if [ "$lane" = narrations ]; then
-  lane_tests=$narration_pins
-else
-  lane_tests=$run_tests
-fi
+case "$lane" in
+  narrations) lane_tests=$narration_pins ;;
+  pins) lane_tests=$pins ;;
+  reader) lane_tests=$reader ;;
+  economies) lane_tests=$economies ;;
+  *) lane_tests=$run_tests ;;
+esac
 want=$(printf '%s\n' "$lane_tests" | awk 'NF { n++ } END { print n + 0 }')
 if [ "$want" -eq 0 ]; then
   echo "::error::scripts/ci/ignored_set_economics_sim.sh names no test to run in the ${lane} lane"
@@ -137,13 +193,31 @@ echo "shekyl-economics-sim ignored set: exactly the listed set; the ${lane} lane
 ignored_set_stop_after_judgement
 
 START=$(date +%s)
-status=0
+# Each line of output as it arrives, with the UTC date and time, to the
+# job's log; the raw lines to sim-ignored.log for the count below. printf's
+# own `%(...)T` reads the clock without a process per line; TZ is set in
+# the function's own subshell (it runs as a pipeline stage), so the stamp
+# is UTC wherever the runner's zone points.
+stamp() {
+  local line
+  export TZ=UTC
+  while IFS= read -r line; do
+    printf '%(%Y-%m-%dT%H:%M:%SZ)T %s\n' -1 "$line"
+  done
+}
+set +e
 # shellcheck disable=SC2086 # one test name per word, by design
 cargo test --locked --release -p shekyl-economics-sim --bin shekyl-economics-sim -- \
-  --ignored --exact --nocapture $lane_tests > sim-ignored.log 2>&1 || status=$?
-cat sim-ignored.log
+  --ignored --exact --nocapture $lane_tests 2>&1 | tee sim-ignored.log | stamp
+pipe=("${PIPESTATUS[@]}")
+set -e
+status=${pipe[0]}
+if [ "${pipe[1]}" -ne 0 ] || [ "${pipe[2]}" -ne 0 ]; then
+  echo "::error::economics-sim ${lane} lane: the log's tee or stamper failed (${pipe[*]}); the run's verdict cannot be read"
+  exit 1
+fi
 if [ "$status" -ne 0 ]; then
-  echo "::error::economics-sim ${lane} lane: a named test failed. If a narration drifted and the sim change is intended, record it in ECONOMICS_SIM_PRODUCTION_REBASE.md and regenerate with regen_stage2_narration_fixtures, regen_esr10_narration_fixtures, regen_eup4_narration_fixtures or regen_jg_grid_narration_fixtures under SHEKYL_PINNED_REGEN_DECISION citing that entry; otherwise the sim drifted from its record."
+  echo "::error::economics-sim ${lane} lane: a named test failed. If a narration drifted and the sim change is intended, record it in ECONOMICS_SIM_PRODUCTION_REBASE.md and regenerate with regen_stage2_narration_fixtures, regen_esr10_narration_fixtures, regen_eup4_narration_fixtures, regen_jg_grid_narration_fixtures or regen_economies_nightly_fixtures under SHEKYL_PINNED_REGEN_DECISION citing that entry; otherwise the sim drifted from its record."
   exit "$status"
 fi
 ran=$(sed -n 's/^test result: ok\. \([0-9]*\) passed.*/\1/p' sim-ignored.log | tail -1)

@@ -50,6 +50,7 @@ use shekyl_crypto_pq::kem::{HybridKemSecretKey, HYBRID_KEM_SECRET_LEN};
 use shekyl_crypto_pq::multisig_envelope::{MultisigEnvelopeSecret, ENVELOPE_SECRET_LEN};
 use shekyl_crypto_pq::multisig_output::{MultisigGroupKey, MultisigMemberView};
 use shekyl_crypto_pq::signature::HybridPublicKey;
+use shekyl_crypto_pq::wallet_envelope::group_member_content_len;
 use shekyl_network::NetworkId;
 use zeroize::Zeroizing;
 
@@ -303,16 +304,9 @@ impl MemberFile {
     pub fn to_bytes(&self) -> Zeroizing<Vec<u8>> {
         let address = self.address.to_canonical_bytes();
         let address_len = u32::try_from(address.len()).expect("an address payload is a few KiB");
-        let mut out = Zeroizing::new(Vec::with_capacity(
-            4 + 1
-                + 4
-                + address.len()
-                + 1
-                + FIELD_LEN * (3 + self.verification_shares.len())
-                + 2 * HYBRID_KEM_SECRET_LEN
-                + ENVELOPE_SECRET_LEN
-                + HybridPublicKey::CANONICAL_LEN * self.envelope_public_keys.len(),
-        ));
+        let mut out = Zeroizing::new(Vec::with_capacity(group_member_content_len(
+            self.address.n_total(),
+        )));
         out.extend_from_slice(&MEMBER_FILE_MAGIC);
         out.push(MEMBER_FILE_VERSION);
         out.extend_from_slice(&address_len.to_le_bytes());
@@ -522,6 +516,15 @@ mod tests {
                 canonical(original.envelope_public_keys())
             );
             assert_eq!(*read.to_bytes(), *bytes);
+        }
+    }
+
+    /// The envelope's closed set of `0x04` lengths is this layout's length.
+    #[test]
+    fn a_member_file_is_the_length_the_envelope_admits() {
+        use shekyl_address::multisig_address::{MAX_MULTISIG_PARTICIPANTS, MIN_MULTISIG_THRESHOLD};
+        for n in MIN_MULTISIG_THRESHOLD..=MAX_MULTISIG_PARTICIPANTS {
+            assert_eq!(file(n, 0).to_bytes().len(), group_member_content_len(n));
         }
     }
 

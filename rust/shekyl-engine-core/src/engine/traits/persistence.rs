@@ -46,7 +46,7 @@
 //! [`shekyl_engine_file::WalletFile`] wrapping the on-disk artifact under a
 //! `Mutex`. Trait method signatures do not change; only the implementor type
 //! does. Callers that bind against `P: PersistenceEngine` get the swap-in for
-//! free. The `impl Future + Send` returns on `save_state` / `save_prefs` /
+//! free. The `impl Future + Send` returns on `save_state` /
 //! `rotate_password` already match the actor model: at Stage 1 the future is
 //! eager (`std::future::ready` wrapping a synchronous body); at Stage 4 the
 //! same signature carries a mailbox round-trip.
@@ -55,19 +55,16 @@
 //! [`docs/design/STAGE_1_PR_6_PERSISTENCE_ENGINE.md`]: ../../../../../docs/design/STAGE_1_PR_6_PERSISTENCE_ENGINE.md
 
 use shekyl_crypto_pq::wallet_envelope::KdfParams;
-use shekyl_engine_prefs::{PrefsHmacKey, WalletPrefs};
 use shekyl_engine_state::WalletLedger;
 
 use crate::engine::error::PersistenceError;
 use crate::engine::lifecycle::Credentials;
 use crate::engine::sealing_keys::StateWrapKey;
 
-/// On-disk wallet persistence: state flush, prefs flush, password
-/// rotation (§2.6).
+/// On-disk wallet persistence: state flush and password rotation (§2.6).
 ///
 /// Implementors own the wallet's durable artifacts — the `.wallet`
-/// state file, the `<base>.prefs.toml` preferences file, and the
-/// `.wallet.keys` key file plus its advisory lock — and serve the
+/// state file and the `.wallet.keys` key file plus its advisory lock — and serve the
 /// flush/rotation surface against them. Hydration (`open` / `create`)
 /// is deliberately **off-trait**: it stays on
 /// [`Engine`](super::super::Engine) constructors per Q9.11, because
@@ -163,46 +160,6 @@ pub(crate) trait PersistenceEngine: Send + Sync + 'static {
         state_key: &StateWrapKey,
         ledger: &WalletLedger,
     ) -> impl std::future::Future<Output = Result<shekyl_engine_file::Durability, Self::Error>> + Send;
-
-    /// Seal and atomically write the wallet's preferences file
-    /// (`<base>.prefs.toml`), HMAC'd with `prefs_key`.
-    ///
-    /// `prefs_key` is the session [`PrefsHmacKey`] derived at open.
-    /// The Stage 1 implementor writes through
-    /// `shekyl_engine_prefs::save_prefs`, which serializes `prefs`,
-    /// appends the HMAC tag, and persists via the prefs crate's own
-    /// atomic-write path. Returns a [`Send`] future for the same
-    /// sync-lifecycle-driving reason as [`save_state`](Self::save_state).
-    ///
-    /// # Cancellation
-    ///
-    /// Class **b** per §4: a prefs-flush side effect, wrapped in eager
-    /// [`std::future::ready`] (synchronous body, no interior `await`).
-    /// The prefs write is atomic at the crate boundary, so a dropped
-    /// future or a crash leaves the prior `.prefs.toml` intact or the
-    /// new one in place.
-    ///
-    /// # Idempotency
-    ///
-    /// **Yes** per §4: last-write-wins. Repeated saves of the same
-    /// `prefs` converge to equivalent on-disk preferences.
-    ///
-    /// # Panics
-    ///
-    /// **Does not panic on mutex poisoning.** Unlike
-    /// [`save_state`](Self::save_state) and
-    /// [`rotate_password`](Self::rotate_password), the Stage 1
-    /// implementor routes this call through
-    /// `shekyl_engine_prefs::save_prefs(self.state_path(), …)`, which
-    /// reads the lockless `state_path()` accessor and never acquires
-    /// the [`WalletFile`](shekyl_engine_file::WalletFile) mutex.
-    /// Failures (serialization, HMAC, filesystem) surface as
-    /// [`Self::Error`] via `PersistenceError::Prefs`, not as a panic.
-    fn save_prefs(
-        &self,
-        prefs_key: &PrefsHmacKey,
-        prefs: &WalletPrefs,
-    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send;
 
     /// Password-handling moment: Argon2 rewrap of the keys file. Does not
     /// rewrite region-2 ciphertext on success (spec §4.2).

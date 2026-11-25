@@ -5,10 +5,9 @@
 
 //! CLI-ephemeral safety overrides applied at wallet open.
 //!
-//! Implements the "CLI-ephemeral overrides" layer of the three-layer
-//! preference model pinned in
-//! [`docs/WALLET_PREFS.md`](../../../../docs/WALLET_PREFS.md) §2.3 and
-//! §3.3. These values are request-scoped: they are not persisted
+//! Implements the session-override layer of
+//! [`docs/WALLET_SETTINGS.md`](../../../../docs/WALLET_SETTINGS.md) §3.
+//! These values are request-scoped: they are not persisted
 //! anywhere and die with the `WalletFile` that carries them.
 //!
 //! Layering policy:

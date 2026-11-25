@@ -13,8 +13,8 @@
 use shekyl_economics::{quantized_fee, relay_floor_admits, FEE_QUANTIZATION_MASK};
 use shekyl_fcmp::MAX_INPUTS;
 use shekyl_tx_weight::{
-    converge_weight_fee, converge_weight_fee_by, predict_weight, InputCount, OutputCount,
-    MAX_OUTPUTS, MAX_TREE_DEPTH,
+    converge_fee_by, converge_weight_fee, converge_weight_fee_by, predict_weight, weight_at_fee,
+    InputCount, OutputCount, MAX_OUTPUTS, MAX_TREE_DEPTH,
 };
 
 fn shape(n_in: usize, n_out: usize) -> (InputCount, OutputCount) {
@@ -54,6 +54,41 @@ fn loop_lattice(
     seed: u64,
 ) -> Option<u64> {
     converge_weight_fee_by(n_in, n_out, depth, seed, lattice(rate))
+}
+
+#[test]
+fn a_measured_weight_converges_to_the_predicted_fee() {
+    // A caller that cannot predict its shape measures one build at a probe
+    // fee and converges on `weight_at_fee` (the chain forge's bond posts and
+    // claims). Wherever the predictor models the shape, that fee is the
+    // wallet's, whatever the probe's varint width. Red: `weight_at_fee`
+    // keeping the probe's varint, or adding instead of replacing it.
+    for (n_in, n_out) in [shape(1, 2), shape(2, 2), shape(MAX_INPUTS, MAX_OUTPUTS)] {
+        for depth in [1u8, 7, MAX_TREE_DEPTH] {
+            let weight = predict_weight(n_in, n_out, depth, 0) as u64;
+            for rate in rates_for(weight) {
+                let predicted = converge_weight_fee_by(n_in, n_out, depth, 0, lattice(rate));
+                for probe in [0u64, 1, 1 << 7, 1 << 21, 1 << 42, u64::MAX] {
+                    let measured = predict_weight(n_in, n_out, depth, probe) as u64;
+                    let fee = converge_fee_by(
+                        |fee| weight_at_fee(measured, probe, fee),
+                        0,
+                        lattice(rate),
+                    );
+                    assert_eq!(
+                        fee, predicted,
+                        "{n_in:?} {n_out:?} depth {depth} rate {rate} probe {probe}"
+                    );
+                    if let Some(fee) = fee {
+                        assert_eq!(
+                            weight_at_fee(measured, probe, fee),
+                            Some(predict_weight(n_in, n_out, depth, fee) as u64)
+                        );
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[test]

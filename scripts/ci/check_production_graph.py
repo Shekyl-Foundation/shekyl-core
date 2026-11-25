@@ -9,7 +9,7 @@
 
 `CHAIN_FORGE.md` §11.1, item 2 (`CF-1b`), over the shipped build graphs
 `shipped_graph.py` computes (`CF-R26`): this repository's release
-(`cmake/BuildRust.cmake`'s roots in one invocation, with its release
+(`rust/xtask/matrix.toml`'s roots in one invocation, with its release
 features) and the GUI wallet's (its pinned shekyl-core edges). Every
 `[target.*]` table is followed, so the union over the release platforms is
 read.
@@ -82,6 +82,7 @@ from shipped_graph import (  # noqa: E402
     release_features,
     shipped_crates,
 )
+from check_p_fetch_dep_cut import BUILD_RUST  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -235,21 +236,21 @@ def selftest() -> int:
         "measure-only": manifest("measure-only", {}),
         "wallet-core": manifest("wallet-core", {}),
     }
-    cmake = (
-        "if(NOT IOS)\n"
-        "  set(_shekyl_rust_bin_features --features shekyld/extra)\n"
-        "  if(SHEKYL_MEASUREMENT_SPANS)\n"
-        "    set(_shekyl_rust_bin_features --features lib/measure)\n"
-        "  endif()\n"
-        "endif()\n"
-    )
+    committed = BUILD_RUST.read_text()
+    # A release feature in the invocations' arguments; the measurement
+    # build's own feature stays in [measurement], which no invocation holds.
+    matrix = committed.replace(
+        'cargo_args = ["build", "--locked", "--release"]',
+        'cargo_args = ["build", "--locked", "--release", "--features", "shekyld/extra"]',
+        1,
+    ).replace("[measurement]\nfeatures = [\n", "[measurement]\nfeatures = [\n    \"lib/measure\",\n", 1)
     in_set = [
         ("a crate one platform alone pulls in", "windows-only"),
         ("a crate only a release feature pulls in", "feature-only"),
         ("a crate only the GUI wallet pulls in", "wallet-core"),
     ]
     try:
-        shipped = shipped_crates(graphs(members, {}, ["shekyld"], release_features(cmake), pin))
+        shipped = shipped_crates(graphs(members, {}, ["shekyld"], release_features(matrix), pin))
     except GraphError as e:
         print(f"selftest FAIL: the set's own case raised: {e}")
         return 1
@@ -265,29 +266,11 @@ def selftest() -> int:
     else:
         print("selftest ok: a measurement-only feature's crate is not in the release set")
     refused = [
-        ("a features set under another conditional",
-         "if(FOO)\n  set(_shekyl_rust_bin_features --features shekyld/extra)\nendif()\n"),
-        ("no features set at all", "set(_other x)\n"),
-        ("a features set in the else of the measurement build",
-         "if(SHEKYL_MEASUREMENT_SPANS)\n"
-         "  set(_shekyl_rust_bin_features --features lib/measure)\n"
-         "else()\n"
-         "  set(_shekyl_rust_bin_features --features shekyld/extra)\n"
-         "endif()\n"),
-        ("a features set in an else nested under NOT IOS",
-         "if(NOT IOS)\n"
-         "  if(SHEKYL_MEASUREMENT_SPANS)\n"
-         "    set(_shekyl_rust_bin_features --features lib/measure)\n"
-         "  else()\n"
-         "    set(_shekyl_rust_bin_features --features shekyld/extra)\n"
-         "  endif()\n"
-         "endif()\n"),
-        ("a features set in an elseif",
-         "if(SHEKYL_MEASUREMENT_SPANS)\n"
-         "  set(_shekyl_rust_bin_features --features lib/measure)\n"
-         "elseif(NOT SHEKYL_MEASUREMENT_SPANS)\n"
-         "  set(_shekyl_rust_bin_features --features shekyld/extra)\n"
-         "endif()\n"),
+        ("a --features with no value",
+         committed.replace('cargo_args = ["build", "--locked", "--release"]',
+                           'cargo_args = ["build", "--locked", "--release", "--features"]', 1)),
+        ("a matrix with a key nothing reads",
+         committed.replace("[build]\n", "[build]\nfeatures = [\"shekyld/extra\"]\n", 1)),
     ]
     for name, text in refused:
         try:

@@ -1,0 +1,42 @@
+CA-3 ML-DSA localisation, diagnostic (no registered line): signing alone (fips204 try_sign_with_seed, keys generated before the loop)
+arch=aarch64 os=linux samples_per_comparison=50000 seed=20261124 matched-pair candidates_drawn=27 expand_s_bytes=2488/2488 expand_a_rejected=10/10 replicates=true/true
+  check entries=50500 returned=50500 verdict=as-intended
+  quantile=1 class0=1012091 class1=1012831 diff=-740
+  quantile=5 class0=1013443 class1=1014257 diff=-814
+  quantile=10 class0=1025850 class1=1026905 diff=-1055
+  quantile=25 class0=1495154 class1=1501007 diff=-5853
+  quantile=50 class0=2455728 class1=2458932 diff=-3204
+  quantile=75 class0=3902550 class1=3910142 diff=-7592
+  quantile=90 class0=5835974 class1=5840178 diff=-4204
+  quantile=95 class0=7281019 class1=7295500 diff=-14481
+  quantile=99 class0=11108052 class1=11120219 diff=-12167
+  crop=raw n0=24976 n1=25024 mean0=2986077.3 mean1=3031408.1 diff=-45330.7 t=-2.28
+  max_at_crop=0 cutoff=1014443 n0=1953 n1=1377 diff=-441.8 t=-16.39
+  check entries=50500 returned=50500 verdict=as-intended
+  quantile=1 class0=1012147 class1=1012146 diff=1
+  quantile=5 class0=1013609 class1=1013683 diff=-74
+  quantile=10 class0=1025923 class1=1026071 diff=-148
+  quantile=25 class0=1496155 class1=1500636 diff=-4481
+  quantile=50 class0=2456802 class1=2458061 diff=-1259
+  quantile=75 class0=3902866 class1=3906847 diff=-3981
+  quantile=90 class0=5837622 class1=5836900 diff=722
+  quantile=95 class0=7305222 class1=7282149 diff=23073
+  quantile=99 class0=10658673 class1=10670524 diff=-11851
+  crop=raw n0=25032 n1=24968 mean0=2989476.8 mean1=2999674.2 diff=-10197.3 t=-0.52
+  max_at_crop=41 cutoff=7270316 n0=23585 n1=23614 diff=-31326.4 t=-2.24
+  check entries=50500 returned=50500 verdict=as-intended
+  quantile=1 class0=1012239 class1=1024294 diff=-12055
+  quantile=5 class0=1013850 class1=1025868 diff=-12018
+  quantile=10 class0=1026275 class1=1038146 diff=-11871
+  quantile=25 class0=1500674 class1=1509581 diff=-8907
+  quantile=50 class0=2457691 class1=2469616 diff=-11925
+  quantile=75 class0=3905995 class1=3914495 diff=-8500
+  quantile=90 class0=5836345 class1=5849678 diff=-13333
+  quantile=95 class0=7278371 class1=7293297 diff=-14926
+  quantile=99 class0=11127126 class1=11123720 diff=3406
+  crop=raw n0=24992 n1=25008 mean0=3004269.0 mean1=3006616.6 diff=-2347.6 t=-0.12
+  max_at_crop=0 cutoff=1025775 n0=2337 n1=1165 diff=-10423.4 t=-163.85
+diagnostic=fixed-a-vs-fixed-b max_abs_t=16.39 median_ns=2447580 raw_sd_ns=2218871 n0=24976 n1=25024
+null=fixed-a-vs-fixed-a max_abs_t=2.24 median_ns=2457376 raw_sd_ns=2197694 n0=25032 n1=24968
+control=fixed-a-vs-fixed-a(planted 0.5%) max_abs_t=163.85 median_ns=2458413 raw_sd_ns=2205398 n0=24992 n1=25008
+exit=0

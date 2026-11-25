@@ -11,6 +11,7 @@ use crate::types::{OutputInfo, SpendInput, TreeContext};
 use crate::{MAX_INPUTS, MAX_OUTPUTS};
 use shekyl_ct_balance::{InputTerm, OutputTerm};
 use shekyl_units::AtomicUnits;
+use shekyl_wire::transaction::MIN_NON_COINBASE_OUTPUTS;
 
 /// Prover-side input validation for FCMP++ signing.
 ///
@@ -44,6 +45,11 @@ pub(crate) fn validate_inputs(
     }
     if outputs.is_empty() {
         return Err(TxBuilderError::NoOutputs);
+    }
+    // CEN-I1: consensus refuses a non-coinbase transaction with fewer outputs,
+    // so the builder does not make one.
+    if outputs.len() < MIN_NON_COINBASE_OUTPUTS {
+        return Err(TxBuilderError::TooFewOutputs(outputs.len()));
     }
     if outputs.len() > MAX_OUTPUTS {
         return Err(TxBuilderError::TooManyOutputs(outputs.len()));

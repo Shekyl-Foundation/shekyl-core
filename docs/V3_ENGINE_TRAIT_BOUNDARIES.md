@@ -267,7 +267,7 @@ The inlining-for-audit argument is load-bearing at `KeyEngine` —
 every key access should inline into a single audited compilation
 unit so that the compiler's cross-function analysis sees the entire
 secret-handling path. The argument is materially weaker at
-`PersistenceEngine::save_prefs`, `LedgerEngine::balance`, or
+`PersistenceEngine::rotate_password`, `LedgerEngine::balance`, or
 `EconomicsEngine::base_emission_at`, where `dyn`-dispatch overhead
 is irrelevant and the auditing bar is lower. We choose the same
 generic-bounded shape across all seven traits anyway, because (a)
@@ -484,7 +484,7 @@ demonstrate the criteria mechanically:
   shape: methods on `DaemonEngine` or inherent on `Engine<S>`.
 - **`SubaddressEngine`** (proposed for subaddress-management
   workflows). Fails (1) — subaddress data lives in
-  `PersistenceEngine` via `WalletPrefs` and is derived via
+  `PersistenceEngine` and is derived via
   `KeyEngine`. Fails (2) — no independent failure domain;
   subaddress operations fail when key or persistence fails.
   Correct shape: methods on `KeyEngine` (derivation) and
@@ -2014,12 +2014,6 @@ pub trait PersistenceEngine {
         ledger: &WalletLedger,
     ) -> impl Future<Output = Result<(), Self::Error>> + Send;
 
-    fn save_prefs(
-        &self,
-        prefs_key: &PrefsHmacKey,
-        prefs: &WalletPrefs,
-    ) -> impl Future<Output = Result<(), Self::Error>> + Send;
-
     fn rotate_password(
         &self,
         old: &Credentials<'_>,
@@ -2030,13 +2024,14 @@ pub trait PersistenceEngine {
 ```
 
 **PR 6 Phase 0a amendment (F5(b), 2026-05-27).** Steady-state saves take
-HKDF-derived sealing keys (`StateWrapKey` = `wrap_key_region_2`,
-`PrefsHmacKey` from `shekyl-engine-prefs`), not `Credentials` or password
+HKDF-derived sealing keys (`StateWrapKey` = `wrap_key_region_2`), not
+`Credentials` or password
 bytes. `type Error` is [`PersistenceError`](../rust/shekyl-engine-core/src/engine/error/lifecycle.rs)
 (not [`OpenError`](../rust/shekyl-engine-core/src/engine/error/lifecycle.rs));
 [`Engine::close`](../rust/shekyl-engine-core/src/engine/lifecycle/session.rs) maps
 persist failures via `OpenError::Persistence`. [`Engine::change_password`](../rust/shekyl-engine-core/src/engine/lifecycle/session.rs)
-uses [`ChangePasswordError`](../rust/shekyl-engine-core/src/engine/error/lifecycle.rs).
+returns `PersistenceError` (the prefs flush that once followed the rotation
+was deleted with the prefs file, 2026-11-21).
 Binding form, open ritual, and commit plan:
 [`docs/design/STAGE_1_PR_6_PERSISTENCE_ENGINE.md`](completed/STAGE_1_PR_6_PERSISTENCE_ENGINE.md).
 
@@ -2048,7 +2043,7 @@ default Stage 1 type) holds two distinct categories of state:
    lock-free; the field types support `&` access without
    coordination.
 2. **Mutable file state** — the KEK rewrap state and the
-   atomic-write coordination for `save_state` / `save_prefs` /
+   atomic-write coordination for `save_state` /
    `rotate_password`. Held behind `Mutex<WalletFileState>`. All
    mutating async methods acquire the mutex internally.
 
@@ -3724,7 +3719,6 @@ not the cancellation surface; the token is).
 | `PersistenceEngine` | `network` | sync | yes (read-only) | n/a |
 | `PersistenceEngine` | `capability` | sync | yes (read-only) | n/a |
 | `PersistenceEngine` | `save_state` | async | yes (last-write-wins; saving the same state twice yields the same final on-disk bytes) | **b** (writes file; Stage 4 drop after enqueue is observation-only) |
-| `PersistenceEngine` | `save_prefs` | async | yes (last-write-wins) | **b** |
 | `PersistenceEngine` | `rotate_password` | async | no (state changes per call; old credentials are no longer valid after a successful rotation) | **b** (writes file; Stage 4 drop is observation-only — rotation may complete after caller drops) |
 | `EconomicsEngine` | `base_emission_at` | sync | yes (read-only; deterministic given height at V3.0 neutral projection; V3.x adaptive-burn state may affect other methods — not this height-keyed projection) | n/a |
 | `EconomicsEngine` | `burn_amount` | sync | yes (read-only; deterministic given inputs at V3.0; deterministic given inputs plus state at V3.x) | n/a |

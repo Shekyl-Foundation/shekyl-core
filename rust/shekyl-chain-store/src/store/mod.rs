@@ -151,7 +151,7 @@ pub use undo::{RawRows, Restorable};
 pub use view::BatchView;
 pub use write::{invariant_of, WriteBatch};
 
-pub use crate::creation::CutShort;
+pub use crate::creation::{CutShort, StoreCheck};
 
 use std::path::Path;
 
@@ -471,6 +471,30 @@ impl ChainStore {
         Ok((store, cut))
     }
 
+    /// The read-only check of the store at `path` under `genesis`: what
+    /// [`with_genesis`](Self::with_genesis) would decide on the file's
+    /// header, and whether it could claim the file, with nothing written
+    /// and no lock held past the return.
+    ///
+    /// A daemon checks every store this way before it opens any of them
+    /// writable, so a start one store refuses leaves the others as it found
+    /// them (a writable open rewrites redb's header even when it changes
+    /// nothing else). The open looks again under its lock: the file can
+    /// change between the check and the open.
+    ///
+    /// # Errors
+    ///
+    /// The refusals [`with_genesis`](Self::with_genesis) makes on the file's
+    /// header: the engine's, a foreign file, another layout or schedule, and
+    /// [`StoreCannot::ForeignGenesis`].
+    pub fn check_with_genesis(
+        path: impl AsRef<Path>,
+        horizons: Horizons,
+        genesis: &GenesisPin,
+    ) -> Result<StoreCheck, StoreError> {
+        open::check_at(path.as_ref(), horizons, GenesisAdmission::Pinned(genesis))
+    }
+
     /// Open an existing store read-only and admit `genesis`.
     ///
     /// The reader twin of [`with_genesis`](Self::with_genesis): the same
@@ -771,6 +795,10 @@ mod archival_write_tests;
 #[cfg(test)]
 #[path = "slash_scan_bench_tests.rs"]
 mod slash_scan_bench_tests;
+
+/// The stores' read-only checks: nothing written, the open's refusals.
+#[cfg(test)]
+mod check_tests;
 
 #[cfg(test)]
 #[path = "alt_tests.rs"]

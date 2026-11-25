@@ -19,6 +19,14 @@ name: nightly/live-daemon-slow-gates
 # on the fixed interval they replaced. The job's timeout is the
 # hosted-runner maximum, so that a long draw is not reported as a red.
 #
+# The `body-fill` job's legs, GATE_LANE=body-fill-complete-tree and
+# GATE_LANE=body-fill-market, run the persona body-store fill's two walks
+# (ARMED_BODY_FILL_*), one walk each, with a timeout of their own. In the
+# slow leg they took it past its limit: on 2026-11-21 the CompleteTree walk passed in 7,214 s and the
+# market walk was then cut at the job's 240 minutes. Until they start from
+# a forged chain (ruled 2026-11-21), most of each walk is that chain being
+# built with real spends.
+#
 # A leg runs a lane only where the CHECKED-OUT revision has it. The matrix
 # is this file's, but each leg checks out matrix.branch and runs that
 # branch's run_live_daemon_gates.sh: a dispatch from a branch whose matrix
@@ -36,34 +44,67 @@ name: nightly/live-daemon-slow-gates
 # quietly: the arm gone is red here, a listed name gone or an empty list
 # is red in the script (its name checks and its empty-lane check). The
 # skip ends by itself when the lane reaches the other branch; there is no
-# exclude to remember to delete. The probe reads text, so the matrix's
-# `lane:` list stays on one line and the script's arms stay `<lane>)`.
+# exclude to remember to delete. The probe reads text: it finds the lane
+# as `"lane":"<lane>"` in the planner's fallback matrix, or as an item of a
+# pre-planner revision's `lane: [...]` list, so the fallback matrix stays
+# on one line and the script's arms stay `<lane>)`.
 #
 # Build recipe mirrors build.yml's ubuntu:24.04 job (the one that runs the
-# per-PR lane): same container, same apt set, same BUILD_DEFAULT_LINUX, so
+# per-PR lane): same container, same apt set, same BUILD_LINUX, so
 # the shekyld under test here is the same shape the per-PR gates run against.
 #
-# A red here is PUSHED at a human, not left to be noticed: the on-failure
-# step opens (or comments on) a tracking issue. That route is the named
-# criterion under which PR #660's rejection of a cost tier reverts — a
-# nightly tier without it "joins a silence" (run_live_daemon_gates.sh header).
-# Removing the notification step voids the split; the slow gates then move
-# back to the per-PR ARMED list.
+# A red here is PUSHED at a human, not left to be noticed: the `report-red`
+# job opens (or comments on) a tracking issue for each red leg. That route
+# is the named criterion under which PR #660's rejection of a cost tier
+# reverts — a nightly tier without it "joins a silence"
+# (run_live_daemon_gates.sh header). Removing it voids the split; the slow
+# gates then move back to the per-PR ARMED list.
+#
+# A leg that runs past its `timeout-minutes` ends `cancelled`, not
+# `failure`, and is red: `report-red` runs on every scheduled run not
+# cancelled as a whole, and scripts/ci/nightly_red.py names a leg cut at its
+# limit as a timeout. A job timeout leaves `!cancelled()` true for the jobs
+# after it, and a run cancelled as a whole reports nothing, whether it was
+# running or waiting (both shown on a scratch probe, 2026-11-22: the
+# reporter ran after a 1-minute timeout and classed it "timed out"). This
+# workflow has no concurrency group, so a scheduled run is never superseded:
+# a run cancelled as a whole was cancelled by hand, and it reports nothing
+# because the person who cancelled it already knows (ruled 2026-11-22).
+# It ran on `failure()` until 2026-11-21, when the slow leg's 240-minute cut
+# opened no issue. The reporter is its own job and the only one that can
+# write: the legs run the code of the branch they check out.
+#
+# A dispatch picks its legs: `lane` runs one lane (the others end green with
+# a notice), `ref` runs one leg over that ref in place of main and dev (to
+# measure a branch's lanes before it merges, as nightly.yml's `ref` does),
+# and `report` sends its reds to the tracking issues as the schedule's do.
 
 on:
   schedule:
-    - cron: "30 3 * * *"
+    - cron: "43 3 * * *"
   workflow_dispatch:
+    inputs:
+      lane:
+        description: 'The lane to run; the others end green with a notice'
+        type: choice
+        options: [all, slow, embargo, body-fill-complete-tree, body-fill-market]
+        default: all
+      ref:
+        description: 'Run over this one ref (a branch or a commit) in place of main and dev. For proving a lane on a branch.'
+        required: false
+        default: ''
+      report:
+        description: 'Send this run''s reds to the tracking issues'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
-  # For the on-failure notification step: a red must reach a human.
-  issues: write
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  BUILD_DEFAULT_LINUX: 'cmake -S . -B build -D ARCH="default" -D CMAKE_BUILD_TYPE=Release && cmake --build build --target all'
-  APT_INSTALL_LINUX: 'apt -y install build-essential cmake git curl clang libclang-dev'
+  BUILD_LINUX: 'cd rust && cargo xtask build --out ../build/bin'
+  APT_INSTALL_LINUX: 'apt -y install build-essential git curl clang libclang-dev'
   APT_SET_CONF: |
     tee -a /etc/apt/apt.conf.d/80-custom << EOF
     Acquire::Retries "3";
@@ -72,22 +113,68 @@ env:
     EOF
 
 jobs:
+  plan:
+    # Which legs run tonight (scripts/ci/nightly_skip.py): a leg whose key
+    # (the commit it tests, this file, the toolchain pin, the pinned test
+    # chains, the runner image) matches a scheduled run in the last week
+    # where it passed is skipped, and the summary names that run. Fuzzing,
+    # property tests with no fixed seed and anything whose verdict is about
+    # an outside host are never skipped; a dispatch runs
+    # every leg it selects. If this job does not succeed, every planned job
+    # falls back to its full matrix (its `matrix` expression): the failure
+    # runs more, never less.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10  # API reads only: the last week's scheduled runs, their jobs and keys
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      slow-gates: ${{ steps.plan.outputs['slow-gates'] }}
+      body-fill: ${{ steps.plan.outputs['body-fill'] }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: |
+            scripts/ci/nightly_skip.py
+            scripts/ci/check_workflows_parse.py
+            .github/workflows/nightly-live-daemon-slow.yml
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: plan tonight's legs
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          INPUT_REF: ${{ inputs.ref }}
+          JOB_CONTEXT: ${{ toJSON(job) }}
+        run: python3 scripts/ci/nightly_skip.py --plan --workflow .github/workflows/nightly-live-daemon-slow.yml
+      - name: the keys, for the nights after
+        uses: actions/upload-artifact@v6
+        with:
+          name: nightly-keys
+          path: nightly-keys.json
+          retention-days: 8
+
   slow-gates:
+    name: slow-gates (${{ matrix.branch }}, ${{ matrix.lane }})
+    needs: [plan]
+    if: ${{ !cancelled() && needs.plan.outputs['slow-gates'] != '{"include":[]}' }}
     # Scheduled workflows execute from the default branch (main); the branch
     # matrix makes each run cover both active branches, the nightly.yml
     # house pattern. workflow_dispatch with ref=dev exercises a newer config
     # before it lands on main.
     runs-on: ubuntu-latest
-    # One number for both legs (the timeout gate takes a whole number): the
-    # hosted-runner maximum, which the embargo leg needs.
-    timeout-minutes: 360
+    # One number for both legs (the timeout gate takes a whole number), set
+    # generously below the hosted maximum for the first nightly runs and
+    # tightened from their times (ruled 2026-11-22). Measured on the hosted
+    # runner: the slow leg 146 to 159 minutes on dev, 2026-11-18 to 20,
+    # before the body-fill walks joined it and after they left; the embargo
+    # leg 43 minutes on its first run (2026-11-22, a dispatch on this
+    # branch). 330 is about twice the slow leg.
+    timeout-minutes: 330
     strategy:
       fail-fast: false
-      matrix:
-        branch: [main, dev]
-        # One line: the lane probe below reads this list from the
-        # checked-out copy of this file.
-        lane: [slow, embargo]
+      matrix: ${{ fromJSON(needs.plan.outputs['slow-gates'] || '{"include":[{"branch":"main","lane":"slow"},{"branch":"main","lane":"embargo"},{"branch":"dev","lane":"slow"},{"branch":"dev","lane":"embargo"}]}') }}
     container:
       image: ubuntu:24.04
       env:
@@ -103,7 +190,7 @@ jobs:
         run: git config --global --add safe.directory '*'
       - uses: actions/checkout@v5
         with:
-          ref: ${{ matrix.branch }}
+          ref: ${{ matrix.sha || matrix.branch }}
           submodules: recursive
       - name: does this revision have the ${{ matrix.lane }} lane
         # See the header: run where the checked-out script has the lane,
@@ -114,8 +201,14 @@ jobs:
         env:
           LANE: ${{ matrix.lane }}
           BRANCH: ${{ matrix.branch }}
+          SELECTED: ${{ inputs.lane || 'all' }}
         run: |
           set -euo pipefail
+          if [ "$SELECTED" != all ] && [ "$SELECTED" != "$LANE" ]; then
+            echo "::notice title=$LANE lane not selected::this dispatch runs the $SELECTED lane only. This leg ran no gate."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           script=scripts/ci/run_live_daemon_gates.sh
           workflow=.github/workflows/nightly-live-daemon-slow.yml
           [ -f "$script" ] || {
@@ -126,7 +219,7 @@ jobs:
             echo "run=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if [ -f "$workflow" ] && grep -Eq "^[[:space:]]*lane:[[:space:]]*\[[^]]*\b${LANE}\b" "$workflow"; then
+          if [ -f "$workflow" ] && grep -Eq "\"lane\":\"${LANE}\"|^[[:space:]]*lane:[[:space:]]*\[([^]]*[,[:space:]])?${LANE}([,[:space:]][^]]*)?\]" "$workflow"; then
             echo "::error::$BRANCH names the $LANE lane in $workflow, but its $script has no '$LANE)' arm: the lane's gates cannot run"
             exit 1
           fi
@@ -137,13 +230,9 @@ jobs:
         # for why it must come after checkout and before the daemon build.
         if: steps.lane.outputs.run == 'true'
         uses: ./.github/actions/install-rust
-      - uses: ./.github/actions/set-make-job-count
-        if: steps.lane.outputs.run == 'true'
       - name: build
         if: steps.lane.outputs.run == 'true'
-        env:
-          CMAKE_BUILD_PARALLEL_LEVEL: ${{env.MAKE_JOB_COUNT}}
-        run: ${{env.BUILD_DEFAULT_LINUX}}
+        run: ${{env.BUILD_LINUX}}
       - name: ${{ matrix.lane }} live-daemon gates
         if: steps.lane.outputs.run == 'true'
         # `shell: bash` for the same reason as build.yml's per-PR step: the
@@ -152,49 +241,202 @@ jobs:
         env:
           GATE_LANE: ${{ matrix.lane }}
         run: scripts/ci/run_live_daemon_gates.sh
-      - name: notify on red
-        # The visibility route that justifies this lane's existence (header
-        # comment): a slow-gate red opens a tracking issue, or comments on
-        # the open one so repeats thread instead of piling up.
-        #
-        # github-script rather than `gh`: this job runs inside the
-        # ubuntu:24.04 container, which does not ship the GitHub CLI, and
-        # installing it would add GitHub's apt repo to the build image for
-        # one failure path. JS actions already run in this container
-        # (checkout/cache above) because the runner injects its own node.
-        if: failure()
-        uses: actions/github-script@v8
+
+  body-fill:
+    name: body-fill (${{ matrix.branch }}, ${{ matrix.lane }})
+    needs: [plan]
+    if: ${{ !cancelled() && needs.plan.outputs['body-fill'] != '{"include":[]}' }}
+    runs-on: ubuntu-latest
+    # One leg per walk; one number for both (the timeout gate takes a whole
+    # number per job), sized for the longer and set generously below the
+    # hosted maximum for the first nightly runs, then tightened from their
+    # times (ruled 2026-11-22). The CompleteTree leg took 117 minutes,
+    # checkout and build included, on 2026-11-22 (a dispatch on this
+    # branch), and about 145 on 2026-11-21, a night every gate ran 20 to 40
+    # per cent slower. The market walk has no finished hosted run yet: cut
+    # with the slow leg at 240 minutes on 2026-11-21, and its 2026-11-22
+    # dispatch cancelled at 79 minutes to free runners. Locally it takes 62
+    # per cent of the CompleteTree walk's time. 300 is about twice the
+    # slower CompleteTree night.
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs['body-fill'] || '{"include":[{"branch":"main","lane":"body-fill-complete-tree"},{"branch":"main","lane":"body-fill-market"},{"branch":"dev","lane":"body-fill-complete-tree"},{"branch":"dev","lane":"body-fill-market"}]}') }}
+    # The steps are slow-gates' own, written out (actionlint cannot check
+    # a job behind a YAML alias); scripts/ci/nightly_red.py --check holds
+    # the two copies equal.
+    container:
+      image: ubuntu:24.04
+      env:
+        DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: set apt conf
+        run: ${{env.APT_SET_CONF}}
+      - name: update apt
+        run: apt update
+      - name: install build dependencies
+        run: ${{env.APT_INSTALL_LINUX}}
+      - name: configure git
+        run: git config --global --add safe.directory '*'
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ matrix.sha || matrix.branch }}
+          submodules: recursive
+      - name: does this revision have the ${{ matrix.lane }} lane
+        # See the header: run where the checked-out script has the lane,
+        # red where the checked-out workflow names a lane its script
+        # lacks, a visible skip where the revision predates the lane.
+        id: lane
+        shell: bash
+        env:
+          LANE: ${{ matrix.lane }}
+          BRANCH: ${{ matrix.branch }}
+          SELECTED: ${{ inputs.lane || 'all' }}
+        run: |
+          set -euo pipefail
+          if [ "$SELECTED" != all ] && [ "$SELECTED" != "$LANE" ]; then
+            echo "::notice title=$LANE lane not selected::this dispatch runs the $SELECTED lane only. This leg ran no gate."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          script=scripts/ci/run_live_daemon_gates.sh
+          workflow=.github/workflows/nightly-live-daemon-slow.yml
+          [ -f "$script" ] || {
+            echo "::error::$BRANCH has no $script: the live-daemon gates have no runner"
+            exit 1
+          }
+          if grep -Eq "^[[:space:]]*${LANE}\)" "$script"; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ -f "$workflow" ] && grep -Eq "\"lane\":\"${LANE}\"|^[[:space:]]*lane:[[:space:]]*\[([^]]*[,[:space:]])?${LANE}([,[:space:]][^]]*)?\]" "$workflow"; then
+            echo "::error::$BRANCH names the $LANE lane in $workflow, but its $script has no '$LANE)' arm: the lane's gates cannot run"
+            exit 1
+          fi
+          echo "::notice title=$LANE lane not on $BRANCH::$BRANCH predates the $LANE lane (neither its $script nor its $workflow names it). This leg ran no gate. It runs once the lane reaches $BRANCH."
+          echo "run=false" >> "$GITHUB_OUTPUT"
+      - name: install Rust
+        # Composite action (.github/actions/install-rust) — see build.yml
+        # for why it must come after checkout and before the daemon build.
+        if: steps.lane.outputs.run == 'true'
+        uses: ./.github/actions/install-rust
+      - name: build
+        if: steps.lane.outputs.run == 'true'
+        run: ${{env.BUILD_LINUX}}
+      - name: ${{ matrix.lane }} live-daemon gates
+        if: steps.lane.outputs.run == 'true'
+        # `shell: bash` for the same reason as build.yml's per-PR step: the
+        # container default is dash, which rejects `set -o pipefail`.
+        shell: bash
+        env:
+          GATE_LANE: ${{ matrix.lane }}
+        run: scripts/ci/run_live_daemon_gates.sh
+
+  report-red:
+    # The route to a human (header). Every leg, red or green, scheduled or
+    # dispatched with `report`; not a run cancelled as a whole.
+    # scripts/ci/nightly_red.py --check holds `needs` and this condition.
+    needs: [plan, slow-gates, body-fill]
+    if: ${{ !cancelled() && (github.event_name == 'schedule' || inputs.report) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10  # API calls only; nightly.yml's report-red p90 is 0.1 min
+    permissions:
+      actions: read
+      # checks: each cancelled job's annotations, GitHub's record of
+      # whether it timed out (nightly_red.py).
+      checks: read
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: |
+            scripts/ci/nightly_red.py
+            scripts/ci/check_workflows_parse.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: the red legs, a timeout among them
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/ci/nightly_red.py --run "${{ github.run_id }}" > "$RUNNER_TEMP/red.json"
+          cat "$RUNNER_TEMP/red.json"
+      - uses: actions/github-script@v8
+        env:
+          RED: ${{ runner.temp }}/red.json
         with:
           script: |
-            const title = `nightly ${{ matrix.lane }} live-daemon gates RED (${{ matrix.branch }})`;
-            const body = [
-              `Run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
-              'Branch: ${{ matrix.branch }}',
-              'The GATE_LANE=${{ matrix.lane }} gates failed (slow: depth-3 FCMP++ spend and the bonded walks; embargo: the relay embargo walks).',
-              'A red here is a consensus regression and blocks release the same as a per-PR red.',
-            ].join('\n');
+            const fs = require('fs');
+            const { owner, repo } = context.repo;
+            const red = JSON.parse(fs.readFileSync(process.env.RED, 'utf8'));
+            if (red.length === 0) {
+              core.notice('No red leg in this run.');
+              return;
+            }
             // Exact-title match over open issues, not text search: the search
             // API's in:title is a substring match and lags on freshly created
             // issues, which would fork the thread on back-to-back nightly reds.
             const open = await github.paginate(github.rest.issues.listForRepo, {
-              owner: context.repo.owner,
-              repo: context.repo.repo,
+              owner,
+              repo,
               state: 'open',
               per_page: 100,
             });
-            const existing = open.find((i) => !i.pull_request && i.title === title);
-            if (existing) {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: existing.number,
-                body,
-              });
-            } else {
-              await github.rest.issues.create({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                title,
-                body,
-              });
+            const what = {
+              'slow': 'the depth-3 FCMP++ spend and the bonded walks',
+              'embargo': 'the relay embargo walks',
+              'body-fill-complete-tree': 'the body-store fill\'s CompleteTree walk',
+              'body-fill-market': 'the body-store fill\'s market walk',
+            };
+            // A leg is routed by its job's id (nightly_red.py's `key`), never
+            // by parsing its name alone: `plan` has no matrix values. A lane
+            // job's leg is named `<job> (<branch>, <lane>)`; the values are
+            // read from the name as data, and nothing here evaluates them. A
+            // red leg of a job named nowhere here fails this job by name
+            // (nightly_red.py --check holds the jobs named here to `needs`).
+            const laneJobs = ['slow-gates', 'body-fill'];
+            for (const leg of red) {
+              // `why` is GitHub's own annotation on a cancelled job, quoted;
+              // `minutes` is null when GitHub recorded no start or end.
+              const ran = leg.minutes === null ? '' : ` after ${leg.minutes} minutes`;
+              const said = leg.why ? ` (GitHub: "${leg.why}")` : '';
+              let title;
+              let how;
+              if (leg.key === 'plan') {
+                title = 'nightly slow-lane planner RED';
+                how = {
+                  'failed': 'The `plan` job (`nightly_skip.py --plan`) failed. Every lane job ran its full fallback matrix, `main` and `dev`, so no leg was skipped tonight; a dispatched run with `ref` ran `main` and `dev` in place of that ref. The run uploaded no keys, so the next scheduled run relies on none of tonight\'s passes. The job\'s log names the step that failed.',
+                  'timed out': `The \`plan\` job ran out of time${ran}${said}. Every lane job ran its full fallback matrix; read the log for the API call it was in.`,
+                  'cancelled': `The \`plan\` job was cancelled${ran}${said}. Every lane job ran its full fallback matrix; read the log for what stopped it.`,
+                }[leg.kind];
+              } else if (laneJobs.includes(leg.key)) {
+                const m = /^\S+ \((.+), (\S+)\)$/.exec(leg.name);
+                if (!m) {
+                  core.setFailed(`report-red cannot read the branch and lane from the leg "${leg.name}"`);
+                  continue;
+                }
+                const [, branch, lane] = m;
+                title = `nightly ${lane} live-daemon gates RED (${branch})`;
+                how = {
+                  'failed': `The GATE_LANE=${lane} gates failed (${what[lane] || lane}). A red here is a consensus regression and blocks release the same as a per-PR red.`,
+                  'timed out': `The leg ran out of time${ran}${said} (${what[lane] || lane}). This is not a test failure. Read the log for the gate it was in when it was cut.`,
+                  'cancelled': `The leg was cancelled${ran}${said} (${what[lane] || lane}): not a timeout, and not a test failure. Read the log for what stopped it.`,
+                }[leg.kind];
+              } else {
+                core.setFailed(`report-red has no route for the red leg "${leg.name}": name its job here`);
+                continue;
+              }
+              const body = [
+                `Run: ${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`,
+                `Leg: [${leg.name}](${leg.url}): ${leg.kind}`,
+                how,
+              ].join('\n');
+              const existing = open.find((i) => !i.pull_request && i.title === title);
+              if (existing) {
+                await github.rest.issues.createComment({ owner, repo, issue_number: existing.number, body });
+                core.notice(`Commented on #${existing.number}: ${title}`);
+              } else {
+                const { data: issue } = await github.rest.issues.create({ owner, repo, title, body });
+                core.notice(`Opened #${issue.number}: ${title}`);
+              }
             }

@@ -1,0 +1,11 @@
+first_attempt_cut_ns=1500000 lowest_boundary_ns=1249742 (valley centre)
+pair: measured=50000 entries_in_1.4_to_1.6_ms=114
+  first: n=(4978, 4879) slope_A=65.9±50.3 slope_B=44.5±49.3 ns/hint | key(A-B)=-463.8 ns t=-1.03 shared_slope=55.2 t=1.57 | unadjusted(A-B)=-524.9 ns welch_t=-1.17
+  lowest: n=(1925, 1820) slope_A=23.1±9.8 slope_B=4.1±10.3 ns/hint | key(A-B)=-265.5 ns t=-3.04 shared_slope=13.9 t=1.96 | unadjusted(A-B)=-277.0 ns welch_t=-3.18
+null: measured=50000 entries_in_1.4_to_1.6_ms=130
+  first: n=(4750, 4981) slope_A=-7.7±62.1 slope_B=23.8±56.6 ns/hint | key(A-B)=-565.0 ns t=-1.14 shared_slope=8.3 t=0.20 | unadjusted(A-B)=-565.9 ns welch_t=-1.15
+  lowest: n=(1841, 1898) slope_A=16.1±10.2 slope_B=39.5±9.6 ns/hint | key(A-B)=187.8 ns t=2.14 shared_slope=28.0 t=4.00 | unadjusted(A-B)=183.0 ns welch_t=2.08
+control: measured=50000 entries_in_1.4_to_1.6_ms=161
+  first: n=(4889, 4910) slope_A=-99.6±63.0 slope_B=-43.6±61.8 ns/hint | key(A-B)=-12689.0 ns t=-24.17 shared_slope=-71.3 t=-1.62 | unadjusted(A-B)=-12683.8 ns welch_t=-24.15
+  lowest: n=(1880, 20) too few to read
+reading=VACUOUS (this build shows no difference to carry)

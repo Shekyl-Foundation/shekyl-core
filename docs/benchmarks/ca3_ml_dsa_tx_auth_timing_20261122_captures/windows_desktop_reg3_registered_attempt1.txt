@@ -1,0 +1,132 @@
+CA-3 ML-DSA-65 transaction authorisation (fips204 fork 54b76cf714), registered 2026-11-24: signing alone from one working slot, the key decoded inside the timed call
+arch=x86_64 os=windows mode=ml-dsa-registered samples_per_comparison=50000 calibration=500 crops=100 inputs=registered
+pass: |t| < 4.5 on the signing pair; its null: |t| < 4.5; its control: |t| > 10; the composed call and key generation alone are information (ruled 2026-11-22)
+matched-pair candidates_drawn=62 fixed-a expand_s_bytes=2504 expand_a_rejected=5 replicates=true fixed-b expand_s_bytes=2504 expand_a_rejected=5 replicates=true
+check=replica replicated=true verdict=as-intended
+  check entries=50500 returned=50500 kept=790 verified=790 malformed_hint_sections=0 verdict=as-intended
+  quantile=1 class0=152200 class1=152200 diff=0
+  quantile=5 class0=152700 class1=152600 diff=100
+  quantile=10 class0=153000 class1=153000 diff=0
+  quantile=25 class0=209300 class1=209300 diff=0
+  quantile=50 class0=322000 class1=321900 diff=100
+  quantile=75 class0=492600 class1=492900 diff=-300
+  quantile=90 class0=723600 class1=730000 diff=-6400
+  quantile=95 class0=942800 class1=943600 diff=-800
+  quantile=99 class0=1355800 class1=1348800 diff=7000
+  crop=raw n0=24928 n1=25072 mean0=393493.1 mean1=394851.1 diff=-1358.1 t=-0.55
+  max_at_crop=2 cutoff=155300 n0=4511 n1=4441 diff=48.9 t=3.33
+  check entries=50500 returned=50500 kept=790 verified=790 malformed_hint_sections=0 verdict=as-intended
+  quantile=1 class0=152200 class1=152200 diff=0
+  quantile=5 class0=152600 class1=152700 diff=-100
+  quantile=10 class0=153100 class1=153000 diff=100
+  quantile=25 class0=209300 class1=209300 diff=0
+  quantile=50 class0=322100 class1=322000 diff=100
+  quantile=75 class0=492700 class1=492900 diff=-200
+  quantile=90 class0=721600 class1=772000 diff=-50400
+  quantile=95 class0=943900 class1=944300 diff=-400
+  quantile=99 class0=1398700 class1=1398600 diff=100
+  crop=raw n0=25063 n1=24937 mean0=395179.1 mean1=395476.4 diff=-297.3 t=-0.12
+  max_at_crop=1 cutoff=153200 n0=2735 n1=2775 diff=-17.0 t=-2.04
+  check entries=50500 returned=50500 kept=790 verified=790 malformed_hint_sections=0 verdict=as-intended
+  quantile=1 class0=152200 class1=153600 diff=-1400
+  quantile=5 class0=152700 class1=154000 diff=-1300
+  quantile=10 class0=153100 class1=154400 diff=-1300
+  quantile=25 class0=209400 class1=210700 diff=-1300
+  quantile=50 class0=322200 class1=323500 diff=-1300
+  quantile=75 class0=493400 class1=494200 diff=-800
+  quantile=90 class0=723900 class1=724000 diff=-100
+  quantile=95 class0=944800 class1=944500 diff=300
+  quantile=99 class0=1397100 class1=1398100 diff=-1000
+  crop=raw n0=25011 n1=24989 mean0=396940.3 mean1=396322.9 diff=617.4 t=0.23
+  max_at_crop=1 cutoff=154700 n0=4274 n1=3005 diff=-1041.8 t=-96.68
+pass-line=sign-fixed-a-vs-fixed-b max_abs_t=3.33 median_ns=269200 raw_sd_ns=276618 n0=24928 n1=25072
+  hints mean0=37.87 mean1=38.74 chi2=291.45 df=36 chi2_z=12.91 | within-equal-hints max_abs_t=3.07 at crop 2 at 155300 ns (n=7493, strata need >= 100 per class) | raw_mean_diff_ns=-1358.1 raw_t=-0.55
+null=sign-fixed-a-vs-fixed-a-again max_abs_t=2.04 median_ns=269000 raw_sd_ns=280530 n0=25063 n1=24937
+  hints mean0=37.93 mean1=37.87 chi2=32.09 df=36 chi2_z=-0.40 | within-equal-hints max_abs_t=2.13 at crop 1 at 153200 ns (n=4266, strata need >= 100 per class) | raw_mean_diff_ns=-297.3 raw_t=-0.12
+control=sign-fixed-a-vs-fixed-a-again(planted 0.5%) max_abs_t=96.68 median_ns=322000 raw_sd_ns=303035 n0=25011 n1=24989
+  hints mean0=37.84 mean1=37.85 chi2=35.00 df=37 chi2_z=-0.16 | within-equal-hints max_abs_t=87.89 at crop 1 at 154700 ns (n=5792, strata need >= 100 per class) | raw_mean_diff_ns=617.4 raw_t=0.23
+control=sign-planted-leak planted_ns=1345 max_abs_t=96.68 delta10_ns=139
+  check entries=50500 returned=50500 kept=790 verified=790 malformed_hint_sections=0 verdict=as-intended
+  hints mean0=37.85 mean1=38.70 chi2=274.54 df=36 chi2_z=12.40 | within-equal-hints max_abs_t=1.47 at crop 22 at 772800 ns (n=38658, strata need >= 100 per class) | raw_mean_diff_ns=706.7 raw_t=0.27
+  quantile=1 class0=368900 class1=369000 diff=-100
+  quantile=5 class0=371500 class1=371700 diff=-200
+  quantile=10 class0=374000 class1=374100 diff=-100
+  quantile=25 class0=429600 class1=429600 diff=0
+  quantile=50 class0=542100 class1=541900 diff=200
+  quantile=75 class0=716100 class1=715300 diff=800
+  quantile=90 class0=991700 class1=965100 diff=26600
+  quantile=95 class0=1167600 class1=1166500 diff=1100
+  quantile=99 class0=1618600 class1=1628000 diff=-9400
+  crop=raw n0=24957 n1=25043 mean0=620935.2 mean1=620228.5 diff=706.7 t=0.27
+  max_at_crop=1 cutoff=375800 n0=3294 n1=3324 diff=-109.9 t=-2.11
+  check entries=50500 returned=50500 kept=790 verified=790 malformed_hint_sections=0 verdict=as-intended
+  hints mean0=37.88 mean1=37.82 chi2=23.72 df=37 chi2_z=-1.70 | within-equal-hints max_abs_t=3.03 at crop 0 at 367300 ns (n=2009, strata need >= 100 per class) | raw_mean_diff_ns=-159.2 raw_t=-0.06
+  quantile=1 class0=365000 class1=365000 diff=0
+  quantile=5 class0=366400 class1=366500 diff=-100
+  quantile=10 class0=368000 class1=368100 diff=-100
+  quantile=25 class0=424100 class1=423900 diff=200
+  quantile=50 class0=536600 class1=536600 diff=0
+  quantile=75 class0=708900 class1=709000 diff=-100
+  quantile=90 class0=956800 class1=953400 diff=3400
+  quantile=95 class0=1158800 class1=1158700 diff=100
+  quantile=99 class0=1609700 class1=1615200 diff=-5500
+  crop=raw n0=24983 n1=25017 mean0=613361.8 mean1=613521.0 diff=-159.2 t=-0.06
+  max_at_crop=0 cutoff=367300 n0=1919 n1=1934 diff=-63.6 t=-2.39
+  check entries=50500 returned=50500 kept=790 verified=790 malformed_hint_sections=0 verdict=as-intended
+  hints mean0=37.84 mean1=37.84 chi2=30.13 df=36 chi2_z=-0.65 | within-equal-hints max_abs_t=47.61 at crop 1 at 370700 ns (n=4456, strata need >= 100 per class) | raw_mean_diff_ns=995.4 raw_t=0.36
+  quantile=1 class0=365000 class1=367700 diff=-2700
+  quantile=5 class0=366500 class1=369200 diff=-2700
+  quantile=10 class0=368100 class1=370800 diff=-2700
+  quantile=25 class0=424000 class1=426500 diff=-2500
+  quantile=50 class0=536900 class1=539000 diff=-2100
+  quantile=75 class0=709800 class1=711700 diff=-1900
+  quantile=90 class0=952400 class1=967300 diff=-14900
+  quantile=95 class0=1160400 class1=1162800 diff=-2400
+  quantile=99 class0=1669600 class1=1619100 diff=50500
+  crop=raw n0=25007 n1=24993 mean0=618073.7 mean1=617078.3 diff=995.4 t=0.36
+  max_at_crop=1 cutoff=370700 n0=3647 n1=2404 diff=-1774.7 t=-54.48
+information=composed-fixed-a-vs-fixed-b max_abs_t=2.11 median_ns=519700 raw_sd_ns=294765 n0=24957 n1=25043
+information=composed-fixed-a-vs-fixed-a max_abs_t=2.39 median_ns=538900 raw_sd_ns=281757 n0=24983 n1=25017
+information=composed-control(planted 0.5%) max_abs_t=54.48 median_ns=539400 raw_sd_ns=310570 n0=25007 n1=24993
+information=composed-planted-leak planted_ns=2694 max_abs_t=54.48 delta10_ns=495
+  check entries=50500 returned=50500 kept=790 verified=790 malformed_hint_sections=0 verdict=as-intended
+  quantile=1 class0=123600 class1=123500 diff=100
+  quantile=5 class0=124000 class1=123900 diff=100
+  quantile=10 class0=124200 class1=124100 diff=100
+  quantile=25 class0=124700 class1=124600 diff=100
+  quantile=50 class0=125400 class1=125300 diff=100
+  quantile=75 class0=126400 class1=126300 diff=100
+  quantile=90 class0=127700 class1=127600 diff=100
+  quantile=95 class0=129000 class1=128900 diff=100
+  quantile=99 class0=148500 class1=145700 diff=2800
+  crop=raw n0=24806 n1=25194 mean0=127773.0 mean1=127661.7 diff=111.3 t=0.32
+  max_at_crop=11 cutoff=127100 n0=20992 n1=21489 diff=59.3 t=7.15
+  check entries=50500 returned=50500 kept=790 verified=790 malformed_hint_sections=0 verdict=as-intended
+  quantile=1 class0=123000 class1=123000 diff=0
+  quantile=5 class0=123300 class1=123300 diff=0
+  quantile=10 class0=123400 class1=123400 diff=0
+  quantile=25 class0=123800 class1=123700 diff=100
+  quantile=50 class0=124200 class1=124200 diff=0
+  quantile=75 class0=124800 class1=124800 diff=0
+  quantile=90 class0=125700 class1=125700 diff=0
+  quantile=95 class0=126800 class1=126800 diff=0
+  quantile=99 class0=132400 class1=133700 diff=-1300
+  crop=raw n0=25241 n1=24759 mean0=125774.6 mean1=125766.9 diff=7.8 t=0.02
+  max_at_crop=0 cutoff=123300 n0=1089 n1=1062 diff=-14.0 t=-2.35
+  check entries=50500 returned=50500 kept=790 verified=790 malformed_hint_sections=0 verdict=as-intended
+  quantile=1 class0=123000 class1=123600 diff=-600
+  quantile=5 class0=123300 class1=123900 diff=-600
+  quantile=10 class0=123500 class1=124100 diff=-600
+  quantile=25 class0=123800 class1=124400 diff=-600
+  quantile=50 class0=124200 class1=124800 diff=-600
+  quantile=75 class0=124900 class1=125500 diff=-600
+  quantile=90 class0=126100 class1=126800 diff=-700
+  quantile=95 class0=127200 class1=127900 diff=-700
+  quantile=99 class0=142100 class1=143200 diff=-1100
+  crop=raw n0=25012 n1=24988 mean0=127271.4 mean1=129077.4 diff=-1806.0 t=-1.86
+  max_at_crop=21 cutoff=125400 n0=20890 n1=17951 diff=-457.6 t=-92.88
+information=keygen-fixed-a-vs-fixed-b max_abs_t=7.15 median_ns=126700 raw_sd_ns=39423 n0=24806 n1=25194
+information=keygen-fixed-a-vs-fixed-a-again max_abs_t=2.35 median_ns=124200 raw_sd_ns=39716 n0=25241 n1=24759
+information=keygen-control(planted 0.5%) max_abs_t=92.88 median_ns=124600 raw_sd_ns=108739 n0=25012 n1=24988
+information=keygen-planted-leak planted_ns=621 max_abs_t=92.88 delta10_ns=67
+result=PASS sign_pair=3.33 sign_null=2.04 sign_control=96.68 delta10_ns=139 information_composed_pair=2.11 information_keygen_pair=7.15

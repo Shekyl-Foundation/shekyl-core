@@ -90,6 +90,13 @@ struct Cli {
     /// Optional file sink for `tracing` events.
     #[arg(long = "log-file")]
     log_file: Option<PathBuf>,
+
+    /// The Tor binary a serving wallet runs. Unset, the wallet finds the
+    /// bundled one. A relative path, or one naming no file on this machine,
+    /// refuses the start.
+    /// Either way the binary must match the pinned build.
+    #[arg(long = shekyl_wallet_rpc::server::TOR_FILE_OPTION)]
+    tor_file: Option<PathBuf>,
 }
 
 /// The first statement is the process hardening (rule 35, DC-Q21), as in
@@ -154,6 +161,8 @@ async fn serve(cli: Cli) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
         daemon,
         auth,
         kdf: KdfParams::default(),
+        tor_file: shekyl_engine_core::TorFile::from_option(cli.tor_file)
+            .map_err(|e| e.to_string())?,
     };
 
     // Armed before the bind, then served until a stop (SIGTERM, SIGINT,

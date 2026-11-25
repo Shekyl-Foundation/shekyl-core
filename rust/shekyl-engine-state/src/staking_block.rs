@@ -36,7 +36,7 @@
 //!   P-scan's own evidence covers it, and the first-stake resume guard's
 //!   already-staked witness. See the field docs.
 //!
-//! # Why this lives in `WalletLedger` (not `SettingsBlock`/`WalletPrefs`)
+//! # Why this lives in `WalletLedger`
 //!
 //! "Which of my personas hold on-chain bonds" is the wallet's
 //! reconciled view of its own chain state — the same *kind* of state
@@ -45,14 +45,11 @@
 //! and belongs with the ledger. `p_slot`/`staking_enabled` are more
 //! config-shaped but are **funds-load-bearing config** — lose them and
 //! the engine stops deriving the personas that hold bonds — so they
-//! want the sealed, integrity-protected region-2 tier regardless.
-//! `WalletPrefs` (advisory tier, tamper-resets to defaults) would
-//! silently drop funds-load-bearing state; `SettingsBlock`
-//! (region-2 metadata) is not loaded by the Rust engine's
-//! `assemble()` path and is read by the C++/wallet2 surface, which has
-//! no use for staking state. `WalletLedger` is the correct tier, the
-//! correct semantic home, and keeps staking entirely inside the Rust
-//! domain with its own [`STAKING_BLOCK_VERSION`].
+//! are sealed state by the funds-first placement order
+//! (`docs/WALLET_SETTINGS.md` §1, rule 42): anything a reset to default
+//! could reach would silently drop them. `WalletLedger` is that tier and
+//! the semantic home, and keeps staking inside the Rust engine with its
+//! own [`STAKING_BLOCK_VERSION`].
 //!
 //! # Why a hint, not a source of truth
 //!

@@ -98,7 +98,7 @@ impl<'a> Proposer<'a, Collecting> {
         rng: &mut (impl RngCore + CryptoRng),
     ) -> Result<(Self, Vec<u8>), CeremonyError> {
         expect_role(&ctx, &[Role::Proposer])?;
-        live.reserve(ctx.intent.hash(), &ctx.intent.intent().input_global_indices)?;
+        live.reserve(&ctx.intent)?;
         let own = hold_all(&ctx, store, rng)?;
         let file = seal_as(
             &ctx,

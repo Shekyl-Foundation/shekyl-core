@@ -1,0 +1,28 @@
+ Downloading crates ...
+  Downloaded multiexp v0.5.2
+   Compiling multiexp v0.5.2
+   Compiling generalized-bulletproofs v0.1.0 (<home>/ca3-1504/src/rust/shekyl-oxide/crypto/generalized-bulletproofs)
+warning: variant `InconsistentWitness` is never constructed
+   --> shekyl-oxide/crypto/generalized-bulletproofs/src/inner_product.rs:106:5
+    |
+ 98 | pub(crate) enum IpProveError {
+    |                 ------------ variant in this enum
+...
+106 |     InconsistentWitness,
+    |     ^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `IpProveError` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `generalized-bulletproofs` (lib) generated 1 warning
+   Compiling generalized-bulletproofs-circuit-abstraction v0.1.0 (<home>/ca3-1504/src/rust/shekyl-oxide/crypto/fcmps/circuit-abstraction)
+   Compiling generalized-bulletproofs-ec-gadgets v0.1.0 (<home>/ca3-1504/src/rust/shekyl-oxide/crypto/fcmps/ec-gadgets)
+warning: `generalized-bulletproofs` (lib) generated 1 warning (1 duplicate)
+   Compiling full-chain-membership-proofs v0.1.0 (<home>/ca3-1504/src/rust/shekyl-oxide/crypto/fcmps)
+   Compiling shekyl-curve-generators v0.4.0 (<home>/ca3-1504/src/rust/shekyl-curve-generators)
+   Compiling shekyl-fcmp-proofs v0.1.0 (<home>/ca3-1504/src/rust/shekyl-fcmp-proofs)
+   Compiling shekyl-onion-key v3.1.0 (<home>/ca3-1504/src/rust/shekyl-onion-key)
+   Compiling shekyl-curve-primitives v0.1.0 (<home>/ca3-1504/src/rust/shekyl-curve-primitives)
+   Compiling shekyl-crypto-pq v3.1.0 (<home>/ca3-1504/src/rust/shekyl-crypto-pq)
+   Compiling shekyl-fcmp v3.1.0 (<home>/ca3-1504/src/rust/shekyl-fcmp)
+    Finished `release` profile [optimized] target(s) in 12m 57s

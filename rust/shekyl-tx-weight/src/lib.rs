@@ -456,16 +456,8 @@ const U64_VARINT_BYTES_MAX: usize = 10;
 /// check, so the loop returns by equality rather than by exhaustion.
 const WEIGHT_FEE_FIXPOINT_PASSES: usize = U64_VARINT_BYTES_MAX + 1;
 
-/// The one fee loop. `price` maps a weight to the fee that weight is charged,
-/// and the fee comes back as the weight's next argument because the wire
-/// carries `varint(fee)`.
-///
-/// The pricer belongs to the caller. This crate does not round: the wallet
-/// passes the lattice, and an unrounded product is [`converge_weight_fee`].
-/// A `None` from the pricer, or a weight that does not fit in `u64`, is
-/// `None`. The loop returns when two passes agree. Running out of passes is
-/// unreachable for a monotone pricer — each disagreeing pass consumes one
-/// varint length — and is a `debug_assert`, then `None`, never a guessed fee.
+/// [`converge_fee_by`] over the predicted weight of a spend of these counts:
+/// the wallet's fee for a shape it has not built yet.
 #[must_use]
 pub fn converge_weight_fee_by(
     n_in: InputCount,
@@ -474,9 +466,64 @@ pub fn converge_weight_fee_by(
     seed: u64,
     price: impl Fn(u64) -> Option<u64>,
 ) -> Option<u64> {
+    converge_fee_by(
+        |fee| u64::try_from(predict_weight(n_in, n_out, tree_depth, fee)).ok(),
+        seed,
+        price,
+    )
+}
+
+/// [`converge_weight_fee_by`] for any [`SpendShape`]: the fee fixed point
+/// of [`predict_spend_weight`], through the same loop ([`converge_fee_by`]).
+/// A solo shape paying no group converges to what [`converge_weight_fee_by`]
+/// does. `None` also when the shape pays more groups than it has outputs.
+#[must_use]
+pub fn converge_spend_fee_by(
+    shape: &SpendShape<'_>,
+    seed: u64,
+    price: impl Fn(u64) -> Option<u64>,
+) -> Option<u64> {
+    converge_fee_by(
+        |fee| u64::try_from(predict_spend_weight(shape, fee)?).ok(),
+        seed,
+        price,
+    )
+}
+
+/// The weight of a transaction measured at `measured_fee`, were it to pay
+/// `fee` instead: the fee reaches the weight only through `varint(fee)` (the
+/// field list [`predict_weight`] sums), so the rest of the measurement
+/// stands. `None` when the result does not fit in `u64`. For a shape
+/// [`predict_weight`] does not model, a caller measures one build and
+/// converges on this ([`converge_fee_by`]).
+#[must_use]
+pub fn weight_at_fee(measured_weight: u64, measured_fee: u64, fee: u64) -> Option<u64> {
+    let width = |fee: u64| u64::try_from(varint_len(fee)).ok();
+    measured_weight
+        .checked_sub(width(measured_fee)?)?
+        .checked_add(width(fee)?)
+}
+
+/// The one fee loop. `weight_at` is the transaction's weight paying a given
+/// fee, `price` maps a weight to the fee that weight is charged, and the fee
+/// comes back as the weight's next argument because the wire carries
+/// `varint(fee)`.
+///
+/// The pricer belongs to the caller. This crate does not round: the wallet
+/// passes the lattice, and an unrounded product is [`converge_weight_fee`].
+/// A `None` from either closure is `None`. The loop returns when two passes
+/// agree. Running out of passes is unreachable for a monotone pricer — each
+/// disagreeing pass consumes one varint length — and is a `debug_assert`,
+/// then `None`, never a guessed fee.
+#[must_use]
+pub fn converge_fee_by(
+    weight_at: impl Fn(u64) -> Option<u64>,
+    seed: u64,
+    price: impl Fn(u64) -> Option<u64>,
+) -> Option<u64> {
     let mut fee = seed;
     for _ in 0..WEIGHT_FEE_FIXPOINT_PASSES {
-        let weight = u64::try_from(predict_weight(n_in, n_out, tree_depth, fee)).ok()?;
+        let weight = weight_at(fee)?;
         let next = price(weight)?;
         if next == fee {
             return Some(fee);

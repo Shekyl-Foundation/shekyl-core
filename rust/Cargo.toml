@@ -275,7 +275,7 @@ members = [
     "shekyl-types",
 
     # The build identity (version, release flag, release name) read from the
-    # environment cmake/Version.cmake sets, and the protocol version
+    # environment `cargo xtask` sets, and the protocol version
     # (DAEMON_CONFIG_CUTOVER.md DC-Q20). A leaf: no dependencies.
     "shekyl-version",
 
@@ -394,7 +394,7 @@ members = [
 
     # Dev-only loopback between `PServeEndpoint` and `PFetchClient`.
     # SF-D4 keeps that edge out of both shipped graphs: nothing in
-    # `cmake/BuildRust.cmake` builds this crate, and neither end depends
+    # rust/xtask/matrix.toml builds this crate, and neither end depends
     # on it except as a dev-dependency.
     "shekyl-p-loopback",
 
@@ -479,9 +479,6 @@ members = [
     # v1 two-file wallet envelope orchestrator (.wallet.keys + .wallet)
     "shekyl-engine-file",
 
-    # Plaintext-with-HMAC user preferences (layer 2 of WALLET_PREFS.md)
-    "shekyl-engine-prefs",
-
     # V3 proof protocol (tx_proof, reserve_proof)
     "shekyl-proofs",
 
@@ -542,6 +539,11 @@ members = [
     # Shard data-source abstraction (list + aggregate lookup) consumed by the
     # GUI shard view. Fixtures-backed today; ArchivalEngine impl at Stage 5.
     "shekyl-shard-source",
+
+    # The release build (`cargo xtask`, rust/.cargo/config.toml): reads
+    # rust/xtask/matrix.toml and runs the one cargo build per host. A build
+    # tool, never a shipped binary (scripts/ci/shipped_graph.py).
+    "xtask",
 ]
 # Local-only harnesses that must not participate in the parent
 # workspace. Excluded here (rather than relying on the nested
@@ -614,6 +616,14 @@ serde = { version = "1", features = ["derive"] }
 # crates keep their own `default-features = false` pins (rule 10).
 zeroize = { version = "1.5", features = ["derive"] }
 
+# Multi-scalar multiplication for the FCMP++ prover, tree roots and batch
+# verification. 0.5 is the floor: 0.4's non-vartime `multiexp` indexes its
+# Straus tables and Pippenger buckets by secret scalar bits, and the prover
+# calls it on secrets; 0.5 selects every entry with `conditional_assign`.
+# `alloc` is load-bearing: without it 0.5's `multiexp` is a naive sum. The
+# vendored `shekyl-oxide/crypto/*` crates keep their own pins (rule 10).
+multiexp = { version = "0.5.2", default-features = false, features = ["alloc"] }
+
 # RandomX v2 verifier primitives (Phase 2b). Both verified at source
 # in `RANDOMX_V2_PHASE2B_PLAN.md` §4 and §5.6.
 #
@@ -641,7 +651,7 @@ blake2 = { version = "0.10", default-features = false }
 # `shekyl-randomx-differential`'s `Cargo.toml`). All three are
 # already widely-used direct deps across the workspace with
 # independent per-crate pins (`sha2` in `shekyl-engine-core`,
-# `shekyl-crypto-pq`, `shekyl-proofs`, `shekyl-engine-prefs`;
+# `shekyl-crypto-pq`, `shekyl-proofs`;
 # `rand_chacha` in `shekyl-engine-core`, `shekyl-crypto-pq`,
 # `shekyl-fcmp`, `shekyl-fcmp-proofs`; `serde_json` across
 # ~14 crates). This section adds them to `[workspace.dependencies]`
@@ -735,16 +745,17 @@ tempfile = "3.27"
 # as 4.4.
 redb = "4.6"
 
-# The TOML reader of every configuration and prefs file (shekyl-options,
-# shekyl-daemon-config, shekyl-engine-prefs) and of the chain forge's plans
+# The TOML reader of every configuration file (shekyl-options,
+# shekyl-daemon-config) and of the chain forge's plans
 # and pins; shekyl-chain-store reads manifests with it in a test. Files are
 # TOML 1.1 (INPUT_GRAMMAR.md R2): over TOML 1.0 that adds newlines and
 # trailing commas in inline tables, the `\e` and `\xHH` escapes, and times
 # without seconds; the key grammar is unchanged. Verified at source
 # (1.2.1+spec-1.1.0, rule 17): `std`, `serde` and `parse` give `from_str`,
 # `Table`, `Value`, `Spanned` (re-exported unconditionally, `lib.rs`) and
-# `de::Error::{message, span}` (`de/error.rs`); `display` (engine-prefs only)
-# gives `to_string`/`to_string_pretty`. Unlike 0.8, `str::parse::<Value>()`
+# `de::Error::{message, span}` (`de/error.rs`). `display` is off: no caller
+# serializes a `toml` value back to text (`to_string` / `to_string_pretty`).
+# Unlike 0.8, `str::parse::<Value>()`
 # parses one value, not a document: a document is a `Table`. Already in
 # Cargo.lock at this version (through trybuild), and the GUI wallet's graph
 # carries the same line through tauri, so core's config parser is never
@@ -931,3 +942,14 @@ unnested_or_patterns = "deny"
 unused_async = "deny"
 unused_self = "deny"
 zero_sized_map_values = "deny"
+
+# fips204 0.5.0 with no conditional branch on a secret coefficient under
+# `overflow-checks = true`, and with the NTT path's range hardened (the record
+# is docs/benchmarks/ca3_pq_branch_sweep_20261123.md). The fork is the tag plus
+# that fix, at the same version: every value the tag returned is unchanged.
+# `[patch]` applies only in the root manifest being built: each fuzz workspace
+# with fips204 in its lock carries this same entry, and
+# scripts/ci/check_crypto_closure.py holds that one revision in every lock
+# and every patch.
+[patch.crates-io]
+fips204 = { git = "https://github.com/Shekyl-Foundation/fips204", rev = "54b76cf71430a406f3c96ab9c80c42b0d74ce2fd" }

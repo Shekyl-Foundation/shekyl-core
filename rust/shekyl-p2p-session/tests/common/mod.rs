@@ -440,3 +440,15 @@ pub use harness::{new_transactions, request_headers, txpool_complement};
 pub fn kind(end: DialEnd) -> CloseKind {
     end.cause().kind()
 }
+
+/// The first fragment of a train, not its last: command 0, `BEGIN` alone,
+/// `body` as the bytes the train opens with.
+pub fn first_fragment(body: &[u8]) -> Vec<u8> {
+    use shekyl_levin::{BucketHead, Flags};
+    let len = u64::try_from(body.len()).expect("fits");
+    let mut bucket = BucketHead::make(0, len, Flags::BEGIN, false)
+        .write()
+        .to_vec();
+    bucket.extend_from_slice(body);
+    bucket
+}

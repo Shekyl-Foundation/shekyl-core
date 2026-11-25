@@ -7,7 +7,7 @@ use crate::*;
 mod interactive;
 pub(crate) use interactive::*;
 
-impl<C: Ciphersuite> Circuit<C> {
+impl<C: Ciphersuite, R: Role<C>> Circuit<C, R> {
     /// Constrain an item as being a member of a list.
     ///
     /// Panics if the list is empty.

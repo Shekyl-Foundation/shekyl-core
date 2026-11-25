@@ -21,8 +21,10 @@
 //!   fixture can pin a key.
 //!
 //! A key never hands out its bytes. It gives `R` ([`TxKey::public`]), it
-//! builds outputs (`crate::output::construct_output` and its kin take
-//! `&TxKey`), and it has two named exits, each with its own type:
+//! places and builds outputs (`crate::output::construct_output` and its kin
+//! take an [`crate::output_order::OutputPosition`], which carries the key and
+//! the index its order gives, R-34), and it has two named exits, each with
+//! its own type:
 //!
 //! - [`StoredTxKey`] — what the wallet keeps inside its sealed record so it
 //!   can prove a payment later. Opened back into a key only here
@@ -35,6 +37,7 @@
 //! Every key is a canonical scalar: the outbound proof signs with `r` as a
 //! scalar and refuses bytes that are not one (alpha.11 bug hunt §A19).
 
+use crate::secret_scalar::canonical_secret_scalar;
 use std::fmt;
 
 use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
@@ -142,8 +145,7 @@ impl TxKey {
     /// canonical scalar: a key this module minted always is, so the record
     /// was not written by it.
     pub fn open(stored: &StoredTxKey) -> Result<Self, StoredKeyError> {
-        let r: Option<Scalar> = Scalar::from_canonical_bytes(*stored.0.as_array()).into();
-        let r = Zeroizing::new(r.ok_or(StoredKeyError::NotCanonical)?);
+        let r = canonical_secret_scalar(stored.0.as_array()).ok_or(StoredKeyError::NotCanonical)?;
         Ok(Self::from_scalar(&r))
     }
 
@@ -209,8 +211,8 @@ impl TxKey {
     /// would sign with a different scalar from the bytes the encapsulation
     /// consumes.
     fn scalar(&self) -> Zeroizing<Scalar> {
-        let canonical: Option<Scalar> = Scalar::from_canonical_bytes(*self.ikm()).into();
-        Zeroizing::new(canonical.expect("a transaction key's bytes are a canonical scalar"))
+        canonical_secret_scalar(self.ikm())
+            .expect("a transaction key's bytes are a canonical scalar")
     }
 }
 

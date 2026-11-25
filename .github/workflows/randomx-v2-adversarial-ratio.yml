@@ -29,7 +29,7 @@
 # 2026-07-03) found the practical effect was an armed gate with no
 # automated trigger — "T6 runs nightly" lived in doc comments while
 # the only trigger was manual — and directed the verification-DoS
-# gate onto a cron. Weekly (Tuesday 06:00 UTC, staggered clear of
+# gate onto a cron. Weekly (Tuesday 06:47 UTC, staggered clear of
 # the Monday mutants/codeql/oxide cluster and the daily 05:00
 # structural cron); `workflow_dispatch` retained. Post-genesis the
 # release-gate trigger still lands per the §11 history row.
@@ -82,7 +82,7 @@ on:
   schedule:
     # Weekly T6 adversarial-ratio gate; see the cadence-amendment
     # citation above.
-    - cron: "0 6 * * 2"
+    - cron: "47 6 * * 2"
   workflow_dispatch:
     inputs:
       samples_per_recipe:
@@ -116,7 +116,7 @@ env:
 
 jobs:
   adversarial-ratio:
-    # Weekly Tuesday 06:00 UTC cron + `workflow_dispatch`, per the
+    # Weekly Tuesday 06:47 UTC cron + `workflow_dispatch`, per the
     # header's M3 cadence amendment (originally dispatch-only per
     # R1-D7 Sub-A close; post-genesis a release-gate trigger is
     # added). The cron fires on the default branch (main) only, so
@@ -147,26 +147,6 @@ jobs:
         # toolchain-sensitive; a silently-moving stable would shift
         # the measurement substrate under the baselined noise margin.
         uses: ./.github/actions/install-rust
-      - name: Verify CMake + Ninja are present
-        # NO apt install. ubuntu-24.04 already ships CMake 3.31.6 and
-        # Ninja 1.13.2, so `apt-get install ninja-build` fetched an
-        # OLDER ninja (1.11.1) over the network for no benefit, and put
-        # an apt-mirror round-trip in front of a gate that needs none.
-        # Four jobs in this repo were killed by exactly that on
-        # 2026-08-18/19. Matches the same conversion in
-        # randomx-v2-differential.yml so the two RandomX workflows do
-        # not drift on their toolchain preconditions.
-        run: |
-          set -euo pipefail
-          for tool in cmake ninja; do
-            if ! command -v "${tool}" >/dev/null 2>&1; then
-              echo "FATAL: ${tool} is not on PATH." >&2
-              echo "  The runner image is expected to provide it. If the image" >&2
-              echo "  changed, install it here explicitly rather than assuming." >&2
-              exit 1
-            fi
-            "${tool}" --version
-          done
       - name: Configure + build randomx-v2 C reference
         # Composite action (.github/actions/build-randomx-v2-ref):
         # byte-identical librandomx.a by construction across every

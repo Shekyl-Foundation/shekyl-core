@@ -27,9 +27,16 @@ Upstream tracking reference (the single source of truth for "where fixes go"):
 Vendored snapshot metadata + integrity:
 
 - `rust/shekyl-oxide/UPSTREAM_MONERO_OXIDE_COMMIT` — pinned commit
-  (`3378433c738970cf757fc766e8ba02b3245646bc` on `chore/crypto-resync-from-tip`,
-  the merge of fork PR #6; its crypto tree is that of the PR tip `2485a176`
-  named in the Q6 re-vet. Synced 2026-09-30.)
+  (`c753b3475fc98c3eb32f7036e2c392a6242585bc` on `chore/crypto-resync-from-tip`, the merge of fork PR #10,
+  `LinComb::evaluate`'s row sum statically dispatched, on top of the merge of fork PR #9 (`6bf40e5118`):
+  `generalized-bulletproofs` correct in every build. Its inner-product prover
+  takes no opening point; its vector lengths hold in every build; its prover is
+  formed from commitments made from their openings and checks every length and
+  constraint in every build; `circuit-abstraction`'s circuit has a role
+  (proving, verifying). Before it, `4ea2c03215` (fork PR #8: upstream
+  `497f60b`'s multiexp hunks, multiexp 0.5 for a constant-time prover, MSRV
+  1.81), whose parent `3abb123` carries the crypto tree of `2485a176`, the
+  tip named in the Q6 re-vet. Synced 2026-11-23.)
 - `rust/shekyl-oxide/CRYPTO_CONTENT_MANIFEST.sha256` — the A1 content gate: the
   vendored crypto subtree is verified byte-for-byte against this manifest on
   push/PR (`scripts/ci/check_vendored_crypto_manifest.sh`), so an in-place edit
@@ -51,8 +58,15 @@ the fork's `crypto/` at the pin with the workspace `rustfmt.toml` and diffing:
   `fcmps` still carries the June `EXTRA_LEAF_SCALARS` shape. Upstream `fcmps`
   fixes are ported by hand into this crate and re-vetted against the Q6 freeze;
   a wholesale copy from the fork would delete PL-D3. Upstream has shipped no
-  `fcmps` logic change since `0662298` (only the `497f60b` dependency
-  reconciliation), so nothing is pending.
+  `fcmps` logic change since `0662298`. Of `497f60b`'s dependency reconciliation,
+  the multiexp hunks are ported (multiexp 0.5 and `subtle`, with the MSRV 1.81
+  multiexp 0.5 needs); the rest of that commit (the `zeroize_derive` floors,
+  `tap`, and the edits to `helioselene`, `divisors` and the gadget crates) is not
+  taken. Fork PR #9's `fcmps` changes are ported: the tape yields its vector
+  commitments' openings (`VectorCommitmentTape::openings`, a branch's opening
+  without its zero padding), committed once through `Openings::commit`, in place
+  of `VectorCommitmentTape::commit`; the circuit wrapper and its gadgets are
+  generic over the circuit's role.
 
 ## Required update workflow
 

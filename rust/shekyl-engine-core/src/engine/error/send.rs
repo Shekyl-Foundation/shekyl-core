@@ -49,13 +49,16 @@ pub enum SendError {
         reason: &'static str,
     },
 
-    /// The transaction builder refused or failed the signing pass. The
-    /// fault keeps the builder's variant by identity, bounded
+    /// A [`SignFault`] the wallet already knows, or one the signing pass
+    /// returned. The fault keeps the builder's variant by identity, bounded
     /// ([`SignFault`]): four are the user's to act on (too many inputs or
     /// outputs, an input its tree path does not hold, an input that is
     /// received but unspendable), and every other names the internal
-    /// invariant that failed.
-    #[error("signing failed: {0}")]
+    /// invariant that failed. Selection raises the user-actionable faults
+    /// as soon as the shape is known — too many inputs, once the shortest
+    /// cover is counted — so the builder is not asked to sign a transaction
+    /// it would refuse. The message is the fault's own text.
+    #[error("{0}")]
     Sign(SignFault),
 
     /// Daemon-side failure during build (typically: `get_fee_estimates`

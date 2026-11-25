@@ -7,10 +7,10 @@
 //
 // Emits the `cargo:rustc-link-{search,lib}` directives that point the
 // Rust toolchain at the C reference library produced by
-// `external/randomx-v2`'s `ExternalProject_Add` (landed at C2 per
-// `docs/design/RANDOMX_V2_PHASE2G_PLAN.md` §5.4.2). The handoff between
-// the C build (CMake-driven, gated on
-// `BUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS`) and this Rust build
+// `external/randomx-v2`, built by `scripts/build_randomx_v2_ref.sh`
+// (`docs/design/RANDOMX_V2_PHASE2G_PLAN.md` §5.4.2). The handoff between
+// the C build (that script, run by hand or by the differential
+// workflow) and this Rust build
 // (Cargo-driven, gated on the `RANDOMX_V2_INSTALL_DIR` environment
 // variable) is the substrate that R4-D3 (§3.16) closes against and
 // R5-D2 (§3.17) refines.
@@ -26,8 +26,7 @@
 //     `cargo:rustc-link-lib=static=randomx` so the downstream
 //     `shekyl-randomx-differential` binary's link step finds
 //     `librandomx.a`. The link-lib name is the on-disk filename
-//     (`librandomx.a`), **not** the CMake imported-target name
-//     `shekyl_randomx_v2` — R4-D2 (§3.16) is explicit on this.
+//     (`librandomx.a`) — R4-D2 (§3.16) is explicit on this.
 //
 //   - The C reference is a C++ static archive; downstream binary
 //     links need the host C++ runtime to resolve `__cxa_*`,
@@ -43,7 +42,7 @@
 //
 //   - When `RANDOMX_V2_INSTALL_DIR` is unset: emit a `cargo:warning=…`
 //     naming the env var, the
-//     `-DBUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS=ON` cmake option, and
+//     `scripts/build_randomx_v2_ref.sh` script, and
 //     the handoff relationship between the two, then `return`
 //     cleanly. The `rlib` still compiles; only the downstream binary
 //     link step fails (with undefined references to the cache,
@@ -81,12 +80,10 @@ fn main() {
                  shekyl-randomx-differential harness) will fail with \
                  undefined references to the light-mode cache and VM \
                  symbols, and, with the full-dataset feature, the dataset \
-                 symbols. To build the harness: configure CMake with \
-                 -DBUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS=ON, build \
-                 the librandomx.a artifact, then export \
-                 RANDOMX_V2_INSTALL_DIR pointing to the install \
-                 prefix (typically \
-                 <build-dir>/external/randomx-v2-install) \
+                 symbols. To build the harness: run \
+                 scripts/build_randomx_v2_ref.sh <build dir> <install dir>, \
+                 then export \
+                 RANDOMX_V2_INSTALL_DIR=<install dir> \
                  before running cargo. See \
                  docs/design/RANDOMX_V2_PHASE2G_PLAN.md §3.16 R4-D3 + \
                  §3.17 R5-D2 + §5.2.2."

@@ -98,7 +98,7 @@ jobs:
           set -u
           head="${{ github.sha }}"
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            base="${{ github.event.pull_request.base.sha }}"
+            base=$(python3 scripts/ci/change_scope.py --pr-base "$head" "${{ github.event.pull_request.head.sha }}")
           else
             # A push is measured from the last commit this workflow passed
             # on, not from `before`: see scripts/ci/push_scope_base.sh. No
@@ -213,8 +213,8 @@ jobs:
           python3 scripts/ci/check_test_only_features.py
       # Same placement reason: reads `cargo metadata`. The measurement build's
       # lifted Tor spans (Rick, 2026-10-14) reach a binary only through the
-      # SHEKYL_MEASUREMENT_SPANS CMake option, default OFF; no Cargo edge and
-      # no release path may turn them on.
+      # xtask's measurement flag (rust/xtask/matrix.toml's [measurement]); no
+      # Cargo edge and no release path may turn them on.
       - name: the measurement spans never reach a release build
         run: |
           python3 scripts/ci/check_measurement_spans.py --selftest
@@ -283,8 +283,8 @@ jobs:
         run: cargo install cargo-audit --locked
       - name: install cargo-nextest
         # Same cache behaviour as cargo-audit above. The pinned version is
-        # scripts/ci/rust_scoped_tests.sh's, shared with the merge-ready
-        # re-test, so both run the tests under the same runner.
+        # scripts/ci/rust_scoped_tests.sh's, shared with the FreeBSD nightly,
+        # so both run the tests under the same runner.
         run: bash scripts/ci/rust_scoped_tests.sh install-nextest
       - name: cargo audit
         working-directory: rust
@@ -480,9 +480,9 @@ jobs:
         # `shekyl-randomx-differential` is excluded because its `c_oracle`
         # module links against the C reference's `librandomx.a` via
         # `randomx-v2-sys`, which requires the `RANDOMX_V2_INSTALL_DIR` env
-        # var to point at a CMake-built install prefix (per
+        # var to point at the C reference's install prefix (per
         # `docs/design/RANDOMX_V2_PHASE2G_PLAN.md` §5.1.16 + §5.2.2 R5-D2).
-        # The `rust-audit-and-test` job does not configure CMake or build
+        # The `rust-audit-and-test` job does not build
         # the C library; that work lives in the dedicated
         # `.github/workflows/randomx-v2-differential.yml` workflow (per
         # §5.5.1 + R1-D12), which builds the C library and runs
@@ -512,8 +512,7 @@ jobs:
         # expression instead.
         if: ${{ needs.changes.outputs.rust_tests != 'none' }}
         # The commands are scripts/ci/rust_scoped_tests.sh's, shared with the
-        # merge-ready re-test (merge-ready-retest.yml), so both run the same
-        # selection.
+        # FreeBSD nightly (freebsd-nightly.yml).
         env:
           RUST_TESTS: ${{ needs.changes.outputs.rust_tests }}
         run: bash ../scripts/ci/rust_scoped_tests.sh nextest
@@ -646,7 +645,7 @@ jobs:
         # but `-D warnings`, or if this step carries any key but `name`,
         # `working-directory`, `run`. Add a row there and a `-p` here in
         # the same commit.
-        run: cargo clippy --locked -p shekyl-archival-retention -p shekyl-bundle-producer -p shekyl-chain-ingest -p shekyl-chain-rules -p shekyl-chain-store -p shekyl-chain-sync-runtime -p shekyl-crypto-pq -p shekyl-ct-balance -p shekyl-curve-tree -p shekyl-fcmp -p shekyl-harness-spender -p shekyl-harness-wallet -p shekyl-mempool -p shekyl-network -p shekyl-draw-rng -p shekyl-p-host -p shekyl-p-store -p shekyl-p2p-session -p shekyl-relay-privacy -p shekyl-rpc-transport -p shekyl-tor-control-client -p shekyl-tx-builder -p shekyl-verify-cost -p shekyl-win-sec -p shekyl-wire --lib -- -D warnings
+        run: cargo clippy --locked -p shekyl-archival-retention -p shekyl-bundle-producer -p shekyl-chain-ingest -p shekyl-chain-rules -p shekyl-chain-store -p shekyl-chain-sync-runtime -p shekyl-crypto-pq -p shekyl-ct-balance -p shekyl-curve-tree -p shekyl-fcmp -p shekyl-harness-spender -p shekyl-harness-wallet -p shekyl-mempool -p shekyl-network -p shekyl-draw-rng -p shekyl-p-host -p shekyl-p-store -p shekyl-p2p-session -p shekyl-relay-privacy -p shekyl-rpc-transport -p shekyl-tor-control-client -p shekyl-tx-builder -p shekyl-verify-cost -p shekyl-win-sec -p shekyl-wire -p shekyl-os-account --lib -- -D warnings
 
       - name: "shekyl-mempool: the policy build the economics sim links (no default features)"
         working-directory: rust

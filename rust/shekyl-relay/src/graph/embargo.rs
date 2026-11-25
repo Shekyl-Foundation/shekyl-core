@@ -11,10 +11,13 @@
 //! shown, and the zone sets it through the FFI's existing `note_shown` path.
 //!
 //! **The embargo is the stem watch's observation.** Every successful stem
-//! send records one (`Relay::record_stem`) with a deadline, its connector's
+//! send records one (`Relay::record_stem`) with a deadline: its connector's
+//! floor, the time a stem and its fluff return can reasonably take (Rick,
+//! 2026-11-22; `EmbargoTimer::adopted_floor_millis`), plus that connector's
 //! memoryless draw (D-1, F-7). Disarm is the watch's predicate, not a timer:
-//! the transaction arrived from somewhere other than where this node sent it
-//! (F-10). An observation that resolves silent is the embargo firing.
+//! the transaction arrived from a peer this node did not hand it to (F-10):
+//! neither the charged successor nor, after a re-stem, the first successor.
+//! An observation that resolves silent is the embargo firing.
 //!
 //! **Once sent, this node's own transaction is a relayed one** (Rick,
 //! 2026-11-18, reversing RX-1's fixed origin interval). Nothing on the
@@ -115,8 +118,9 @@ pub const FIRE_WAIT_MISS_ONE_IN: u64 = 1_000;
 
 /// How long a test may wait for one embargo fire over the longest declared
 /// transit before calling it late, in seconds: the shared timer's survival
-/// quantile at [`FIRE_WAIT_MISS_ONE_IN`]. The draw is memoryless, so a fire
-/// has no earliest time, only this late bound.
+/// quantile at [`FIRE_WAIT_MISS_ONE_IN`]. A fire's earliest time is the
+/// timer's floor (`EmbargoTimer::floor_millis`); past it the draw is
+/// memoryless, and this is its late bound.
 #[must_use]
 pub fn embargo_fire_wait_secs() -> u32 {
     longest_transit_timer().judge_failed_after_secs(FIRE_WAIT_MISS_ONE_IN)
@@ -178,6 +182,10 @@ pub(super) struct Held {
     pub(super) blob: TxBlob,
     /// Where it came from: `None` for this node's own transaction.
     pub(super) source: Option<ConnectionId>,
+    /// The peer the first stem went to. A re-stem names it to the stem
+    /// watch as a peer the transaction was already handed to, so its echo
+    /// after the fire resolves nothing (F-10).
+    pub(super) first_successor: ConnectionId,
     /// The reshape alternate, captured at the first stem from the source's
     /// frozen pin. Not re-read at fire, so a churn refill cannot change it.
     pub(super) alternate: Option<ConnectionId>,
@@ -253,8 +261,9 @@ impl Relay {
     /// Record that `txs` were stemmed to `successor`, keyed under `source`
     /// (`None` = this node's own), and arm each one's embargo.
     ///
-    /// The deadline is drawn from the successor's connector, the same draw
-    /// whether the transaction is this node's own or relayed, and a connector
+    /// The deadline is drawn from the successor's connector, the same floor
+    /// and the same draw whether the transaction is this node's own or
+    /// relayed, and a connector
     /// with no assessed transit records nothing. The first
     /// stem of a transaction captures its reshape alternate; a later record
     /// of the same transaction keeps what it has.
@@ -270,14 +279,16 @@ impl Relay {
             return;
         };
         for (tx, blob) in txs {
+            let earlier = self.embargoes.held.get(tx).map(|held| held.first_successor);
             self.stem_watch
-                .stemmed(*tx, successor, source, connector, deadline);
+                .stemmed(*tx, successor, earlier, source, connector, deadline);
             let prior_armed = self.embargoes.unsent.get(tx).map(|unsent| unsent.armed_at);
             self.embargoes.unsent.remove(tx);
             let alternate = self.map.alternate_for(source, successor);
             self.embargoes.held.entry(*tx).or_insert_with(|| Held {
                 blob: TxBlob::clone(blob),
                 source,
+                first_successor: successor,
                 alternate,
                 restemmed: false,
                 armed_at: prior_armed.unwrap_or(now),
@@ -328,15 +339,26 @@ impl Relay {
         if self.embargoes.unsent.contains_key(&stem.tx) {
             return ControlFlow::Continue(());
         }
-        if !self.embargoes.held.contains_key(&stem.tx) {
+        let Some(earlier) = self
+            .embargoes
+            .held
+            .get(&stem.tx)
+            .map(|held| held.first_successor)
+        else {
             return ControlFlow::Break(());
-        }
+        };
         let Some((connector, deadline)) = self.embargo_draw(stem.peer, now, rng) else {
             self.release(&stem.tx);
             return ControlFlow::Break(());
         };
-        self.stem_watch
-            .stemmed(stem.tx, stem.peer, stem.source, connector, deadline);
+        self.stem_watch.stemmed(
+            stem.tx,
+            stem.peer,
+            Some(earlier),
+            stem.source,
+            connector,
+            deadline,
+        );
         ControlFlow::Continue(())
     }
 

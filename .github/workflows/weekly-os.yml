@@ -12,7 +12,7 @@ name: ci/weekly-os
 
 on:
   schedule:
-    - cron: "0 6 * * 1"   # Mondays 06:00 UTC
+    - cron: "19 6 * * 1"   # Mondays 06:19 UTC
   workflow_dispatch:
 
 concurrency:
@@ -24,7 +24,12 @@ permissions:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  BUILD_DEFAULT_LINUX: 'cmake -S . -B build -D ARCH="default" -D CMAKE_BUILD_TYPE=Release && cmake --build build --target all'
+  # The release build for the machine's triple (rust/xtask/matrix.toml's
+  # native row). It refuses a rustc other than rust/rust-toolchain.toml's
+  # channel, so each leg installs that channel through rustup rather than
+  # building with the distribution's own rust.
+  BUILD_NATIVE: 'cd rust && cargo xtask build --out ../build/bin'
+  PINNED_TOOLCHAIN: 'rustup toolchain install "$(sed -n "s/^channel = \"\(.*\)\"$/\1/p" rust/rust-toolchain.toml)" --profile minimal'
 
 jobs:
   build-windows-msys2:
@@ -41,10 +46,23 @@ jobs:
       - uses: msys2/setup-msys2@v2
         with:
           update: true
-          install: mingw-w64-x86_64-toolchain make mingw-w64-x86_64-cmake mingw-w64-x86_64-rust git
-      - uses: ./.github/actions/set-make-job-count
+          install: mingw-w64-x86_64-toolchain mingw-w64-x86_64-rustup git
+      # rustup's default host on Windows is MSVC, even inside MSYS2. This leg
+      # exists to build with MinGW, so it names that host and then checks it:
+      # an MSVC build here would pass and test nothing this job is for.
+      - name: install the pinned Rust for MinGW
+        run: |
+          rustup set default-host x86_64-pc-windows-gnu
+          ${{env.PINNED_TOOLCHAIN}}
+      - name: the toolchain is MinGW's
+        run: |
+          verbose=$(cd rust && rustc -vV)
+          case "$verbose" in
+            *"host: x86_64-pc-windows-gnu"*) echo "rustc host is x86_64-pc-windows-gnu" ;;
+            *) echo "::error::this leg builds with MinGW, and rustc is: $verbose"; exit 1 ;;
+          esac
       - name: build
-        run: make release-static-win64 -j${{env.MAKE_JOB_COUNT}}
+        run: ${{env.BUILD_NATIVE}}
 
   build-arch:
     name: 'Arch Linux'
@@ -54,14 +72,13 @@ jobs:
       image: archlinux:latest
     steps:
       - name: install dependencies
-        run: pacman -Syyu --noconfirm base-devel git cmake python3 rust
+        run: pacman -Syyu --noconfirm base-devel git python3 rustup
       - name: configure git
         run: git config --global --add safe.directory '*'
       - uses: actions/checkout@v5
         with:
           submodules: recursive
-      - uses: ./.github/actions/set-make-job-count
+      - name: install the pinned Rust
+        run: ${{env.PINNED_TOOLCHAIN}}
       - name: build
-        env:
-          CMAKE_BUILD_PARALLEL_LEVEL: ${{env.MAKE_JOB_COUNT}}
-        run: ${{env.BUILD_DEFAULT_LINUX}}
+        run: ${{env.BUILD_NATIVE}}

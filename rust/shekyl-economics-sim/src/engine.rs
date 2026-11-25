@@ -151,6 +151,10 @@ pub struct SimParams {
     /// scenario's demand ([`crate::chain_cursor::STANDARD_TRAFFIC`]), or the
     /// `steady` control (§5.35). The sim's own input.
     pub traffic: crate::chain_cursor::Traffic,
+    /// The economy's arms (§5.37): where the penalty goes, what the burn
+    /// reads, and which coinbase the template compares. Production on
+    /// every arm by default. The sim's own input.
+    pub economy: crate::economy::EconomyArms,
 }
 
 impl Default for SimParams {
@@ -161,6 +165,7 @@ impl Default for SimParams {
             fee: FeeModel::PRODUCTION_DEFAULT,
             volume_signal: crate::volume_window::VolumeSignal::Sum,
             traffic: crate::chain_cursor::STANDARD_TRAFFIC,
+            economy: crate::economy::EconomyArms::PRODUCTION,
         }
     }
 }
@@ -180,6 +185,7 @@ impl SimParams {
             fee: FeeModel::PRODUCTION_DEFAULT,
             volume_signal: crate::volume_window::VolumeSignal::Sum,
             traffic: crate::chain_cursor::STANDARD_TRAFFIC,
+            economy: crate::economy::EconomyArms::PRODUCTION,
         })
     }
 
@@ -189,7 +195,7 @@ impl SimParams {
     /// two economic fields set to the candidate's values
     /// ([`crate::escalation::EscalationCurve::on`]), whatever the run set
     /// them to. A path given twice within `more` is still refused. The fee
-    /// arm, the volume signal and the traffic are kept.
+    /// arm, the volume signal, the traffic and the economy's arms are kept.
     ///
     /// # Errors
     ///
@@ -210,6 +216,7 @@ impl SimParams {
             fee: self.fee,
             volume_signal: self.volume_signal,
             traffic: self.traffic,
+            economy: self.economy,
         })
     }
 
@@ -387,7 +394,7 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
         // "no burden yet" baseline (stage2 threads real n via burden::closed_shards).
         let fee_split = priced.paid.fee_burn;
 
-        already_generated += u128::from(paid_reward);
+        already_generated += u128::from(priced.minted());
         total_burned += fee_split.actually_destroyed as u128;
 
         staker_emission_earned_year += staker_emission as u128;

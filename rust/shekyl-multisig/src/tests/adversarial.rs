@@ -51,10 +51,16 @@ fn structural_validation_rejects_all_bad_inputs() {
         created_at: 1000,
         reference_block_height: 900,
         reference_block_hash: [0; 32],
-        recipients: vec![IntentRecipient {
-            payee: IntentPayee::Group { address: vec![1] },
-            amount: AtomicUnits::from_raw(100),
-        }],
+        recipients: vec![
+            IntentRecipient {
+                payee: IntentPayee::Group { address: vec![1] },
+                amount: AtomicUnits::from_raw(100),
+            },
+            IntentRecipient {
+                payee: IntentPayee::Group { address: vec![2] },
+                amount: AtomicUnits::from_raw(100),
+            },
+        ],
         fee: AtomicUnits::from_raw(10),
         input_global_indices: vec![42],
         kem_randomness_seed: IntentSeed::new(&[0; 32]),

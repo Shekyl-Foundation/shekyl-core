@@ -513,7 +513,7 @@ is required; the design choice is **what** is cached.
 | File master | `file_kek` | Random 32 B; encrypted under `wrap_key`; **transient at open** (HKDF PRK, then zeroize for F5(b)) |
 | Region 1 (spend keys) | `wrap_key_region_1` | `HKDF-Expand(file_kek, info = b"shekyl-region1-aead-v1" \|\| addr, L=32)` |
 | Region 2 (ledger) | `wrap_key_region_2` | `HKDF-Expand(file_kek, info = b"shekyl-region2-aead-v1" \|\| addr, L=32)` |
-| Prefs HMAC | `prefs_hmac_key` | `HKDF-Expand(file_kek, info = b"shekyl-prefs-hmac-v1" \|\| addr)` per [`WALLET_PREFS.md`](../WALLET_PREFS.md) §2.2 |
+| Prefs HMAC | `prefs_hmac_key` | `HKDF-Expand(file_kek, info = b"shekyl-prefs-hmac-v1" \|\| addr)` per [`WALLET_PREFS.md`](WALLET_PREFS.md) §2.2 |
 
 **One key, one purpose** — region 1 and region 2 no longer share raw `file_kek`
 as the AEAD key. AAD prevents ciphertext swapping; HKDF provides **key-purpose

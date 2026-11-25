@@ -1,0 +1,35 @@
+== conditions loc2-ml-dsa-keygen-start at 2026-11-22T22:30:02Z
+model: Raspberry Pi 4 Model B Rev 1.2
+revision: c03112
+os: Ubuntu 26.04.1 LTS
+kernel: 7.0.0-1023-raspi
+governor: ondemand
+ntp: yes
+load: 1.02 1.11 1.08
+clock_khz: 1500000
+soc_temp_millic: 55991
+throttled: throttled=0x0
+undervoltage_alarm: 0
+total_trans: 162811
+time_in_state:
+  600000 2749586
+  700000 35261
+  800000 5442
+  900000 4582
+  1000000 8027
+  1100000 9044
+  1200000 6010
+  1300000 6431
+  1400000 4639
+  1500000 6706282
+mem_available_kb: 3307500
+top processes by cpu:
+      PID USER     %CPU     ELAPSED COMMAND
+    43978 <agent>  100       00:00 ps
+    43934 root     25.5       00:00 systemd-timedat
+    43956 <agent>  5.5       00:00 bash
+    43593 root      0.1       04:14 kworker/1:0-events
+    43759 root      0.0       02:30 kworker/2:1-events
+       59 root      0.0  1-02:29:12 kworker/u17:0-brcmf_wq/mmc1:0001:1
+    42057 root      0.0       14:54 kworker/1:1-events
+tmux: ca3loc2: 1 windows (created Sun Nov 22 17:07:41 2026);

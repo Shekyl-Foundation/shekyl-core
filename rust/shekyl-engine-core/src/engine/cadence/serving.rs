@@ -56,6 +56,8 @@ where
     /// same "the endpoint is the caller's" shape `start_serving_if_staker`
     /// itself documents.
     pub(super) daemon: shekyl_rpc_transport::DaemonTarget,
+    /// The serving host's `tor-file` option, threaded the same way.
+    pub(super) tor_file: crate::TorFile,
     pub(super) slot: ServingSlot,
 }
 
@@ -82,6 +84,7 @@ where
     fn fire(&mut self, _tip: u64) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
         let weak = Weak::clone(&self.engine);
         let daemon = self.daemon.clone();
+        let tor_file = self.tor_file.clone();
         let slot = Arc::clone(&self.slot);
         Box::pin(async move {
             // Liveness under a brief lock: a live task is the no-op fire; a
@@ -104,7 +107,7 @@ where
             let Some(engine) = weak.upgrade() else {
                 return;
             };
-            match Engine::start_serving_if_staker(engine, &daemon).await {
+            match Engine::start_serving_if_staker(engine, &daemon, &tor_file).await {
                 Ok(Some(handle)) => {
                     *slot.lock().expect("serving slot lock") = Some(handle);
                 }

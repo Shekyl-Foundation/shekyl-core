@@ -6,7 +6,7 @@
 //! The build's identity, and the protocol version
 //! (`DAEMON_CONFIG_CUTOVER.md` DC-Q20).
 //!
-//! `cmake/Version.cmake` is the one home of the build identity: the
+//! `rust/xtask/src/version.rs` is the one home of the build identity: the
 //! version, its tag, whether the build is a release, and the release name.
 //! It passes those to every cargo-built binary as three environment
 //! variables, read here at compile time and nowhere else:

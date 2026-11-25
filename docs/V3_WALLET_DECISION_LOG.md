@@ -39,6 +39,195 @@ the original reasoning and assume it was arbitrary.
 
 ---
 
+## 2026-11-23 — The account-alone fact is one judgment, and one open is one resolution
+
+**Decision.** A directory no other account can enter is
+`shekyl_os_account::directory::account_alone`. The data-directory lock, a
+socket listener's directory and a service's network directory in the
+default layout all call it. A set-id bit or the sticky bit is not entry, so
+a service configuration check no longer refuses a network directory the
+console's bind would accept. The service home and the owner's socket
+directory stay exact mode `0700`, which was already their rule. The
+directories above a data directory or a configuration file are the
+directories one open of that path searches
+(`directories_entered`): each component is read without following, a link
+continues at its target, and the hop bound is that one resolution's. The
+socket bind holds the directory and creates, removes and narrows the socket
+through that descriptor.
+
+**Rationale.** The network-directory check had been written with the service
+home's exact `0700`, while the console and the lock refuse only when
+another account can enter. The ancestor walk was a second resolver, with
+one hop budget for every leg and a later `metadata` that followed what the
+walk had stopped following. The socket's mode was set on a path. One
+judgment and one resolution are what the next caller cannot miss. The
+socket's directory entry is what a connect checks; narrowing that name
+through the held directory does not follow a link planted in place of the
+directory.
+
+## 2026-11-23 — The daemon never changes a mode, and nothing above its data directory can be swapped
+
+**Decision (Rick, 2026-11-23).** The daemon creates each new directory with
+mode `0700` and never changes a mode, new or existing, by path or by handle.
+After creating one it checks the result with a no-follow `lstat`. A umask that
+stripped the owner's own bits refuses the start, naming the umask's owner
+digit, such as `02xx` (`config.data-dir.umask`). That digit is read from the
+new directory's mode: reading the whole umask would mean writing the
+process-wide mask, or making a probe other accounts could enter. Before it creates or uses the data directory, the
+daemon runs the configuration loader's ancestor check on every directory above
+it, on the same function with the same wording: any owner but root or the
+daemon's account, or any group or other write bit, refuses
+(`config.data-dir.ancestor-writable`). A sticky world-writable directory is
+refused too, so a data directory under `/tmp` is refused. A symbolic link is
+judged on both legs: the directory holding the link, where another account
+could replace it, and every directory above where it resolves. **The
+configuration file loader is stricter by the same rule**, since it reads the
+same walk. This narrows the 2026-11-22 entry below: a umask that strips the
+owner's bits is now refused rather than repaired.
+
+**Rationale.** Three findings in a row landed on the one mode change after
+`mkdir`: the new name swapped for a link, the same swap spelled with a trailing
+`/`, and an ancestor swapped for a link, which redirected the change to a
+same-named directory of the daemon's elsewhere (reproduced, `0750` to `0700`).
+Each fix guarded the last component while the path was resolved again. Removing
+the mode change closes that class, and refusing a writable ancestor closes the
+race at its cause: nothing above the data directory can be swapped by another
+account.
+
+**Fixtures.** The real check runs on every test fixture, with no exception. A
+fixture lives in `~/.shekyl-test/<pid>-<name>` (`shekyl_os_account::test_fixture`)
+and is removed when its test ends; a run removes what dead processes left.
+The build's target directory is not used: a checkout under umask `002`, or a CI
+workspace another account owns, would not pass the check.
+
+**Windows.** Not checked here, as in the 2026-11-22 entry: the keys and the
+console's pipe carry owner-only descriptors of their own.
+
+## 2026-11-22 — The data directory's account check is the shared directory walk
+
+**Decision.** `Lock::owner_only` reads
+`shekyl_os_account::directory::DirectoryFacts`, the same walk the service
+home and the socket listeners read. A missing directory still passes: the
+start creates it owner-only. An existing directory the group or others can
+enter is still `config.data-dir.exposed`. A symbolic link, a non-directory,
+an unreadable path, or another account's directory is
+`config.data-dir.unusable`, in the walk's own clause. The daemon still does
+not change a mode it did not create. A socket listener's directory refusal
+is that same clause; each listener adds only its own frame.
+
+**Rationale.** The mode had been re-read with `metadata`, which follows a
+symbolic link and does not ask who owns the directory. The service check
+and the console leg already refused a link and another account's directory,
+so a user-mode configuration check could accept a path the start's socket
+bind refused. The three mode policies stay with their callers: a service
+home and the owner's socket directory are mode `0700` exactly, a data
+directory and a socket directory are refused when another account can enter,
+and a service rendezvous is refused when the group or others can write. The
+fact of the directory is spoken once. This does not change the `0700`
+creation or the exposed refusal in the entry below.
+
+## 2026-11-22 — The daemon's data directory is its account's alone; the daemon makes it 0700 and refuses a wider one
+
+**Decision (Rick, 2026-11-22).** Every directory the daemon creates on its
+data directory's path, the data home and the network directory included, is
+`0700` on Unix whatever the umask
+(`shekyl_os_account::create_account_dir_all`, which `Lock::take` and the log
+location use, and the wallet binaries' `ensure_per_account_root` too). An
+existing data directory other accounts can enter refuses the start with
+`config.data-dir.exposed`, naming the directory and `chmod 700 <dir>`; the
+configuration check refuses it the same way. The daemon never changes a mode
+it did not create. The FreeBSD rc script already makes the service's data home
+`0700`; the network directory inside it is the daemon's, now `0700`. The
+release notes name the one-time `chmod 700` for an existing node.
+
+**Rationale.** The data directory holds an administrator's secret. A service's
+console key, `rpc-console.key`, is the host's administrator
+(`shekyl-daemon-rpc/src/authority.rs`), and it lives in the network's data
+directory beside the console's socket. A `0755` data directory lets every
+account on the host list and walk the directory where they sit. So the data
+directory is owner-only on its own account, not only through a directory
+above it, and the console socket's directory check (the entry below) enforces
+it. The check found the gap: the daemon made the network directory with the
+umask's mode (`create_dir_all`), so a FreeBSD service's `/var/db/shekyl/<network>`
+and any daemon started without `--data-dir` had a `0755` data directory, which
+the console leg's mandatory check refuses. Making it `0700` at creation fixes
+a new node; refusing an existing wider one, rather than narrowing it, leaves an
+operator's mode the operator's.
+
+**Windows.** Not checked here. The console key and the console leg's record
+are created with owner-only descriptors in their creating calls and refused
+on read when anyone else can read them, and the console's pipe is owner-only;
+Windows enforces each object's descriptor on every open, so the directory is
+not their containment the way it is for a socket on a BSD-derived system.
+
+## 2026-11-22 — Every socket listener is 0600 before it listens; its directory stays the containment
+
+**Decision.** Every Unix socket listener — the wallet RPC server, the
+daemon's owner socket, the daemon's console leg and the RPC tunnel — binds
+through one function, `shekyl_rpc_transport::listen::bind_owner_only_socket`.
+In order: the socket's directory must be this account's alone; what is at the
+path must be nothing, or a socket this account owns whose server is gone
+(the listeners' shared replace decision); then the socket is created and
+close-on-exec before its bind (atomically on Linux and FreeBSD; just after
+creation on macOS, where every production spawn's `shekyl_spawn::inherit`
+closes it in the child), bound, narrowed to `0600`, and only then listens. Each
+listener keeps only its own wording of a refusal, and the post-bind chmod
+steps are deleted. This supersedes the 2026-11-21 ruling's acceptance
+(#1490) that a socket's own `0600` comes after its bind and its directory
+alone covers startup.
+
+**Rationale.** tokio's and std's Unix binds listen in the same call, so a
+chmod after them leaves a window in which a connect is accepted at the
+umask's mode. A FreeBSD CI run on 2026-11-22 (umask 002) connected inside
+that window and found the wallet RPC's socket `0775`. The `0700` directory
+held, so no other account could reach it, but the claim that the socket is
+the owner's whenever it can be reached was false, and an operator who puts a
+listener's socket in a directory of their own (`--rpc-unix`, the tunnel's
+socket) had only that directory between the socket and every other account.
+The rejected alternative was to make the test wait for the mode: that keeps
+the window and teaches the test to agree with it. With bind, narrow, listen,
+a connect before the narrowing is refused, so the mode holds from the first
+moment anything can connect. The directory check stays mandatory in all four
+listeners: it is the containment, because BSD-derived systems may not
+enforce a socket's mode on connect. The tunnel's socket becoming `0600` (it
+had the umask's mode) is not a compatibility change: its owner-only
+directory already kept every other account out.
+
+The shared replace decision also refuses a socket another account owns (the
+daemon's owner socket refused one by uid before the decision was shared),
+and it is synchronous, so the daemon's owner socket, bound before its
+runtime serves it, takes the same steps as the listeners that bind inside
+one.
+
+---
+
+## 2026-11-22 — A send past the input cap is refused with the cap named; consolidation is its own round
+
+**Decision (Rick, 2026-11-22).** A send the balance covers, but only across
+more inputs than one transaction spends (`shekyl_tx_builder::MAX_INPUTS`), is
+refused when its inputs are selected, as the signer's
+`SignFault::TooManyInputs`: `-29123 TOO_MANY_INPUTS` on the wire, with the
+count the send needs and the cap. The refusal reads the constant, so it
+follows the cap wherever the cap's derivation lands. Automatic consolidation
+is a design round of its own, with its privacy priced.
+
+**Rationale.** The selection had no bound. Largest-first kept adding outputs
+until the amount was covered, and the batch reached the curve-tree actor,
+whose own bound refused it as `CurveTreeUnavailable`: an outage, answered by a
+rescan that cannot help. A wallet of many like-sized outputs hits this as soon
+as it sends more than its largest inputs can cover in one transaction, and every solo miner and staker
+holds such a wallet. It was found when the harness wallet on a forged chain
+asked to send a quarter of about 950 coinbases and selected 240 of them. The
+signer's refusal already named this failure and its remedy; the build reaches
+it before anything is reserved. Because largest-first takes the fewest inputs
+that cover an amount, a selection past the cap means no selection fits.
+
+**Not decided here.** The cap's value: 8 is inherited, without a derivation,
+and a separate lane derives it (`docs/FOLLOWUPS.md`, CEN-I4's entry).
+Consolidation is its own round: how the wallet merges outputs for the user,
+how many transactions the cap forces, when they are sent, and what a burst
+of them in one window discloses.
+
 ## 2026-09-20 — A persona's bond is immutable for its life
 
 **Decision.** A persona's bond is **immutable for its life**. The holdings set
@@ -7358,3 +7547,51 @@ gives every wallet the same shapes. The wallet's own reservations already
 keep built and staking-held outputs out of selection.
 
 **Reopens** only on a named user job those reservations do not cover.
+
+## 2026-11-21 — The wallet prefs file is deleted
+
+**Decision** (Rick: option (b), deleting the file rather than fixing its
+torn write).
+
+- **A wallet keeps no preferences file.** `<base>.prefs.toml`, its
+  `.prefs.toml.hmac` companion and the `shekyl-engine-prefs` crate are
+  deleted, with the prefs HMAC key, its derivation (the label
+  `shekyl-prefs-hmac-v1` leaves the domain registry with its code), the load at open, the
+  saves at create, close, shutdown and password change, and the
+  quarantine. A password change is the rotation alone.
+- **The one live field becomes an option of the process.** Which Tor
+  binary a serving wallet runs is the machine's, not the wallet's: it is
+  `tor-file` on `shekyl-wallet-rpc`, and on `shekyl-cli` for its
+  in-process server (`INPUT_GRAMMAR.md` §12.1, §12.4), with the daemon's
+  behaviour (IG-Q41): unset is discovery; a path naming no file on this
+  machine refuses the start with its remedy, never replaced by discovery;
+  a path naming a file must pass the pin. The deleted override fell back to
+  discovery only because a path stored beside the wallet travelled with
+  it; an option of the machine has no such residue.
+- **The coin-selection knobs are REJECTED:** `min_output_count`,
+  `min_output_value`, `ignore_outputs_above`, `ignore_outputs_below` and
+  `merge_destinations`, refused by name in the CLI's table with the reason
+  below. That table is the only record: the wallet contract never exposed
+  these names.
+- **Every other field is deleted** with a one-line reason each
+  (`WALLET_SETTINGS.md` §6.2): Monero's settings carried over with no
+  reader. Auto-lock (`inactivity_lock_timeout`) is required by no live
+  design; if the GUI builds it, it is a GUI setting.
+- **No migration and no compatibility code.** A pair an earlier build left
+  beside a wallet is not read, moved or deleted.
+- `WALLET_PREFS.md` is retired to `docs/completed/`; what still holds is
+  restated in `WALLET_SETTINGS.md`, and rule 42's placement order loses the
+  advisory tier.
+
+**Why.** Fixing the torn write (the body and its HMAC were two replaces,
+and a kill between them quarantined good settings as tampered) would have
+treated a symptom. One field had a production reader, and it was
+machine-scoped; the rest had none. The file promised hand editing while
+its HMAC made every hand edit a tamper event that reset all settings. For
+the coin-selection knobs, the reason given for the user freeze
+(2026-11-15): a human choice on a visible transaction parameter becomes a
+pattern, while deterministic selection gives every wallet the same shapes.
+
+**Reopens.** The coin-selection knobs, only on a named user job the
+wallet's own selection does not cover. A per-wallet setting, only as
+sealed state (rule 42), never as an advisory file.

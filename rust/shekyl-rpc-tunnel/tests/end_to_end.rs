@@ -100,9 +100,9 @@ fn socket_dir(dir: &Path) -> PathBuf {
 }
 
 /// The test's directory and its socket directory, each 0700.
-fn workdir() -> tempfile::TempDir {
+fn workdir() -> shekyl_os_account::test_fixture::FixtureDir {
     use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
-    let dir = tempfile::tempdir().expect("a directory");
+    let dir = shekyl_os_account::test_fixture::tempdir().expect("a directory");
     std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700))
         .expect("the test's directory");
     std::fs::DirBuilder::new()

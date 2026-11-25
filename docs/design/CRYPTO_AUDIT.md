@@ -6,8 +6,9 @@ ignored in `cargo audit` by ruling (Rick, 2026-10-24); its long-term fix is
 not yet designed. `CA-2` opened 2026-10-24 from CA-1's dynamic measurement:
 operand-dependent timing in the vendored `HelioseleneField` on x86_64,
 mechanism open (§2). `CA-3` opened 2026-11-21 by Rick's ruling: no
-constant-time evidence covers any of Shekyl's post-quantum signing (§3).
-Its FN-DSA run is registered and unmeasured (§3.1).
+registered timing evidence then covered any of Shekyl's post-quantum signers (§3).
+All three signers have since passed their registered runs. CA-3 closed on
+2026-11-25 (§3.1–§3.3).
 
 One row per advisory or audit finding that touches a cryptographic
 dependency or primitive and cannot be closed by a routine lockfile bump. A
@@ -21,7 +22,7 @@ bump's commit is its record.
 | --- | --- | --- |
 | `CA-1` | `crypto-bigint` 0.5.5, RUSTSEC-2026-0387 (timing variability) | **IGNORED BY RULING 2026-10-24** — fix undesigned (§1) |
 | `CA-2` | Operand-dependent timing in the vendored `HelioseleneField` on x86_64, outside BINSEC's model | **OPEN 2026-10-24** — mechanism open (§2) |
-| `CA-3` | No constant-time evidence for post-quantum signing: FN-DSA (receipt countersignature), ML-DSA-65 (transactions), SLH-DSA-192s (messages) | **OPEN 2026-11-21** — FN-DSA: floor device passes, laptop not yet run (§3.1); ML-DSA-65 and SLH-DSA-192s registered, unmeasured (§3.2, §3.3) |
+| `CA-3` | No constant-time evidence for post-quantum signing: FN-DSA (receipt countersignature), ML-DSA-65 (transactions), SLH-DSA-192s (messages) | **CLOSED 2026-11-25**. FN-DSA (§3.1) and SLH-DSA (§3.3) passed their registered runs. Post-fork ML-DSA-65 passed on the floor (pair 3.57, delta10 657 ns) and the physical Windows desktop (pair 3.33, delta10 139 ns), meeting the final signing criterion (§3.2). |
 
 ## 1. `CA-1` — crypto-bigint 0.5.5, RUSTSEC-2026-0387
 
@@ -438,12 +439,12 @@ fips203/204/205 0.5.0. Owner: the crypto-audit lane. It is not part of
 respect to its secret key, on the floor device (Raspberry Pi 4, rule 76)
 and on x86?
 
-**What covers post-quantum code today.** checkct's drivers and its dynamic
+**Coverage when CA-3 opened.** checkct's drivers and its dynamic
 harness (`docs/formal/checkct/`) cover crypto-bigint 0.5.5,
 `dalek_ff_group::FieldElement` and `HelioseleneField`, and nothing in
 fips203, fips204, fips205 or fn-dsa. RT-P4
 ([`RPC_CHANNEL.md`](RPC_CHANNEL.md) §9) times ML-KEM-768 decapsulation
-only. No registered run covers any signing.
+only. At opening, no registered run covered signing.
 
 **The signers, by exposure.**
 
@@ -467,12 +468,46 @@ devices, with its source read recorded here.
 
 ### 3.1 FN-DSA, the receipt countersignature
 
-**Status: the floor device PASSES (2026-11-22); the laptop's two runs are
-not yet made.** The registration and its results are in
+**Status: CLOSED 2026-11-22: all three registered runs PASS.** The
+registration and its results are in
 [`ca3_fn_dsa_receipt_sign_timing_20261121.md`](../benchmarks/ca3_fn_dsa_receipt_sign_timing_20261121.md).
-On the 4 GB Pi 4 at 500,000 samples the fixed pair read 2.90, the nulls
-2.77 and 1.77, and the control 200.07. That excludes a key-value dependence
-of 0.5 % of a signature (10.19 µs) or more there.
+| Run | Fixed pair | Nulls | Control |
+| --- | --- | --- | --- |
+| 4 GB Pi 4, 500,000 samples | 2.90 | 2.77, 1.77 | 200.07 |
+| Laptop, AVX2 path | 1.71 | 2.28, 2.49 | 159.34 |
+| Laptop, SSE2 path | 1.85 | 2.25, 1.99 | 162.04 |
+
+Each pass excludes a key-value dependence of 0.5 % of a signature or more on
+its path: 10.19 µs on the floor device, about 2 µs on x86. The record
+discloses one coverage difference. On the SSE2 path, which runs only on x86
+without AVX2, the wallet inlines `sign_inner` where the harness does not.
+The sampler and the LDL decomposition it calls are instruction-identical.
+
+`sign_inner` (`fn-dsa-sign` 0.4.0, `lib.rs:482`) does key-derived
+floating-point work of its own:
+- the Gram matrix from the basis (`poly_mulownadj_fft`, `poly_muladj_fft`,
+  `lib.rs:590-604`);
+- the target and lattice-point products (`poly_mul_fft`, `lib.rs:632-635`
+  and `:680-686`);
+- the inverse FFT (`lib.rs:688-689`);
+- `rint` (`lib.rs:700`, `:715`), which on x86_64 is `cvtsd2si`
+  (`_mm_cvtsd_si64`, `flr_native.rs:373-384`).
+
+All of it is multiplies, adds, subtractions and conversions, whose latency
+on x86_64 does not depend on operand values for normal inputs. Every
+division and square root on key-derived values in signing is in the two
+functions the comparison found identical between the harness and the
+wallet:
+- `poly_LDL_fft`, whose divisions on x86_64 are `_mm_div_pd` and
+  `_mm_div_sd` (`poly.rs:1130`, `:1148`; the AVX2 path's `_mm256_div_pd`
+  at `poly_avx2.rs:393`; `poly.rs:1215` is the same division on targets
+  without SIMD);
+- `ffsamp_fft_inner`, whose leaf divides once (`sampler.rs:512`) and takes
+  two square roots (`:532`, `:553`); on the AVX2 path
+  `sampler_avx2.rs:280`, `:300` and `:321`.
+
+So the differently compiled `sign_inner` contains no operation whose time
+can vary with the key's values.
 It covers three runs: the laptop's AVX2 path, the laptop's baseline (SSE2)
 path, and the floor device. The row closes when all three pass.
 - **The pass line** is the fixed pair, key A against key B (the
@@ -653,14 +688,77 @@ above. None is chosen before then.
 
 ### 3.2 ML-DSA-65, transaction authorisation
 
-**Status: registered, unmeasured.** The registration is
+**CLOSED 2026-11-25.** Post-fork revision 3 passed the registered signing
+line on both devices. The floor recorded pair 3.57, null 2.16, control
+160.82 and delta10 657 ns. The physical Windows desktop recorded pair
+3.33, null 2.04, control 96.68 and delta10 139 ns. Both used 50,000
+samples per comparison with key decode timed. All signature checks held.
+The two earlier VM preflights missed their controls and contributed no
+registered result. This closes the final signer under CA-3's criterion.
+
+Core #1545 pins fips204's fork at `54b76cf714`, removing the secret-coefficient
+branches and hardening the inverse NTT range; the source and guard evidence
+are in [`ca3_pq_branch_sweep_20261123.md`](../benchmarks/ca3_pq_branch_sweep_20261123.md).
+The maintainer ordered the same registered line at 50,000 per comparison,
+on a fresh seed, after merging dev: signing alone with decode timed, floor
+on the performance governor, Windows behind its quiet gate. The maintainer
+substituted a fleet Windows VM for the unavailable laptop on 2026-11-24,
+before its run; the timing record states the conditions and limits. The revision-3
+registration is in the timing record below. Neither earlier device result
+closes the post-fork run.
+
+**Revision 2 record, published fips204 0.5.0 (2026-11-23):**
+- **The laptop PASSES:** attempt 2, sign pair 1.32, null 3.38, control
+  65.73, δ₁₀ 415 ns. Attempt 1 was void: its control was not detected,
+  under load on the measured core's sibling.
+- **The floor device is INCONCLUSIVE:** attempt 1, sign pair 7.55, null
+  3.15, control 118.00, δ₁₀ 1,145 ns. Key A is about 0.4 µs faster in the
+  single-attempt signatures, about 0.03 %.
+- **Observed, not established:** on all three floor pairs the key with
+  more hints per signature is the slower. The hint count is public.
+- **The attempt is not made again.** Diagnostics follow it, and none of them
+  is a pass or a second attempt (2026-11-23):
+  - **The public hint count is not the carrier.** The slope is tens of ns per
+    hint (14 and 55), and adjusting for it moves the fastest signatures'
+    difference only from −277 to −266 ns.
+  - **Not yet attributed to layout.** The registered binary read 10.50 and then
+    4.05 on identical code, so the figure moves between runs of one binary.
+    Two verified layout-only builds read 2.75 and 1.90, one run each. This is
+    with the maintainer.
+
+The record is
 [`ca3_ml_dsa_tx_auth_timing_20261122.md`](../benchmarks/ca3_ml_dsa_tx_auth_timing_20261122.md).
-Its pass line is a fixed pair matched on the work key generation does by
-design (ExpandS bytes, ExpandA rejections), and `fixed-vs-varied` is
-information (the maintainer's rulings, 2026-11-21). The harness is
-`rust/shekyl-crypto-pq/examples/ca3_pq_sign_timing.rs`, mode `ml-dsa`. It
-times `sign_pqc_auth_for_output` (`shekyl-crypto-pq/src/output.rs:1182`)
-through its seeded twin (`:1206`).
+- **The line:** signing alone from one working slot, with the key's
+  decode timed as the shipped call decodes on every call
+  (`shekyl-crypto-pq/src/signature.rs:354`). The pass line is the pair
+  matched on the work key generation does by design (ExpandS bytes,
+  ExpandA rejections). The composed call (`sign_pqc_auth_for_output`,
+  `output.rs:1182`, through its seeded twin at `:1224`) and key generation
+  alone are information.
+- **The size:** 50,000 samples per comparison on each device. It comes from
+  the threat model below (about one sample per key), the rule ruled for
+  SLH-DSA, and each attempt states its sensitivity as δ₁₀.
+- **The harness:** `rust/shekyl-crypto-pq/examples/ca3_pq_sign_timing.rs`,
+  mode `ml-dsa-registered`.
+- **fips204 0.5.0 has no architecture-specific code,** and its keccak
+  dispatches only on aarch64 behind a feature the workspace does not
+  enable. So one run covers each device.
+
+**Disclosed:**
+- **The size and the line were set after the runs that informed them:**
+  the floor device's shake-down (composed pair 10.44), two localisations,
+  and the shake-down's own binary run again (7.12).
+- **That rerun's crossing follows the build.** The second localisation's
+  build read 3.52 on the same mode, pair, seed and device. So the composed
+  call carries a per-key effect whose size follows the code layout. Its
+  likely carrier is the test repeating each key, which production does
+  not do (about one signature per output key). It is not a reliable line.
+- **Every localisation pair sat above its null** at 50,000: 2.6 to 3.7,
+  against 1.2 to 2.2. That is probably a per-key difference of about
+  0.3 µs, about 0.01 % of the call. Its likely carrier is the same
+  repetition, but it is not identified. A run at 500,000 might cross on it.
+- **The hint count differs per key**, as ML-DSA's design implies, and is
+  public. Within equal hint counts the pairs read as they do overall.
 
 **Threat model.**
 - **Adversary.** A co-resident process on the wallet's host, or an
@@ -668,7 +766,7 @@ through its seeded twin (`:1206`).
 - **Capability: about one sample per key.** Each output's hybrid key is
   derived from the transaction's combined shared secret and the output
   index. It signs when that output is spent, and is wiped
-  (`sign_derived_output_auth`, `output.rs:1229`). So a timing observer
+  (`sign_derived_output_auth`, `output.rs:1247`). So a timing observer
   sees about one signature per key, more only if the user rebuilds the
   same spend. An enrolled RPC client can request signatures, but it can
   already spend.
@@ -726,8 +824,14 @@ through its seeded twin (`:1206`).
 
 ### 3.3 SLH-DSA-SHA2-192s, message signing
 
-**Status: registered, unmeasured.** The registration is
+**Status: CLOSED 2026-11-22. Both registered runs PASS: the floor device's
+and the laptop's.** The registration and its results are in
 [`ca3_slh_dsa_msg_sign_timing_20261122.md`](../benchmarks/ca3_slh_dsa_msg_sign_timing_20261122.md).
+On the 4 GB Pi 4 the fixed pair read 1.40, the null 2.21, and the control
+22.89 at δ = 1.22 ms, which excludes a key-value dependence of 1.22 ms
+(0.023 % of a signature) or more there. On the laptop (x86_64, Windows) the
+fixed pair read 2.43, the null 2.15, and the control 66.60 at its own
+δ = 9.61 ms (1.66 %): a coarser bound, from that machine's larger noise.
 It has three comparisons (the fixed pair, the a/a null, and the control on
 it) at 1,000 signatures per class, and its control is sized from each
 device's measured noise (the maintainer's rulings, 2026-11-21). The harness

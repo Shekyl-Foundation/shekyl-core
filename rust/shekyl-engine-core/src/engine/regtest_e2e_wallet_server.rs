@@ -6,7 +6,7 @@
 //! A real `shekyl-wallet-rpc` process for the regtest gates that drive the
 //! wallet through its contract: the A19 gates (`send_durable`) and the
 //! balance and signer gates (`balance`). Requires `SHEKYL_WALLET_RPC_BIN`
-//! (staged in `build/bin` by the CMake build) beside `SHEKYLD_BIN`.
+//! (staged in `build/bin` by `cargo xtask build`) beside `SHEKYLD_BIN`.
 
 #![cfg(test)]
 
@@ -44,7 +44,7 @@ impl WalletServer {
         let bin = std::env::var_os("SHEKYL_WALLET_RPC_BIN").unwrap_or_else(|| {
             panic!(
                 "SHEKYL_WALLET_RPC_BIN not set. Build the wallet server \
-                 (cmake --build build) and pass build/bin/shekyl-wallet-rpc"
+                 (cargo xtask build, in rust/) and pass build/bin/shekyl-wallet-rpc"
             )
         });
         let port = {

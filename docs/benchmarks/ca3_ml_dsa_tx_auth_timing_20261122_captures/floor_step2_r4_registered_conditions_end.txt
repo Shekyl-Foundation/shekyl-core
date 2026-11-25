@@ -1,0 +1,35 @@
+== conditions r4-registered-end at 2026-11-23T16:57:09Z
+model: Raspberry Pi 4 Model B Rev 1.2
+revision: c03112
+os: Ubuntu 26.04.1 LTS
+kernel: 7.0.0-1023-raspi
+governor: ondemand
+ntp: yes
+load: 1.15 1.05 1.01
+clock_khz: 1500000
+soc_temp_millic: 56965
+throttled: throttled=0x0
+undervoltage_alarm: 0
+total_trans: 219944
+time_in_state:
+  600000 7790744
+  700000 79105
+  800000 11370
+  900000 5746
+  1000000 9228
+  1100000 11003
+  1200000 7916
+  1300000 9057
+  1400000 7120
+  1500000 8246868
+mem_available_kb: 3299488
+top processes by cpu:
+      PID USER     %CPU     ELAPSED COMMAND
+    83089 <agent>  100       00:00 ps
+    83076 root     48.0       00:00 systemd-timedat
+    83066 <agent>  2.9       00:00 bash
+    83064 root      0.0       00:31 kworker/3:1-events
+    82647 root      0.0       07:01 kworker/1:0-events
+    82368 root      0.0       12:31 kworker/1:1-events
+    82811 root      0.0       04:53 kworker/2:2-events
+tmux: ca3lruns: 1 windows (created Mon Nov 23 10:19:14 2026);

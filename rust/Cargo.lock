@@ -1171,8 +1171,7 @@ dependencies = [
 [[package]]
 name = "fips204"
 version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a823e139c2d539b1b735d31cdce8b0b356671585eac3d54dec79d1d15052093b"
+source = "git+https://github.com/Shekyl-Foundation/fips204?rev=54b76cf71430a406f3c96ab9c80c42b0d74ce2fd#54b76cf71430a406f3c96ab9c80c42b0d74ce2fd"
 dependencies = [
  "rand_core 0.6.4",
  "sha3",
@@ -1281,9 +1280,9 @@ checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
 name = "form_urlencoded"
-version = "1.2.2"
+version = "1.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf"
+checksum = "afa489199eaffb1211795df1c6236ce1ad0d41a6fa45250add73e3b02420f06e"
 dependencies = [
  "percent-encoding",
 ]
@@ -1299,9 +1298,10 @@ dependencies = [
  "generalized-bulletproofs-circuit-abstraction",
  "generalized-bulletproofs-ec-gadgets",
  "generic-array 1.4.5",
- "multiexp 0.4.2",
+ "multiexp",
  "rand_core 0.6.4",
  "std-shims",
+ "subtle",
  "zeroize",
 ]
 
@@ -1407,7 +1407,7 @@ dependencies = [
  "ciphersuite",
  "ff",
  "flexible-transcript",
- "multiexp 0.4.2",
+ "multiexp",
  "rand_core 0.6.4",
  "std-shims",
  "subtle",
@@ -1421,6 +1421,7 @@ dependencies = [
  "ciphersuite",
  "generalized-bulletproofs",
  "std-shims",
+ "subtle",
  "zeroize",
 ]
 
@@ -2145,7 +2146,7 @@ dependencies = [
  "dkg-recovery",
  "flexible-transcript",
  "hex",
- "multiexp 0.5.2",
+ "multiexp",
  "rand_chacha",
  "rand_core 0.6.4",
  "schnorr-signatures",
@@ -2162,20 +2163,6 @@ checksum = "bb85c154ba489f01b25c0d36ae69a87e4a1c73a72631fc6c0eb6dde34a73e44b"
 dependencies = [
  "num-traits",
  "pxfm",
-]
-
-[[package]]
-name = "multiexp"
-version = "0.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7ec2ce93a6f06ac6cae04c1da3f2a6a24fcfc1f0eb0b4e0f3d302f0df45326cb"
-dependencies = [
- "ff",
- "group",
- "rand_core 0.6.4",
- "rustversion",
- "std-shims",
- "zeroize",
 ]
 
 [[package]]
@@ -3007,7 +2994,7 @@ checksum = "037878e1cd9b8dcd0c9bcd1de2f8f4e14233b6a62cd08f34e6c9bade081f52e8"
 dependencies = [
  "ciphersuite",
  "flexible-transcript",
- "multiexp 0.5.2",
+ "multiexp",
  "rand_core 0.6.4",
  "std-shims",
  "zeroize",
@@ -3422,6 +3409,7 @@ dependencies = [
  "shekyl-thread-priority",
  "shekyl-tor-status",
  "shekyl-tx-builder",
+ "shekyl-tx-weight",
  "shekyl-types",
  "shekyl-units",
  "shekyl-wire",
@@ -3570,7 +3558,6 @@ dependencies = [
  "shekyl-economics",
  "shekyl-engine-core",
  "shekyl-engine-file",
- "shekyl-engine-prefs",
  "shekyl-logging",
  "shekyl-options",
  "shekyl-os-account",
@@ -3934,6 +3921,7 @@ dependencies = [
  "libm",
  "serde",
  "serde_json",
+ "sha2",
  "shekyl-archival-retention",
  "shekyl-block-template",
  "shekyl-chain-rules",
@@ -3949,6 +3937,7 @@ dependencies = [
  "shekyl-units",
  "shekyl-wire",
  "thiserror",
+ "time",
 ]
 
 [[package]]
@@ -3974,7 +3963,7 @@ dependencies = [
  "hex",
  "hkdf",
  "kameo",
- "multiexp 0.4.2",
+ "multiexp",
  "proptest",
  "rand_chacha",
  "rand_core 0.6.4",
@@ -4000,7 +3989,6 @@ dependencies = [
  "shekyl-encoding",
  "shekyl-engine-core",
  "shekyl-engine-file",
- "shekyl-engine-prefs",
  "shekyl-engine-state",
  "shekyl-fcmp",
  "shekyl-fcmp-proofs",
@@ -4010,6 +3998,7 @@ dependencies = [
  "shekyl-noise",
  "shekyl-onion-key",
  "shekyl-operator-alarm",
+ "shekyl-os-account",
  "shekyl-p-host",
  "shekyl-p-loopback",
  "shekyl-p-serve",
@@ -4053,31 +4042,12 @@ dependencies = [
  "shekyl-address",
  "shekyl-crypto-pq",
  "shekyl-curve-primitives",
- "shekyl-engine-prefs",
  "shekyl-engine-state",
  "shekyl-os-account",
  "shekyl-types",
  "tempfile",
  "thiserror",
  "tracing",
- "zeroize",
-]
-
-[[package]]
-name = "shekyl-engine-prefs"
-version = "3.1.0"
-dependencies = [
- "hkdf",
- "hmac",
- "serde",
- "sha2",
- "shekyl-os-account",
- "shekyl-units",
- "tempfile",
- "thiserror",
- "toml",
- "tracing",
- "windows-sys 0.60.2",
  "zeroize",
 ]
 
@@ -4122,7 +4092,7 @@ dependencies = [
  "generalized-bulletproofs",
  "helioselene",
  "modular-frost",
- "multiexp 0.4.2",
+ "multiexp",
  "rand 0.8.8",
  "rand_chacha",
  "rand_core 0.6.4",
@@ -4153,7 +4123,7 @@ dependencies = [
  "generic-array 1.4.5",
  "helioselene",
  "modular-frost",
- "multiexp 0.4.2",
+ "multiexp",
  "rand_chacha",
  "rand_core 0.6.4",
  "shekyl-curve-generators",
@@ -4252,6 +4222,7 @@ dependencies = [
  "shekyl-archival-retention",
  "shekyl-crypto-hash",
  "shekyl-net-address",
+ "shekyl-os-account",
  "shekyl-p2p-transport",
  "shekyl-peer-bounds",
  "shekyl-portable-storage",
@@ -4333,6 +4304,7 @@ dependencies = [
  "shekyl-curve-io",
  "shekyl-curve-primitives",
  "shekyl-curve-tree",
+ "shekyl-engine-state",
  "shekyl-fcmp",
  "shekyl-network",
  "shekyl-tx-builder",
@@ -4882,6 +4854,7 @@ dependencies = [
  "hyper-rustls",
  "hyper-util",
  "rand_core 0.6.4",
+ "rustix",
  "serde",
  "serde_json",
  "shekyl-address",
@@ -4896,6 +4869,7 @@ dependencies = [
  "shekyl-rpc-types",
  "shekyl-socks",
  "shekyl-win-sec",
+ "socket2",
  "tempfile",
  "tokio",
  "tower-service",
@@ -5300,7 +5274,7 @@ dependencies = [
  "ec-divisors",
  "gungraun",
  "helioselene",
- "multiexp 0.4.2",
+ "multiexp",
  "rand_chacha",
  "rand_core 0.6.4",
  "shekyl-bulletproofs",
@@ -5330,7 +5304,6 @@ dependencies = [
  "shekyl-crypto-pq",
  "shekyl-engine-core",
  "shekyl-engine-file",
- "shekyl-engine-prefs",
  "shekyl-engine-state",
  "shekyl-rpc-client",
  "shekyl-rpc-types",
@@ -5359,9 +5332,9 @@ dependencies = [
  "shekyl-curve-primitives",
  "shekyl-engine-core",
  "shekyl-engine-file",
- "shekyl-engine-prefs",
  "shekyl-engine-state",
  "shekyl-logging",
+ "shekyl-os-account",
  "shekyl-process",
  "shekyl-rpc-client",
  "shekyl-rpc-transport",
@@ -6444,6 +6417,13 @@ dependencies = [
  "rand_core 0.6.4",
  "serde",
  "zeroize",
+]
+
+[[package]]
+name = "xtask"
+version = "3.1.0"
+dependencies = [
+ "toml",
 ]
 
 [[package]]

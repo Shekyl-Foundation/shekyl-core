@@ -13,11 +13,25 @@
 #     its SIMD cfgs through rustc_version), a derive recorded and its
 #     compiler toolchain not walked.
 #
+#   - a package with a `source` comes from exactly that source in every lock;
+#     one without comes from crates.io, so a `[patch]` of a held crate is a
+#     change to this record.
+#
 # Moving a version here is a review, not a refresh: read the change at
 # source against .cursor/rules/30-cryptography.mdc and 35-secure-memory.mdc,
 # and run the KATs, the pinned FCMP++ vectors and the checkct rows on it
-# (rule 17). A new primitive dependency adds its name to `roots` in the
-# change that adds it.
+# (rule 17). For fips204 that includes both of its branch guards: the
+# `fips204ct` checkct row (docs/formal/checkct/) and
+# scripts/ci/check_fips204_branch_counts.py on x86_64 and on the floor
+# device. A toolchain bump re-pins that script's counts on both.
+#
+# A pinned fork revision moves only with a recorded run of the fork's workflow
+# commands: the `exhaustive` and `branch-gate` jobs in its
+# .github/workflows/test.yml. Actions is off on the fork, so they are run by
+# hand and their output goes in the record of the change that moves the pin.
+#
+# A new primitive dependency adds its name to `roots` in the change that adds
+# it.
 
 roots = [
     "aes",
@@ -290,7 +304,8 @@ reason = "ML-KEM: the post-quantum half of the hybrid KEM (shekyl-crypto-pq, she
 [[package]]
 name = "fips204"
 version = "0.5.0"
-reason = "ML-DSA-65: the post-quantum half of the hybrid signature (shekyl-crypto-pq, shekyl-tx-builder). 0.5.0 reviewed (PR 2): CHANGELOG and traits.rs read; the exact-pin DummyRng is unchanged; Ph and the deprecated test hooks are gone (Shekyl used neither); a signing key with s1 or s2 outside [-eta, eta] is now refused at parse, and signing gives up after 814 attempts instead of looping; seeded keygen and try_sign_with_seed byte-identical to 0.4.6."
+source = "git+https://github.com/Shekyl-Foundation/fips204?rev=54b76cf71430a406f3c96ab9c80c42b0d74ce2fd#54b76cf71430a406f3c96ab9c80c42b0d74ce2fd"
+reason = "ML-DSA-65: the post-quantum half of the hybrid signature (shekyl-crypto-pq, shekyl-tx-builder). The Shekyl fork of tag v0.5.0: the reductions, decompose, make_hint and infinity_norm have no conditional branch on a secret coefficient under overflow-checks = true, and the NTT path's range is hardened (docs/benchmarks/ca3_pq_branch_sweep_20261123.md); every value the tag returned is unchanged. 0.5.0 reviewed (PR 2): CHANGELOG and traits.rs read; the exact-pin DummyRng is unchanged; Ph and the deprecated test hooks are gone (Shekyl used neither); a signing key with s1 or s2 outside [-eta, eta] is now refused at parse, and signing gives up after 814 attempts instead of looping; seeded keygen and try_sign_with_seed byte-identical to 0.4.6."
 
 [[package]]
 name = "fips205"
@@ -375,12 +390,12 @@ reason = "Hex under bitcoin_hashes, on bip39's checksum path. 0.2.3 admitted aft
 [[package]]
 name = "hkdf"
 version = "0.12.4"
-reason = "HKDF-SHA512 seed normalisation and account key derivation (shekyl-crypto-pq account.rs); the prefs HMAC key (shekyl-engine-prefs hmac_key.rs)."
+reason = "HKDF-SHA512 seed normalisation and account key derivation (shekyl-crypto-pq account.rs)."
 
 [[package]]
 name = "hmac"
 version = "0.12.1"
-reason = "HMAC under hkdf; the prefs file's MAC (shekyl-engine-prefs); Tor control's SAFECOOKIE handshake (shekyl-tor-control-client)."
+reason = "HMAC under hkdf; Tor control's SAFECOOKIE handshake (shekyl-tor-control-client)."
 
 [[package]]
 name = "hybrid-array"
@@ -429,13 +444,8 @@ reason = "Multisig FROST signing (shekyl-fcmp, shekyl-fcmp-proofs). 0.11.1 admit
 
 [[package]]
 name = "multiexp"
-version = "0.4.2"
-reason = "Multi-scalar multiplication and batch verification in FCMP++ and the generalized Bulletproofs (fcmps, generalized-bulletproofs, shekyl-fcmp, shekyl-fcmp-proofs, shekyl-engine-core, shekyl-verify-cost). Kept at 0.4.2 while FROST moves to 0.5.2. 0.4's non-vartime multiexp indexes its Straus tables and Pippenger buckets by secret scalar bits (straus.rs: tables[s][groupings[s][b]]; pippenger.rs: buckets[bits[p][n]]), and every non-vartime multiexp in the prover takes secret scalars: generalized-bulletproofs lib.rs:323 (Pedersen commit) and :353 (PedersenVectorCommitment::commit), arithmetic_circuit_proof.rs:377 (AI), :390 (AO), :412 (S, the blinds) and :585/:591 (the t/tau transcript points), point_vector.rs:122, fcmps tape.rs:275 (the witness tape's commitments); fcmps lib.rs:605-625 (tree roots) run non-vartime on public data (cost only); the verifiers use verify_vartime (shekyl-fcmp proof.rs:1082/1208, sal/multisig.rs:316). 0.5 scans every entry with conditional_assign, at a cost to the prover's large multiexps. Owner: the DRS lane (Rick, 2026-11-21). Reopen: the DRS lane's change moving the prover to 0.5, with a Pi 4 prover timing (rule 76); 0.5 needs its alloc feature there, or multiexp falls back to a naive sum."
-
-[[package]]
-name = "multiexp"
 version = "0.5.2"
-reason = "Multi-scalar multiplication and batch verification under modular-frost 0.11.1 (multisig FROST). Admitted after diffing src against 0.4.2: the non-vartime Straus and Pippenger select table entries and buckets with subtle's conditional_assign over every index instead of indexing by secret scalar bits (the reason the group gains a ConditionallySelectable bound), BatchVerifier's constant-time verify moves to that bound's impl block with an unchanged body, std-shims gives way to alloc, and the vartime paths are unchanged. Without its alloc feature multiexp is a naive sum; modular-frost enables it."
+reason = "Multi-scalar multiplication and batch verification in the FCMP++ prover and verifier (fcmps, generalized-bulletproofs, shekyl-fcmp, shekyl-fcmp-proofs, shekyl-engine-core, shekyl-verify-cost; one workspace declaration with alloc) and under modular-frost 0.11.1 (multisig FROST). Every non-vartime multiexp in the prover takes secret scalars: generalized-bulletproofs lib.rs:323 (Pedersen commit) and :353 (PedersenVectorCommitment::commit), arithmetic_circuit_proof.rs:377 (AI), :390 (AO), :412 (S, the blinds) and :585/:591 (the t/tau transcript points), point_vector.rs:122, and fcmps tape.rs (the witness tape's commitments); the verifiers use verify_vartime. Admitted after diffing src against 0.4.2, which indexed its Straus tables and Pippenger buckets by secret scalar bits: 0.5's non-vartime Straus and Pippenger select table entries and buckets with subtle's conditional_assign over every index (the reason the group gains a ConditionallySelectable bound), BatchVerifier's constant-time verify moves to that bound's impl block with an unchanged body, std-shims gives way to alloc, and the vartime paths are unchanged. The full scan costs the prover 1.3-2.2x on the Pi 4 floor (rule 76; verification unaffected). Without its alloc feature multiexp is a naive sum, so the workspace declaration and modular-frost both enable it. Owner: the DRS lane (Rick, 2026-11-21)."
 
 [[package]]
 name = "once_cell"

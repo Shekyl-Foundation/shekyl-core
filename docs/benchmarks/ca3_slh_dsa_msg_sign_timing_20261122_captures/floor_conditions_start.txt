@@ -1,0 +1,35 @@
+== conditions slh-registered-start at 2026-11-22T07:15:32Z
+model: Raspberry Pi 4 Model B Rev 1.2
+revision: c03112
+os: Ubuntu 26.04.1 LTS
+kernel: 7.0.0-1023-raspi
+governor: ondemand
+ntp: yes
+load: 1.58 2.11 2.08
+clock_khz: 1500000
+soc_temp_millic: 58913
+throttled: throttled=0x0
+undervoltage_alarm: 0
+total_trans: 117948
+time_in_state:
+  600000 1471443
+  700000 20265
+  800000 3781
+  900000 3926
+  1000000 6421
+  1100000 5957
+  1200000 4359
+  1300000 4664
+  1400000 3648
+  1500000 2523797
+mem_available_kb: 3315296
+top processes by cpu:
+      PID USER     %CPU     ELAPSED COMMAND
+    28493 <agent>  100       00:00 ps
+    28470 root     36.3       00:00 systemd-timedat
+    28471 <agent>  5.2       00:00 bash
+    26732 root      0.1       14:51 kworker/1:1-events
+    28379 root      0.1       02:56 kworker/3:3-events
+    25634 root      0.1       17:07 kworker/3:1-events
+    26592 root      0.1       15:14 kworker/2:0-events
+tmux: ca3slh: 1 windows (created Sun Nov 22 01:54:44 2026);

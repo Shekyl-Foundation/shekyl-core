@@ -102,7 +102,6 @@ _DRAFT = "github.event.pull_request.draft"
 # request trigger at all (ruled 2026-11-16), so it has no filter to carry.
 NAMED = (
     "benchmarks.yml",
-    "cmake-gate-test.yml",
     "doc-claims.yml",
     "docs-gates.yml",
     "gf7-no-emit-guard.yml",

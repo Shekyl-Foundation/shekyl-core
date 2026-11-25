@@ -76,6 +76,19 @@ pub struct ReplArgs {
     #[arg(long, global = true)]
     rpc_url: Option<String>,
 
+    /// The Tor binary the self-hosted wallet server runs when this wallet
+    /// serves. Unset, the bundled one is found. A relative path, or one
+    /// naming no file on this machine, refuses the start. Either way the
+    /// binary must match the
+    /// pinned build. Refused with --rpc-url: that server is not started, so
+    /// set it on the server you connect to.
+    #[arg(
+        long = shekyl_wallet_rpc::server::TOR_FILE_OPTION,
+        global = true,
+        conflicts_with = "rpc_url"
+    )]
+    tor_file: Option<std::path::PathBuf>,
+
     /// Network the self-hosted wallet server binds to: mainnet, testnet,
     /// stagenet. With --rpc-url that server is not started, and the flag is
     /// then read only to supply the default daemon port (so a run that names
@@ -347,8 +360,12 @@ fn stop_session(
     command: &str,
     error: shekyl_cli::outcome::CommandFailed,
 ) -> ! {
-    rpc.shutdown();
-    stop(presentation, command, error);
+    let close = rpc.shutdown();
+    // The failure is on standard error, which a closed standard output does
+    // not close. Then the closed-output line, if a write there has failed.
+    commands::publish_failure(presentation, command, error);
+    rpc_client::exit_if_output_closed(close);
+    std::process::exit(1);
 }
 
 /// The first statement is the process hardening (rule 35, DC-Q21), as in
@@ -379,8 +396,10 @@ fn main() {
     }
     let (presentation, outcome) = match &cli.command {
         Some(Commands::DerivationFreezeSelfCheck) => {
+            // No session, so the backstop below is the closed-output exit.
+            // Returning here would skip it and leave status 0.
             run_derivation_freeze_self_check();
-            return;
+            (scripted, Ok(()))
         }
         Some(Commands::Create(args)) => (
             scripted,
@@ -431,6 +450,11 @@ fn main() {
     if let Err(error) = outcome {
         stop(&presentation, "session", refusal(error.to_string()));
     }
+    // A session path shuts down before it returns and exits there when the
+    // output closed. This is the path that had no session: the self-check,
+    // or a write that failed after the session was already gone. No wallet
+    // was open on it.
+    shekyl_cli::rpc_client::exit_if_output_closed(shekyl_cli::rpc_client::WalletClose::NotOpen);
 }
 
 /// Disclose network exposure for every endpoint this invocation will actually
@@ -463,7 +487,7 @@ fn disclose_network_posture(cli: &ReplArgs, endpoints: &Endpoints) {
     // the operator who typed the flag is looking.
     fn say(warnings: impl IntoIterator<Item = String>) {
         for warning in warnings {
-            eprintln!("{warning}");
+            shekyl_cli::err_line!("{warning}");
         }
     }
 
@@ -514,6 +538,7 @@ fn build_session(
             cli.resolved_wallet_dir(*network)?,
             *network,
             daemon.target.clone(),
+            shekyl_wallet_rpc::server::TorFile::from_option(cli.tor_file.clone())?,
             cli.debug,
             shekyl_os_account::per_account_root().as_deref(),
         ),
@@ -532,6 +557,7 @@ fn host_session(
     wallet_dir: std::path::PathBuf,
     network: Network,
     daemon: DaemonTarget,
+    tor_file: shekyl_wallet_rpc::server::TorFile,
     debug: bool,
     root: Option<&std::path::Path>,
 ) -> Result<rpc_client::RpcSession, Box<dyn std::error::Error>> {
@@ -539,7 +565,7 @@ fn host_session(
         shekyl_os_account::ensure_per_account_root(root)
             .map_err(|e| format!("cannot create {}: {e}", root.display()))?;
     }
-    rpc_client::RpcSession::host_in_process(wallet_dir, network, daemon, debug)
+    rpc_client::RpcSession::host_in_process(wallet_dir, network, daemon, tor_file, debug)
 }
 
 /// Run one non-interactive subcommand against a fresh session and translate a
@@ -554,7 +580,8 @@ where
     let rpc = build_session(conn, &endpoints)?;
     disclose_network_posture(conn, &endpoints);
     let ok = publish(&rpc);
-    rpc.shutdown();
+    let close = rpc.shutdown();
+    rpc_client::exit_if_output_closed(close);
     if !ok {
         // The command printer already wrote the envelope or the human line.
         std::process::exit(1);
@@ -564,9 +591,9 @@ where
 
 fn run_derivation_freeze_self_check() {
     match shekyl_crypto_pq::address_derivation_freeze::address_derivation_manifest_self_check() {
-        Ok(()) => println!("ADDRESS_DERIVATION_V3 corpus OK"),
+        Ok(()) => shekyl_cli::out_line!("ADDRESS_DERIVATION_V3 corpus OK"),
         Err(e) => {
-            eprintln!("derivation freeze self-check failed: {e}");
+            shekyl_cli::err_line!("derivation freeze self-check failed: {e}");
             std::process::exit(1);
         }
     }
@@ -633,7 +660,7 @@ fn run_repl_command(
             Ok(dc) => Some(dc),
             Err(daemon::DaemonError::NotConfigured) => None,
             Err(e) => {
-                eprintln!("Warning: daemon client init failed: {e}");
+                shekyl_cli::err_line!("Warning: daemon client init failed: {e}");
                 None
             }
         }
@@ -647,7 +674,7 @@ fn run_repl_command(
         if dc.is_loopback() {
             if let Err(e) = dc.daemon_status() {
                 if matches!(e, daemon::DaemonError::ConnectionRefused { .. }) {
-                    eprintln!("Note: {e}");
+                    shekyl_cli::err_line!("Note: {e}");
                 }
             }
         }
@@ -701,14 +728,14 @@ fn run_repl_command(
         };
         if !commands::publish_wallet_open(presentation, &rpc, filename, &password) {
             drop(password);
-            rpc.shutdown();
+            rpc_client::exit_if_output_closed(rpc.shutdown());
             std::process::exit(1);
         }
         if cli.complete_tree_foundation {
             let sealed = commands::publish_foundation_stake(presentation, &rpc, &password);
             drop(password);
             if !sealed {
-                rpc.shutdown();
+                rpc_client::exit_if_output_closed(rpc.shutdown());
                 std::process::exit(1);
             }
         }

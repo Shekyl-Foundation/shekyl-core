@@ -46,7 +46,7 @@ Escalation candidate family (§6.1 / DQ-2D) — staker share % vs n = closed sha
 burden under 0%/yr Kryder, A4/A5 drop those that fail W9/W10; Stage 3
 freezes the survivor's number.
 
-A4 (W9) stuffer cost — max-archival-bytes-per-fee shape (8-in/1-out, searched over every
+A4 (W9) stuffer cost — max-archival-bytes-per-fee shape (8-in/2-out, searched over every
 builder-legal shape), min weight-fee @ the production relay floor at each row's point of the baseline chain, W = 3.0 MB/shard:
 Monero-replication anchor (DQ-2C): the March-2024 spam bought ~3.08 GB / 23 days
 for ~61.5 XMR — that byte volume is ~1026 Shekyl shards' worth of archival good.
@@ -55,11 +55,11 @@ operand counts; outputs carry unprunable prefix it does not), NOT decoy poisonin
 (FCMP++ has no rings). 'sustained' prices the cheapest output-conserving
 producer/consumer cycle — what a campaign that must mint its own inputs pays.
 chain n(shards) depth        shape   fee/tx (SKL)  tx/shard   cost/shard (SKL)      sustained (SKL)  floor (atomic/B)
-1                   1   8-in/1-out       1.125079        57            64.1295              70.8134             20701
-100000              5   8-in/1-out       1.074708        52            55.8848              60.1892             17975
-500000              5   8-in/1-out       0.176853        52             9.1964               9.9051              2958
-2250000             6   8-in/1-out       0.029036        52             1.5099               1.6021               481
-10000000            6   8-in/1-out       0.017929        52             0.9323               0.9893               297
+1                   1   8-in/2-out       1.152694        57            66.6773              71.7923             20701
+100000              5   8-in/2-out       1.098686        52            57.1317              61.3713             17975
+500000              5   8-in/2-out       0.180799        52             9.4015              10.0990              2958
+2250000             6   8-in/2-out       0.029677        52             1.5432               1.6443               481
+10000000            6   8-in/2-out       0.018325        52             0.9529               1.0152               297
   -> Depth moves the archival/weight ratio by only a few percent (the FCMP proof grows
 with depth, and it is archival good the stuffer is buying). The rate is the relay floor at each row, and it follows the block reward, so a shard is dear to stuff early and cheap late. Rows are the baseline chain at the year it reaches that shard count, and past its last year they hold that year's rate. The A4 ROI gate
 below weighs the one-shot (binding, attacker-favouring) cost against the escalation
@@ -73,16 +73,16 @@ the cheapest integer packing of the block; miner E = the same paying the floor
 100 holders, and as the whole holder set. 'today' / 'fixed' = the minimum over the
 attackers on each chain.
 scenario       y era          M (KB)   room       relay      miner U   (placement)     miner E  self 1/100    self all       today       fixed
-baseline_ste   5 constrained     324      0    223.5422     184.2593         Mixed    188.5680    188.5573    187.5015    184.2593    187.5015
-baseline_ste  20 carried         733      0     36.7892      22.2754         Mixed     25.3312     25.3235     24.5682     22.2754     24.5682
-baseline_ste  45 tail            765      0      9.1311       4.3294         Mixed      5.4083      5.4056      5.1388      4.3294      5.1388
-high_history  50 below zone      300     69      8.8455       0.0000      FreeRoom      2.2247      2.2192      1.6686      0.0000      1.6686
+baseline_ste   5 constrained     324      0    228.5299     199.4947         Mixed    203.8418    203.8309    202.7611    199.4947    202.7611
+baseline_ste  20 carried         733      0     37.6100      24.1172         Mixed     27.2118     27.2041     26.4387     24.1172     26.4387
+baseline_ste  45 tail            765      0      9.3330       4.6581         Mixed      5.8275      5.8248      5.5198      4.6581      5.5198
+high_history  50 below zone      300     69      9.0410       0.0000      FreeRoom      2.2739      2.2682      1.7054      0.0000      1.7054
   -> Shards a miner stuffs at the U price within a budget: share x budget / blocks per shard.
 Hashrate and time set a rate, not a price; a larger campaign raises the overshoot and the price.
-       baseline_ste y5     155 blocks/shard; relay at 71901 atomic/B (outranking honest): 10%/epoch 6, 10%/year 169, 10%/decade 1695, 33%/epoch 21, 33%/year 559, 33%/decade 5595
-       baseline_ste y20    155 blocks/shard; relay at 11833 atomic/B (outranking honest): 10%/epoch 6, 10%/year 169, 10%/decade 1695, 33%/epoch 21, 33%/year 559, 33%/decade 5595
+       baseline_ste y5      93 blocks/shard; relay at 71901 atomic/B (outranking honest): 10%/epoch 10, 10%/year 282, 10%/decade 2825, 33%/epoch 35, 33%/year 932, 33%/decade 9325
+       baseline_ste y20     93 blocks/shard; relay at 11833 atomic/B (outranking honest): 10%/epoch 10, 10%/year 282, 10%/decade 2825, 33%/epoch 35, 33%/year 932, 33%/decade 9325
        baseline_ste y45    156 blocks/shard; relay at 2909 atomic/B (outranking honest): 10%/epoch 6, 10%/year 168, 10%/decade 1684, 33%/epoch 21, 33%/year 555, 33%/decade 5559
-       high_history y50     47 blocks/shard; relay at 2818 atomic/B (the floor): 10%/epoch 21, 10%/year 559, 10%/decade 5591, 33%/epoch 70, 33%/year 1845, 33%/decade 18451
+       high_history y50     51 blocks/shard; relay at 2818 atomic/B (the floor): 10%/epoch 19, 10%/year 515, 10%/decade 5152, 33%/epoch 64, 33%/year 1700, 33%/decade 17004
 
 A1 — burden clearance (§12.2, F-G): min budget / (bond-opp-cost + storage) ratio.
 budget = emission_leg + fee_burn x share(n) [SKL]; binding burden = bond_floor 0.75 x R6 x n x rate.
@@ -370,9 +370,9 @@ OQ-4 (D3 round §12.8) — A4 gate under PLATEAU DELETION (scenario baseline_ste
 steepest candidate, Δn=10000, H=10y). Prediction: the capped column vanishes and
 the realistic-end numbers become the only numbers.
 honest regime                       ROI     fee x -> 1
-kept, small bonds (h=4)          0.0076            0.0
-kept, capped (h=512)             0.0482            0.0
-DELETED (h irrelevant)           0.0076            0.0
+kept, small bonds (h=4)          0.0074            0.0
+kept, capped (h=512)             0.0472            0.0
+DELETED (h irrelevant)           0.0074            0.0
   -> Read: deletion reproduces the small-bond row exactly — under R2 there is no
 cap to dodge, so the honest-holdings axis stops mattering and A4 has ONE number
 per regime instead of a naive/rational spread. fee_mult_to_close is unchanged
@@ -415,30 +415,31 @@ Ceiling: 300000 B/block floor x3 surge = 900000 B, reached after
 reorg reach = 720 blocks. Curve = steepest candidate (asymptote 90%,
 knee 500000) — a cliff would surface there first.
         n     Δn/epoch   Δshare/epoch   Δshare %pts/ep %pts/ep w/penalty reorg Δshare%pt
-        0         2832           7363          0.7363%           1.5074%         0.0527%
-   100000         2907           7558          0.7558%           1.5119%         0.0543%
-   500000         2907              0          0.0000%           0.0000%         0.0000%
-  2250000         2844              0          0.0000%           0.0000%         0.0000%
- 10000000         2844              0          0.0000%           0.0000%         0.0000%
+        0         2815           7319          0.7319%           1.4638%         0.0525%
+   100000         2818           7326          0.7326%           1.4705%         0.0525%
+   500000         2818              0          0.0000%           0.0000%         0.0000%
+  2250000         2773              0          0.0000%           0.0000%         0.0000%
+ 10000000         2773              0          0.0000%           0.0000%         0.0000%
   -> Read: 'Δshare %pts/ep' is the MAXIMUM the staker share can move in one
 settlement epoch when an adversary floods at the surge ceiling for the whole
-epoch — the worst case for §6.0's no-swing claim. Worst observed: 0.7558 points.
+epoch — the worst case for §6.0's no-swing claim. Worst observed: 0.7326 points.
 The reorg column bounds the only DOWN-swing that exists (monotonicity holds in
 the canonical chain; a reorg can re-open at most 720 blocks' worth).
-VERDICT: worst penalty-free slew 0.7558 points an epoch at S = 3, under the 1.0 gate
+VERDICT: worst penalty-free slew 0.7326 points an epoch at S = 3, under the 1.0 gate
   -> §6.0/§6.1 SEPARATED, because they are different claims:
 (a) CLIFF (structural, §6.1's actual requirement) — NOT present. The share is
 monotone and a single shard never moves it discontinuously; the family's
 `no_cliff_bounded_slope` test pins that, and the reorg column shows the only
-down-swing reaches 0.0543 points. W8 stands armed BY OPERAND.
-(b) ADVERSARIAL SLEW RATE (economic) — 0.7558 pts/epoch penalty-free, 1.5119
+down-swing reaches 0.0525 points. W8 stands armed BY OPERAND.
+(b) ADVERSARIAL SLEW RATE (economic) — 0.7326 pts/epoch penalty-free, 1.4705
 pts/epoch if the flooder also compensates the miner penalty (the legal 2x
 limit). MEASURED against blockchain.cpp's ArticMine algorithm, not derived —
 the ceiling a flood can force at maximum effort. A rate, not a cliff,
 and it is bounded, monotone and one-directional — but it is NOT invisible,
 which is the honest correction to a purely structural reading of §6.0.
 It is also PRICED, and the legal-limit price is dominated by a term that is
-NOT the fees: ~322368 SKL/epoch in stuffing fees at the A4 rate, PLUS
+NOT the fees: 5313 to 367722 SKL/epoch in stuffing fees at the A4 rate
+across the sampled chain sizes (lowest at n = 10000000, highest at n = 0), PLUS
 ~5120000 SKL/epoch of miner-reward penalty compensation — at B = 2M the
 production penalty formula (get_block_reward) pays the miner EXACTLY ZERO,
 so the flooder must fund the whole block reward, every block, or no rational
@@ -457,15 +458,15 @@ honest-holdings ends: hHold=4 (rational small bonds — the gate) and hHold=512
 Flat-25 has no share lever ⇒ 0. Attacker-favouring: min opp-rate 0.02, storage
 omitted, age-0. PASS iff realistic-end (hHold=4) ROI < 1 everywhere.
 scenario                flat-25    best@hHold4  best@hHold512     worst (n/Δn/H)
-baseline_steady_stat     0.0000         0.0537         0.1055      91256/100000/10
-boom_bust_cycle          0.0000         0.0586         0.1146      97571/100000/10
-sustained_growth         0.0000         2.3197        14.0896    1890857/100000/10
+baseline_steady_stat     0.0000         0.0526         0.1033      91256/100000/10
+boom_bust_cycle          0.0000         0.0574         0.1122      97571/100000/10
+sustained_growth         0.0000         2.3043        13.9959    1890857/100000/10
 stuffing_attack          0.0000         0.0000         0.0000          0/    0/ 0
-stake_concentration      0.0000         0.0537         0.1055      91256/100000/10
-mass_unstaking           0.0000         0.0537         0.1054      91256/100000/10
-chain_bootstrap          0.0000         0.0754         0.1421      58664/100000/10
-late_chain_tail          0.0000         0.3107         1.5455     991584/100000/10
-high_history_low_act     0.0000         0.8962         3.3596     501490/100000/10
+stake_concentration      0.0000         0.0526         0.1033      91256/100000/10
+mass_unstaking           0.0000         0.0526         0.1032      91256/100000/10
+chain_bootstrap          0.0000         0.0738         0.1391      58664/100000/10
+late_chain_tail          0.0000         0.3070         1.5267     991584/100000/10
+high_history_low_act     0.0000         0.8784         3.2927     501490/100000/10
   -> W9 gate (realistic hHold=4 end): FAIL — rule-21 per-output fee-floor reopen (§11.3), NOT a D2 redesign (§8). Flat-25 = 0 (no share lever): the
 premium is purely the escalation's. A steeper share (higher asymptote /
 tighter knee) lets the marginal stuffed shard's Δpool slice out-earn its
@@ -480,18 +481,18 @@ proportional (first-mover premium); 'fee×→1' = the per-output fee multiplier 
 would drive ROI to 1 in THIS regime; 'ROI(resp)' = ROI once honest replicas answer
 (r:1→6 after 2y lag; first-order, NOT gating).
 scenario              Δpool/yr SKL   capt%  prem     revenue      fees    bond   fee×→1 ROI(resp)
-baseline_steady_stat       58494.7  52.31%   1.0    305987.1 5684674.8 15000.00      0.1      0.02
-boom_bust_cycle            70477.9  50.64%   1.0    356893.6 6070809.2 15000.00      0.1      0.02
-sustained_growth          100505.9   5.03%   1.0     50530.5    6783.1 15000.00      5.2      0.77
-stake_concentration        58494.7  52.31%   1.0    305987.1 5684674.8 15000.00      0.1      0.02
-mass_unstaking             58494.7  52.31%   1.0    305987.1 5684674.8 15000.00      0.1      0.02
-chain_bootstrap            74659.1  63.05%   1.0    470718.1 6227174.6 15000.00      0.1      0.03
-late_chain_tail            12189.1   9.17%   1.0     11176.3   20967.4 15000.00      0.0      0.10
-high_history_low_act      194791.5  16.64%   1.0    324111.8  346652.2 15000.00      0.9      0.30
+baseline_steady_stat       58494.7  52.31%   1.0    305987.1 5805125.9 15000.00      0.1      0.02
+boom_bust_cycle            70477.9  50.64%   1.0    356893.6 6199440.8 15000.00      0.1      0.02
+sustained_growth          100505.9   5.03%   1.0     50530.5    6928.8 15000.00      5.1      0.77
+stake_concentration        58494.7  52.31%   1.0    305987.1 5805125.9 15000.00      0.1      0.02
+mass_unstaking             58494.7  52.31%   1.0    305987.1 5805125.9 15000.00      0.1      0.02
+chain_bootstrap            74659.1  63.05%   1.0    470718.1 6359117.5 15000.00      0.1      0.02
+late_chain_tail            12189.1   9.17%   1.0     11176.3   21408.9 15000.00      0.0      0.10
+high_history_low_act      194791.5  16.64%   1.0    324111.8  354000.2 15000.00      0.9      0.29
   -> Read: prem≈1.0 at the realistic end ⇒ NO concentration premium — the attack is
 pure fee-flow-volume leverage (cheap stuffing unlocks a large Δpool; the attacker
 takes only their proportional slice, but the pool dwarfs the stuffing cost). The
-fee-RATE cancels in fee×→1, so its 0.0→5.2x spread is volume/share-slope
+fee-RATE cancels in fee×→1, so its 0.0→5.1x spread is volume/share-slope
 variation: one fee-floor sized for the worst regime over-charges benign traffic
 ~infx in the mildest — the remedy's real cost. Denominate it in WEIGHT (a
 virtual-weight surcharge rides the fee market over time; an atomic constant rots)

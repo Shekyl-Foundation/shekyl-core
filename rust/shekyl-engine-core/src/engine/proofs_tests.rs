@@ -511,17 +511,18 @@ mod check_workflows {
         let local = LocalKeys::from_test_seed(TEST_SEED);
         let keys = &local.keys;
 
+        let tx_key = shekyl_crypto_pq::TxKey::seeded(TX_KEY_SECRET);
+        let positions = tx_key.output_positions(AMOUNTS.len());
         let outputs: Vec<OutputData> = AMOUNTS
             .iter()
             .enumerate()
             .map(|(i, &amount)| {
                 construct_output(
-                    &shekyl_crypto_pq::TxKey::seeded(TX_KEY_SECRET),
+                    positions.at(u64::try_from(i).unwrap()).unwrap(),
                     &keys.x25519_pk,
                     &keys.ml_kem_ek,
                     keys.spend_pk.as_canonical_bytes(),
                     amount,
-                    u64::try_from(i).unwrap(),
                 )
                 .expect("construct_output succeeds for synthetic outputs")
             })

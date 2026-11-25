@@ -1,6 +1,6 @@
 //! Cross-language consensus parameters from `config/consensus_constants.json`.
 //!
-//! The C++ mirror is `shekyl/consensus_constants_generated.h` (CMake configure).
+//! This crate's `build.rs` generates the values from that file.
 //! The CT wire type is also consumed by `shekyl_multisig::intent` via its own
 //! `include!` of a file generated from the same JSON.
 
