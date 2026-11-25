@@ -1,7 +1,7 @@
 # `CA-3`, ML-DSA-65: the transaction authorisation's signing time, registered 2026-11-22
 
-**State of this record: post-fork revision 3 REGISTERED 2026-11-24,
-before either new run. Both devices are pending.** Revision 2 on published
+**State of this record: post-fork revision 3 — floor PASS (2026-11-24),
+Windows pending a valid preflight and registered attempt.** Revision 2 on published
 fips204 0.5.0 passed on the laptop and was inconclusive (7.55) on the
 floor. The maintainer ordered a fresh-seed run after #1545 merged the
 fips204 fix. Revision 3 below fixes that run's inputs and conditions;
@@ -1281,3 +1281,48 @@ preflight permits `ml-dsa-registered` with the still-unused Windows
 registered seed. The signing line, timed decode, 50,000 samples, 0.5 %
 control, 100 crops, all checks and ordered verdict thresholds are unchanged.
 A void is retained and localised, not read as a passing pair.
+
+
+### Revision 3: the floor's registered attempt 1 (2026-11-24): PASS
+
+**Status: PASS on the registered signing line.** A fresh recursive checkout
+of `63bcfab1d45fb9a1a71cf9f9a6231d1f291307d1`, built natively on the
+4 GB Raspberry Pi 4 at two jobs, rustc 1.94.0, release with locked
+dependencies and no extra RUSTFLAGS. Binary SHA-256:
+`a366cb8dc150af16efad08c9e48b69e348ce5f850deab9b405ab55483dd98210`.
+
+**The shake-down, not an attempt:** explicit seed `2026112801`,
+01:16:14–01:38:51Z on 2026-11-25. It was valid but inconclusive: pair
+7.86, null 1.66, control 180.92, delta10 602 ns. Its full output stays
+in `floor_reg3_shakedown.txt`. The registered inputs were not used.
+
+**Registered attempt 1:** 01:39:51–02:02:31Z on 2026-11-25 (1,360 seconds),
+no seed argument, `inputs=registered`, exit 0. The two keys matched after
+62 candidates, on 2,504 ExpandS bytes and five ExpandA rejections; both
+replicas agreed with the fork. The performance governor held at both
+ends, 1.5 GHz, 50.1 to 54.0 °C, no throttling (`0x0`), NTP synchronised,
+about 3.28 GB available. The original governor was restored after the
+session and read back. Operational logs stay in the private record.
+
+```text
+pass-line=sign-fixed-a-vs-fixed-b max_abs_t=3.57 median_ns=2116473
+null=sign-fixed-a-vs-fixed-a-again max_abs_t=2.16
+control=sign-planted-leak planted_ns=10567 max_abs_t=160.82 delta10_ns=657
+result=PASS sign_pair=3.57 sign_null=2.16 sign_control=160.82 delta10_ns=657 information_composed_pair=3.44 information_keygen_pair=16.55
+```
+
+Read in the registered order: every check held in every comparison;
+the control exceeds 10; the null is below 4.5; the signing pair is below
+4.5. **PASS.** Each comparison returned all 50,500 calls and verified all
+790 retained results, with no malformed hint sections.
+
+The stated sensitivity is delta10 657 ns, about 0.031 % of the signing
+median. The pass says nothing below that bound. The key-generation pair
+reads 16.55 as information, outside the registered signing line; it stays
+in the output and no attribution is inferred from it here. The composed
+pair is also information (3.44).
+
+**Captures:** `floor_reg3_registered_attempt1.txt`, the shake-down,
+`floor_reg3_rustc_vV.txt` and `floor_reg3_binary_sha256.txt`, with SHA256SUMS.
+Windows still needs a valid preflight and a passing registered attempt;
+CA-3 is not closed by the floor result alone.
