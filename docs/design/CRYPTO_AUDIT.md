@@ -21,7 +21,7 @@ bump's commit is its record.
 | --- | --- | --- |
 | `CA-1` | `crypto-bigint` 0.5.5, RUSTSEC-2026-0387 (timing variability) | **IGNORED BY RULING 2026-10-24** — fix undesigned (§1) |
 | `CA-2` | Operand-dependent timing in the vendored `HelioseleneField` on x86_64, outside BINSEC's model | **OPEN 2026-10-24** — mechanism open (§2) |
-| `CA-3` | No constant-time evidence for post-quantum signing: FN-DSA (receipt countersignature), ML-DSA-65 (transactions), SLH-DSA-192s (messages) | **OPEN 2026-11-21** — FN-DSA CLOSED 2026-11-22, all three runs pass (§3.1); SLH-DSA-192s CLOSED 2026-11-22, both runs pass (§3.3); ML-DSA-65 revision 2 (signing alone, 50,000): laptop PASSES; floor device INCONCLUSIVE (7.55), with the maintainer (§3.2) |
+| `CA-3` | No constant-time evidence for post-quantum signing: FN-DSA (receipt countersignature), ML-DSA-65 (transactions), SLH-DSA-192s (messages) | **OPEN 2026-11-21** — FN-DSA CLOSED 2026-11-22, all three runs pass (§3.1); SLH-DSA-192s CLOSED 2026-11-22, both runs pass (§3.3); ML-DSA-65 post-fork revision 3 REGISTERED 2026-11-24: fresh seed, signing alone with decode timed, 50,000 per comparison on both devices; results pending (§3.2) |
 
 ## 1. `CA-1` — crypto-bigint 0.5.5, RUSTSEC-2026-0387
 
@@ -657,8 +657,17 @@ above. None is chosen before then.
 
 ### 3.2 ML-DSA-65, transaction authorisation
 
-**Status: registered, and revised 2026-11-23 before any attempt (the
-maintainer's ruling of 2026-11-22).**
+**Status: post-fork revision 3 REGISTERED 2026-11-24; both devices pending.**
+Core #1545 pins fips204's fork at `54b76cf714`, removing the secret-coefficient
+branches and hardening the inverse NTT range; the source and guard evidence
+are in [`ca3_pq_branch_sweep_20261123.md`](../benchmarks/ca3_pq_branch_sweep_20261123.md).
+The maintainer ordered the same registered line at 50,000 per comparison,
+on a fresh seed, after merging dev: signing alone with decode timed, floor
+on the performance governor, laptop behind its quiet gate. The revision-3
+registration is in the timing record below. Neither earlier device result
+closes the post-fork run.
+
+**Revision 2 record, published fips204 0.5.0 (2026-11-23):**
 - **The laptop PASSES:** attempt 2, sign pair 1.32, null 3.38, control
   65.73, δ₁₀ 415 ns. Attempt 1 was void: its control was not detected,
   under load on the measured core's sibling.
