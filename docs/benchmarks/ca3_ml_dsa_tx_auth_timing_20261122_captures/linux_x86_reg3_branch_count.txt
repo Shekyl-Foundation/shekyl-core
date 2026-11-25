@@ -1,0 +1,2 @@
+x86_64: loop back-edges=27 gamma2 tests=4 other=0
+PASS

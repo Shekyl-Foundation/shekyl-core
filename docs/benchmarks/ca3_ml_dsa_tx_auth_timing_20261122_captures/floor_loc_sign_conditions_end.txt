@@ -1,0 +1,35 @@
+== conditions loc-sign-end at 2026-11-22T19:38:11Z
+model: Raspberry Pi 4 Model B Rev 1.2
+revision: c03112
+os: Ubuntu 26.04.1 LTS
+kernel: 7.0.0-1023-raspi
+governor: ondemand
+ntp: yes
+load: 1.00 0.98 1.11
+clock_khz: 1500000
+soc_temp_millic: 56478
+throttled: throttled=0x0
+undervoltage_alarm: 0
+total_trans: 156113
+time_in_state:
+  600000 1860468
+  700000 25845
+  800000 4596
+  900000 4445
+  1000000 7953
+  1100000 8913
+  1200000 5765
+  1300000 6178
+  1400000 4445
+  1500000 6575626
+mem_available_kb: 3311724
+top processes by cpu:
+      PID USER     %CPU     ELAPSED COMMAND
+    39261 root     47.8       00:00 systemd-timedat
+    39251 <agent>  3.1       00:00 bash
+    39250 root      0.1       00:19 kworker/3:0-events
+    32571 root      0.0       42:03 kworker/0:3-events
+    36880 root      0.0       26:29 kworker/0:0-events
+       59 root      0.0    23:37:21 kworker/u17:0-brcmf_wq/mmc1:0001:1
+    39021 <agent>  0.0       10:04 systemd
+tmux: ca3loc: 1 windows (created Sun Nov 22 14:28:09 2026);

@@ -1183,6 +1183,24 @@ pub fn sign_pqc_auth_for_output(
 /// instruction count taken over it moves with the nonce. This entry passes
 /// `ml_dsa_seed` through [`crate::signature::HybridEd25519MlDsa::sign_with_ml_dsa_seed`].
 ///
+/// The seed the output's ML-DSA-65 key is generated from: the
+/// `ml_dsa_seed` [`sign_pqc_auth_for_output`] derives and feeds to
+/// [`crate::derivation::keygen_from_seed`], wrapped so it wipes on drop.
+///
+/// For CA-3's timing harness only (`examples/ca3_pq_sign_timing.rs`), which
+/// matches two keys on the rejection-sampling work their generation does by
+/// design (`docs/design/CRYPTO_AUDIT.md` §3.2). Behind the TEST_ONLY
+/// `seeded-rng` feature, like the seeded twin below; production derives and
+/// wipes the seed inside [`sign_pqc_auth_for_output`] and never returns it.
+#[cfg(any(test, feature = "seeded-rng"))]
+#[must_use]
+pub fn output_ml_dsa_seed_for_tests(
+    combined_ss: &[u8; SHARED_SECRET_LEN],
+    output_index: u64,
+) -> Zeroizing<[u8; 32]> {
+    Zeroizing::new(derive_output_secrets(combined_ss, output_index).ml_dsa_seed)
+}
+
 /// Deterministic signing only (the TEST_ONLY `seeded-rng` feature, or this
 /// crate's own tests). Production signatures stay on [`sign_pqc_auth_for_output`].
 #[cfg(any(test, feature = "seeded-rng"))]

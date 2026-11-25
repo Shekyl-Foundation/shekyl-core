@@ -388,7 +388,7 @@ wallet ships, fips204 0.5.0 branches on secret coefficients in `infinity_norm`,
   target, not the shipped binary. The shipped-profile aarch64 and x86_64 builds are
   checked by `scripts/ci/check_fips204_branch_counts.py`, which runs the fork's
   `shekyl/check_branch_counts.py` with the pair recorded for
-  `fips204_branch_subject`. The nightly `fips204-branch-count` job runs the
+  `ca3_pq_sign_timing`. The nightly `fips204-branch-count` job runs the
   x86_64 pair.
 
 ```bash

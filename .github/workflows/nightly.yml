@@ -593,7 +593,7 @@ jobs:
     needs: [plan]
     if: ${{ !cancelled() && (!inputs.job || inputs.job == 'all' || inputs.job == 'fips204-branch-count') && needs.plan.outputs['fips204-branch-count'] != '{"include":[]}' }}
     # fips204's coefficient helpers stay free of conditional branches in the
-    # shipped profile: one build of `fips204_branch_subject` with line tables,
+    # shipped profile: one build of `ca3_pq_sign_timing` with line tables,
     # then the count. The checker is the fork's, from the pinned revision, and
     # the pair it is given is the one recorded for this binary.
     #
@@ -626,6 +626,22 @@ jobs:
           script=scripts/ci/check_fips204_branch_counts.py
           workflow=.github/workflows/nightly.yml
           if [ -f "$script" ]; then
+            # A stable tree may still carry #1545's 16/4 stand-in record.
+            # Each leg builds the subject its own counter record judges.
+            if grep -q '^BRANCH_SUBJECT_COUNTS = ' "$script"; then
+              subject=fips204_branch_subject
+            else
+              subject=$(python3 "$script" --subject)
+            fi
+            case "$subject" in
+              ca3_pq_sign_timing|fips204_branch_subject) ;;
+              *) echo "::error::$BRANCH has no recognised fips204 subject"; exit 1 ;;
+            esac
+            if [ ! -f "rust/shekyl-crypto-pq/examples/$subject.rs" ]; then
+              echo "::error::$BRANCH names $subject, but its source is missing"
+              exit 1
+            fi
+            echo "subject=$subject" >> "$GITHUB_OUTPUT"
             echo "run=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -645,11 +661,11 @@ jobs:
         working-directory: rust
         env:
           CARGO_PROFILE_RELEASE_DEBUG: line-tables-only
-        run: cargo build --locked --release -p shekyl-crypto-pq --example fips204_branch_subject
+        run: cargo build --locked --release -p shekyl-crypto-pq --example ${{ steps.guard.outputs.subject }}
 
       - name: Count the helpers' conditional branches
         if: steps.guard.outputs.run == 'true'
-        run: python3 scripts/ci/check_fips204_branch_counts.py rust/target/release/examples/fips204_branch_subject x86_64
+        run: python3 scripts/ci/check_fips204_branch_counts.py rust/target/release/examples/${{ steps.guard.outputs.subject }} x86_64
 
   trybuild-ignored:
     name: trybuild-ignored (${{ matrix.branch }})
@@ -936,7 +952,7 @@ jobs:
               'fips204-branch-count': {
                 title: 'nightly fips204 branch count RED',
                 lines: [
-                  'The `fips204-branch-count` job failed. It builds `fips204_branch_subject` in the shipped profile with line tables and runs `scripts/ci/check_fips204_branch_counts.py`: every conditional branch inlined from fips204\'s coefficient helpers must be a loop back-edge or the public `gamma2` test, in the recorded number.',
+                  'The `fips204-branch-count` job failed. It builds the example selected by that revision\'s own counter record (`ca3_pq_sign_timing` on current code), in the shipped profile with line tables, and runs `scripts/ci/check_fips204_branch_counts.py`: every conditional branch inlined from fips204\'s coefficient helpers must be a loop back-edge or the public `gamma2` test, in the recorded number.',
                   'A branch outside those two is a finding: read it before changing anything. A toolchain bump moves the counts, and re-pins them on x86_64 and on the floor device.',
                 ],
               },

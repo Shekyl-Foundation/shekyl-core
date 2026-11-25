@@ -294,9 +294,12 @@ harness = false
 name = "fn_dsa_stack_ladder"
 path = "examples/fn_dsa_stack_ladder.rs"
 
+# CA-3's timing harness for ML-DSA-65 transaction authorisation and
+# SLH-DSA-192s message signing (`CRYPTO_AUDIT.md` §3.2, §3.3), timing the
+# shipped entries through their seeded twins (`seeded-rng`, on the dev edge).
 [[example]]
-name = "fips204_branch_subject"
-path = "examples/fips204_branch_subject.rs"
+name = "ca3_pq_sign_timing"
+path = "examples/ca3_pq_sign_timing.rs"
 
 [[bin]]
 name = "fa6_decap_prefilter_gate"

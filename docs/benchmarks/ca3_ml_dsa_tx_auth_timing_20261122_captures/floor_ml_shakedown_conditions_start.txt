@@ -1,0 +1,35 @@
+== conditions ml-shakedown-start at 2026-11-22T06:05:25Z
+model: Raspberry Pi 4 Model B Rev 1.2
+revision: c03112
+os: Ubuntu 26.04.1 LTS
+kernel: 7.0.0-1023-raspi
+governor: ondemand
+ntp: yes
+load: 1.66 2.13 2.08
+clock_khz: 1500000
+soc_temp_millic: 58426
+throttled: throttled=0x0
+undervoltage_alarm: 0
+total_trans: 103876
+time_in_state:
+  600000 1431037
+  700000 19501
+  800000 3543
+  900000 3697
+  1000000 6044
+  1100000 5412
+  1200000 3817
+  1300000 3906
+  1400000 2836
+  1500000 2147772
+mem_available_kb: 3341904
+top processes by cpu:
+      PID USER     %CPU     ELAPSED COMMAND
+    23389 <agent>  100       00:00 ps
+    23366 root     35.2       00:00 systemd-timedat
+    23367 <agent>  5.2       00:00 bash
+    23275 root      0.1       02:26 kworker/0:2-events
+    23103 root      0.1       08:28 kworker/0:1-events
+    23274 root      0.1       03:40 kworker/2:0-events
+    23273 root      0.0       03:52 kworker/3:2-events
+tmux: ca3ml: 1 windows (created Sun Nov 22 00:44:39 2026);
