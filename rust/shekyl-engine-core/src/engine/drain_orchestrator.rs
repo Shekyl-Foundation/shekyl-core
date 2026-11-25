@@ -72,9 +72,9 @@ use super::drain_assembly::{AssembleDrain, AssembledDrain, DrainDestination};
 use super::drain_select::{
     select_for_drain, select_for_sweep, DrainCandidate, DrainSelectError, SweepSelectError,
 };
-use super::output_selector::input_limit_at;
+use super::output_selector::{input_limit_at, selection_layers};
 use super::stake_engine::{PersonaHandle, StakeEngineError, StakeEngineHandle};
-use shekyl_tx_weight::MIN_NON_COINBASE_OUTPUTS;
+use shekyl_tx_weight::NonCoinbaseOutputs;
 
 /// The drain-path `P`-balance surface: a single aggregate spendable scalar
 /// (F-D2 core-side). Carries no per-output/per-epoch breakdown by
@@ -757,7 +757,7 @@ pub(crate) async fn orchestrate_drain(
         })?;
     let reference_height = reference.height;
     // A drain is transfer-shaped with two outputs in both regimes (T-DS-6).
-    let max_inputs = input_limit_at(MIN_NON_COINBASE_OUTPUTS, tree_depth);
+    let max_inputs = input_limit_at(NonCoinbaseOutputs::FEWEST, selection_layers(tree_depth));
 
     // 2. Scope to the persona's own unreserved records, then plan per the
     //    intent: the F-D1 planner (project → amount → select) for a payment

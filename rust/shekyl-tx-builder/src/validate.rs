@@ -8,11 +8,11 @@ use std::num::NonZeroUsize;
 
 use crate::error::TxBuilderError;
 use crate::types::{OutputInfo, SpendInput, TreeContext};
-use crate::{MAX_INPUTS, MAX_OUTPUTS, MAX_TREE_DEPTH};
+use crate::{MAX_OUTPUTS, MAX_TREE_DEPTH};
 use shekyl_ct_balance::{InputTerm, OutputTerm};
-use shekyl_fcmp::MIN_SPEND_LAYERS;
+use shekyl_curve_generators::SpendLayers;
 use shekyl_units::AtomicUnits;
-use shekyl_wire::transaction::weight::max_inputs_at;
+use shekyl_wire::transaction::weight::{max_inputs_at, NonCoinbaseOutputs};
 use shekyl_wire::transaction::MIN_NON_COINBASE_OUTPUTS;
 
 /// Prover-side input validation for FCMP++ signing.
@@ -42,12 +42,18 @@ pub(crate) fn validate_inputs(
     let Some(input_count) = NonZeroUsize::new(inputs.len()) else {
         return Err(TxBuilderError::NoInputs);
     };
-    if inputs.len() > MAX_INPUTS {
-        return Err(TxBuilderError::TooManyInputs {
-            count: inputs.len(),
-            limit: MAX_INPUTS,
-        });
+    // The depth is named before the input count. A depth of 0, a one-layer
+    // tree, and a depth past the maximum are not spend depths, and none of
+    // them is "too many inputs".
+    if tree.tree_depth == 0 {
+        return Err(TxBuilderError::ZeroTreeDepth);
     }
+    if tree.tree_depth > MAX_TREE_DEPTH {
+        return Err(TxBuilderError::TreeDepthTooLarge(tree.tree_depth));
+    }
+    let layers = SpendLayers::new(tree.tree_depth).ok_or(TxBuilderError::TreeTooShallow {
+        layers: tree.tree_depth,
+    })?;
     if outputs.is_empty() {
         return Err(TxBuilderError::NoOutputs);
     }
@@ -59,12 +65,11 @@ pub(crate) fn validate_inputs(
     if outputs.len() > MAX_OUTPUTS {
         return Err(TxBuilderError::TooManyOutputs(outputs.len()));
     }
-    // CEN-H3 at this shape: in a deep tree the weight limit admits fewer inputs
-    // than the cap. A depth outside the legal range is the prover's refusal.
-    let limit = max_inputs_at(
-        outputs.len(),
-        tree.tree_depth.clamp(MIN_SPEND_LAYERS, MAX_TREE_DEPTH),
-    );
+    let output_count = NonCoinbaseOutputs::new(outputs.len())
+        .expect("the output count was just bounded to the non-coinbase range");
+    // The one consensus question: how many inputs this output count can carry
+    // at this spend depth. A wider fee is CEN-H3's refusal, on the weight.
+    let limit = max_inputs_at(output_count, layers);
     if inputs.len() > limit {
         return Err(TxBuilderError::TooManyInputs {
             count: inputs.len(),
@@ -116,14 +121,6 @@ pub(crate) fn validate_inputs(
             available_total: available.to_raw(),
             required_total: required.to_raw(),
         });
-    }
-
-    // --- Tree depth ---
-    if tree.tree_depth == 0 {
-        return Err(TxBuilderError::ZeroTreeDepth);
-    }
-    if tree.tree_depth > shekyl_fcmp::MAX_TREE_DEPTH {
-        return Err(TxBuilderError::TreeDepthTooLarge(tree.tree_depth));
     }
 
     let selene_chunk_width = shekyl_fcmp::SELENE_CHUNK_WIDTH;

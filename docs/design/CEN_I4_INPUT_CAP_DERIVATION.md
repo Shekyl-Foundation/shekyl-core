@@ -751,7 +751,12 @@ the cutover sweeps them.
   (`ICD-R5`).** `n_in = 1..=N(d)` at every depth tier the table covers, since a
   cell no legal transaction fills is not measured: 22 cells at each of depths
   2, 3 and 4, 21 at depths 5 and 6, 20 at depth 7, so 128 cells, the existing
-  ones remeasured beside the new ones. On the floor device's configuration
+  ones remeasured beside the new ones. **Until that session the table's domain
+  stays the measured prefix (`MAX_TABLE_INPUTS`, 8).** An empty row is not a
+  measurement, so the domain does not grow to the cap to satisfy a length
+  assert. `f_ms` refuses every larger consensus-legal count
+  (`InputCountOutsideDomain`). `shekyl-node` asserts the prefix does not
+  exceed the cap. The floor session is what moves the prefix. On the floor device's configuration
   (§9, `ICD-R5`) and nowhere else, after its cover-by-shape run ends
   (2026-11-24T17:11Z); never scaled from x86 or from the diagnostic Pi (§80.3's
   correction; the `Provenance` test refuses a scaled cell), never mixing

@@ -46,7 +46,8 @@ use serde::{Serialize, Serializer};
 use shekyl_curve_tree::segment::outputs_per_node;
 use shekyl_tx_weight::{
     converge_weight_fee, converge_weight_fee_by, legal_shapes_at, predict_archival_len,
-    predict_weight, InputCount, OutputCount, MAX_TREE_DEPTH, MIN_SPEND_LAYERS,
+    predict_weight, InputCount, OutputCount, ProofLayers, SpendLayers, MAX_TREE_DEPTH,
+    MIN_SPEND_LAYERS,
 };
 use shekyl_types::SHARD_LENGTH;
 
@@ -214,7 +215,13 @@ impl Shape {
     #[must_use]
     pub fn tx_weight(self, tree_depth: u8, rate: PerByteRate) -> Option<u64> {
         let fee = self.tx_fee_atomic(tree_depth, rate)?;
-        u64::try_from(predict_weight(self.n_in, self.n_out, tree_depth, fee)).ok()
+        u64::try_from(predict_weight(
+            self.n_in,
+            self.n_out,
+            ProofLayers::known(tree_depth),
+            fee,
+        ))
+        .ok()
     }
 
     /// The fee one transaction of this shape pays at `tree_depth`.
@@ -228,14 +235,19 @@ impl Shape {
     pub fn tx_fee_atomic(self, tree_depth: u8, rate: PerByteRate) -> Option<u64> {
         let rate_per_weight = rate.atomic();
         match rate.pricer() {
-            FeePricer::Lattice(relay) => {
-                converge_weight_fee_by(self.n_in, self.n_out, tree_depth, 0, |weight| {
-                    relay.quantize(weight, rate_per_weight)
-                })
-            }
-            FeePricer::Unrounded => {
-                converge_weight_fee(rate_per_weight, self.n_in, self.n_out, tree_depth)
-            }
+            FeePricer::Lattice(relay) => converge_weight_fee_by(
+                self.n_in,
+                self.n_out,
+                ProofLayers::known(tree_depth),
+                0,
+                |weight| relay.quantize(weight, rate_per_weight),
+            ),
+            FeePricer::Unrounded => converge_weight_fee(
+                rate_per_weight,
+                self.n_in,
+                self.n_out,
+                ProofLayers::known(tree_depth),
+            ),
         }
     }
 
@@ -243,7 +255,7 @@ impl Shape {
     /// `tree_depth` — what the operand counts.
     #[must_use]
     pub fn archival_bytes(self, tree_depth: u8) -> u64 {
-        predict_archival_len(self.n_in, self.n_out, tree_depth) as u64
+        predict_archival_len(self.n_in, self.n_out, ProofLayers::known(tree_depth)) as u64
     }
 
     /// Outputs created minus outputs consumed: positive for a producer,
@@ -260,11 +272,23 @@ impl Shape {
     }
 }
 
-/// Every shape consensus can mine at `tree_depth`, read from the wire's
-/// legal-shape function (`ICD-R1`). A depth below the first spendable one reads
-/// as that depth: the sim's tree size can start under it.
-pub(crate) fn all_shapes(tree_depth: u8) -> impl Iterator<Item = Shape> {
-    legal_shapes_at(tree_depth.max(MIN_SPEND_LAYERS)).map(|(n_in, n_out)| Shape { n_in, n_out })
+/// The sim's layer count as a spend depth.
+///
+/// The sim's tree can start at one layer, which has nothing to spend. That
+/// counts as the shallowest mineable tree. A depth past the protocol maximum
+/// is a bug in the depth map.
+pub(crate) fn spend_layers(tree_depth: u8) -> SpendLayers {
+    if tree_depth < MIN_SPEND_LAYERS {
+        SpendLayers::SHALLOWEST
+    } else {
+        SpendLayers::new(tree_depth).expect("the sim's depth stays within the protocol maximum")
+    }
+}
+
+/// Every shape consensus can mine at `layers`, read from the wire's
+/// legal-shape function (`ICD-R1`).
+pub(crate) fn all_shapes(layers: SpendLayers) -> impl Iterator<Item = Shape> {
+    legal_shapes_at(layers).map(|(n_in, n_out)| Shape { n_in, n_out })
 }
 
 /// Fee per archival byte of `shape` at `tree_depth`, as a rational
@@ -287,7 +311,7 @@ fn cheaper(a: (u128, u128), b: (u128, u128)) -> bool {
 /// `None` when no shape's fee fits in `u64`.
 #[must_use]
 pub fn stuffer_shape(tree_depth: u8, rate: PerByteRate) -> Option<Shape> {
-    all_shapes(tree_depth)
+    all_shapes(spend_layers(tree_depth))
         .filter_map(|s| fee_per_archival(s, tree_depth, rate).map(|ratio| (s, ratio)))
         .fold(
             None,
@@ -309,7 +333,7 @@ pub fn stuffer_shape(tree_depth: u8, rate: PerByteRate) -> Option<Shape> {
 /// physical ceiling on the fold's slew is this search, not the cost search.
 #[must_use]
 pub fn max_archival_bytes_per_block(block_weight: u64, tree_depth: u8, rate: PerByteRate) -> u64 {
-    all_shapes(tree_depth)
+    all_shapes(spend_layers(tree_depth))
         .filter_map(|s| {
             let weight = s.tx_weight(tree_depth, rate)?;
             Some(if weight == 0 {
@@ -444,7 +468,7 @@ pub fn sustained_stuffer_cost_per_shard_atomic(
     rate: PerByteRate,
 ) -> Option<u128> {
     let depth = tree_depth_for_leaves(chain_leaves);
-    let shapes: Vec<(Shape, (u128, u128))> = all_shapes(depth)
+    let shapes: Vec<(Shape, (u128, u128))> = all_shapes(spend_layers(depth))
         .filter_map(|s| fee_per_archival(s, depth, rate).map(|ratio| (s, ratio)))
         .collect();
     let mut best: Option<(u128, u128)> = None;

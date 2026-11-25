@@ -93,13 +93,14 @@ pub use shekyl_p2p::{
     BanTarget, ClearnetPlan, LinkLimits, Network, NetworkPlan, PeerPlan, SupervisorFeeds, TorPlan,
 };
 
-// The embargo table's input domain is the consensus cap. Its crate cannot see
-// the wire and the wire cannot see it, and this crate links both, so a change
-// to the weight limit that moves the cap fails the build here until the table
-// moves and its new cells are measured (`ICD-R8`).
+// The embargo table's measured domain sits inside the consensus cap. Its crate
+// cannot see the wire and the wire cannot see it, and this crate links both.
+// A cap that shrinks below the measured prefix fails the build here. A cap
+// that grows does not: the table refuses every unmeasured count, and the
+// floor session is what extends the prefix (`ICD-R5`, `ICD-R8`).
 const _: () = assert!(
-    shekyl_relay::MAX_TABLE_INPUTS == shekyl_wire::transaction::MAX_FCMP_INPUTS,
-    "the embargo table's input domain is not the consensus input cap",
+    shekyl_relay::MAX_TABLE_INPUTS <= shekyl_wire::transaction::MAX_FCMP_INPUTS,
+    "the embargo table prices an input count consensus refuses",
 );
 
 use std::num::NonZeroUsize;

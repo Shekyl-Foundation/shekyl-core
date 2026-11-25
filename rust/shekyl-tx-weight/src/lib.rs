@@ -58,9 +58,9 @@ use {
 // shapes (the economics sim's leaf-stuffer, DQ-2G) can single-source them through
 // this crate — the sanctioned window into the weight model — instead of depping
 // shekyl-wire directly; the cap stays crate-internal under this crate's name.
-pub use shekyl_curve_generators::{MAX_TREE_DEPTH, MIN_SPEND_LAYERS};
+pub use shekyl_curve_generators::{ProofLayers, SpendLayers, MAX_TREE_DEPTH, MIN_SPEND_LAYERS};
 pub use shekyl_wire::transaction::weight::{
-    heaviest_legal_weight, is_legal_shape, max_buildable_inputs, max_inputs_at,
+    is_legal_shape, max_buildable_inputs, max_inputs_at, NonCoinbaseOutputs,
 };
 use shekyl_wire::transaction::MAX_FCMP_INPUTS as MAX_INPUTS;
 pub use shekyl_wire::transaction::{MAX_OUTPUTS, MIN_NON_COINBASE_OUTPUTS};
@@ -166,10 +166,14 @@ pub struct SpendShape<'a> {
 /// one legal-shape function in the wire ([`max_inputs_at`]): a search over
 /// transaction shapes reads this, so it never picks one no node admits. Empty
 /// at a depth no spend proves under.
-pub fn legal_shapes_at(tree_depth: u8) -> impl Iterator<Item = (InputCount, OutputCount)> {
-    (MIN_NON_COINBASE_OUTPUTS..=MAX_OUTPUTS).flat_map(move |n_out| {
-        (1..=max_inputs_at(n_out, tree_depth))
-            .map(move |n_in| (InputCount::clamped(n_in), OutputCount::clamped(n_out)))
+pub fn legal_shapes_at(layers: SpendLayers) -> impl Iterator<Item = (InputCount, OutputCount)> {
+    NonCoinbaseOutputs::each().flat_map(move |outputs| {
+        (1..=max_inputs_at(outputs, layers)).map(move |n_in| {
+            (
+                InputCount::clamped(n_in),
+                OutputCount::clamped(outputs.get()),
+            )
+        })
     })
 }
 
@@ -180,8 +184,8 @@ pub fn legal_shapes_at(tree_depth: u8) -> impl Iterator<Item = (InputCount, Outp
 /// the synthetic-tree measurement machinery) can cross-check it against real
 /// proofs.
 #[must_use]
-pub fn fcmp_proof_size(n_in: InputCount, tree_depth: u8) -> usize {
-    fcmp_proof_len(n_in.get(), tree_depth)
+pub fn fcmp_proof_size(n_in: InputCount, layers: ProofLayers) -> usize {
+    fcmp_proof_len(n_in.get(), layers)
 }
 
 /// One per-input `PqcAuth` of `signer`: a solo hybrid key and signature,
@@ -215,15 +219,13 @@ fn extra_multisig_field_weight(group_payees: &[GroupSize]) -> usize {
 /// `shekyl_wire::Transaction::write` plus the Bp+ clawback, so it equals
 /// `Transaction::weight()` for the tx the builder will produce from these counts.
 #[must_use]
-pub fn predict_weight(n_in: InputCount, n_out: OutputCount, tree_depth: u8, fee: u64) -> usize {
-    weight::spend_weight(
-        n_in.get(),
-        n_out.get(),
-        tree_depth,
-        fee,
-        pqc_auth_weight(),
-        0,
-    )
+pub fn predict_weight(
+    n_in: InputCount,
+    n_out: OutputCount,
+    layers: ProofLayers,
+    fee: u64,
+) -> usize {
+    weight::spend_weight(n_in.get(), n_out.get(), layers, fee, pqc_auth_weight(), 0)
 }
 
 /// [`predict_weight`] for any [`SpendShape`]: each input's auth is its
@@ -241,10 +243,11 @@ pub fn predict_spend_weight(shape: &SpendShape<'_>, fee: u64) -> Option<usize> {
     if shape.group_payees.len() > shape.n_out.get() {
         return None;
     }
+    let layers = ProofLayers::new(shape.tree_depth)?;
     Some(weight::spend_weight(
         shape.n_in.get(),
         shape.n_out.get(),
-        shape.tree_depth,
+        layers,
         fee,
         signer_pqc_auth_weight(shape.signer),
         extra_multisig_field_weight(shape.group_payees),
@@ -268,12 +271,12 @@ const WEIGHT_FEE_FIXPOINT_PASSES: usize = U64_VARINT_BYTES_MAX + 1;
 pub fn converge_weight_fee_by(
     n_in: InputCount,
     n_out: OutputCount,
-    tree_depth: u8,
+    layers: ProofLayers,
     seed: u64,
     price: impl Fn(u64) -> Option<u64>,
 ) -> Option<u64> {
     converge_fee_by(
-        |fee| u64::try_from(predict_weight(n_in, n_out, tree_depth, fee)).ok(),
+        |fee| u64::try_from(predict_weight(n_in, n_out, layers, fee)).ok(),
         seed,
         price,
     )
@@ -337,9 +340,9 @@ pub fn converge_weight_fee(
     rate_per_weight: u64,
     n_in: InputCount,
     n_out: OutputCount,
-    tree_depth: u8,
+    layers: ProofLayers,
 ) -> Option<u64> {
-    converge_weight_fee_by(n_in, n_out, tree_depth, 0, |weight| {
+    converge_weight_fee_by(n_in, n_out, layers, 0, |weight| {
         weight.checked_mul(rate_per_weight)
     })
 }
@@ -361,8 +364,8 @@ pub fn converge_weight_fee(
 /// transaction mean (DQ-2G dep-don't-mirror; `ARCHIVAL_SHARD_COUNT_CUTOVER.md`
 /// §D, the `SHARD_BYTES` row).
 #[must_use]
-pub fn predict_archival_len(n_in: InputCount, n_out: OutputCount, tree_depth: u8) -> usize {
-    weight::archival_len(n_in.get(), n_out.get(), tree_depth)
+pub fn predict_archival_len(n_in: InputCount, n_out: OutputCount, layers: ProofLayers) -> usize {
+    weight::archival_len(n_in.get(), n_out.get(), layers)
 }
 
 /// Serialized byte size **and** fee weight for the tx the builder would produce
@@ -378,10 +381,10 @@ pub fn predict_archival_len(n_in: InputCount, n_out: OutputCount, tree_depth: u8
 pub fn predict_size_and_weight(
     n_in: InputCount,
     n_out: OutputCount,
-    tree_depth: u8,
+    layers: ProofLayers,
     fee: u64,
 ) -> (usize, usize) {
-    let weight = predict_weight(n_in, n_out, tree_depth, fee);
+    let weight = predict_weight(n_in, n_out, layers, fee);
     let size = weight - bp_plus_clawback_weight(n_out.get());
     (size, weight)
 }
@@ -403,9 +406,13 @@ pub fn predict_size_and_weight(
 pub fn marginal_input_weight_at_d_ref() -> usize {
     let fee = 0;
     let n_out = OutputCount::clamped(1);
-    predict_weight(InputCount::clamped(2), n_out, MAX_TREE_DEPTH, fee).saturating_sub(
-        predict_weight(InputCount::clamped(1), n_out, MAX_TREE_DEPTH, fee),
-    )
+    let depth = SpendLayers::DEEPEST.as_proof();
+    predict_weight(InputCount::clamped(2), n_out, depth, fee).saturating_sub(predict_weight(
+        InputCount::clamped(1),
+        n_out,
+        depth,
+        fee,
+    ))
 }
 
 #[cfg(test)]
@@ -443,9 +450,24 @@ mod tests {
 
     #[test]
     fn predict_weight_increases_with_inputs_and_outputs() {
-        let w1 = predict_weight(InputCount::clamped(1), OutputCount::clamped(1), 1, 1_000);
-        let w2 = predict_weight(InputCount::clamped(2), OutputCount::clamped(1), 1, 1_000);
-        let w3 = predict_weight(InputCount::clamped(1), OutputCount::clamped(2), 1, 1_000);
+        let w1 = predict_weight(
+            InputCount::clamped(1),
+            OutputCount::clamped(1),
+            ProofLayers::ONE,
+            1_000,
+        );
+        let w2 = predict_weight(
+            InputCount::clamped(2),
+            OutputCount::clamped(1),
+            ProofLayers::ONE,
+            1_000,
+        );
+        let w3 = predict_weight(
+            InputCount::clamped(1),
+            OutputCount::clamped(2),
+            ProofLayers::ONE,
+            1_000,
+        );
         assert!(w2 > w1);
         assert!(w3 > w1);
     }
@@ -461,7 +483,11 @@ mod tests {
     #[test]
     fn converge_weight_fee_is_the_varint_fixed_point() {
         assert_eq!(varint_len(u64::MAX), U64_VARINT_BYTES_MAX);
-        let (n_in, n_out, depth) = (InputCount::clamped(1), OutputCount::clamped(1), 1u8);
+        let (n_in, n_out, depth) = (
+            InputCount::clamped(1),
+            OutputCount::clamped(1),
+            ProofLayers::ONE,
+        );
 
         let fixed = |rate: u64| {
             let fee = converge_weight_fee(rate, n_in, n_out, depth).expect("the product fits");
@@ -493,13 +519,13 @@ mod tests {
         let capped = predict_weight(
             InputCount::clamped(usize::MAX),
             OutputCount::clamped(usize::MAX),
-            MAX_TREE_DEPTH,
+            SpendLayers::DEEPEST.as_proof(),
             u64::MAX,
         );
         let normal = predict_weight(
             InputCount::clamped(2),
             OutputCount::clamped(2),
-            MAX_TREE_DEPTH,
+            SpendLayers::DEEPEST.as_proof(),
             1_000,
         );
         assert!(
@@ -588,20 +614,31 @@ mod tests {
                         // Spend fixture: no pass records (RF-D1).
                         bulletproofs: vec![bp],
                         tree_depth: u64::from(depth),
-                        fcmp_proof: vec![0u8; fcmp_proof_size(InputCount::clamped(n_in), depth)],
+                        fcmp_proof: vec![
+                            0u8;
+                            fcmp_proof_size(
+                                InputCount::clamped(n_in),
+                                ProofLayers::known(depth)
+                            )
+                        ],
                         pseudo_outs: vec![[0; 32]; n_in],
                     }),
                 },
             };
             assert_eq!(
-                predict_weight(InputCount::clamped(n_in), OutputCount::clamped(n_out), depth, fee),
+                predict_weight(
+                    InputCount::clamped(n_in),
+                    OutputCount::clamped(n_out),
+                    ProofLayers::known(depth),
+                    fee,
+                ),
                 tx.weight(),
                 "predict_weight ≠ wire weight for n_in={n_in} n_out={n_out} depth={depth} fee={fee}"
             );
             let (size, weight) = predict_size_and_weight(
                 InputCount::clamped(n_in),
                 OutputCount::clamped(n_out),
-                depth,
+                ProofLayers::known(depth),
                 fee,
             );
             assert_eq!(
@@ -615,7 +652,11 @@ mod tests {
                 "predict_size_and_weight size ≠ wire serialized_len for n_in={n_in} n_out={n_out}"
             );
             assert_eq!(
-                predict_archival_len(InputCount::clamped(n_in), OutputCount::clamped(n_out), depth),
+                predict_archival_len(
+                    InputCount::clamped(n_in),
+                    OutputCount::clamped(n_out),
+                    ProofLayers::known(depth),
+                ),
                 usize::try_from(tx.archival_len().to_raw()).expect("archival length fits usize"),
                 "predict_archival_len ≠ wire archival_len for n_in={n_in} n_out={n_out} depth={depth}"
             );
@@ -644,14 +685,15 @@ mod tests {
     fn a_spend_weighs_its_signers_auths_and_its_payees_entries() {
         let three_of_five = GroupSize::new(5, 3).unwrap();
         let other_group = GroupSize::new(3, 2).unwrap();
-        let (n_in, n_out, layers, fee) = (InputCount::clamped(2), OutputCount::clamped(3), 7, 900);
+        let layers = ProofLayers::known(7);
+        let (n_in, n_out, fee) = (InputCount::clamped(2), OutputCount::clamped(3), 900);
         let solo = predict_weight(n_in, n_out, layers, fee);
         let weigh = |signer: Signer, group_payees: &[GroupSize]| {
             predict_spend_weight(
                 &SpendShape {
                     n_in,
                     n_out,
-                    tree_depth: layers,
+                    tree_depth: layers.get(),
                     signer,
                     group_payees,
                 },
@@ -721,7 +763,11 @@ mod marginal_input_weight_pin {
     /// makes this return `Some(u64::MAX)`.
     #[test]
     fn an_unrepresentable_product_is_not_a_fee() {
-        let (n_in, n_out, depth) = (InputCount::clamped(1), OutputCount::clamped(1), 1u8);
+        let (n_in, n_out, depth) = (
+            InputCount::clamped(1),
+            OutputCount::clamped(1),
+            ProofLayers::ONE,
+        );
         assert_eq!(converge_weight_fee(u64::MAX, n_in, n_out, depth), None);
         assert_eq!(
             converge_weight_fee_by(n_in, n_out, depth, 0, |_| None),

@@ -29,8 +29,7 @@
 use shekyl_levin::{notify, NewTransactions, PortableMap as _, NOTIFY_NEW_TRANSACTIONS};
 use shekyl_relay_privacy::params::{carrier, inherited};
 use shekyl_tx_weight::{
-    legal_shapes_at, predict_size_and_weight, InputCount, OutputCount, MAX_TREE_DEPTH,
-    MIN_SPEND_LAYERS,
+    legal_shapes_at, predict_size_and_weight, InputCount, OutputCount, ProofLayers, SpendLayers,
 };
 
 /// The Dandelion++ epoch the carrier is provisioned against, in seconds.
@@ -46,11 +45,11 @@ const PROVISIONED_EPOCH_SECS: u32 = 300;
 /// The fee is `u64::MAX` so the varint that carries it is at its widest: the
 /// window is a bound, and a bound taken at a plausible fee would be one a
 /// large fee could cross.
-fn message_bytes(n_in: usize, n_out: usize, depth: u8) -> usize {
+fn message_bytes(n_in: usize, n_out: usize, layers: ProofLayers) -> usize {
     let (tx_bytes, _) = predict_size_and_weight(
         InputCount::clamped(n_in),
         OutputCount::clamped(n_out),
-        depth,
+        layers,
         u64::MAX,
     );
     let msg = NewTransactions {
@@ -65,11 +64,12 @@ fn message_bytes(n_in: usize, n_out: usize, depth: u8) -> usize {
 /// legal shape and depth. A cap-sized spend at the deepest tree is over the
 /// weight limit, so the corner of the count limits is not a message.
 fn structural_max_message() -> usize {
-    (MIN_SPEND_LAYERS..=MAX_TREE_DEPTH)
-        .flat_map(|depth| {
-            legal_shapes_at(depth).map(move |(n_in, n_out)| (n_in.get(), n_out.get(), depth))
+    SpendLayers::each()
+        .flat_map(|layers| {
+            legal_shapes_at(layers)
+                .map(move |(n_in, n_out)| (n_in.get(), n_out.get(), layers.as_proof()))
         })
-        .map(|(n_in, n_out, depth)| message_bytes(n_in, n_out, depth))
+        .map(|(n_in, n_out, layers)| message_bytes(n_in, n_out, layers))
         .max()
         .expect("consensus admits a shape")
 }
@@ -88,7 +88,7 @@ fn structural_max_message() -> usize {
 /// timing-observable drift a fixed window exists to prevent.
 #[test]
 fn the_window_holds_the_modal_transaction_at_max_tree_depth() {
-    let needed = message_bytes(1, 2, MAX_TREE_DEPTH);
+    let needed = message_bytes(1, 2, SpendLayers::DEEPEST.as_proof());
     assert!(
         needed <= carrier::WINDOW_BYTES,
         "the modal transaction at MAX_TREE_DEPTH needs {needed} B of window \
@@ -238,7 +238,11 @@ fn every_verify_cell_carries_its_shapes_real_message_size() {
     let mut checked = 0;
     let mut moved = Vec::new();
     for (n_in, depth, cell) in SPEC_VERIFY_COST.populated() {
-        let real = message_bytes(n_in, 2, u8::try_from(depth).expect("table depth is small"));
+        let real = message_bytes(
+            n_in,
+            2,
+            ProofLayers::known(u8::try_from(depth).expect("table depth is small")),
+        );
         if usize::try_from(cell.msg_bytes).expect("pinned size is small") != real {
             moved.push(format!(
                 "verify-cost cell ({n_in}, {depth}) pins {} B but the shape really \

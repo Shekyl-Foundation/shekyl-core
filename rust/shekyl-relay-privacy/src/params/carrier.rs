@@ -91,15 +91,11 @@ pub const WINDOW_BYTES: usize = 20_480;
 /// # Derived, and comfortable
 ///
 /// A correctness bound: `ceil(S_max / WINDOW_BYTES)`, where `S_max` is the
-/// **structural** maximum message — the largest transaction the wire admits
-/// (8-in/16-out at `MAX_TREE_DEPTH`) plus its levin envelope, which is
-/// `ceil(97_658 / 20_480) = 5`.
-///
-/// The transaction alone is **97,580 B at a five-byte fee varint and
-/// 97,585 B at `u64::MAX`** — the fee is a varint, so its width moves with
-/// its value. A note that gives two figures for it is giving this one
-/// transaction at two fees. The bound is taken at the wider one, because a bound
-/// evaluated at a plausible fee is one a large fee can cross.
+/// largest message any mineable shape produces, at the widest fee varint.
+/// The corner of the count limits is not that message: a cap-sized spend at
+/// the deepest tree is over the weight limit. `tests/carrier_window.rs`
+/// computes `S_max` from the legal-shape function and pins this constant
+/// equal to the ceiling. The byte figure lives in that test, not here.
 ///
 /// The structural max is the right basis *here*, where it is a correctness
 /// bound that does not drift as the tree deepens — unlike the window, which

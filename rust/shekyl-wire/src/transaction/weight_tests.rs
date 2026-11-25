@@ -8,11 +8,11 @@
 use shekyl_fcmp_proofs::FcmpPlusPlus;
 
 use super::weight::{
-    fcmp_proof_len, heaviest_legal_weight, is_legal_shape, max_buildable_inputs, max_inputs_at,
-    pqc_auth_weight, spend_weight, FCMP_PROOF_LEN_MAX, TREE_DEPTH_FLOOR,
+    fcmp_proof_len, is_legal_shape, max_buildable_inputs, max_inputs_at, pqc_auth_weight,
+    spend_weight, NonCoinbaseOutputs, TREE_DEPTH_FLOOR,
 };
-use super::{MAX_FCMP_INPUTS, MAX_OUTPUTS, MIN_NON_COINBASE_OUTPUTS, TX_WEIGHT_LIMIT};
-use shekyl_curve_generators::{MAX_TREE_DEPTH, MIN_SPEND_LAYERS};
+use super::{MAX_FCMP_INPUTS, TX_WEIGHT_LIMIT};
+use shekyl_curve_generators::{ProofLayers, SpendLayers, MAX_TREE_DEPTH};
 
 /// Measured FCMP++ proof sizes in bytes, indexed `[n_in][tree_depth]` over
 /// `n_in ∈ 0..=8` and `tree_depth ∈ 0..=24` (row and column 0 are unused).
@@ -79,33 +79,43 @@ fn the_closed_form_is_every_measured_proof() {
     assert_eq!(cells, 192, "every measured cell was compared");
 }
 
-/// The model's term answers the closed form on the whole legal domain.
+/// The model's term answers the closed form on every layer the formula covers.
 #[test]
 fn the_model_reads_the_closed_form_on_the_legal_domain() {
     for n_in in 1..=MAX_FCMP_INPUTS {
         for depth in 1..=MAX_TREE_DEPTH {
+            let layers = ProofLayers::known(depth);
             assert_eq!(
-                fcmp_proof_len(n_in, depth),
+                fcmp_proof_len(n_in, layers),
                 FcmpPlusPlus::proof_size(n_in, usize::from(depth))
             );
-            assert!(fcmp_proof_len(n_in, depth) <= FCMP_PROOF_LEN_MAX);
         }
     }
 }
 
-/// A depth no transaction can carry answers the conservative maximum, never a
-/// short length that would under-pay, and never a panic in the formula.
+/// A depth the formula does not cover is not a [`ProofLayers`].
 #[test]
-fn an_illegal_depth_answers_the_longest_proof() {
+fn an_illegal_depth_is_not_a_proof_depth() {
     for depth in [0, MAX_TREE_DEPTH + 1, u8::MAX] {
-        assert_eq!(fcmp_proof_len(1, depth), FCMP_PROOF_LEN_MAX);
+        assert!(ProofLayers::new(depth).is_none(), "{depth}");
     }
-    assert_eq!(fcmp_proof_len(0, 2), FCMP_PROOF_LEN_MAX);
+    assert!(
+        SpendLayers::new(1).is_none(),
+        "one layer has nothing to spend"
+    );
+    assert!(NonCoinbaseOutputs::new(1).is_none());
 }
 
 /// The lightest legal spend's weight: a solo signer and a one-byte fee.
-fn lightest(n_in: usize, n_out: usize, depth: u8) -> usize {
-    spend_weight(n_in, n_out, depth, 0, pqc_auth_weight(), 0)
+fn lightest(n_in: usize, outputs: NonCoinbaseOutputs, layers: SpendLayers) -> usize {
+    spend_weight(
+        n_in,
+        outputs.get(),
+        layers.as_proof(),
+        0,
+        pqc_auth_weight(),
+        0,
+    )
 }
 
 /// The derived values at today's weight limit (`ICD-R1`, `ICD-R9`), written out
@@ -116,8 +126,8 @@ fn the_derived_cap_and_depth_at_todays_weight_limit() {
     assert_eq!(MAX_FCMP_INPUTS, 22);
     assert_eq!(TREE_DEPTH_FLOOR, 12);
     assert_eq!(MAX_TREE_DEPTH, 14);
-    let per_depth: Vec<usize> = (MIN_SPEND_LAYERS..=MAX_TREE_DEPTH)
-        .map(|d| max_inputs_at(MIN_NON_COINBASE_OUTPUTS, d))
+    let per_depth: Vec<usize> = SpendLayers::each()
+        .map(|layers| max_inputs_at(NonCoinbaseOutputs::FEWEST, layers))
         .collect();
     assert_eq!(
         per_depth,
@@ -130,99 +140,88 @@ fn the_derived_cap_and_depth_at_todays_weight_limit() {
 /// search is only right if that holds.
 #[test]
 fn the_weight_limit_refuses_every_count_past_the_answer() {
-    for depth in MIN_SPEND_LAYERS..=MAX_TREE_DEPTH {
-        for n_out in MIN_NON_COINBASE_OUTPUTS..=MAX_OUTPUTS {
-            let most = max_inputs_at(n_out, depth);
-            assert!(most <= MAX_FCMP_INPUTS, "{n_out} outputs at depth {depth}");
+    for layers in SpendLayers::each() {
+        for outputs in NonCoinbaseOutputs::each() {
+            let most = max_inputs_at(outputs, layers);
+            assert!(
+                most <= MAX_FCMP_INPUTS,
+                "{} outputs at depth {}",
+                outputs.get(),
+                layers.get()
+            );
             if most > 0 {
-                assert!(lightest(most, n_out, depth) <= TX_WEIGHT_LIMIT);
+                assert!(lightest(most, outputs, layers) <= TX_WEIGHT_LIMIT);
             }
             for n_in in most + 1..=4 * MAX_FCMP_INPUTS {
-                let weight = spend_weight(n_in, n_out, depth, 0, pqc_auth_weight(), 0);
-                // Past the cap `fcmp_proof_len` answers its conservative
-                // maximum, so read the closed form for the honest weight.
-                let honest = weight - fcmp_proof_len(n_in, depth)
-                    + FcmpPlusPlus::proof_size(n_in, usize::from(depth));
+                let weight = spend_weight(
+                    n_in,
+                    outputs.get(),
+                    layers.as_proof(),
+                    0,
+                    pqc_auth_weight(),
+                    0,
+                );
                 assert!(
-                    honest > TX_WEIGHT_LIMIT,
-                    "{n_in} inputs, {n_out} outputs at depth {depth} fit"
+                    weight > TX_WEIGHT_LIMIT,
+                    "{n_in} inputs, {} outputs at depth {} fit",
+                    outputs.get(),
+                    layers.get()
                 );
             }
         }
     }
 }
 
-/// The shape space is consensus's: one output, too many outputs, an empty tree
-/// and a depth past the maximum are not shapes.
+/// The input count is the only axis [`is_legal_shape`] still answers. The
+/// output count and the depth are types: one output and a one-layer tree are
+/// not values of those types.
 #[test]
 fn the_legal_shapes_are_the_consensus_shapes() {
-    assert!(is_legal_shape(MAX_FCMP_INPUTS, MIN_NON_COINBASE_OUTPUTS, 2));
-    assert!(!is_legal_shape(
-        MAX_FCMP_INPUTS + 1,
-        MIN_NON_COINBASE_OUTPUTS,
-        2
-    ));
-    assert!(!is_legal_shape(0, MIN_NON_COINBASE_OUTPUTS, 2));
-    assert!(!is_legal_shape(1, MIN_NON_COINBASE_OUTPUTS - 1, 2));
-    assert!(!is_legal_shape(1, MAX_OUTPUTS + 1, 2));
-    assert!(!is_legal_shape(
-        1,
-        MIN_NON_COINBASE_OUTPUTS,
-        MIN_SPEND_LAYERS - 1
-    ));
-    assert!(!is_legal_shape(
-        1,
-        MIN_NON_COINBASE_OUTPUTS,
-        MAX_TREE_DEPTH + 1
-    ));
+    let two = NonCoinbaseOutputs::FEWEST;
+    let shallow = SpendLayers::SHALLOWEST;
+    assert!(is_legal_shape(MAX_FCMP_INPUTS, two, shallow));
+    assert!(!is_legal_shape(MAX_FCMP_INPUTS + 1, two, shallow));
+    assert!(!is_legal_shape(0, two, shallow));
     assert!(
-        !is_legal_shape(MAX_FCMP_INPUTS, MIN_NON_COINBASE_OUTPUTS, MAX_TREE_DEPTH),
+        !is_legal_shape(MAX_FCMP_INPUTS, two, SpendLayers::DEEPEST),
         "the weight limit binds below the cap at the deepest tree"
     );
-}
-
-/// The heaviest legal two-output spend: 22 inputs at depth 4, with room for the
-/// widest fee varint.
-#[test]
-fn the_heaviest_legal_spend() {
-    let heaviest = heaviest_legal_weight(MIN_NON_COINBASE_OUTPUTS);
-    assert_eq!(heaviest, 148_521);
-    assert_eq!(
-        heaviest,
-        spend_weight(22, 2, 4, u64::MAX, pqc_auth_weight(), 0)
-    );
-    assert!(heaviest <= TX_WEIGHT_LIMIT);
-    assert_eq!(heaviest_legal_weight(1), 0, "no transaction has one output");
 }
 
 /// A wallet's limit holds at any fee, is the largest count that does, and never
 /// exceeds what consensus can mine.
 #[test]
 fn the_buildable_limit_fits_at_the_widest_fee() {
-    let widest =
-        |n_in, n_out, depth| spend_weight(n_in, n_out, depth, u64::MAX, pqc_auth_weight(), 0);
-    for depth in MIN_SPEND_LAYERS..=MAX_TREE_DEPTH {
-        for n_out in MIN_NON_COINBASE_OUTPUTS..=MAX_OUTPUTS {
-            let limit = max_buildable_inputs(n_out, depth);
-            let mineable = max_inputs_at(n_out, depth);
-            assert!(limit <= mineable, "{n_out} outputs at depth {depth}");
+    let widest = |n_in, outputs: NonCoinbaseOutputs, layers: SpendLayers| {
+        spend_weight(
+            n_in,
+            outputs.get(),
+            layers.as_proof(),
+            u64::MAX,
+            pqc_auth_weight(),
+            0,
+        )
+    };
+    for layers in SpendLayers::each() {
+        for outputs in NonCoinbaseOutputs::each() {
+            let limit = max_buildable_inputs(outputs, layers);
+            let mineable = max_inputs_at(outputs, layers);
+            assert!(
+                limit <= mineable,
+                "{} outputs at depth {}",
+                outputs.get(),
+                layers.get()
+            );
             if limit > 0 {
-                assert!(widest(limit, n_out, depth) <= TX_WEIGHT_LIMIT);
+                assert!(widest(limit, outputs, layers) <= TX_WEIGHT_LIMIT);
             }
             if limit < mineable {
-                assert!(widest(limit + 1, n_out, depth) > TX_WEIGHT_LIMIT);
+                assert!(widest(limit + 1, outputs, layers) > TX_WEIGHT_LIMIT);
             }
         }
     }
-    assert_eq!(max_buildable_inputs(MIN_NON_COINBASE_OUTPUTS, 4), 22);
-    assert_eq!(max_buildable_inputs(MIN_NON_COINBASE_OUTPUTS, 5), 21);
-    assert_eq!(
-        max_buildable_inputs(MIN_NON_COINBASE_OUTPUTS, MAX_TREE_DEPTH),
-        18
-    );
-    assert_eq!(max_buildable_inputs(MIN_NON_COINBASE_OUTPUTS - 1, 4), 0);
-    assert_eq!(
-        max_buildable_inputs(MIN_NON_COINBASE_OUTPUTS, MAX_TREE_DEPTH + 1),
-        0
-    );
+    let two = NonCoinbaseOutputs::FEWEST;
+    assert_eq!(max_buildable_inputs(two, SpendLayers::known(4)), 22);
+    assert_eq!(max_buildable_inputs(two, SpendLayers::known(5)), 21);
+    assert_eq!(max_buildable_inputs(two, SpendLayers::DEEPEST), 18);
 }

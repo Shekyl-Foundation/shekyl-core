@@ -60,9 +60,7 @@
 //! [`OutputSelector::select_outputs`] doc-comment for the
 //! caller-side discipline pin.
 
-use shekyl_tx_weight::{
-    max_buildable_inputs, MAX_OUTPUTS, MAX_TREE_DEPTH, MIN_NON_COINBASE_OUTPUTS, MIN_SPEND_LAYERS,
-};
+use shekyl_tx_weight::{max_buildable_inputs, NonCoinbaseOutputs, SpendLayers, MIN_SPEND_LAYERS};
 use shekyl_units::AtomicUnits;
 
 use super::error::OutputSelectorError;
@@ -376,20 +374,28 @@ pub trait OutputSelector: Send + Sync + 'static {
     ) -> Result<SelectedOutputs, Self::Error>;
 }
 
-/// The most inputs a spend of `n_out` outputs can carry at `tree_depth`: the
-/// weight limit's per-depth answer (`ICD-R1`), which is below
-/// [`shekyl_tx_builder::MAX_INPUTS`] from depth 5.
+/// The spend depth a selection is priced at.
 ///
-/// The arguments are clamped into the legal shape space because this bounds a
-/// *selection*: an unresolved reference reads as depth 1 and is classified by
-/// the caller, a recipient list past [`MAX_OUTPUTS`] is refused by name at
-/// signing, and neither should surface here as "too many inputs".
+/// A depth below [`MIN_SPEND_LAYERS`] is the unresolved-reference sentinel
+/// (`1` from the transfer build). It is not a layer count. Selection still
+/// classifies an insufficiency, and it uses the shallowest mineable tree;
+/// that path does not assemble. A depth above the protocol maximum is a
+/// caller bug.
 #[must_use]
-pub(crate) fn input_limit_at(n_out: usize, tree_depth: u8) -> usize {
-    max_buildable_inputs(
-        n_out.clamp(MIN_NON_COINBASE_OUTPUTS, MAX_OUTPUTS),
-        tree_depth.clamp(MIN_SPEND_LAYERS, MAX_TREE_DEPTH),
-    )
+pub(crate) fn selection_layers(tree_depth: u8) -> SpendLayers {
+    if tree_depth < MIN_SPEND_LAYERS {
+        SpendLayers::SHALLOWEST
+    } else {
+        SpendLayers::new(tree_depth).expect("a resolved reference depth is a spend depth")
+    }
+}
+
+/// The most inputs a solo spend of `outputs` can carry at `layers`, at any
+/// fee (`ICD-R1`). Below [`shekyl_tx_builder::MAX_INPUTS`] once the tree is
+/// deep enough for the weight limit to bind.
+#[must_use]
+pub(crate) fn input_limit_at(outputs: NonCoinbaseOutputs, layers: SpendLayers) -> usize {
+    max_buildable_inputs(outputs, layers)
 }
 
 /// V3.0 default [`OutputSelector`] implementor.
@@ -514,6 +520,7 @@ mod tests {
     //!   `total_covered` projection is internally consistent
     //!   with the returned `indices`.
     use super::*;
+    use shekyl_tx_weight::{MAX_TREE_DEPTH, MIN_NON_COINBASE_OUTPUTS};
 
     fn candidate(index: usize, amount: u64) -> OutputCandidate {
         OutputCandidate {
@@ -670,7 +677,7 @@ mod tests {
     /// tree's depth is refused here, before any proof work.
     #[test]
     fn a_cover_past_the_per_depth_limit_is_refused() {
-        let at_depth_14 = input_limit_at(MIN_NON_COINBASE_OUTPUTS, MAX_TREE_DEPTH);
+        let at_depth_14 = input_limit_at(NonCoinbaseOutputs::FEWEST, SpendLayers::DEEPEST);
         assert!(at_depth_14 < shekyl_tx_builder::MAX_INPUTS);
         let candidates: Vec<OutputCandidate> = (0..=at_depth_14)
             .map(|index| OutputCandidate {
@@ -692,22 +699,19 @@ mod tests {
         );
     }
 
-    /// An unresolved reference (depth 1) and an over-long recipient list are
-    /// classified elsewhere, so neither reads as a zero input limit.
+    /// Depth 1 is the unresolved-reference sentinel, not a spend depth. Selection
+    /// prices it at the shallowest mineable tree. One output is not an output
+    /// count a non-coinbase transaction can carry.
     #[test]
-    fn the_input_limit_clamps_into_the_legal_shape_space() {
-        assert_eq!(input_limit_at(2, 1), input_limit_at(2, MIN_SPEND_LAYERS));
+    fn the_sentinel_depth_is_the_shallowest_spend() {
+        assert!(SpendLayers::new(1).is_none());
+        assert_eq!(selection_layers(1), SpendLayers::SHALLOWEST);
+        assert_eq!(selection_layers(MIN_SPEND_LAYERS), SpendLayers::SHALLOWEST);
+        assert_eq!(selection_layers(MAX_TREE_DEPTH), SpendLayers::DEEPEST);
+        assert!(NonCoinbaseOutputs::new(1).is_none());
         assert_eq!(
-            input_limit_at(1, 2),
-            input_limit_at(MIN_NON_COINBASE_OUTPUTS, 2)
-        );
-        assert_eq!(
-            input_limit_at(MAX_OUTPUTS + 1, 2),
-            input_limit_at(MAX_OUTPUTS, 2)
-        );
-        assert_eq!(
-            input_limit_at(2, u8::MAX),
-            input_limit_at(2, MAX_TREE_DEPTH)
+            NonCoinbaseOutputs::new(MIN_NON_COINBASE_OUTPUTS),
+            Some(NonCoinbaseOutputs::FEWEST)
         );
     }
 

@@ -51,7 +51,9 @@ use std::time::Duration;
 use trace::{pair_messages, CountingProxy, Message};
 
 use shekyl_scanner::WalletLedgerExt;
-use shekyl_tx_weight::{predict_size_and_weight, InputCount, OutputCount, MAX_TREE_DEPTH};
+use shekyl_tx_weight::{
+    predict_size_and_weight, InputCount, OutputCount, ProofLayers, MAX_TREE_DEPTH,
+};
 use shekyl_units::AtomicUnits;
 use tokio::sync::RwLock;
 
@@ -531,7 +533,9 @@ fn write_outputs(
         let n_out = OutputCount::clamped(b.outputs);
         assert_eq!((n_in.get(), n_out.get()), (b.inputs, b.outputs));
         let built_depth = (1..=MAX_TREE_DEPTH)
-            .find(|&d| predict_size_and_weight(n_in, n_out, d, b.fee).0 == b.tx_len)
+            .find(|&d| {
+                predict_size_and_weight(n_in, n_out, ProofLayers::known(d), b.fee).0 == b.tx_len
+            })
             .unwrap_or_else(|| {
                 panic!(
                     "no tree depth predicts a {}-in {}-out transaction of {} bytes",
@@ -550,7 +554,7 @@ fn write_outputs(
                 b.fee,
                 built_depth,
                 d,
-                predict_size_and_weight(n_in, n_out, d, b.fee).0
+                predict_size_and_weight(n_in, n_out, ProofLayers::known(d), b.fee).0
             ));
         }
     }

@@ -55,12 +55,12 @@ use shekyl_economics::{
     burn::calc_burn_pct_at, price_emission, CirculatingSupply, ClosedShardCount, EconomicParams,
     EmissionInputs, PaidEmission, RelayPolicy,
 };
-use shekyl_tx_weight::predict_weight;
+use shekyl_tx_weight::{predict_weight, ProofLayers};
 use shekyl_types::SHARD_LENGTH;
 
 use crate::block_space::ListedBodies;
 use crate::calibration::{
-    all_shapes, required_price, stuffer_cost_per_shard_atomic, stuffer_shape,
+    all_shapes, required_price, spend_layers, stuffer_cost_per_shard_atomic, stuffer_shape,
     tree_depth_for_leaves, PerByteRate, Shape,
 };
 use crate::engine::SimParams;
@@ -511,7 +511,7 @@ impl<'a> Block<'a> {
         // The search key is the body, not the shape that produced it. The
         // shape walk stays in builder order, so a tie keeps the earlier shape.
         let mut seen = HashSet::new();
-        for shape in all_shapes(self.depth) {
+        for shape in all_shapes(spend_layers(self.depth)) {
             let Some(body) = StuffingBody::from_shape(shape, self.depth, floor) else {
                 continue;
             };
@@ -637,7 +637,13 @@ impl StuffingBody {
             Some(rate) => shape.tx_fee_atomic(depth, rate)?,
             None => 0,
         };
-        let weight = u64::try_from(predict_weight(shape.n_in, shape.n_out, depth, fee)).ok()?;
+        let weight = u64::try_from(predict_weight(
+            shape.n_in,
+            shape.n_out,
+            ProofLayers::known(depth),
+            fee,
+        ))
+        .ok()?;
         if weight == 0 {
             return None;
         }
@@ -1339,7 +1345,7 @@ mod tests {
     ) -> PricedPacking {
         let mut best: Option<PricedPacking> = None;
         let mut seen = HashSet::new();
-        for shape in all_shapes(block.depth) {
+        for shape in all_shapes(spend_layers(block.depth)) {
             let Some(body) = StuffingBody::from_shape(shape, block.depth, floor) else {
                 continue;
             };

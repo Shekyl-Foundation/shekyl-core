@@ -19,6 +19,7 @@ use sha3::{Digest, Keccak256};
 use curve25519_dalek::{
     constants::ED25519_BASEPOINT_POINT,
     edwards::{CompressedEdwardsY, EdwardsBasepointTable, EdwardsPoint},
+    scalar::Scalar,
     traits::{BasepointTable, Identity},
 };
 use group::{prime::PrimeGroup, GroupEncoding};
@@ -161,22 +162,125 @@ pub const FCMP_SELENE_GENERATORS: usize = 8192;
 /// The Helios generators the protocol builds; see [`FCMP_SELENE_GENERATORS`].
 pub const FCMP_HELIOS_GENERATORS: usize = 4096;
 
-/// Whether a proof of `inputs` inputs over `layers` layers fits the generator
-/// tables: the one bound the prover and the verifier both read, so a proof
-/// that can be built can be verified.
+/// FCMP++ layer count the size formula accepts: one layer through
+/// [`MAX_TREE_DEPTH`].
 ///
-/// Safe on an untrusted count. The first comparison bounds `inputs` before
-/// `ipa_rows` multiplies it, since every input needs at least one row.
+/// One layer is a tree with nothing to spend. The formula still has a length
+/// there, which a fee estimate and a synthetic proof measure. A spend that
+/// can be mined is the narrower [`SpendLayers`].
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct ProofLayers(u8);
+
+impl ProofLayers {
+    /// The one-layer tree. Nothing can be spent under it.
+    pub const ONE: Self = Self(1);
+
+    /// A layer count the formula covers.
+    #[must_use]
+    pub const fn new(layers: u8) -> Option<Self> {
+        if layers >= 1 && layers <= MAX_TREE_DEPTH {
+            Some(Self(layers))
+        } else {
+            None
+        }
+    }
+
+    /// A layer count already known to be in range.
+    ///
+    /// In a const context an out-of-range count fails the build. At runtime
+    /// it is a caller bug: an untrusted depth is [`Self::new`].
+    #[must_use]
+    pub const fn known(layers: u8) -> Self {
+        match Self::new(layers) {
+            Some(layers) => layers,
+            None => panic!("FCMP layer count is outside 1..=MAX_TREE_DEPTH"),
+        }
+    }
+
+    /// The layer count.
+    #[must_use]
+    pub const fn get(self) -> u8 {
+        self.0
+    }
+}
+
+/// FCMP++ layer count consensus can mine a spend at (`ICD-R9`).
+///
+/// Every value is a [`ProofLayers`]. The range starts at [`MIN_SPEND_LAYERS`]
+/// because an empty tree has one layer and nothing to spend.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct SpendLayers(u8);
+
+impl SpendLayers {
+    /// The shallowest tree a spend can prove under.
+    pub const SHALLOWEST: Self = Self(MIN_SPEND_LAYERS);
+
+    /// The deepest tree the protocol admits.
+    pub const DEEPEST: Self = Self(MAX_TREE_DEPTH);
+
+    /// A layer count consensus can mine a spend at.
+    #[must_use]
+    pub const fn new(layers: u8) -> Option<Self> {
+        if layers >= MIN_SPEND_LAYERS && layers <= MAX_TREE_DEPTH {
+            Some(Self(layers))
+        } else {
+            None
+        }
+    }
+
+    /// A layer count already known to be a spend depth. See [`ProofLayers::known`].
+    #[must_use]
+    pub const fn known(layers: u8) -> Self {
+        match Self::new(layers) {
+            Some(layers) => layers,
+            None => panic!("spend layer count is outside MIN_SPEND_LAYERS..=MAX_TREE_DEPTH"),
+        }
+    }
+
+    /// The layer count.
+    #[must_use]
+    pub const fn get(self) -> u8 {
+        self.0
+    }
+
+    /// This spend depth as a proof-formula depth. Infallible: every spend
+    /// depth is inside [`ProofLayers`].
+    #[must_use]
+    pub const fn as_proof(self) -> ProofLayers {
+        ProofLayers(self.0)
+    }
+
+    /// Every spend depth, shallowest first.
+    pub fn each() -> impl Iterator<Item = Self> {
+        (MIN_SPEND_LAYERS..=MAX_TREE_DEPTH).map(Self)
+    }
+}
+
+/// Compressed `k·G` on Ed25519.
+///
+/// Canonical, torsion-free, and the identity only at `k = 0`. The chain
+/// mutation that adds inputs past the cap uses `k` from 2, so each copy has
+/// its own key image and CEN-H11 holds.
 #[must_use]
-pub const fn fcmp_fits_generators(inputs: usize, layers: usize) -> bool {
-    if inputs == 0
-        || layers == 0
-        || layers > MAX_TREE_DEPTH as usize
-        || inputs > FCMP_SELENE_GENERATORS
-    {
+pub fn compressed_basepoint_multiple(k: u64) -> [u8; 32] {
+    (ED25519_BASEPOINT_POINT * Scalar::from(k))
+        .compress()
+        .to_bytes()
+}
+
+/// Whether a proof of `inputs` inputs over `layers` fits the generator tables.
+///
+/// The one bound the prover and the verifier both read, so a proof that can
+/// be built can be verified. `inputs` is an untrusted count: the first
+/// comparison bounds it before `ipa_rows` multiplies it, since every input
+/// needs at least one row. `layers` is already a [`ProofLayers`].
+#[must_use]
+pub const fn fcmp_fits_generators(inputs: usize, layers: ProofLayers) -> bool {
+    if inputs == 0 || inputs > FCMP_SELENE_GENERATORS {
         return false;
     }
-    let (selene, helios) = full_chain_membership_proofs::Fcmp::<()>::ipa_rows(inputs, layers);
+    let (selene, helios) =
+        full_chain_membership_proofs::Fcmp::<()>::ipa_rows(inputs, layers.get() as usize);
     selene <= FCMP_SELENE_GENERATORS && helios <= FCMP_HELIOS_GENERATORS
 }
 

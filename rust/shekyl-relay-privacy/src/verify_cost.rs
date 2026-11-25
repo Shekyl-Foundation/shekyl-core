@@ -197,18 +197,16 @@ pub const GENESIS_TREE_DEPTH: u32 = 2;
 /// this edge [`SpecVerifyCost::f_ms`] refuses — see the module docs.
 pub const MAX_TABLE_DEPTH: u32 = 7;
 
-/// The input-count domain the table covers: `1..=` the consensus input cap
-/// (CEN-I4), which is computed from the weight limit
-/// (`shekyl_wire::transaction::MAX_FCMP_INPUTS`, `ICD-R1`).
+/// The input-count domain the table has measured: `1..=8`.
 ///
-/// The cap is enforced by the wire's `validate` and by CEN-I4, so the surface
-/// over this domain **is** the specification, not a sample of it. This crate
-/// cannot see the wire, so the equality is asserted at compile time in
-/// `shekyl-node`, which links both: a weight-limit change that moves the cap
-/// fails the build until this moves (`ICD-R8`). New cells are **measured** on
-/// the floor device, never extrapolated (§84.2), and until they are, the table
-/// refuses them, which is the correct interim.
-pub const MAX_TABLE_INPUTS: usize = 22;
+/// This is the measured prefix, not the consensus cap. The cap is computed
+/// from the weight limit and may be larger. A count inside the cap and past
+/// this constant is [`VerifyCostRefusal::InputCountOutsideDomain`]: the table
+/// refuses it. An empty row is not a measurement, so the domain does not grow
+/// to the cap ahead of the floor session (`CEN_I4_INPUT_CAP_DERIVATION.md`
+/// §8, `ICD-R5`). `shekyl-node` asserts this constant does not exceed the cap,
+/// so the table never prices a shape consensus refuses.
+pub const MAX_TABLE_INPUTS: usize = 8;
 
 const DEPTH_TIERS: usize = (MAX_TABLE_DEPTH - GENESIS_TREE_DEPTH + 1) as usize;
 
@@ -218,9 +216,9 @@ const DEPTH_TIERS: usize = (MAX_TABLE_DEPTH - GENESIS_TREE_DEPTH + 1) as usize;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VerifyCostRefusal {
     /// `n_in` is outside `1..=MAX_TABLE_INPUTS`. Zero-input transactions do
-    /// not exist; above the cap is consensus-unreachable today, and if the
-    /// cap ever rises the new cells are measured, not extrapolated — a table
-    /// cannot be evaluated at 9 (§80.5).
+    /// not exist. A consensus-legal count past the measured prefix is refused
+    /// here until the floor session measures it — a table is not evaluated
+    /// past its measurements (§80.5).
     InputCountOutsideDomain {
         /// The out-of-domain input count.
         n_in: usize,
@@ -380,7 +378,8 @@ pub const SPEC_VERIFY_COST: SpecVerifyCost = {
         TreeBasis::SynthesizedProjection,
         14_783,
     ));
-    // n_in = 8 (the consensus maximum): the tail §75's sorting is about.
+    // n_in = 8: the measured tail. The consensus cap is larger, and those
+    // counts are outside this table until the floor session (§8).
     cells[7][0] = Some(pi4(
         DoorOperands::at(PI4_MASKS_AND_PROOF_8IN_D2_MS, DoorInputCount::Eight).millis(),
         TreeBasis::Genesis,

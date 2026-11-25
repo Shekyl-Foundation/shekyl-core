@@ -23,7 +23,7 @@ use super::traits::{
     DaemonEngine, EconomicsEngine, LedgerEngine, PendingTxEngine, PersistenceEngine, RefreshEngine,
 };
 use super::tx_counts::{InputCount, OutputCount};
-use super::tx_fee_model::{converge_fee, predict_size_and_weight};
+use super::tx_fee_model::{converge_fee, predict_size_and_weight, ProofLayers};
 use super::{Engine, EngineSignerKind};
 
 /// Predicted byte size and fee weight for a hypothetical tx shape.
@@ -106,7 +106,8 @@ impl<
         fee: u64,
     ) -> TxShapeEstimate {
         let tree_depth = self.estimate_tree_depth().await;
-        let (size, weight) = predict_size_and_weight(n_in, n_out, tree_depth, fee);
+        let (size, weight) =
+            predict_size_and_weight(n_in, n_out, ProofLayers::known(tree_depth), fee);
         TxShapeEstimate {
             size,
             weight,

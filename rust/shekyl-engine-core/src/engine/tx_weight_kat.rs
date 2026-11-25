@@ -55,7 +55,10 @@ pub(crate) mod support {
     }
 
     pub(crate) fn kat_cell(n_in: usize, tree_depth: u8) -> Result<KatCell, String> {
-        if !shekyl_curve_generators::fcmp_fits_generators(n_in, usize::from(tree_depth)) {
+        if !shekyl_curve_generators::fcmp_fits_generators(
+            n_in,
+            shekyl_curve_generators::ProofLayers::known(tree_depth),
+        ) {
             return Err("grid cell past the shipped generators".into());
         }
 

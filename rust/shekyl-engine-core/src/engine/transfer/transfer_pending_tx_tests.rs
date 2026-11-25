@@ -1562,7 +1562,7 @@ async fn build_then_submit_places_awaiting_confirmation_lock() {
         crate::engine::tx_fee_model::predict_weight(
             InputCount::clamped(tx.prefix.inputs.len()),
             OutputCount::clamped(tx.prefix.outputs.len()),
-            depth,
+            shekyl_tx_weight::ProofLayers::known(depth),
             fee,
         ),
         tx.weight(),
@@ -3987,7 +3987,12 @@ async fn build_then_submit_via_test_daemon_uses_daemon_fee() {
     // Real tree depth for the 2-leaf consistent fixture is 2.
     let seed = fee_from_weight(
         &rate,
-        predict_weight(InputCount::clamped(n_in), OutputCount::clamped(n_out), 2, 0),
+        predict_weight(
+            InputCount::clamped(n_in),
+            OutputCount::clamped(n_out),
+            shekyl_tx_weight::ProofLayers::known(2),
+            0,
+        ),
     );
     let expected_fee = converge_fee(
         &rate,
@@ -4022,8 +4027,8 @@ async fn build_then_submit_via_test_daemon_uses_daemon_fee() {
         predict_weight(
             InputCount::clamped(n_in),
             OutputCount::clamped(n_out),
-            depth,
-            fee
+            shekyl_tx_weight::ProofLayers::known(depth),
+            fee,
         ),
         tx.weight(),
         "predict_weight must equal the built tx's canonical weight"

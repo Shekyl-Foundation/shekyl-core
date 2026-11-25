@@ -36,7 +36,7 @@ use shekyl_economics::block_weight::BLOCK_WEIGHT_SURGE_FACTOR;
 use shekyl_economics::emission::block_weight_limit;
 use shekyl_economics::EconomicParams;
 use shekyl_fcmp::tree::{chunk_width, SELENE_CHUNK_WIDTH};
-use shekyl_tx_weight::{predict_weight, InputCount, OutputCount, MAX_OUTPUTS};
+use shekyl_tx_weight::{predict_weight, InputCount, OutputCount, ProofLayers, MAX_OUTPUTS};
 use shekyl_wire::transaction::TX_WEIGHT_LIMIT;
 
 /// Finalization depth `W`, in blocks: the age at which the wallet's frontier is
@@ -129,7 +129,7 @@ pub fn densest_leaf_shape(tree_depth: u8) -> LeafShape {
         for n_in in 1..=CANONICAL_INPUTS.max(1) {
             let inputs = InputCount::clamped(n_in);
             let outputs = OutputCount::clamped(n_out);
-            let weight = predict_weight(inputs, outputs, tree_depth, 0);
+            let weight = predict_weight(inputs, outputs, ProofLayers::known(tree_depth), 0);
             if weight > TX_WEIGHT_LIMIT {
                 continue;
             }

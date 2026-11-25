@@ -480,7 +480,10 @@ fn dummy_tree_at_depth(depth: u8) -> TreeContext {
 #[test]
 fn a_count_past_the_per_depth_limit_is_refused() {
     let depth = shekyl_fcmp::MAX_TREE_DEPTH;
-    let limit = shekyl_wire::transaction::weight::max_inputs_at(2, depth);
+    let limit = shekyl_wire::transaction::weight::max_inputs_at(
+        shekyl_wire::transaction::weight::NonCoinbaseOutputs::FEWEST,
+        shekyl_curve_generators::SpendLayers::DEEPEST,
+    );
     assert!(limit < MAX_INPUTS);
     let inputs: Vec<SpendInput> = (0..=limit).map(|_| dummy_spend_input(100)).collect();
     let result = sign_transaction(
@@ -503,7 +506,7 @@ fn a_count_past_the_per_depth_limit_is_refused() {
 
 #[test]
 fn validate_accepts_all_legal_depths() {
-    for depth in 1..=shekyl_fcmp::MAX_TREE_DEPTH {
+    for depth in shekyl_fcmp::MIN_SPEND_LAYERS..=shekyl_fcmp::MAX_TREE_DEPTH {
         let input = dummy_spend_input_at_depth(depth);
         let tree = dummy_tree_at_depth(depth);
         let result = validate_inputs(
@@ -523,6 +526,22 @@ fn validate_accepts_all_legal_depths() {
             result,
         );
     }
+}
+
+#[test]
+fn validate_rejects_a_one_layer_tree() {
+    let result = validate_inputs(
+        &[dummy_spend_input_at_depth(1)],
+        &dummy_outputs(100),
+        AtomicUnits::ZERO,
+        &[],
+        &[],
+        &dummy_tree_at_depth(1),
+    );
+    assert!(
+        matches!(result, Err(TxBuilderError::TreeTooShallow { layers: 1 })),
+        "{result:?}"
+    );
 }
 
 #[test]
@@ -622,8 +641,8 @@ fn validate_rejects_swapped_c1_c2_alternation() {
 fn extra_output_term_raises_required_total() {
     use shekyl_ct_balance::{InputTerm, OutputTerm};
     // input=100, output=100, fee=0 is exactly sufficient with no extra terms.
-    let input = dummy_spend_input_at_depth(1);
-    let tree = dummy_tree_at_depth(1);
+    let input = dummy_spend_input_at_depth(shekyl_fcmp::MIN_SPEND_LAYERS);
+    let tree = dummy_tree_at_depth(shekyl_fcmp::MIN_SPEND_LAYERS);
     assert!(validate_inputs(
         std::slice::from_ref(&input),
         &dummy_outputs(100),

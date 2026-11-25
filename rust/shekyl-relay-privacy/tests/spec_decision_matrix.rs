@@ -303,33 +303,29 @@ fn scaling_the_spec_row_from_x86_would_underprovision_the_tail() {
     );
 }
 
-/// The table claims to be exhaustive over the legal input domain. This is what
-/// makes that claim falsifiable.
-///
-/// `F_X86_MS` is `[f64; 8]`, so its length is a compile-time constant — an
-/// assertion against the literal `8` could never fail, and would go on
-/// reporting "the whole range, not an extrapolation" after the cap moved. The
-/// comparison has to be against the cap **as the code enforces it**:
-/// [`shekyl_wire::transaction::MAX_FCMP_INPUTS`], computed from the weight
-/// limit and read by the wire's `validate` and by CEN-I4.
+/// The measured surface is the measured prefix. It matches the diagnostic
+/// array, it does not extend past the consensus cap, and every consensus-legal
+/// count past it is refused rather than filled with an empty row.
 #[test]
-fn the_measured_surface_covers_the_whole_consensus_domain() {
-    assert_eq!(
-        MAX_TABLE_INPUTS,
-        shekyl_wire::transaction::MAX_FCMP_INPUTS,
-        "the production table's input domain must be the consensus domain; if \
-         the cap moves, `MAX_TABLE_INPUTS` moves with it and the new cells are \
-         measured on the spec machine, never extrapolated (§84.2) — otherwise \
-         `f_ms` refuses consensus-legal shapes as `InputCountOutsideDomain`, \
-         which reads as designed behaviour rather than a stale cap"
-    );
+fn the_measured_surface_is_the_prefix_and_refuses_the_rest_of_the_cap() {
+    use shekyl_relay_privacy::verify_cost::VerifyCostRefusal;
     assert_eq!(
         F_X86_MS.len(),
-        shekyl_wire::transaction::MAX_FCMP_INPUTS,
-        "the measured surface must cover the whole consensus domain; if the \
-         cap moves, re-measure the new cells rather than extrapolating into \
-         them — the tail is where §75's sorting lives"
+        MAX_TABLE_INPUTS,
+        "the diagnostic array and the production domain are one measured prefix"
     );
+    let cap = shekyl_wire::transaction::MAX_FCMP_INPUTS;
+    assert!(
+        MAX_TABLE_INPUTS <= cap,
+        "the table must not price a count consensus refuses"
+    );
+    for n_in in MAX_TABLE_INPUTS + 1..=cap {
+        assert_eq!(
+            SPEC_VERIFY_COST.f_ms(n_in, GENESIS_TREE_DEPTH),
+            Err(VerifyCostRefusal::InputCountOutsideDomain { n_in }),
+            "an unmeasured consensus-legal count is refused, not extrapolated"
+        );
+    }
 }
 
 /// Every cell the production table publishes, restated from its sources: the

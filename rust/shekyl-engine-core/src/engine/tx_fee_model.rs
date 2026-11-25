@@ -26,7 +26,7 @@ use super::traits::key::FeeDirective;
 #[cfg(test)]
 pub(crate) use shekyl_tx_weight::predict_weight;
 pub(crate) use shekyl_tx_weight::{
-    converge_weight_fee_by, predict_size_and_weight, InputCount, OutputCount,
+    converge_weight_fee_by, predict_size_and_weight, InputCount, OutputCount, ProofLayers,
 };
 
 // ── FEE-RATE LAYER (weight model lives in shekyl-tx-weight) ──────────────────
@@ -56,11 +56,12 @@ pub(crate) fn converge_fee(
     tree_depth: u8,
     initial_fee: u64,
 ) -> Option<u64> {
+    let layers = ProofLayers::known(tree_depth);
     let per_weight = rate.per_weight();
     let price = |weight: u64| shekyl_economics::quantized_fee(weight, per_weight);
-    let fee = converge_weight_fee_by(n_in, n_out, tree_depth, initial_fee, price)?;
+    let fee = converge_weight_fee_by(n_in, n_out, layers, initial_fee, price)?;
     if cfg!(debug_assertions) && initial_fee != 0 {
-        let least = converge_weight_fee_by(n_in, n_out, tree_depth, 0, price)?;
+        let least = converge_weight_fee_by(n_in, n_out, layers, 0, price)?;
         debug_assert!(
             initial_fee <= least && fee == least,
             "seed {initial_fee} is above the least fixed point {least}"
@@ -130,7 +131,7 @@ mod tests {
             let measured = crate::engine::tx_weight_kat::support::measure_fcmp_proof_len(n_in, 1)
                 .unwrap_or_else(|e| panic!("({n_in},1): {e}"));
             assert_eq!(
-                fcmp_proof_size(InputCount::clamped(n_in), 1),
+                fcmp_proof_size(InputCount::clamped(n_in), ProofLayers::ONE),
                 measured,
                 "depth=1 KAT mismatch at n_in={n_in}"
             );
@@ -143,7 +144,10 @@ mod tests {
         (1..=shekyl_tx_builder::MAX_TREE_DEPTH).flat_map(|depth| {
             (1..=shekyl_tx_builder::MAX_INPUTS)
                 .filter(move |&n_in| {
-                    shekyl_curve_generators::fcmp_fits_generators(n_in, usize::from(depth))
+                    shekyl_curve_generators::fcmp_fits_generators(
+                        n_in,
+                        shekyl_curve_generators::ProofLayers::known(depth),
+                    )
                 })
                 .map(move |n_in| (n_in, depth))
         })
@@ -168,7 +172,7 @@ mod tests {
                 crate::engine::tx_weight_kat::support::measure_fcmp_proof_len(n_in, tree_depth)
                     .unwrap_or_else(|e| panic!("({n_in},{tree_depth}): {e}"));
             assert_eq!(
-                fcmp_proof_size(InputCount::clamped(n_in), tree_depth),
+                fcmp_proof_size(InputCount::clamped(n_in), ProofLayers::known(tree_depth)),
                 measured,
                 "KAT mismatch at n_in={n_in} depth={tree_depth}"
             );
@@ -202,7 +206,10 @@ mod tests {
         // what its own predicted weight prices. A fee returned one pass
         // early prices one varint byte's worth of rate short.
         assert_eq!(
-            fee_from_weight(&rate, predict_weight(n_in, n_out, depth, fee)),
+            fee_from_weight(
+                &rate,
+                predict_weight(n_in, n_out, ProofLayers::known(depth), fee)
+            ),
             fee,
             "converge_fee returned a fee its own weight does not price"
         );
@@ -218,7 +225,10 @@ mod tests {
     fn converge_fee_is_independent_of_its_seed() {
         let rate = FeeRate::new(24_184).unwrap();
         let (n_in, n_out, depth) = (InputCount::clamped(1), OutputCount::clamped(1), 1u8);
-        let warm = fee_from_weight(&rate, predict_weight(n_in, n_out, depth, 0));
+        let warm = fee_from_weight(
+            &rate,
+            predict_weight(n_in, n_out, ProofLayers::known(depth), 0),
+        );
         assert_eq!(
             converge_fee(&rate, n_in, n_out, depth, 0),
             converge_fee(&rate, n_in, n_out, depth, warm),
@@ -254,7 +264,7 @@ mod tests {
             for &(ni, no, depth) in &shapes {
                 let n_in = InputCount::clamped(ni);
                 let n_out = OutputCount::clamped(no);
-                let w0 = predict_weight(n_in, n_out, depth, 0) as u64;
+                let w0 = predict_weight(n_in, n_out, ProofLayers::known(depth), 0) as u64;
                 for bits in [7u32, 14, 21, 28, 35, 42, 49, 56] {
                     let centre = (1u64 << bits) / w0;
                     for delta in -8i64..=8 {
@@ -265,14 +275,21 @@ mod tests {
                         let Some(fee) = converge_fee(&rate, n_in, n_out, depth, 0) else {
                             continue;
                         };
-                        let priced =
-                            fee_from_weight(&rate, predict_weight(n_in, n_out, depth, fee));
+                        let priced = fee_from_weight(
+                            &rate,
+                            predict_weight(n_in, n_out, ProofLayers::known(depth), fee),
+                        );
                         assert_eq!(
                             priced, fee,
                             "not a fixed point: pw={pw} mask={mask} shape=({ni},{no},{depth}) \
                              fee={fee} prices at {priced}"
                         );
-                        if fee != fee_from_weight(&rate, predict_weight(n_in, n_out, depth, 0)) {
+                        if fee
+                            != fee_from_weight(
+                                &rate,
+                                predict_weight(n_in, n_out, ProofLayers::known(depth), 0),
+                            )
+                        {
                             multi_pass += 1;
                         }
                     }

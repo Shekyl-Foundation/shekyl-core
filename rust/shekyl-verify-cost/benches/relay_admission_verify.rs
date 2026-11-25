@@ -107,9 +107,9 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use rand_core::OsRng;
 
-use shekyl_curve_generators::MIN_SPEND_LAYERS;
+use shekyl_curve_generators::SpendLayers;
 use shekyl_verify_cost::relay::{admission_verify, build_fixture, ChunkLayout};
-use shekyl_wire::transaction::weight::max_inputs_at;
+use shekyl_wire::transaction::weight::{max_inputs_at, NonCoinbaseOutputs};
 
 fn bench_admission(c: &mut Criterion) {
     let mut group = c.benchmark_group("relay_admission_verify");
@@ -148,8 +148,10 @@ fn bench_admission(c: &mut Criterion) {
         // (`max_inputs_at`, the one legal-shape function; `ICD-R5`). So there
         // is no functional form to choose and nothing to extrapolate: measuring
         // all of them makes the surface itself the specification (§80). The
-        // sub-production depth 1 reads depth 2's domain.
-        let most = max_inputs_at(n_out, tree_depth.max(MIN_SPEND_LAYERS));
+        let most = max_inputs_at(
+            NonCoinbaseOutputs::new(n_out).expect("the bench's output count is mineable"),
+            SpendLayers::known(tree_depth),
+        );
         for n_in in 1usize..=most {
             // Wall-clock timing averages over many samples, so a fresh random
             // fixture each build is fine (and closer to production variety). The

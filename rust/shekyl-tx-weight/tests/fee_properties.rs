@@ -13,7 +13,7 @@
 use shekyl_economics::{quantized_fee, relay_floor_admits, FEE_QUANTIZATION_MASK};
 use shekyl_tx_weight::{
     converge_fee_by, converge_weight_fee, converge_weight_fee_by, predict_weight, weight_at_fee,
-    InputCount, OutputCount, MAX_OUTPUTS, MAX_TREE_DEPTH,
+    InputCount, OutputCount, ProofLayers, MAX_OUTPUTS, MAX_TREE_DEPTH,
 };
 use shekyl_wire::transaction::MAX_FCMP_INPUTS as MAX_INPUTS;
 
@@ -53,7 +53,7 @@ fn loop_lattice(
     rate: u64,
     seed: u64,
 ) -> Option<u64> {
-    converge_weight_fee_by(n_in, n_out, depth, seed, lattice(rate))
+    converge_weight_fee_by(n_in, n_out, ProofLayers::known(depth), seed, lattice(rate))
 }
 
 #[test]
@@ -65,11 +65,18 @@ fn a_measured_weight_converges_to_the_predicted_fee() {
     // keeping the probe's varint, or adding instead of replacing it.
     for (n_in, n_out) in [shape(1, 2), shape(2, 2), shape(MAX_INPUTS, MAX_OUTPUTS)] {
         for depth in [1u8, 7, MAX_TREE_DEPTH] {
-            let weight = predict_weight(n_in, n_out, depth, 0) as u64;
+            let weight = predict_weight(n_in, n_out, ProofLayers::known(depth), 0) as u64;
             for rate in rates_for(weight) {
-                let predicted = converge_weight_fee_by(n_in, n_out, depth, 0, lattice(rate));
+                let predicted = converge_weight_fee_by(
+                    n_in,
+                    n_out,
+                    ProofLayers::known(depth),
+                    0,
+                    lattice(rate),
+                );
                 for probe in [0u64, 1, 1 << 7, 1 << 21, 1 << 42, u64::MAX] {
-                    let measured = predict_weight(n_in, n_out, depth, probe) as u64;
+                    let measured =
+                        predict_weight(n_in, n_out, ProofLayers::known(depth), probe) as u64;
                     let fee = converge_fee_by(
                         |fee| weight_at_fee(measured, probe, fee),
                         0,
@@ -82,7 +89,7 @@ fn a_measured_weight_converges_to_the_predicted_fee() {
                     if let Some(fee) = fee {
                         assert_eq!(
                             weight_at_fee(measured, probe, fee),
-                            Some(predict_weight(n_in, n_out, depth, fee) as u64)
+                            Some(predict_weight(n_in, n_out, ProofLayers::known(depth), fee) as u64)
                         );
                     }
                 }
@@ -97,12 +104,13 @@ fn the_unrounded_fee_is_the_product() {
     // Over-payment is 0: the fixed point is `rate × weight(fee)`.
     let (n_in, n_out) = shape(1, 2);
     for depth in [0u8, 1, MAX_TREE_DEPTH] {
-        let weight = predict_weight(n_in, n_out, depth, 0) as u64;
+        let weight = predict_weight(n_in, n_out, ProofLayers::known(depth), 0) as u64;
         for rate in rates_for(weight) {
-            let Some(fee) = converge_weight_fee(rate, n_in, n_out, depth) else {
+            let Some(fee) = converge_weight_fee(rate, n_in, n_out, ProofLayers::known(depth))
+            else {
                 continue;
             };
-            let at_fee = predict_weight(n_in, n_out, depth, fee) as u64;
+            let at_fee = predict_weight(n_in, n_out, ProofLayers::known(depth), fee) as u64;
             assert_eq!(fee, at_fee.checked_mul(rate).unwrap());
         }
     }
@@ -113,12 +121,12 @@ fn the_lattice_fee_never_under_pays_and_admission_accepts_it() {
     // Red: return from the loop one pass before `next == fee`.
     let (n_in, n_out) = shape(1, 2);
     for depth in [1u8, 8, MAX_TREE_DEPTH] {
-        let weight = predict_weight(n_in, n_out, depth, 0) as u64;
+        let weight = predict_weight(n_in, n_out, ProofLayers::known(depth), 0) as u64;
         for rate in rates_for(weight) {
             let Some(fee) = loop_lattice(n_in, n_out, depth, rate, 0) else {
                 continue;
             };
-            let at_fee = predict_weight(n_in, n_out, depth, fee) as u64;
+            let at_fee = predict_weight(n_in, n_out, ProofLayers::known(depth), fee) as u64;
             let product = at_fee
                 .checked_mul(rate)
                 .expect("a represented fee's product fits");
@@ -146,7 +154,7 @@ fn the_lattice_fee_is_the_least_on_small_cells() {
         "the brute-force cell grew: {fee}"
     );
     let at = |candidate: u64| {
-        let weight = predict_weight(n_in, n_out, 1, candidate) as u64;
+        let weight = predict_weight(n_in, n_out, ProofLayers::ONE, candidate) as u64;
         candidate >= weight * rate
     };
     assert!(at(fee));
@@ -168,12 +176,12 @@ fn over_payment_stays_inside_one_lattice_step() {
         for n_out in 1..=MAX_OUTPUTS {
             for depth in [0u8, 1, MAX_TREE_DEPTH] {
                 let (n_in, n_out) = shape(n_in, n_out);
-                let weight = predict_weight(n_in, n_out, depth, 0) as u64;
+                let weight = predict_weight(n_in, n_out, ProofLayers::known(depth), 0) as u64;
                 for rate in rates_for(weight) {
                     let Some(fee) = loop_lattice(n_in, n_out, depth, rate, 0) else {
                         continue;
                     };
-                    let at_fee = predict_weight(n_in, n_out, depth, fee) as u64;
+                    let at_fee = predict_weight(n_in, n_out, ProofLayers::known(depth), fee) as u64;
                     let product = at_fee.checked_mul(rate).unwrap();
                     let over = fee - product;
                     assert!(
@@ -193,12 +201,13 @@ fn the_loop_returns_only_when_two_passes_agree() {
     // Red: return the last pass when the bound runs out.
     let (n_in, n_out) = shape(2, 2);
     for depth in [0u8, 1, MAX_TREE_DEPTH] {
-        let weight = predict_weight(n_in, n_out, depth, 0) as u64;
+        let weight = predict_weight(n_in, n_out, ProofLayers::known(depth), 0) as u64;
         for rate in rates_for(weight) {
             let Some(fee) = loop_lattice(n_in, n_out, depth, rate, 0) else {
                 continue;
             };
-            let again = lattice(rate)(predict_weight(n_in, n_out, depth, fee) as u64);
+            let again =
+                lattice(rate)(predict_weight(n_in, n_out, ProofLayers::known(depth), fee) as u64);
             assert_eq!(again, Some(fee));
         }
     }
@@ -237,11 +246,12 @@ fn the_in_loop_fixed_point_is_not_the_rounded_unrounded_fee() {
     let found = cells.into_iter().any(|(inputs, depth, bits)| {
         let (n_in, n_out) = shape(inputs, 1);
         let boundary = 1u64 << bits;
-        let weight = predict_weight(n_in, n_out, depth, boundary - 1) as u64;
+        let weight = predict_weight(n_in, n_out, ProofLayers::known(depth), boundary - 1) as u64;
         let Some(rate) = rate_in_the_last_step_below(weight, boundary) else {
             return false;
         };
-        let Some(unrounded) = converge_weight_fee(rate, n_in, n_out, depth) else {
+        let Some(unrounded) = converge_weight_fee(rate, n_in, n_out, ProofLayers::known(depth))
+        else {
             return false;
         };
         let Some(third) = unrounded.checked_next_multiple_of(FEE_QUANTIZATION_MASK) else {
