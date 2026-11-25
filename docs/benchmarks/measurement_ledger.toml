@@ -148,6 +148,7 @@ spec = [
   "rust/shekyl-pow-randomx/src",
 ]
 stale_through = [
+  { through = "4665100e30a1a75f955a42fe0b24d4439c3eb3aa", note = "CEN-I4, the derived cap and the typed shape (#1543; f349f855fa, 07cea1f10c, this commit). In this path set, shekyl-fcmp's prove and verify parse the layer count as ProofLayers and bound the input count by the generator tables, where they compared it with the old cap of 8. A shape they accept does the same proof and verify work after that check. The legal domain moved: the maximum depth is 14, and the input cap is the weight limit's derivation, so the heaviest legal block is a different shape and has not been re-measured. The hybrid signature verify is untouched. The rows stay stale." },
   { through = "7d045c4b2168dfeb748bddeb93cfe462fd6d5304", note = "CEN-I4 cutover, the move (#1543, commits 55a8d08ab4, 9feecf217b, 7d045c4b21; ICD-R1). Fcmp::proof_size, FcmpPlusPlus::proof_size and the Bp+ clawback become const fn with unchanged bodies, the transaction weight model moves into shekyl-wire, and MAX_TREE_DEPTH moves to shekyl-curve-generators at the same value. No prover or verifier code path, proof byte, row count or limit changed, so nothing here moves a verify cost." },
   { through = "4d1b79d21ee12affa120967bfa437c131d206908", note = "The re-vendor of fork PR #9 (54c8df4103, pin 6bf40e5118; 4d1b79d21e formats its new test). In fcmps the tape's vector commitments are computed once from their openings (Openings::commit) in place of VectorCommitmentTape::commit: the same constant-time multiexp over the same terms. The arithmetic-circuit prover no longer forms the inner-product opening point (a variable-time multiexp over 2n+1 points per proof, removed), and checks every length and evaluates every constraint in every build (field arithmetic). The verifiers are unchanged, so the verify cost this path set prices does not move. shekyl-fcmp's proof.rs gains a pinned proof-bytes test. Not re-measured." },
   { through = "104487033550cbb5dfeb03eb7ca796459cc39df5", note = "#1494: signature.rs maps fips204 0.5.0's signing failures through ml_dsa_sign_error (the attempt limit to MalformedSigningKey, anything else as before) and a signing-key parse failure to MalformedSigningKey, with their tests. The mapping runs only on an Err; the Ed25519 + ML-DSA-65 sign and verify that block verification prices are unchanged. fips204 itself moves 0.4.6 -> 0.5.0 in Cargo.lock in the same pull request, outside this path set (keygen, signing and verify outputs byte-identical over 3,000 seeds). Not re-measured; the rows stay stale from PL-D3." },
@@ -265,10 +266,10 @@ spec = [
 [[constant]]
 name = "fcmp_max_inputs_per_tx"
 defined_in = "rust/shekyl-wire/src/transaction.rs"
-needle = "pub const MAX_FCMP_INPUTS: usize = 8;"
+needle = "pub const MAX_FCMP_INPUTS: usize = weight::derive_input_cap();"
 measured_by = ["BA-T10"]
 status = "unmeasured"
-carrier = "BA-T10. The 2026-09-24 input-count runs are quoted in CHAIN_RULES_SLICE_6.md section 5.4 and have no capture in the tree; the cap's derivation is owed (FOLLOWUPS, CEN-I4)."
+carrier = "BA-T10. The cap is weight::derive_input_cap() (ICD-R1). The 2026-09-24 input-count runs are quoted in CHAIN_RULES_SLICE_6.md section 5.4 and have no capture in the tree; the verify cost across the derived cap is unmeasured."
 path_set = "fcmp-inputs"
 disposition = "floor"
 
@@ -280,10 +281,10 @@ spec = ["rust/shekyl-fcmp/src", "rust/shekyl-curve-generators/src"]
 [[constant]]
 name = "fcmp_max_tree_depth"
 defined_in = "rust/shekyl-curve-generators/src/lib.rs"
-needle = "pub const MAX_TREE_DEPTH: u8 = 24;"
+needle = "pub const MAX_TREE_DEPTH: u8 = 14;"
 measured_by = ["BA-T10"]
 status = "unmeasured"
-carrier = "BA-T10. Nothing is measured past depth 7; the depth-24 verify cost the surge factor is signed on is composed from per-layer slopes (BA-G4)."
+carrier = "BA-T10. The constant is the derived maximum, 14 (ICD-R9). Nothing is measured past depth 7. The surge factor was signed on a depth-24 composition (BA-G4); that depth is no longer a tree the protocol admits, and the verify cost through depth 14 is unmeasured."
 path_set = "fcmp-tree-depth"
 disposition = "floor"
 
@@ -1202,6 +1203,7 @@ spec = [
   "rust/shekyl-fcmp/src",
 ]
 stale_through = [
+  { through = "4665100e30a1a75f955a42fe0b24d4439c3eb3aa", note = "CEN-I4, the derived cap and the typed shape (#1543; f349f855fa, 07cea1f10c, this commit). In this path set, shekyl-fcmp's prove and verify parse the layer count as ProofLayers and bound the input count by the generator tables, where they compared it with the old cap of 8. A legal spend proves the same way after that check. The deepest legal spend is depth 14 rather than 24, and it may carry the derived input cap rather than 8, so the heaviest spend's proving time moved and has not been re-measured on the floor. The rows stay stale." },
   { through = "7d045c4b2168dfeb748bddeb93cfe462fd6d5304", note = "CEN-I4 cutover, the move (#1543, commits 55a8d08ab4, 9feecf217b, 7d045c4b21; ICD-R1). Fcmp::proof_size, FcmpPlusPlus::proof_size and the Bp+ clawback become const fn with unchanged bodies, the transaction weight model moves into shekyl-wire, and MAX_TREE_DEPTH moves to shekyl-curve-generators at the same value. No prover or verifier code path, proof byte, row count or limit changed, so nothing here moves a verify cost." },
   { through = "4d1b79d21ee12affa120967bfa437c131d206908", note = "The re-vendor of fork PR #9 (54c8df4103, pin 6bf40e5118; 4d1b79d21e formats its new test): the prover drops the inner-product opening point's variable-time multiexp and adds its constraint and length checks in every build, so a spend's proving cost moves slightly down (a seeded signing run over four shapes took 40.6 s against 49.7 s on a build VM, release, one run each; not a floor reading). The curve tree and the verifier are unchanged. Not re-measured on the floor; the rows stay stale." },
   { through = "36d0bd5715544ebc3535e2a70ffcb0a3d588f8ba", note = "collect_block_leaves returns the gindex it already assigned, one slot per output. The matcher's second walk and its scan of the new leaves are gone; the match is still skipped while the expectation map is empty. Nothing on the spend path changed. Not measured." },
