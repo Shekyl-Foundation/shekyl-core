@@ -52,9 +52,10 @@ buffers. Record the smaller sample size alongside the result. Read
 the comparisons against the original thresholds and qualify any flat
 result by the smaller run size.
 
-The harness now supports windowed ciphertext batches. It builds each
-window before timing, reads a separate cache pad and reuses the batch
-slots. This bounds prepared operand memory independently of sample count.
-Cache residency remains platform-dependent. A future million-batch
-windowed run needs its own measurement record. The historical
-100,000-batch capture used a complete schedule.
+The harness now keeps an operand above its complete-schedule ceiling on a
+windowed schedule: each window is built, then timed, and the slots are
+reused. After the window is written, and before it is timed, a pad sized
+to a ceiling over the measured machines' last-level caches is written and
+read back, so those batches leave that cache. A later compare can use the
+registered 1,000,000 batches per class. The 100,000-batch compare above
+is the run made before that, and its record stands.

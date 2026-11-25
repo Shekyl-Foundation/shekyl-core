@@ -19,9 +19,10 @@
 //! [`Retention`] applies the rules. A small operand keeps every batch
 //! ([`Retention::Complete`]), which is how the recorded field runs were
 //! measured. A large operand uses a windowed schedule ([`Retention::Windowed`]):
-//! the window is built, then timed, and its slots are reused. An independent
-//! buffer is read between input construction and timing to reduce cache
-//! residency from construction. Cache residency remains platform-dependent.
+//! the window is built, then timed, and its slots are reused. After those
+//! batches are written, and before they are timed, [`touch_cache_pad`] writes
+//! a pad of [`WINDOW_BYTES`] and reads it back, so the timed batches leave a
+//! last-level cache smaller than that pad.
 
 use core::hint::black_box;
 
@@ -37,12 +38,16 @@ pub const BATCH: usize = 32;
 /// and sits above this.
 pub const COMPLETE_OPERAND_MAX: usize = 256;
 
-/// Target size for one window's operands and for the separate cache pad.
-/// The pad applies the same cache pressure before each window. Its size
-/// does not establish the measured operands' cache residency.
+/// Bytes in the cache pad, and the operand budget of one full window.
+///
+/// A ceiling over the last-level cache of every machine the harness
+/// measures, the floor device included. A larger cache means raising this
+/// constant; the pad is what evicts a timed batch.
 pub const WINDOW_BYTES: usize = 64 * 1024 * 1024;
 
-/// Read one byte per 64-byte stride when touching the cache pad.
+/// Stride of [`touch_cache_pad`]: the smallest data-cache line of the
+/// machines this harness measures. A longer line is still covered, because
+/// it is a multiple of this stride.
 const CACHE_STRIDE: usize = 64;
 
 /// How a row's batches are retained.
@@ -292,23 +297,43 @@ fn visit_batches_with<I: Clone>(
     }
 }
 
-/// At least one recorded batch, with anything smaller than a full batch
-/// rounded up so the same path works for the final short window.
+/// Recorded batches in one full window.
+///
+/// A window holds about one pad of measured inputs, so the pad is written
+/// once per that many samples. At least one: a window that recorded nothing
+/// would not advance. The newest batch still has the whole pad written
+/// after it. A short final window is the last chunk of the shuffled order.
 fn recorded_batches(operand_bytes: usize, window_bytes: usize) -> usize {
     window_bytes
         .div_ceil(BATCH.saturating_mul(operand_bytes).max(1))
         .max(1)
 }
 
-/// Read the independent pad after preparing a window. Keep the read
-/// observable even when the harness is built with fat LTO.
+/// Write one byte of every line of `pad`, then read that byte back.
+///
+/// Called after a window's inputs are written and before they are timed.
+/// One store write-allocates the line. The volatile read keeps the store
+/// under fat LTO: the pad is not an input, so a plain store is deleted.
+/// Not inlined, so the timed loop does not see the pad's body.
 #[inline(never)]
-fn touch_cache_pad(pad: &[u8]) {
-    let mut sum = 0u64;
-    for &byte in black_box(pad).iter().step_by(CACHE_STRIDE) {
-        sum = sum.wrapping_add(u64::from(byte));
+fn touch_cache_pad(pad: &mut [u8]) {
+    let mut acc = 0u8;
+    for (index, line) in pad.chunks_mut(CACHE_STRIDE).enumerate() {
+        let mark = line_mark(index);
+        // Safety: `chunks_mut` yields a non-empty subslice here, so the
+        // first byte is inside `pad`. `u8` has alignment 1.
+        unsafe {
+            let ptr = line.as_mut_ptr();
+            std::ptr::write_volatile(ptr, mark);
+            acc ^= std::ptr::read_volatile(ptr);
+        }
     }
-    black_box(sum);
+    black_box(acc);
+}
+
+/// `1..=255`, so a pad of any length leaves a non-zero mark on every line.
+fn line_mark(index: usize) -> u8 {
+    u8::try_from((index % 255) + 1).expect("a cache-line mark fits in one byte")
 }
 
 fn visit_windows<I: Clone>(
@@ -322,7 +347,7 @@ fn visit_windows<I: Clone>(
     let sources = ClassSources::bind(contrast, draw, rng);
     let order = shuffled_classes(samples_per_class, rng);
     let limit = recorded_batches(size_of::<I>(), window_bytes).min(order.len());
-    let pad = vec![1u8; window_bytes];
+    let mut pad = vec![0u8; window_bytes];
     let mut warmup = Vec::with_capacity(BATCH);
     let mut slots: Vec<Vec<I>> = (0..limit).map(|_| Vec::with_capacity(BATCH)).collect();
     for classes in order.chunks(limit.max(1)) {
@@ -331,7 +356,8 @@ fn visit_windows<I: Clone>(
         for (&class, slot) in classes.iter().zip(&mut slots) {
             sources.source(class).write_batch(slot, rng);
         }
-        touch_cache_pad(&pad);
+        // After the writes, before any batch of this window is timed.
+        touch_cache_pad(&mut pad);
         visit(warmup_class, &warmup, BatchRole::Warmup);
         for (&class, slot) in classes.iter().zip(&slots) {
             visit(class, slot, BatchRole::Record);
@@ -446,6 +472,20 @@ mod tests {
     #[test]
     fn a_window_records_at_least_one_batch() {
         assert_eq!(recorded_batches(32, 0), 1);
+    }
+
+    #[test]
+    fn the_cache_pad_marks_every_line() {
+        let mut pad = vec![0u8; CACHE_STRIDE * 3 + 8];
+        touch_cache_pad(&mut pad);
+        for (index, line) in pad.chunks(CACHE_STRIDE).enumerate() {
+            assert_eq!(line[0], line_mark(index));
+        }
+    }
+
+    #[test]
+    fn an_empty_cache_pad_is_a_no_op() {
+        touch_cache_pad(&mut []);
     }
 
     #[test]
