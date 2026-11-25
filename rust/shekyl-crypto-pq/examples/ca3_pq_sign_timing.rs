@@ -116,10 +116,10 @@ const SLH_DSA_CLASS_SIZE: f64 = 1_000.0;
 const KEEP_EVERY: usize = 64;
 /// The input seed of SLH-DSA's registered runs (registered 2026-11-22).
 const SLH_DSA_REGISTERED_SEED: u64 = 0x4341_335f_4d4c_534c;
-/// The input seed of ML-DSA's registered runs (registered 2026-11-23, the
-/// maintainer's ruling of 2026-11-22: a fresh seed). No run before this
-/// registration drew from it; the matched pair is drawn from it first.
-const ML_DSA_REGISTERED_SEED: u64 = 0x4341_335f_4d4c_3233;
+/// The fresh input seed of ML-DSA's post-fork registered runs (revision 3,
+/// registered 2026-11-24 under the maintainer's final CA-3 ruling). No run
+/// before this registration drew from it; the matched pair is drawn first.
+const ML_DSA_REGISTERED_SEED: u64 = 0x4341_335f_4d4c_4633;
 /// ML-DSA's registered size: 50,000 samples per comparison on each device,
 /// sized from its threat model (ruled 2026-11-22; the registration's
 /// Assumption gives the basis).
@@ -1361,8 +1361,8 @@ fn ml_dsa_localisation(mode: Mode, sizing: Sizing, inputs: &mut Inputs, seed: u6
     std::process::exit(i32::from(!checks));
 }
 
-/// ML-DSA-65's registered run (revised 2026-11-23, the maintainer's ruling
-/// of 2026-11-22; `docs/benchmarks/ca3_ml_dsa_tx_auth_timing_20261122.md`).
+/// ML-DSA-65's post-fork registered run (revision 3, 2026-11-24;
+/// `docs/benchmarks/ca3_ml_dsa_tx_auth_timing_20261122.md`).
 ///
 /// - **The line:** signing alone from one working slot, the key decoded
 ///   inside the timed call ([`sign_comparisons`] with `decode_timed`): the
@@ -1378,7 +1378,7 @@ fn ml_dsa_localisation(mode: Mode, sizing: Sizing, inputs: &mut Inputs, seed: u6
 /// in every comparison, information included.
 fn ml_dsa_registered(sizing: Sizing, inputs: &mut Inputs, seed: u64) -> ! {
     println!(
-        "CA-3 ML-DSA-65 transaction authorisation (fips204 0.5.0), registered 2026-11-23: \
+        "CA-3 ML-DSA-65 transaction authorisation (fips204 fork 54b76cf714), registered 2026-11-24: \
          signing alone from one working slot, the key decoded inside the timed call"
     );
     println!(

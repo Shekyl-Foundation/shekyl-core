@@ -1,13 +1,11 @@
 # `CA-3`, ML-DSA-65: the transaction authorisation's signing time, registered 2026-11-22
 
-**State of this record: registered, and revised on 2026-11-23 before any
-attempt (the maintainer's ruling of 2026-11-22). The laptop PASSES
-(attempt 2, after a void attempt 1). The floor device's attempt 1 is
-INCONCLUSIVE (7.55) and is with the maintainer.**
-The revision is "Registered before the run: revision 2". It replaces the
-first registration's pass line, size and seed, and is the one the attempts
-are read against. Results are added below both, and neither registration
-section is edited afterwards.
+**State of this record: post-fork revision 3 REGISTERED 2026-11-24,
+before either new run. Both devices are pending.** Revision 2 on published
+fips204 0.5.0 passed on the laptop and was inconclusive (7.55) on the
+floor. The maintainer ordered a fresh-seed run after #1545 merged the
+fips204 fix. Revision 3 below fixes that run's inputs and conditions;
+the earlier registrations and results remain records of their own builds.
 
 ## Why this run
 
@@ -1142,3 +1140,53 @@ not the committed reading:
 
 **Captures:** `floor_step2_*` with `SHA256SUMS`. The raw files are in the
 estate's private captures.
+
+
+## Registered before the run: revision 3, post-fork (2026-11-24)
+
+**Status: REGISTERED; no revision-3 run has been made.** This follows the
+maintainer's final instruction for fork #1, core #1545 and CA-3: #1545 is
+merged, and #1504 contains current dev, including the fips204 fork at
+`54b76cf71430a406f3c96ab9c80c42b0d74ce2fd`.
+
+**The line and size stay revision 2's:** signing alone from one working
+slot, with the secret-key decode inside the timed call; 50,000 samples
+per comparison, calibration 500, the same 100 crops. The pair is matched
+on ExpandS bytes and ExpandA rejections; both replicas must agree with
+the library. The composed call and key generation remain information.
+All checks, retained-signature verification, null, planted 0.5 % control,
+sensitivity calculation and ordered verdict lines stay as registered:
+any check failure, control at or below 10, or null at or above 4.5 voids
+the run; otherwise the signing pair below 4.5 passes, 4.5 through 10 is
+inconclusive, and above 10 fails.
+
+**Fresh inputs, fixed before either device runs.**
+`ML_DSA_REGISTERED_SEED = 0x4341_335f_4d4c_4633`. Run
+`ca3_pq_sign_timing ml-dsa-registered` with no argument, which prints
+`inputs=registered`. This seed has not been used by an earlier run.
+Both devices draw the same matched pair first. Each binary first makes
+one shake-down at the same size with explicit seed `2026112801`, outside
+the registered inputs. A void shake-down stops the attempt until the
+cause is identified and fixed; it does not spend the registered attempt.
+
+**Build and conditions.** Each device uses a fresh recursive checkout of
+the commit carrying this registration, release profile, rustc 1.94.0,
+locked dependencies and no additional RUSTFLAGS. Record its clean source
+SHA, toolchain, binary SHA-256, start/end conditions, times and exit code.
+- **Floor:** the 4 GB Raspberry Pi 4, native aarch64, build at two jobs,
+  under a quiet claim. Set the governor to `performance` before the
+  shake-down and attempt, record it with frequency, temperature and
+  throttling, and restore the original governor after the session.
+- **Laptop:** native Windows MSVC, `+crt-static` from workspace config,
+  pinned to logical processor 4 at Normal priority. Use the recorded
+  revision-2 attempt-2 quiet gate, including the ten-second sibling
+  monitor and its stop rule; no browser and Defender left enabled.
+
+**Attempts and reading.** One registered attempt per device. A void may
+be repeated once only after its cause is recorded and fixed. A completed
+fail or inconclusive is recorded and localised without repeating it as
+an attempt. Interrupted laptop runs stay unread as the quiet gate requires.
+Pass on both devices closes ML-DSA and CA-3; anything else stays open
+while localisation continues, returning to the maintainer for a decision
+only when one is needed. Keep full outputs and SHA256SUMS beside the
+existing captures, with operational conditions in the private estate record.
