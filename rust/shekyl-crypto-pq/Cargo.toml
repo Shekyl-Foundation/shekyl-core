@@ -301,10 +301,6 @@ path = "examples/fn_dsa_stack_ladder.rs"
 name = "ca3_pq_sign_timing"
 path = "examples/ca3_pq_sign_timing.rs"
 
-[[example]]
-name = "fips204_branch_subject"
-path = "examples/fips204_branch_subject.rs"
-
 [[bin]]
 name = "fa6_decap_prefilter_gate"
 path = "examples/fa6_decap_prefilter_gate.rs"

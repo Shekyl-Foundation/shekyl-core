@@ -6,19 +6,20 @@
 """fips204's coefficient helpers keep the shape recorded for this binary.
 
 Runs the fork's own `shekyl/check_branch_counts.py`, from the revision this
-workspace pins, on a shipped-profile build of `fips204_branch_subject` with
+workspace pins, on a shipped-profile build of `ca3_pq_sign_timing` with
 line tables. The fork classifies every conditional branch inlined from the
 helpers. This script states the pair for that binary. The fork carries no
 count: another binary inlines the same helpers in more places.
 
 A compiler change moves the pair. **A toolchain bump re-pins
-`BRANCH_SUBJECT_COUNTS`, on x86_64 and on the floor device,** after reading
+`TIMING_COUNTS`, on x86_64 and on the floor device,** after reading
 the result. The nightly job runs x86_64. Invoking this script with aarch64
 checks the recorded floor pair; the nightly job does not invoke it.
 
-  cargo build --release --locked -p shekyl-crypto-pq --example fips204_branch_subject
+  cargo build --release --locked -p shekyl-crypto-pq --example ca3_pq_sign_timing
       (with CARGO_PROFILE_RELEASE_DEBUG=line-tables-only, from rust/)
   check_fips204_branch_counts.py BINARY x86_64|aarch64
+  check_fips204_branch_counts.py --subject  (the example this record judges)
 """
 
 from __future__ import annotations
@@ -29,13 +30,14 @@ import subprocess
 import sys
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-# (loop back-edges, gamma2 tests) in fips204_branch_subject, rustc 1.94.0.
-BRANCH_SUBJECT_COUNTS = {"x86_64": (16, 4), "aarch64": (16, 0)}
+SUBJECT = "ca3_pq_sign_timing"
+# (loop back-edges, gamma2 tests) in ca3_pq_sign_timing, rustc 1.94.0.
+TIMING_COUNTS = {"x86_64": (27, 4), "aarch64": (27, 0)}
 
 
 def expected_argument(arch: str) -> str:
     """The pair the fork's checker reads for `arch`."""
-    backs, gammas = BRANCH_SUBJECT_COUNTS[arch]
+    backs, gammas = TIMING_COUNTS[arch]
     return f"{arch}={backs},{gammas}"
 
 
@@ -63,7 +65,7 @@ def fork_script() -> str:
 
 def self_test() -> int:
     """The recorded pairs format as the fork's `--expected` argument."""
-    if expected_argument("x86_64") != "x86_64=16,4" or expected_argument("aarch64") != "aarch64=16,0":
+    if expected_argument("x86_64") != "x86_64=27,4" or expected_argument("aarch64") != "aarch64=27,0":
         print("FAIL: self-test: a recorded pair did not format as ARCH=BACK,GAMMA2")
         return 1
     if main(["/no/such-fips204-subject", "x86_64"]) == 0:
@@ -79,7 +81,10 @@ def self_test() -> int:
 def main(argv: list[str]) -> int:
     if argv == ["--self-test"]:
         return self_test()
-    if len(argv) != 2 or argv[1] not in BRANCH_SUBJECT_COUNTS:
+    if argv == ["--subject"]:
+        print(SUBJECT)
+        return 0
+    if len(argv) != 2 or argv[1] not in TIMING_COUNTS:
         print(__doc__)
         return 2
     binary, arch = argv
@@ -94,7 +99,7 @@ def main(argv: list[str]) -> int:
     if completed.returncode != 0:
         print(
             "fips204 branch counts: read the result before changing anything here. "
-            "A toolchain bump re-pins BRANCH_SUBJECT_COUNTS on x86_64 and on the floor device; "
+            "A toolchain bump re-pins TIMING_COUNTS on x86_64 and on the floor device; "
             "a branch on a coefficient is a finding."
         )
     return completed.returncode

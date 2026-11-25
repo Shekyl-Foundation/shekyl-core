@@ -116,7 +116,11 @@ over. In the shipped profile on x86_64 its SHA-256 goes from `8664ab61…` to
 `00855c62…`.
 
 `scripts/ci/check_fips204_branch_counts.py` runs the fork's checker on the
-shipped profile and passes the pair recorded for `fips204_branch_subject`.
+shipped profile and passes the pair recorded for `ca3_pq_sign_timing`
+(27 loop back-edges and 4 public gamma2 tests on x86_64, 27 and 0 on
+aarch64). #1504 replaces #1545's small stand-in with the timing harness,
+as the maintainer's final instruction requires; the earlier stand-in
+counts below remain a record of that binary.
 The fork classifies each conditional branch inlined from the helpers and
 carries no count of its own. Each must be a loop back-edge or the x86 test of
 the public `gamma2`. The nightly `fips204-branch-count` job runs the x86_64
@@ -126,9 +130,9 @@ The fork rows are at the merge commit.
 
 | Binary | Target | Crate | Back-edges | `gamma2` tests | Other |
 | --- | --- | --- | --- | --- | --- |
-| `fips204_branch_subject` | x86_64 Linux | tag | 0 | 1 | **63** |
-| `fips204_branch_subject` | x86_64 Linux | fork | 16 | 4 | **0** |
-| `fips204_branch_subject` | aarch64 Linux | fork | 16 | 0 | **0** |
+| `fips204_branch_subject` (historical #1545 subject) | x86_64 Linux | tag | 0 | 1 | **63** |
+| `fips204_branch_subject` (historical #1545 subject) | x86_64 Linux | fork | 16 | 4 | **0** |
+| `fips204_branch_subject` (historical #1545 subject) | aarch64 Linux | fork | 16 | 0 | **0** |
 | `ca3_pq_sign_timing` | x86_64 Linux | tag | 0 | 1 | **81** |
 | `ca3_pq_sign_timing` | x86_64 Linux | fork | 27 | 4 | **0** |
 | `ca3_pq_sign_timing` | aarch64 Linux | tag | 0 | 0 | **88** |
@@ -211,3 +215,38 @@ architectures differ.
   measurement each at this revision.
 - This record is about branches. Whether signing time depends on a secret is
   measured by `CA-3`'s registered timing runs.
+
+
+### Nightly target verified for #1504 (2026-11-24)
+
+The nightly now reads the real `ca3_pq_sign_timing` harness, as the
+maintainer's final instruction requires. Its source is the registered
+`63bcfab1d4`; the CI change removes only the unused stand-in target
+and change the wrapper and workflow, not the timing harness's source or
+crypto library. Fresh native release builds with line tables, rustc 1.94.0:
+
+| Target | Loop back-edges | Public gamma2 tests | Other | Result |
+| --- | --- | --- | --- | --- |
+| x86_64 Linux, registered harness, VERIFIED 2026-11-24 | 27 | 4 | 0 | PASS |
+| aarch64 Linux on the floor, registered harness, VERIFIED 2026-11-24 | 27 | 0 | 0 | PASS |
+
+The former stand-in's 16/4 pair refuses the actual x86_64 harness with
+exit 1, so the exact-count gate can fail. The fork still refuses an absent
+helper and every other conditional branch. On the isolated x86_64 source,
+formatting, crypto-crate all-target Clippy and all-target build passed.
+
+Each nightly matrix leg selects the subject named by its own checked-out
+counter record (`--subject`). A stable tree still carrying #1545's older
+record builds its own stand-in and applies its own 16/4 counts. Current
+code removes that unused example and checks the timing harness. The
+selection was exercised on current and older records, absent subject,
+unrecognised record, the actual pre-adoption main workflow, and a workflow
+with its checker missing: the valid cases select the right subject,
+pre-adoption main explicitly skips, and the invalid cases refuse.
+
+
+Raw count outputs and the old-count refusal are retained with SHA256SUMS
+in `ca3_ml_dsa_tx_auth_timing_20261122_captures/`:
+`floor_reg3_branch_count.txt`, `linux_x86_reg3_branch_count.txt`, and
+`linux_x86_reg3_old_counts_refused.txt`. Build logs and machine identities
+stay in the private infrastructure record.
