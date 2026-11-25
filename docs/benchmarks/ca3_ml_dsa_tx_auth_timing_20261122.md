@@ -1076,8 +1076,8 @@ faster.
   **not** a layout finding, and it does not close anything. It goes to the
   maintainer with the figures.
 
-**The other Pi.** skl-pi4-1 holds the cover-traffic lane's measurement until
-2026-11-24 17:11Z. These runs do not wait for it.
+**Device scheduling.** These runs use the floor device; scheduling records
+are maintained in the private infrastructure usage ledger.
 
 ### Step 2, the builds as verified, before any timing run
 
