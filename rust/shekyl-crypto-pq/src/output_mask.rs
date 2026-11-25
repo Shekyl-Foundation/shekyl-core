@@ -12,6 +12,7 @@
 //! place its bytes are read, and [`OutputMask::opening`] is how every other
 //! crate uses it. A reader does not convert the bytes back.
 
+use crate::secret_scalar::canonical_secret_scalar;
 use std::fmt;
 
 use curve25519_dalek::Scalar;
@@ -34,10 +35,7 @@ impl OutputMask {
     /// reducing it a second time.
     #[must_use]
     pub fn from_derived(z: &[u8; 32]) -> Self {
-        Self(Zeroizing::new(
-            Option::<Scalar>::from(Scalar::from_canonical_bytes(*z))
-                .expect("a derived output mask is a canonical scalar"),
-        ))
+        Self(canonical_secret_scalar(z).expect("a derived output mask is a canonical scalar"))
     }
 
     /// The output's commitment opening at `amount`: the mask and the amount

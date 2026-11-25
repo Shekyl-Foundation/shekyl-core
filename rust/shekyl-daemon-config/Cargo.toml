@@ -37,7 +37,7 @@ shekyl-os-account = { path = "../shekyl-os-account" }
 
 [target.'cfg(unix)'.dependencies]
 # Safe wrappers for the data-directory lock (`flock`) and the account's
-# effective uid; the crate shekyl-engine-prefs already pins for `fsync`.
+# effective uid.
 rustix = { version = "1", features = ["fs", "process"] }
 # The group and account reads the secret-read rule makes (`group.rs`:
 # `getgrgid_r`, `getpwuid_r`, the `getpwent` walk), which rustix does not
@@ -50,6 +50,8 @@ libc = "0.2"
 shekyl-win-sec = { path = "../shekyl-win-sec" }
 
 [dev-dependencies]
+# A test's data directory, where the daemon's real check passes it.
+shekyl-os-account = { path = "../shekyl-os-account", features = ["test-fixture"] }
 tempfile = "3"
 # A valid v3 onion for the operator-Tor tests.
 shekyl-onion-v3 = { path = "../shekyl-onion-v3" }

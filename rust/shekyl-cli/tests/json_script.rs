@@ -277,9 +277,12 @@ struct SpawnedDaemon {
 
 impl SpawnedDaemon {
     fn spawn(bin: &std::ffi::OsStr, rpc_port: u16) -> Self {
-        let data_dir = std::env::temp_dir().join(format!("shekyl-cli-daemon-{rpc_port}"));
+        let data_dir = shekyl_os_account::test_fixture::path(&format!("cli-daemon-{rpc_port}"))
+            .expect("a fixture path");
         drop(std::fs::remove_dir_all(&data_dir));
-        std::fs::create_dir_all(&data_dir).expect("data dir");
+        // Made as the daemon makes a data directory: it refuses an existing
+        // one other accounts can enter (`config.data-dir.exposed`).
+        shekyl_os_account::create_account_dir_all(&data_dir).expect("data dir");
         let port = rpc_port.to_string();
         // Both connectors off is the offline posture: no listener, no
         // dial, so no p2p port to pick (INPUT_GRAMMAR.md §5).

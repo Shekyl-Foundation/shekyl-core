@@ -168,11 +168,9 @@ Measure address volatility for ephemeral-per-boot onion endpoints (PWD-E8), then
 Run the `ρ`/`g_max` sub-round (Q-10) deferred by PWD-I4.
 Daemon PQC phase-1 payload assembly duplicates [`20-rust-vs-cpp-policy`](completed/RULE_20_RUST_VS_CPP.md)
 FCMP++ sender-side output verification — inherited `wallet2::sanity_check` [`16-architectural-inheritance`](../.cursor/rules/16-architectural-inheritance.mdc)
-Hardening-pass commit 8 follow-up: WalletPrefs round-trip property test (`2k.a2` deferred test).
 `shekyld` `fee_policy_version` daemon-side exposure.
 `ActivityMetric` producer actor (wallet-side coherent bundle).
 Daemon atomic activity snapshot RPC (conditional on RPC upstream).
-RandomX v2 `ExternalProject_Add`: per-`CONFIG` install path and `IMPORTED_LOCATION_<CONFIG>` for multi-config generators.
 The GUI dials its daemon with nothing said — and a dial that says nothing is constructible.
 `atomic_write_file` power-loss crash-injection tests.
 Wallet file metadata obfuscation (PR 6 §5.12 F5–F6).

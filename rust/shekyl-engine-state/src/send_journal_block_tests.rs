@@ -10,6 +10,7 @@
 //! production module.
 
 use super::*;
+use crate::group_payee::tests::group;
 
 fn sample_record(state: SendState, lock_baseline: Option<u64>) -> SendRecord {
     SendRecord {
@@ -132,13 +133,20 @@ fn send_state_discriminants_are_pinned() {
 /// never move.
 #[test]
 fn send_destination_discriminants_are_pinned() {
-    let pins: [(SendDestination, &[u8]); 2] = [
+    // variant index 2, then the fingerprint's 32 bytes with no length
+    // prefix (a fixed-size array)
+    let fingerprint = GroupFingerprint::of(&group(0x21));
+    let group_pin: Vec<u8> = std::iter::once(2)
+        .chain(fingerprint.as_bytes().iter().copied())
+        .collect();
+    let pins: [(SendDestination, &[u8]); 3] = [
         // variant index 0, then the string's varint length and bytes
         (
             SendDestination::Address("ab".to_owned()),
             &[0, 2, b'a', b'b'],
         ),
         (SendDestination::OwnPersonaFunding, &[1]),
+        (SendDestination::Group(fingerprint), &group_pin),
     ];
     for (destination, expected) in pins {
         let bytes = postcard::to_allocvec(&destination).expect("serialize");
@@ -148,6 +156,40 @@ fn send_destination_discriminants_are_pinned() {
             "SendDestination discriminant moved for {destination:?} — append-only violated"
         );
     }
+}
+
+fn group_row(fingerprint: GroupFingerprint) -> SendRecord {
+    let mut row = sample_record(SendState::Dispatched, None);
+    row.recipients[0].destination = SendDestination::Group(fingerprint);
+    row
+}
+
+/// A group is stored once however many sends pay it, and stays while a
+/// row pays it: undoing one of two sends to it keeps it, undoing the
+/// last drops it.
+#[test]
+fn a_group_is_stored_once_and_kept_while_a_row_pays_it() {
+    let address = group(0x21);
+    let mut block = SendJournalBlock::empty();
+    let first = block.store_group_payee(&address);
+    let second = block.store_group_payee(&address);
+    assert_eq!(first, second);
+    assert_eq!(block.group_payees().count(), 1);
+    assert_eq!(
+        block
+            .group_address(&first)
+            .expect("stored")
+            .address()
+            .expect("parses"),
+        address
+    );
+
+    block.rows.insert([1; 32], group_row(first));
+    block.rows.insert([2; 32], group_row(first));
+    block.undo_dispatch(&[1; 32]);
+    assert!(block.group_address(&first).is_some(), "a row still pays it");
+    block.undo_dispatch(&[2; 32]);
+    assert!(block.group_address(&first).is_none(), "no row pays it");
 }
 
 /// A v1 block with no rows deserializes from its minimal encoding —

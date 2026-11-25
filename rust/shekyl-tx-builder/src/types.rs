@@ -9,9 +9,12 @@
 
 use shekyl_crypto_pq::output::EncryptedOutputField;
 use shekyl_crypto_pq::output_mask::OutputMask;
-use shekyl_types::{BlockHash, CurveTreeRoot, TxSignableHash};
+use shekyl_fcmp::PqcKeyScalar;
+use shekyl_types::{BlockHash, CurveTreeRoot, KeyImage, TxSignableHash};
 use shekyl_units::AtomicUnits;
 use zeroize::{Zeroize, ZeroizeOnDrop};
+
+use crate::error::TxBuilderError;
 
 #[derive(Clone, Debug)]
 pub struct LeafEntry {
@@ -159,6 +162,12 @@ impl PqcScheme {
     }
 }
 
+/// The scheme of every spend slot this builder signs: one hybrid signer, the
+/// holder of the spend's key. A multisig spend's slots are its ceremony's, not
+/// the builder's. The placeholder auth, the signed auth and the membership
+/// self-verify's key scalar all take it from here.
+pub const SPEND_SLOT_SCHEME: PqcScheme = PqcScheme::Single;
+
 /// Per-input PQC authentication data (hybrid signature).
 ///
 /// Contains the serialized hybrid signature and the serialized public key
@@ -213,4 +222,72 @@ pub struct SignedProofs {
     /// transaction to it: a layout whose prefix or base differs from what
     /// was proved is refused there, not by the daemon.
     pub tx_signable: TxSignableHash,
+    /// Each input's key image `x·Hp(O)`, in input order: the images the
+    /// membership proof was verified against before it was returned.
+    /// [`crate::open_spend`] holds the layout's key images to them, so the
+    /// prefix carries exactly the images the proof verifies under.
+    pub key_images: Vec<KeyImage>,
+    /// Each spend slot's PQC key scalar, in input order: the scalars the
+    /// membership proof was verified against, derived from the hybrid public
+    /// key each slot will carry under [`SPEND_SLOT_SCHEME`].
+    /// [`crate::open_spend`] holds the layout's spend-slot keys to them.
+    pub pqc_keys: Vec<PqcKeyScalar>,
+}
+
+impl SignedProofs {
+    /// Hold what a transaction will carry to what its membership proof was
+    /// verified against: the prefix's key images, and each spend slot's key
+    /// as the consensus verifier derives its scalar from the slot. Every path
+    /// that assembles a spend from these proofs calls this, because the
+    /// self-verify's operands are the signer's and the daemon reads the
+    /// transaction's.
+    ///
+    /// # Errors
+    ///
+    /// [`TxBuilderError::MembershipSelfCheck`] on a count that differs, a key
+    /// image that is not the proof's, or a slot key that does not derive to
+    /// the proof's scalar.
+    pub fn hold_spend_layout(
+        &self,
+        key_images: &[[u8; 32]],
+        spend_slot_keys: &[Vec<u8>],
+    ) -> Result<(), TxBuilderError> {
+        if key_images.len() != self.key_images.len() {
+            return Err(TxBuilderError::MembershipSelfCheck(format!(
+                "the transaction's key images ({}) and the proof's ({}) disagree",
+                key_images.len(),
+                self.key_images.len()
+            )));
+        }
+        if spend_slot_keys.len() != self.pqc_keys.len() {
+            return Err(TxBuilderError::MembershipSelfCheck(format!(
+                "the transaction's spend slots ({}) and the proof's PQC keys ({}) disagree",
+                spend_slot_keys.len(),
+                self.pqc_keys.len()
+            )));
+        }
+        if let Some(index) = key_images
+            .iter()
+            .zip(&self.key_images)
+            .position(|(carried, proved)| carried != proved.as_bytes())
+        {
+            return Err(TxBuilderError::MembershipSelfCheck(format!(
+                "key image {index} is not the image the membership proof was verified against"
+            )));
+        }
+        if let Some(index) =
+            spend_slot_keys
+                .iter()
+                .zip(&self.pqc_keys)
+                .position(|(slot_key, proved)| {
+                    PqcKeyScalar::from_pqc_auth(SPEND_SLOT_SCHEME.id(), slot_key).as_ref()
+                        != Some(proved)
+                })
+        {
+            return Err(TxBuilderError::MembershipSelfCheck(format!(
+                "spend slot {index}'s key is not the key the membership proof was verified against"
+            )));
+        }
+        Ok(())
+    }
 }

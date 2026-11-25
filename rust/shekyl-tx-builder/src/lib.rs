@@ -18,6 +18,8 @@
 //!   ├─ ECDH amount encoding (compact v2 format)
 //!   ├─ Pseudo-output balancing
 //!   ├─ FCMP++ membership proof via shekyl-fcmp::proof::prove
+//!   ├─ Self-verify: the CT balance, and the membership proof under
+//!   │  shekyl-fcmp::proof::verify (the consensus verifier's own call)
 //!   └─ PQC signing (hybrid Ed25519 + ML-DSA-65) via shekyl-crypto-pq
 //! ```
 //!
@@ -56,7 +58,7 @@
 // that narrows the dependency shape cannot silently drop the refusal.
 //
 // Matching gates: Tripwire A (shekyl-crypto-pq, primary) and Tripwire D
-// (top-level CMakeLists.txt, configure gate). All three duplicate the
+// (rust/xtask/matrix.toml, no 32-bit host). All three duplicate the
 // refusal by design; none of them should be deleted on "never fires"
 // grounds.
 //
@@ -72,7 +74,7 @@ compile_error!(
      emits libgcc helpers (__muldi3, __udivdi3, __ashldi3) with no CT \
      guarantee — the exact threat model exploited by KyberSlash (Bernstein \
      et al., 2024). Matching gates live in shekyl-crypto-pq (Tripwire A) \
-     and the top-level CMakeLists.txt (Tripwire D). \
+     and the release matrix, rust/xtask (Tripwire D). \
      See docs/CHANGELOG.md entry 'Retired 32-bit build targets' before \
      attempting to revert this gate."
 );
@@ -103,7 +105,7 @@ pub use sign::{
 };
 pub use types::{
     LeafEntry, OutputInfo, PqcAuth, PqcScheme, SignedProofs, SpendInput, TreeContext,
-    PQC_AUTH_VERSION,
+    PQC_AUTH_VERSION, SPEND_SLOT_SCHEME,
 };
 
 /// Cleartext balance terms, re-exported so `sign_transaction_with_terms`

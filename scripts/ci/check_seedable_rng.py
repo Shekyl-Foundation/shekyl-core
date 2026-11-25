@@ -38,8 +38,8 @@ construction in a listed function is reviewed like a new site.
 
 The crates the shipped binaries build (`CF-R26`, Rick, 2026-11-15): the
 set `shipped_graph.py` computes, which `check_production_graph.py` reads
-too. It is this repository's release (`cmake/BuildRust.cmake`'s roots in
-one invocation, with the release's features, every platform's
+too. It is this repository's release (`rust/xtask/matrix.toml`'s roots in
+one invocation per host, with the release's features, every platform's
 `[target.*]` tables) and the GUI wallet's release (its pinned shekyl-core
 edges). A crate enters when either build activates it, and its sites are
 checked from the commit it enters: there is no list of crates to update.

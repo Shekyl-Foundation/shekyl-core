@@ -10,8 +10,9 @@ autoexamples = false
 [features]
 # Test-support helpers that take no seed: `generate_ephemeral_keypair_for_tests`
 # (a non-derived keypair, which must never reach a wallet),
-# `FnDsaHybridSecretKey::corrupt_fn_dsa_half_for_tests` and
-# `derive_p_hs_id_seed`. TEST_ONLY (`scripts/ci/check_test_only_features.py`):
+# `FnDsaHybridSecretKey::corrupt_fn_dsa_half_for_tests`,
+# `derive_p_hs_id_seed`, and `TxKey::output_positions` (one output position
+# read at a time; production places a whole set with `TxKey::place`, R-34). TEST_ONLY (`scripts/ci/check_test_only_features.py`):
 # enabled from `[dev-dependencies]` edges only.
 test-utils = []
 # Deterministic signing: `sign_with_ml_dsa_seed`,
@@ -252,7 +253,7 @@ shekyl-stats = { path = "../shekyl-stats" }
 # Independent (tier-2) oracle for the WALLET_FILE_FORMAT_V1 §2.6 wrap-key
 # KAT: the test re-implements HKDF-Expand from RFC 5869 as raw HMAC-SHA-256
 # so the check does not share the `hkdf` wrapper under test. Already in
-# `Cargo.lock` via `shekyl-engine-prefs` and `shekyl-tor-control-wallet` — adds no package
+# `Cargo.lock` via `shekyl-tor-control-wallet` — adds no package
 # to the supply chain (`17-dependency-discipline`).
 hmac = "0.12"
 # Compile-fail harness for `tests/trybuild.rs`: the only way to assert that
@@ -299,6 +300,10 @@ path = "examples/fn_dsa_stack_ladder.rs"
 [[example]]
 name = "ca3_pq_sign_timing"
 path = "examples/ca3_pq_sign_timing.rs"
+
+[[example]]
+name = "fips204_branch_subject"
+path = "examples/fips204_branch_subject.rs"
 
 [[bin]]
 name = "fa6_decap_prefilter_gate"

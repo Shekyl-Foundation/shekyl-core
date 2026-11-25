@@ -453,9 +453,12 @@ impl Regtest {
             .local_addr()
             .expect("addr")
             .port();
-        let data_dir = std::env::temp_dir().join(format!("shekyl-tx-show-{rpc_port}"));
+        let data_dir = shekyl_os_account::test_fixture::path(&format!("tx-show-{rpc_port}"))
+            .expect("a fixture path");
         drop(std::fs::remove_dir_all(&data_dir));
-        std::fs::create_dir_all(&data_dir).expect("data dir");
+        // Made as the daemon makes a data directory: it refuses an existing
+        // one other accounts can enter (`config.data-dir.exposed`).
+        shekyl_os_account::create_account_dir_all(&data_dir).expect("data dir");
         let config_dir = private_config_dir(rpc_port);
         let stdout = std::fs::File::create(data_dir.join("daemon.log")).expect("stdout log");
         let stderr = stdout.try_clone().expect("stderr log");
@@ -603,7 +606,6 @@ impl Regtest {
                 p: 1,
             },
             overrides: shekyl_engine_file::SafetyOverrides::none(),
-            prefs: shekyl_engine_prefs::WalletPrefs::default(),
         };
         let wallet = shekyl_engine_core::Engine::<shekyl_engine_core::SoloSigner>::create(
             params,

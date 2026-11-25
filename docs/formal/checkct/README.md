@@ -20,6 +20,8 @@ docs/formal/checkct/
 │                       a table lookup indexed by a secret
 ├── drivers/fpprobe.rs  CA-3's probe: SSE2 mulsd, divsd, sqrtsd and cvtsd2si on secret
 │                       operands, beside a positive control (x86_64 only)
+├── drivers/fips204ct.rs  CA-3's guard: fips204's infinity_norm, decompose and make_hint on
+│                       unrestricted secret i32s, at the tag (control) and on the fork
 └── results/<date>/     one .txt per run: pins, run window, verdict table, leak lines
 ```
 
@@ -363,3 +365,50 @@ regenerate it after any run.
 | --- | --- | --- | --- | --- | --- | --- |
 | `dynamic-x86_64-fleet-measurement-host-code-path.txt` | dynamic | see file | — | — | — | not a checkct record |
 | `dynamic-x86_64-workstation-code-path.txt` | dynamic | see file | — | — | — | not a checkct record |
+
+## CA-3: fips204's coefficient helpers (record table 2026-11-23)
+
+The guard recorded in [`ca3_pq_branch_sweep_20261123.md`](../../benchmarks/ca3_pq_branch_sweep_20261123.md). With `overflow-checks = true`, as the
+wallet ships, fips204 0.5.0 branches on secret coefficients in `infinity_norm`,
+`decompose` and `make_hint`. The Shekyl fork removes those branches.
+
+- **What runs.** `drivers/fips204ct.rs`. The helpers are `pub(crate)`, so `setup.sh`
+  compiles that revision's `helpers.rs`, `high_low.rs` and `types.rs` unchanged,
+  as their own crate, and reads `Q`, `D` and `ZETA` from its `lib.rs`. The fork
+  revision is the `[patch]` in `rust/Cargo.toml`, the same source the
+  crypto-closure record holds. The fork's public API is unchanged.
+- **The control.** The same driver on the unpatched tag `v0.5.0` (`fips204-tag`)
+  must be insecure, and is, on all five entrypoints. If it ever passes, the guard
+  has stopped seeing the branch.
+- **The subject.** `fips204-fix`, at the revision `rust/Cargo.toml` pins, must be
+  secure. Every input is an unrestricted secret `i32`, so the result does not
+  assume the valid range.
+- **What it does not cover.** It runs on x86_64 with checkct's toolchain
+  (`nightly-2025-12-04`, the closest to the shipped LLVM) and its freestanding
+  target, not the shipped binary. The shipped-profile aarch64 and x86_64 builds are
+  checked by `scripts/ci/check_fips204_branch_counts.py`, which runs the fork's
+  `shekyl/check_branch_counts.py` with the pair recorded for
+  `fips204_branch_subject`. The nightly `fips204-branch-count` job runs the
+  x86_64 pair.
+
+```bash
+CHECKCT_NIGHTLY=nightly-2025-12-04 CHECKCT_ONLY="fips204-tag fips204-fix" docs/formal/checkct/setup.sh
+docs/formal/checkct/run.sh fips204-tag --timeout 600   # must exit non-zero
+docs/formal/checkct/run.sh fips204-fix --timeout 500   # must exit 0
+```
+
+Rendered by `python3 docs/formal/checkct/summarize.py docs/formal/checkct/results/2026-11-23`.
+
+| record | workspace | toolchain | options | target | secure / insecure / unknown | not secure |
+| --- | --- | --- | --- | --- | --- | --- |
+| `fips204-fix.nightly-2025-12-04.txt` | fips204-fix | nightly-2025-12-04 | `--timeout 500` | x86_64-unknown-linux-gnu | 5 / 0 / 0 | — |
+| `fips204-tag.nightly-2025-12-04.txt` | fips204-tag | nightly-2025-12-04 | `--timeout 600` | x86_64-unknown-linux-gnu | 0 / 5 / 0 | insecure: fips204_decompose_44, fips204_decompose_65, fips204_infinity_norm, fips204_make_hint_44, fips204_make_hint_65 |
+
+The 2026-11-23 rows above compile a rewritten slice of the helpers. The
+2026-11-24 rows compile each revision's own `helpers.rs`, `high_low.rs` and
+`types.rs`.
+
+| record | workspace | toolchain | options | target | secure / insecure / unknown | not secure |
+| --- | --- | --- | --- | --- | --- | --- |
+| `2026-11-24/fips204-fix.nightly-2025-12-04.txt` | fips204-fix | nightly-2025-12-04 | `--timeout 500` | x86_64-unknown-linux-gnu | 5 / 0 / 0 | — |
+| `2026-11-24/fips204-tag.nightly-2025-12-04.txt` | fips204-tag | nightly-2025-12-04 | `--timeout 600` | x86_64-unknown-linux-gnu | 0 / 5 / 0 | insecure: fips204_decompose_44, fips204_decompose_65, fips204_infinity_norm, fips204_make_hint_44, fips204_make_hint_65 |

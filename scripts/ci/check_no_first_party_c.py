@@ -5,8 +5,8 @@
 """No first-party C or C++: the end state of the C++ removal.
 
 Ruled 2026-11-06 (Rick): no first-party C or C++ in the tree outside
-`external/`, and no CMake target compiling any. Three halves, each of
-which asserts its subject before it judges (rule 47):
+`external/`, and no first-party build compiling any. Three halves, each
+of which asserts its subject before it judges (rule 47):
 
 1. Tracked files (`--tree`). `git ls-files` lists no C or C++ source or
    header outside `external/`. One exemption, and it is structural: a
@@ -15,12 +15,16 @@ which asserts its subject before it judges (rule 47):
    `contrib/depends/packages/<pkg>.mk` builds that package. Every submodule
    in `.gitmodules` lives under `external/`. Subject: the listing is not
    empty and holds a gitlink under `external/`.
-2. CMake (`--tree`). Configures the tree into a temporary directory with a
-   File API codemodel query and reads every target's sources: a source in
-   a compile group (one CMake compiles) that is not under `external/`
-   fails. Subject: the reply lists `shekyl_rust_bins`, the target that
-   builds the binaries. Default options; the RandomX options add only
-   ExternalProject custom targets, and a compiled source would show here.
+2. Build scripts (`--tree`). The release is one cargo build per host
+   (`cargo xtask`, rust/xtask/matrix.toml), so the only first-party code
+   that could compile C is a workspace member's build script. None may:
+   a build-dependency on `cc`, `cmake` or `autotools`, or a build script
+   that calls a C compiler, make or cmake, or links a native library
+   (`rustc-link-lib`), fails. One exemption, `randomx-v2-sys`, which links
+   the C RandomX reference for the differential harness and must stay
+   outside the shipped graph (`shipped_graph.py`). Subject: build scripts
+   were read, and the exempt crate is seen linking C, so the detector is
+   shown seeing what it looks for.
 3. The linked daemon (`--binary <shekyld>`). No C++ runtime among its
    dynamic dependencies (`readelf -d` NEEDED: libstdc++, libc++, libc++abi,
    libsupc++), and no C++ symbol: every `_Z` symbol is Rust's
@@ -34,13 +38,10 @@ which asserts its subject before it judges (rule 47):
 Usage: check_no_first_party_c.py --tree | --binary <path to shekyld> | --selftest
 """
 
-import json
 import pathlib
 import re
-import shutil
 import subprocess
 import sys
-import tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 C_FAMILY = (
@@ -52,7 +53,19 @@ VENDORED = "external/"
 DEPENDS_PATCHES = re.compile(r"^contrib/depends/patches/([^/]+)/")
 CXX_RUNTIMES = ("libstdc++", "libc++", "libc++abi", "libsupc++")
 RUST_LEGACY_HASH = re.compile(r"17h[0-9a-f]{16}E")
-BINARIES_TARGET = "shekyl_rust_bins"
+# A build-dependency that compiles C for its crate.
+C_BUILD_DEPS = frozenset({"cc", "cmake", "autotools"})
+# A build script that compiles C, runs a C build, or links a native library.
+C_BUILD_CALLS = re.compile(
+    r"\bcc::Build\b|\bcmake::(?:Config|build)\b|\bautotools::"
+    r'|Command::new\(\s*"(?:cc|gcc|clang|cl|c\+\+|g\+\+|clang\+\+|make|cmake)(?:\.exe)?"\s*\)'
+    r"|rustc-link-lib="
+)
+# The one crate whose build script may link C, and why it may.
+EXEMPT = {
+    "randomx-v2-sys": "links the C RandomX reference for the differential harness "
+    "(RANDOMX_V2_RUST.md §2); never in a shipped graph",
+}
 
 
 # ── 1. Tracked files ────────────────────────────────────────────────────────
@@ -93,61 +106,63 @@ def tracked_inputs(root):
     return files, gitlinks, packages, paths
 
 
-# ── 2. CMake ────────────────────────────────────────────────────────────────
+# ── 2. Build scripts ────────────────────────────────────────────────────────
 
 
-def check_codemodel(targets):
-    """`targets`: (name, [(source path relative to the tree, compiled?)])."""
+def check_build_scripts(scripts, shipped):
+    """`scripts`: crate -> (its build-dependencies, its build script's text
+    or None). `shipped`: the crates a release build links."""
     errors = []
-    if BINARIES_TARGET not in {name for name, _ in targets}:
-        errors.append(f"the codemodel lists no {BINARIES_TARGET} target (rule 47)")
-    for name, sources in targets:
-        for path, compiled in sources:
-            if compiled and not path.startswith(VENDORED):
-                errors.append(f"CMake target {name} compiles {path}")
+    if not scripts:
+        errors.append("no workspace member was read (rule 47)")
+    for crate, (deps, text) in sorted(scripts.items()):
+        code = re.sub(r"//[^\n]*", "", text or "")
+        compiles = bool(set(deps) & C_BUILD_DEPS) or bool(C_BUILD_CALLS.search(code))
+        if crate in EXEMPT:
+            if not compiles:
+                errors.append(
+                    f"{crate} is exempt but its build script links no C: the detector no "
+                    "longer sees it, or the exemption is stale (rule 47)"
+                )
+            if crate in shipped:
+                errors.append(f"{crate} links C and a release build links {crate}")
+            continue
+        if compiles:
+            errors.append(f"{crate}'s build compiles or links C")
+    for crate in EXEMPT:
+        if crate not in scripts:
+            errors.append(f"{crate}, the exempt crate, is not a workspace member (rule 47)")
     return errors
 
 
-def codemodel_targets(root):
-    cmake = shutil.which("cmake")
-    if cmake is None:
-        return None, "cmake is not on PATH; the CMake half cannot run (rule 47)"
-    with tempfile.TemporaryDirectory() as build:
-        query = pathlib.Path(build, ".cmake/api/v1/query")
-        query.mkdir(parents=True)
-        (query / "codemodel-v2").touch()
-        run = subprocess.run(
-            [cmake, "-S", str(root), "-B", build, "-DCMAKE_BUILD_TYPE=Release"],
-            capture_output=True, text=True, check=False,
-        )
-        if run.returncode != 0:
-            return None, f"cmake configure exited {run.returncode}:\n{run.stdout}{run.stderr}"
-        reply = pathlib.Path(build, ".cmake/api/v1/reply")
-        index = sorted(reply.glob("index-*.json"))
-        if not index:
-            return None, "cmake wrote no File API reply (rule 47)"
-        objects = json.loads(index[-1].read_text())["objects"]
-        model_file = next((o["jsonFile"] for o in objects if o["kind"] == "codemodel"), None)
-        if model_file is None:
-            return None, "the File API reply has no codemodel (rule 47)"
-        model = json.loads((reply / model_file).read_text())
-        source_dir = pathlib.Path(model["paths"]["source"]).resolve()
-        targets = []
-        for config in model["configurations"]:
-            for ref in config["targets"]:
-                target = json.loads((reply / ref["jsonFile"]).read_text())
-                sources = []
-                for src in target.get("sources", []):
-                    path = pathlib.Path(src["path"])
-                    if not path.is_absolute():
-                        path = source_dir / path
-                    try:
-                        rel = path.resolve().relative_to(source_dir).as_posix()
-                    except ValueError:
-                        rel = path.as_posix()
-                    sources.append((rel, "compileGroupIndex" in src))
-                targets.append((target["name"], sources))
-        return targets, None
+def build_scripts():
+    """Every workspace member's build-dependencies and build script."""
+    # Here, not at the top: the build job runs --selftest and --binary in an
+    # Ubuntu 22.04 container, whose Python 3.10 has no tomllib. --tree runs
+    # in the grep gates.
+    import tomllib
+
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+    from shipped_graph import member_dirs  # noqa: E402
+
+    out = {}
+    for crate, path in member_dirs().items():
+        manifest = tomllib.loads((path / "Cargo.toml").read_text(encoding="utf-8"))
+        deps = set(manifest.get("build-dependencies", {}))
+        for table in manifest.get("target", {}).values():
+            deps |= set(table.get("build-dependencies", {}))
+        build = manifest.get("package", {}).get("build", "build.rs")
+        script = path / build if isinstance(build, str) else None
+        text = script.read_text(encoding="utf-8") if script and script.is_file() else None
+        out[crate] = (deps, text)
+    return out
+
+
+def shipped_set():
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+    from shipped_graph import live_graphs, shipped_crates  # noqa: E402
+
+    return shipped_crates(live_graphs())
 
 
 # ── 3. The linked daemon ────────────────────────────────────────────────────
@@ -193,7 +208,7 @@ def check_binary(libs, syms):
 
 def selftest():
     links = ["external/randomx-v2"]
-    tree = ["rust/a/src/lib.rs", "external/randomx-v2/src/vm.cpp", "CMakeLists.txt"]
+    tree = ["rust/a/src/lib.rs", "external/randomx-v2/src/vm.cpp", "README.md"]
     assert check_tracked(tree, links, {"ncurses"}, ["external/randomx-v2"]) == []
     assert check_tracked(tree + ["src/crypto/keccak.c"], links, set(), []), "first-party C is red"
     assert check_tracked(tree + ["tools/x.HPP"], links, set(), []), "the extension check ignores case"
@@ -202,11 +217,17 @@ def selftest():
     assert check_tracked(tree + [patch], links, set(), []), "a patch with no package is red"
     assert check_tracked(tree, links, set(), ["vendor/x"]), "a submodule outside external/ is red"
     assert check_tracked([], [], set(), []), "an empty listing is red"
-    bins = (BINARIES_TARGET, [])
-    assert check_codemodel([bins, ("randomx_v2_external", [("external/randomx-v2/x.cpp", False)])]) == []
-    assert check_codemodel([bins, ("probe", [("tools/probe.c", True)])]), "a compiled first-party source is red"
-    assert check_codemodel([bins, ("rx", [("external/randomx-v2/vm.cpp", True)])]) == []
-    assert check_codemodel([("other", [])]), "no binaries target is red"
+    rx = 'println!("cargo:rustc-link-lib=static=randomx");'
+    clean = {"randomx-v2-sys": (set(), rx), "shekyl-types": ({"serde_json"}, "fn main() {}")}
+    assert check_build_scripts(clean, {"shekyl-types"}) == []
+    planted = dict(clean, **{"shekyl-x": ({"cc"}, 'fn main() { cc::Build::new().file("x.c").compile("x"); }')})
+    assert check_build_scripts(planted, set()), "a build script compiling C is red"
+    assert check_build_scripts(dict(clean, **{"shekyl-x": ({"cc"}, "fn main() {}")}), set()), "a cc build-dependency is red"
+    assert check_build_scripts(dict(clean, **{"shekyl-x": (set(), 'Command::new("gcc")')}), set()), "running gcc is red"
+    assert check_build_scripts(clean, {"randomx-v2-sys"}), "the exempt crate in a shipped graph is red"
+    assert check_build_scripts(dict(clean, **{"randomx-v2-sys": (set(), "fn main() {}")}), set()), "a stale exemption is red"
+    assert check_build_scripts({}, set()), "nothing read is red"
+    assert check_build_scripts(dict(clean, **{"shekyl-x": (set(), "// rustc-link-lib= in a comment\nfn main() {}")}), set()) == []
     many = ["x"] * 1000
     assert not cxx_symbol("_ZN4core3fmt5write17h0123456789abcdefE"), "a Rust legacy symbol"
     assert not cxx_symbol("_ZN4core3fmt5write17h0123456789abcdefE.llvm.123"), "with an LLVM suffix"
@@ -238,17 +259,15 @@ def main():
     if args == ["--tree"]:
         files, gitlinks, packages, modules = tracked_inputs(ROOT)
         errors = check_tracked(files, gitlinks, packages, modules)
-        targets, failure = codemodel_targets(ROOT)
-        if failure:
-            errors.append(failure)
-        else:
-            errors += check_codemodel(targets)
-        compiled = 0 if targets is None else sum(c for _, s in targets for _, c in s)
+        scripts = build_scripts()
+        errors += check_build_scripts(scripts, shipped_set())
+        with_script = sum(1 for _, text in scripts.values() if text is not None)
         return report(
             errors,
             f"{len(files)} tracked files hold no C or C++ outside {VENDORED}; "
             f"{len(modules)} submodule(s), all under {VENDORED}; "
-            f"CMake configures {len(targets or [])} target(s), compiling {compiled} source(s)",
+            f"{with_script} of {len(scripts)} workspace members have a build script, none "
+            f"compiling C but {', '.join(EXEMPT)}, outside the shipped graph",
         )
     if len(args) == 2 and args[0] == "--binary":
         binary = args[1]

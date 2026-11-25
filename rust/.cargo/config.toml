@@ -7,8 +7,8 @@
 # CRT, and the cc-built C objects inside crates follow this feature (/MT).
 # The feature selects libcmt in every profile, debug included, so the
 # Windows binaries need no Visual C++ runtime beside them.
-# Cargo reads this file because CMake runs cargo from this directory
-# (cmake/BuildRust.cmake, WORKING_DIRECTORY ${RUST_SOURCE_DIR}), and so
+# Cargo reads this file because `cargo xtask` runs cargo from this directory
+# (rust/xtask/src/main.rs, `execute`), and so
 # does every direct cargo invocation here. An environment RUSTFLAGS
 # replaces these flags; the build sets none for an MSVC target.
 [target.x86_64-pc-windows-msvc]
@@ -16,3 +16,9 @@ rustflags = ["-C", "target-feature=+crt-static"]
 
 [target.aarch64-pc-windows-msvc]
 rustflags = ["-C", "target-feature=+crt-static"]
+
+# `cargo xtask dist --host <host>` and `cargo xtask build`: the release
+# build, from rust/xtask/matrix.toml. `--locked` so the build tool itself
+# resolves only what Cargo.lock holds.
+[alias]
+xtask = "run --locked --quiet --package xtask --"

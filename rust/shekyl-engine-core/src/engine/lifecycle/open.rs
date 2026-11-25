@@ -7,19 +7,16 @@
 
 use std::path::Path;
 
-use tracing::warn;
-
 use shekyl_address::Network;
 use shekyl_crypto_pq::account::{account_from_seed, rederive_account};
 use shekyl_crypto_pq::wallet_envelope::{CapabilityContent, EXPECTED_CLASSICAL_ADDRESS_BYTES};
 use shekyl_engine_file::{
     CreateParams as FileCreateParams, OpenOutcome, SafetyOverrides, WalletFile,
 };
-use shekyl_engine_prefs::LoadOutcome as PrefsLoadOutcome;
 use shekyl_engine_state::{LedgerIndexes, WalletLedger};
 use shekyl_types::BlockHeight;
 
-use crate::engine::error::{IoError, KeyError, OpenError};
+use crate::engine::error::{KeyError, OpenError};
 use crate::engine::stake_engine::PSlot;
 use crate::engine::{Capability, DaemonClient, Engine, SoloSigner};
 
@@ -57,7 +54,6 @@ impl Engine<SoloSigner> {
             restore_height_hint,
             kdf,
             overrides,
-            prefs,
         } = params;
 
         let CapabilityInput::Full { seed } = capability;
@@ -127,12 +123,6 @@ impl Engine<SoloSigner> {
             file = reopened;
         }
 
-        // Persist the caller-supplied preferences so the next open
-        // sees them. `save_prefs` is HMAC-keyed by the session-cached
-        // PrefsHmacKey on `file`.
-        file.save_prefs(&prefs)
-            .map_err(|e| OpenError::Io(IoError::WalletFile(e)))?;
-
         let indexes = LedgerIndexes::rebuild_from_ledger(&initial_ledger.ledger);
 
         Self::assemble(
@@ -141,7 +131,6 @@ impl Engine<SoloSigner> {
             &master_seed_64,
             initial_ledger,
             indexes,
-            prefs,
             daemon,
             network,
             Capability::Full,
@@ -244,24 +233,6 @@ impl Engine<SoloSigner> {
             return Err(OpenError::Key(KeyError::PublicBytesMismatch));
         }
 
-        // Layer-2 preferences. Tampered → warn + use defaults; this
-        // mirrors `docs/WALLET_PREFS.md §5`'s advisory failure
-        // policy. The structured fields make the warn line
-        // grep-able for operators investigating tamper signals.
-        let prefs = match file.load_prefs() {
-            Ok(PrefsLoadOutcome::Loaded(p) | PrefsLoadOutcome::Missing(p)) => p,
-            Ok(PrefsLoadOutcome::Tampered { prefs, .. }) => {
-                warn!(
-                    target: "shekyl_engine_core::lifecycle",
-                    state_path = %file.state_path().display(),
-                    "wallet preferences failed HMAC verification; quarantined and reset to \
-                     defaults — investigate file corruption, manual edit, or hardware fault"
-                );
-                prefs
-            }
-            Err(e) => return Err(OpenError::Io(IoError::WalletFile(e))),
-        };
-
         let (ledger, restored_from) = match outcome {
             OpenOutcome::StateLoaded(ledger) => (ledger, None),
             OpenOutcome::StateLost {
@@ -277,7 +248,6 @@ impl Engine<SoloSigner> {
             &inputs.master_seed_64,
             ledger,
             indexes,
-            prefs,
             daemon,
             network,
             capability,

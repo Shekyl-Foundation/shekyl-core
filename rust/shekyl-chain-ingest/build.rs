@@ -5,7 +5,7 @@
 
 //! Stamp `shekyl-chain-replay` with the checkout it was built from.
 //!
-//! cmake's `SHEKYL_VERSION_FULL` reaches `shekyl-cli` and
+//! the xtask's `SHEKYL_VERSION_FULL` reaches `shekyl-cli` and
 //! `shekyl-wallet-rpc` only. This binary is cargo-built, so a capture that
 //! trusted the daemon's sha alone could write a trace from a stale replay
 //! binary and stamp it with the daemon's commit. The sha printed by

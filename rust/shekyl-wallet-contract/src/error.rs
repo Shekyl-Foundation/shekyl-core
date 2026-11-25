@@ -12,12 +12,11 @@ use shekyl_engine_core::engine::error::{
 };
 use shekyl_engine_core::engine::{ResendError, SubmitError};
 use shekyl_engine_core::{
-    ChangePasswordError, CurveTreeIngestFault, DrainToPrincipalError, IoError, KeyError, OpenError,
-    PScanStartError, PendingTxError, PersistenceError, RefreshError, SendError, ServingStartError,
-    SetTxNoteError, SignFault, StakeInError, StoreOpenFault, MAX_INPUTS, MAX_OUTPUTS,
+    CurveTreeIngestFault, DrainToPrincipalError, IoError, KeyError, OpenError, PScanStartError,
+    PendingTxError, PersistenceError, RefreshError, SendError, ServingStartError, SetTxNoteError,
+    SignFault, StakeInError, StoreOpenFault, MAX_INPUTS, MAX_OUTPUTS,
 };
 use shekyl_engine_file::{PayloadError, WalletEnvelopeError, WalletFileError};
-use shekyl_engine_prefs::PrefsError;
 use shekyl_engine_state::WalletLedgerError;
 use shekyl_engine_state::{SetNoteError, TxNoteTooLong};
 use shekyl_rpc_client::{DaemonFault, HashHex, IdentityMismatch, Network};
@@ -1903,21 +1902,6 @@ impl From<OpenError> for WalletRpcError {
     }
 }
 
-impl From<ChangePasswordError> for WalletRpcError {
-    fn from(err: ChangePasswordError) -> Self {
-        match err {
-            ChangePasswordError::RotateFailed(e) => e.into(),
-            // The password DID change; only the preferences flush failed. A
-            // storage code here would tell the client the rotation failed, and
-            // a retry with the old password would then refuse. Category-only,
-            // naming what happened.
-            ChangePasswordError::RotatedButPrefsFlushFailed(e) => {
-                internal_detail("password rotated but preferences flush failed", e)
-            }
-        }
-    }
-}
-
 impl From<RefreshError> for WalletRpcError {
     fn from(err: RefreshError) -> Self {
         match err {
@@ -2070,7 +2054,7 @@ impl From<SendError> for WalletRpcError {
             SendError::Fee(e) => e.into(),
             SendError::InsufficientFunds { .. } => Self::InsufficientFunds,
             SendError::Io(io) => from_io_error(io),
-            SendError::Sign(fault) => from_sign_fault(fault),
+            SendError::Sign(fault) => fault.into(),
             SendError::NotSynced => Self::WalletNotSynced,
             // No spend-key material in scope: the session's signer is gone,
             // which is what `-29006` names — reopen the wallet.
@@ -2103,22 +2087,26 @@ impl From<SendError> for WalletRpcError {
 
 /// The signing pass's fault to its code: the four the user acts on each
 /// get their own, with the limit or the input named; every internal
-/// invariant is `-29119`, named by its keyword (A16).
-fn from_sign_fault(fault: SignFault) -> WalletRpcError {
-    match fault {
-        SignFault::TooManyInputs { count } => WalletRpcError::TooManyInputs {
-            count,
-            limit: MAX_INPUTS,
-        },
-        SignFault::TooManyOutputs { count } => WalletRpcError::TooManyOutputs {
-            count,
-            limit: MAX_OUTPUTS,
-        },
-        SignFault::SpentOutputNotInLeafChunk { input } => WalletRpcError::InputNotInTree { input },
-        SignFault::PqcLeafMismatch { input } => WalletRpcError::InputUnspendable { input },
-        SignFault::Internal(internal) => WalletRpcError::SignerFailed {
-            fault: internal.keyword(),
-        },
+/// invariant is `-29119`, named by its keyword (A16). The one mapping for
+/// every path that signs: a transfer, a stake, a drain, an unstake and a
+/// collect.
+impl From<SignFault> for WalletRpcError {
+    fn from(fault: SignFault) -> Self {
+        match fault {
+            SignFault::TooManyInputs { count } => Self::TooManyInputs {
+                count,
+                limit: MAX_INPUTS,
+            },
+            SignFault::TooManyOutputs { count } => Self::TooManyOutputs {
+                count,
+                limit: MAX_OUTPUTS,
+            },
+            SignFault::SpentOutputNotInLeafChunk { input } => Self::InputNotInTree { input },
+            SignFault::PqcLeafMismatch { input } => Self::InputUnspendable { input },
+            SignFault::Internal(internal) => Self::SignerFailed {
+                fault: internal.keyword(),
+            },
+        }
     }
 }
 
@@ -2352,6 +2340,11 @@ fn from_wallet_file_error(err: &WalletFileError) -> WalletRpcError {
         F::Payload(PayloadError::UnsupportedVersion { .. }) => {
             WalletRpcError::WalletFileVersionUnsupported
         }
+        // A file that parsed and cannot be this wallet's state: a damaged
+        // frame, a network byte this build does not know, a postcard body
+        // that does not decode, or records that contradict each other. A
+        // group ledger that holds one output twice is that last case, the
+        // same class as a solo ledger that breaks an invariant.
         F::Payload(
             PayloadError::TooShort { .. }
             | PayloadError::BadMagic
@@ -2361,15 +2354,20 @@ fn from_wallet_file_error(err: &WalletFileError) -> WalletRpcError {
             | PayloadError::BodyLenTooLarge { .. },
         )
         | F::UnexpectedPayloadKind { .. }
-        | F::UnknownNetwork(_) => WalletRpcError::WalletFileCorrupt,
+        | F::UnknownNetwork(_)
+        | F::Ledger(
+            WalletLedgerError::Postcard(_)
+            | WalletLedgerError::InvariantFailed { .. }
+            | WalletLedgerError::GroupInvariantFailed { .. },
+        ) => WalletRpcError::WalletFileCorrupt,
         F::Ledger(
             WalletLedgerError::UnsupportedFormatVersion { .. }
+            | WalletLedgerError::UnsupportedGroupFormatVersion { .. }
             | WalletLedgerError::UnsupportedBlockVersion { .. },
         )
-        | F::UnknownCapability(_) => WalletRpcError::WalletFileVersionUnsupported,
-        F::Ledger(WalletLedgerError::Postcard(_) | WalletLedgerError::InvariantFailed { .. }) => {
-            WalletRpcError::WalletFileCorrupt
-        }
+        | F::UnknownCapability(_)
+        | F::GroupWalletKeysFile
+        | F::NotAGroupWalletKeysFile => WalletRpcError::WalletFileVersionUnsupported,
         F::Io(e) => from_io_kind(e.kind()),
         F::KeysFileAlreadyExists { .. } | F::SaveAsTargetExists { .. } => {
             WalletRpcError::WalletFileExists
@@ -2385,7 +2383,6 @@ fn from_wallet_file_error(err: &WalletFileError) -> WalletRpcError {
             wallet: found.to_string(),
             expected: expected.to_string(),
         },
-        F::Prefs(e) => return from_prefs_error(e, err),
         // `save_as` is not a JSON-RPC method, and a write-once violation is a
         // bug by the variant's own contract.
         F::SaveAsCrossFilesystem { .. } | F::KeysFileWriteOnceViolation { .. } => {
@@ -2416,23 +2413,6 @@ fn from_envelope_error(e: &WalletEnvelopeError, whole: &WalletFileError) -> Wall
     code
 }
 
-/// A preferences failure. `logged` is what the log names — the wrapping
-/// file error when there is one, so the log keeps its context.
-fn from_prefs_error(e: &PrefsError, logged: &dyn std::fmt::Display) -> WalletRpcError {
-    let code = match e {
-        PrefsError::Io(io) => from_io_kind(io.kind()),
-        PrefsError::UnsupportedSchemaVersion { .. } => WalletRpcError::WalletFileVersionUnsupported,
-        PrefsError::Bucket3Field { .. }
-        | PrefsError::OversizeToml { .. }
-        | PrefsError::TomlParse(_)
-        | PrefsError::HmacMismatch { .. }
-        | PrefsError::HmacWrongLength { .. } => WalletRpcError::WalletFileCorrupt,
-        PrefsError::TomlSerialize(_) => return internal_detail("wallet preferences", logged),
-    };
-    tracing::warn!(error = %logged, code = code.code().as_i32(), "wallet preferences refused");
-    code
-}
-
 /// A filesystem failure by kind. `NotFound` is the file-level answer: a
 /// missing *directory* on create is named before any write
 /// ([`WalletFileError::DirectoryMissing`]).
@@ -2450,7 +2430,6 @@ impl From<PersistenceError> for WalletRpcError {
     fn from(err: PersistenceError) -> Self {
         match err {
             PersistenceError::WalletFile(e) => from_wallet_file_error(&e),
-            PersistenceError::Prefs(e) => from_prefs_error(&e, &e),
             // A dispatch whose rename landed but whose durability was not
             // confirmed. Nothing was sent. The submit path reports this as
             // `DispatchNotSaved`; this arm is the same answer, by cause, if
@@ -2634,9 +2613,10 @@ pub fn from_unsaved_send(err: &PersistenceError, of: SaveOf) -> WalletRpcError {
             | F::UnknownNetwork(_)
             | F::NetworkMismatch { .. }
             | F::UnknownCapability(_)
+            | F::GroupWalletKeysFile
+            | F::NotAGroupWalletKeysFile
             | F::SaveAsCrossFilesystem { .. }
-            | F::SaveAsTargetExists { .. }
-            | F::Prefs(_) => WalletRpcError::SaveInternalFault { of },
+            | F::SaveAsTargetExists { .. } => WalletRpcError::SaveInternalFault { of },
         },
         PersistenceError::DurabilityUnconfirmed(why) => match why {
             U::Remote(_) => WalletRpcError::SaveOnNetworkDrive { of },
@@ -2653,8 +2633,6 @@ pub fn from_unsaved_send(err: &PersistenceError, of: SaveOf) -> WalletRpcError {
             // it never reports this; if it did, that would be a fault.
             U::Reopened => WalletRpcError::SaveInternalFault { of },
         },
-        // A send's or a seal's save never writes the preferences.
-        PersistenceError::Prefs(_) => WalletRpcError::SaveInternalFault { of },
     }
 }
 
@@ -2829,6 +2807,7 @@ impl From<DrainToPrincipalError> for WalletRpcError {
                 rate,
                 bound,
             },
+            DrainToPrincipalError::Signer(fault) => fault.into(),
             DrainToPrincipalError::State { context, detail } => internal_detail(context, detail),
             DrainToPrincipalError::Submit { detail } => {
                 tracing::warn!(detail = %detail, "drain dispatch failed at the choke point");
@@ -2902,6 +2881,7 @@ impl From<shekyl_engine_core::UnstakeError> for WalletRpcError {
             // a remote daemon, so "internal error" on exactly this one is the
             // hard-to-diagnose shape rule 82 forbids. Named code + remedy.
             E::Transport { detail } => Self::UnstakeLocalNodeRequired { detail },
+            E::Signer(fault) => fault.into(),
             E::Engine { context, detail } => internal_detail(context, detail),
         }
     }
@@ -2946,6 +2926,7 @@ impl From<shekyl_engine_core::CollectUnstakedError> for WalletRpcError {
             // The seal's save was not confirmed: nothing was sent and the
             // seal was removed. The save's cause answers (Rick, 2026-11-19).
             E::SealNotSaved(error) => from_unsaved_send(&error, SaveOf::Staking),
+            E::Signer(fault) => fault.into(),
             E::Engine { context, detail } => internal_detail(context, detail),
         }
     }
@@ -4045,19 +4026,18 @@ mod tests {
                 WalletRpcErrorCode::WalletFileVersionUnsupported,
             ),
             (
+                WalletFileError::Ledger(WalletLedgerError::GroupInvariantFailed {
+                    invariant: "group-outputs-unique",
+                    detail: "two group outputs share an output key".into(),
+                }),
+                WalletRpcErrorCode::WalletFileCorrupt,
+            ),
+            (
                 WalletFileError::NetworkMismatch {
                     expected: shekyl_engine_file::Network::Testnet,
                     found: shekyl_engine_file::Network::Mainnet,
                 },
                 WalletRpcErrorCode::WalletNetworkMismatch,
-            ),
-            (
-                WalletFileError::Prefs(PrefsError::Io(IoErr::from(ErrorKind::PermissionDenied))),
-                WalletRpcErrorCode::WalletFileAccessDenied,
-            ),
-            (
-                WalletFileError::Prefs(PrefsError::TomlParse("bad".into())),
-                WalletRpcErrorCode::WalletFileCorrupt,
             ),
             (
                 WalletFileError::KeysFileWriteOnceViolation { path: path() },
@@ -4625,12 +4605,6 @@ mod tests {
                 None,
                 "report it",
             ),
-            (
-                PersistenceError::Prefs(PrefsError::TomlParse("bad".into())),
-                C::SaveInternalFault,
-                None,
-                "report it",
-            ),
         ];
         for (cause, code, data, advice) in cases {
             let shown = format!("{cause}");
@@ -4867,6 +4841,45 @@ mod tests {
                 FirstStakeError::FeeEstimate(fee),
                 FirstStakeError::FeeEstimate(FeeEstimatorError::Daemon(f)) if f == fault
             ));
+        }
+    }
+
+    /// A signer fault answers the same on every path that signs: an internal
+    /// one is `-29119` with its keyword, and one the user can act on keeps
+    /// its own code. Red edit: map a lane's `Signer` arm to an internal error.
+    #[test]
+    fn a_signer_fault_answers_the_same_on_every_signing_path() {
+        use shekyl_engine_core::{
+            CollectUnstakedError, DrainToPrincipalError, InternalSignFault, UnstakeError,
+        };
+        let internal = SignFault::Internal(InternalSignFault::MembershipSelfCheck);
+        for (fault, code) in [
+            (internal, WalletRpcErrorCode::SignerFailed),
+            (
+                SignFault::PqcLeafMismatch { input: 1 },
+                WalletRpcErrorCode::InputUnspendable,
+            ),
+        ] {
+            let lanes: [(&str, WalletRpcError); 4] = [
+                ("send", SendError::Sign(fault).into()),
+                ("drain", DrainToPrincipalError::Signer(fault).into()),
+                ("unstake", UnstakeError::Signer(fault).into()),
+                ("collect", CollectUnstakedError::Signer(fault).into()),
+            ];
+            for (lane, err) in lanes {
+                assert_eq!(err.code(), code, "{lane}: {fault:?}");
+                if fault == internal {
+                    assert!(
+                        matches!(
+                            err,
+                            WalletRpcError::SignerFailed {
+                                fault: "membership-self-check"
+                            }
+                        ),
+                        "{lane}: {err:?}"
+                    );
+                }
+            }
         }
     }
 

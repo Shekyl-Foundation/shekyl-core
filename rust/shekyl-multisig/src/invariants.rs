@@ -205,12 +205,20 @@ mod tests {
             created_at: 1000,
             reference_block_height: 900,
             reference_block_hash: [0xCC; 32],
-            recipients: vec![IntentRecipient {
-                payee: IntentPayee::Group {
-                    address: group_payload(Network::Testnet, 0x60).to_canonical_bytes(),
+            recipients: vec![
+                IntentRecipient {
+                    payee: IntentPayee::Group {
+                        address: group_payload(Network::Testnet, 0x60).to_canonical_bytes(),
+                    },
+                    amount: AtomicUnits::from_raw(100),
                 },
-                amount: AtomicUnits::from_raw(300),
-            }],
+                IntentRecipient {
+                    payee: IntentPayee::Group {
+                        address: group_payload(Network::Testnet, 0x61).to_canonical_bytes(),
+                    },
+                    amount: AtomicUnits::from_raw(200),
+                },
+            ],
             fee: AtomicUnits::from_raw(10),
             input_global_indices: vec![42],
             kem_randomness_seed: IntentSeed::new(&[0xDD; 32]),
@@ -245,10 +253,16 @@ mod tests {
         assert_eq!(validated.input_amounts(), &[AtomicUnits::from_raw(310)]);
         assert!(matches!(
             validated.recipients(),
-            [ResolvedRecipient {
-                payee: crate::intent::ResolvedPayee::Group(_),
-                ..
-            }]
+            [
+                ResolvedRecipient {
+                    payee: crate::intent::ResolvedPayee::Group(_),
+                    ..
+                },
+                ResolvedRecipient {
+                    payee: crate::intent::ResolvedPayee::Group(_),
+                    ..
+                },
+            ]
         ));
     }
 

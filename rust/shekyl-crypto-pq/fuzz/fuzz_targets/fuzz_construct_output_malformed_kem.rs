@@ -34,30 +34,35 @@ fuzz_target!(|data: &[u8]| {
     let output_index = u64::from_le_bytes(data[8..16].try_into().unwrap()) % 256;
 
     let tx_key = TxKey::seeded(data[16..48].try_into().unwrap());
+    // R-34: the position comes from the key's order, as a wallet's does:
+    // place `output_index + 1` outputs and build the last.
+    let (position, ()) = tx_key
+        .place(vec![(); usize::try_from(output_index).unwrap() + 1])
+        .into_iter()
+        .next_back()
+        .unwrap();
     let x25519_pk: [u8; 32] = data[48..80].try_into().unwrap();
     let ml_kem_ek = &data[80..80 + ML_KEM_768_EK_LEN];
 
     let spend_key = SPEND_KEY;
 
     let _ = construct_output(
-        &tx_key,
+        position,
         &x25519_pk,
         ml_kem_ek,
         &spend_key,
         amount,
-        output_index,
     );
 
     // Also test with wrong-length ML-KEM key (truncated)
     if data.len() >= 80 + 100 {
         let short_ek = &data[80..80 + 100];
         let _ = construct_output(
-            &tx_key,
+            position,
             &x25519_pk,
             short_ek,
             &spend_key,
             amount,
-            output_index,
         );
     }
 
@@ -65,12 +70,11 @@ fuzz_target!(|data: &[u8]| {
     if data.len() >= 80 + ML_KEM_768_EK_LEN + 64 {
         let long_ek = &data[80..80 + ML_KEM_768_EK_LEN + 64];
         let _ = construct_output(
-            &tx_key,
+            position,
             &x25519_pk,
             long_ek,
             &spend_key,
             amount,
-            output_index,
         );
     }
 });

@@ -340,12 +340,15 @@ pub fn is_degraded(policy: &SupervisorPolicy, class: FailureClass, attempt: u32)
 /// the SP-T0c gate re-runs per spawn (never a cached witness).
 #[derive(Debug, Clone)]
 pub enum TorBinarySource {
-    /// The ambient production path: `binary::discover_and_verify()` (env
-    /// override → `tor/` beside the wallet → the `/opt/shekyl` system
-    /// directory), pin-gated.
+    /// Discovery: [`discover_and_verify`](shekyl_tor_control_client::binary::discover_and_verify),
+    /// pin-gated. The search lives on that function. No environment
+    /// variable and no `PATH` tier.
     Discover,
-    /// A caller-supplied path (the wallet's settings file):
-    /// `binary::discover_and_verify_at`, pin-gated.
+    /// A caller-supplied path, the `tor-file` option on the daemon and on
+    /// the wallet binaries:
+    /// [`discover_and_verify_at`](shekyl_tor_control_client::binary::discover_and_verify_at),
+    /// pin-gated. This arm does not search, and a failure is not replaced
+    /// by discovery.
     At(PathBuf),
     /// **Test-only bypass** of the gate (lifecycle tests injecting an arbitrary
     /// tor). Loud and greppable, like `VerifiedTorBinary::unchecked_for_test`,

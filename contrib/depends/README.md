@@ -18,12 +18,12 @@ For example:
 make HOST=x86_64-w64-mingw32 -j4
 ```
 
-A toolchain will be generated that's suitable for plugging into Monero's
-cmake. In the above example, a dir named x86_64-w64-mingw32 will be
-created. To use it for Monero:
+A toolchain is generated for the release build. In the above example, a
+dir named x86_64-w64-mingw32 is created, and `share/toolchain.env` in it
+names its prefix, compiler and archiver. To build the release from it:
 
 ```bash
-cmake -DCMAKE_TOOLCHAIN=`pwd`/contrib/depends/x86_64-w64-mingw32
+cd rust && cargo xtask dist --host x86_64-w64-mingw32
 ```
 
 Common `host-platform-triplets` for cross compilation are:
@@ -37,8 +37,8 @@ No other options are needed, the paths are automatically configured.
 
 Note: 32-bit targets (`i686-w64-mingw32`, `arm-linux-gnueabihf`,
 `i686-linux-gnu`) were retired in
-Chore #3 (`v3.1.0-alpha.5`). The root `CMakeLists.txt` refuses to
-configure for any target where `CMAKE_SIZEOF_VOID_P != 8`; see
+Chore #3 (`v3.1.0-alpha.5`). The release matrix
+(`rust/xtask/matrix.toml`) lists only 64-bit hosts; see
 `docs/CHANGELOG.md` and `docs/STRUCTURAL_TODO.md` for the PQC
 constant-time security argument.
 

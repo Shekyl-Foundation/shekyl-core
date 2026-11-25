@@ -14,9 +14,9 @@
 //! and the digest is a wire-contract fact that sits beside
 //! `CORE_RPC_VERSION`. The consensus-constant and economics generators
 //! elsewhere in the workspace read the same JSON for their own values and do
-//! not compute this (`VC-D4`); neither does
-//! `cmake/generate_consensus_constants.py`, because nothing in C++ consumes
-//! it (`VC-D9`).
+//! not compute this (`VC-D4`), and nothing outside the Rust clients and
+//! the daemon consumes it
+//! (`VC-D9`).
 //!
 //! The canonicalisation rules live in `build_support/consensus_canonical.rs`,
 //! which this build script and the crate's tests both include — one
@@ -164,7 +164,7 @@ use std::path::PathBuf;
 /// and it is still sourced here — through `settlement_epoch_blocks`, which
 /// stays; the multiple is a ratified structural constant with no value of
 /// its own to source, so no key replaces the removed one. No generator read
-/// the key (no `build.rs`, no CMake); the Rust constant was hand-pinned. **No
+/// the key (no `build.rs`); the Rust constant was hand-pinned. **No
 /// production behaviour changes** — `1 · 10 000 = 10 000`; the digest moves
 /// because the binding shrank.
 ///

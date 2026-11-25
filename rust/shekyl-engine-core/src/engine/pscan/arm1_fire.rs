@@ -334,7 +334,6 @@ pub async fn run_arm3_fire(scratch_dir: &std::path::Path) -> Result<Arm3FireRepo
             p: 1,
         },
         overrides: SafetyOverrides::none(),
-        prefs: shekyl_engine_prefs::WalletPrefs::default(),
     };
     let network = params.network;
     Engine::<SoloSigner>::create(params, dummy_daemon().await?)

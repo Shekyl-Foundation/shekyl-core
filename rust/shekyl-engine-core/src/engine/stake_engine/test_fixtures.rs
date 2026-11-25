@@ -120,12 +120,14 @@ pub(crate) fn constructed_record_with_entry(
     lineage: MintLineageOutput,
 ) -> (PFundingOutputRecord, LeafEntry, [u8; 64]) {
     let constructed = construct_output(
-        &shekyl_crypto_pq::TxKey::seeded(FIXTURE_TX_KEY),
+        shekyl_crypto_pq::TxKey::seeded(FIXTURE_TX_KEY)
+            .output_positions(usize::try_from(index_in_transaction).unwrap() + 1)
+            .at(index_in_transaction)
+            .unwrap(),
         &keys.x25519_pk,
         &keys.ml_kem_ek,
         keys.spend_pk.as_canonical_bytes(),
         amount,
-        index_in_transaction,
     )
     .expect("fixture output constructs");
     let mut record = funding_record(0, gindex, height, amount, lineage);

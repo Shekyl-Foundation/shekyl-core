@@ -21,10 +21,9 @@
 //!
 //! - The decrypted [`OpenedKeysFile`] for read-only metadata
 //!   (creation_timestamp, restore_height_hint, network, …).
-//! - Session-cached HKDF `wrap_key_region_2` and [`PrefsHmacKey`]
-//!   derived once at open/create so steady-state `save_state` /
-//!   prefs I/O avoid Argon2id (amended `docs/WALLET_FILE_FORMAT_V1.md`
-//!   §4.3 / PR 6 F5(b)).
+//! - The session-cached HKDF `wrap_key_region_2`, derived once at
+//!   open/create so steady-state `save_state` avoids Argon2id (amended
+//!   `docs/WALLET_FILE_FORMAT_V1.md` §4.3 / PR 6 F5(b)).
 //! - The keys-file *bytes* (for region-2 AAD binding), behind a
 //!   [`Mutex`] so trait-shaped `&self` saves and rotation serialize.
 //!
@@ -57,16 +56,12 @@ use std::sync::Mutex;
 use zeroize::{Zeroize, Zeroizing};
 
 use shekyl_address::Network;
+use shekyl_crypto_pq::wallet_envelope::FILE_KEK_BYTES;
 use shekyl_crypto_pq::wallet_envelope::{
     derive_wrap_key_region_2, open_keys_file, open_state_file,
     open_state_file_with_wrap_key_region_2, rewrap_keys_file_password, seal_keys_file,
     seal_state_file, seal_state_file_with_wrap_key_region_2, CapabilityContent, KdfParams,
     OpenedKeysFile, EXPECTED_CLASSICAL_ADDRESS_BYTES,
-};
-use shekyl_engine_prefs::hmac_key::FILE_KEK_BYTES;
-use shekyl_engine_prefs::{
-    load_prefs as prefs_load_prefs, save_prefs as prefs_save_prefs,
-    LoadOutcome as PrefsLoadOutcome, PrefsHmacKey, WalletPrefs,
 };
 use shekyl_engine_state::{
     BookkeepingBlock, LedgerBlock, StakingBlock, SyncStateBlock, TxMetaBlock, WalletLedger,
@@ -79,7 +74,8 @@ use crate::error::WalletFileError;
 use crate::lock::KeysFileLock;
 use crate::overrides::SafetyOverrides;
 use crate::paths::{
-    keys_path_from, pending_post_path_from, pscan_state_path_from, state_path_from,
+    keys_path_from, multisig_state_path_from, pending_post_path_from, pscan_state_path_from,
+    state_path_from,
 };
 use crate::payload::{decode_payload, encode_payload, PayloadKind};
 
@@ -263,14 +259,6 @@ pub struct WalletFile {
     /// [`SafetyOverrides::none`] because `create` is a provisioning
     /// operation, not a user-facing session start.
     overrides: SafetyOverrides,
-    /// HMAC key for the per-wallet `prefs.toml.hmac` companion file,
-    /// derived once at open/create time from `file_kek` and
-    /// `expected_classical_address` under HKDF-Expand per
-    /// `docs/WALLET_PREFS.md §2.2`. Cached for the session so each
-    /// `load_prefs` / `save_prefs` avoids a second Argon2id run.
-    /// Zeroized on drop via [`PrefsHmacKey`]'s `Zeroizing<[u8; 32]>`
-    /// interior; callers never see the raw bytes.
-    prefs_hmac_key: PrefsHmacKey,
     /// HKDF-derived region-2 wrap key, cached for the session so
     /// [`Self::save_state`] does not re-run Argon2id.
     wrap_key_region_2: Zeroizing<[u8; FILE_KEK_BYTES]>,
@@ -288,7 +276,6 @@ impl std::fmt::Debug for WalletFile {
             .field("network", &self.network)
             .field("capability", &self.capability)
             .field("overrides", &self.overrides)
-            .field("prefs_hmac_key", &self.prefs_hmac_key)
             .field("wrap_key_region_2", &"<redacted>")
             .finish()
     }
@@ -336,61 +323,16 @@ impl WalletFile {
     /// disk; the next open will hit the lost-`.wallet` rescan path
     /// (2i).
     pub fn create(params: &CreateParams<'_>) -> Result<Self, WalletFileError> {
-        if let Some(dir) = params
-            .base_path
-            .parent()
-            .filter(|d| !d.as_os_str().is_empty())
-        {
-            // Only absence is "missing". Any other failure to read the
-            // directory keeps its own cause, so a permission refusal is not
-            // reported as a directory to create.
-            match std::fs::metadata(dir) {
-                Ok(meta) if meta.is_dir() => {}
-                Ok(_) => return Err(io::Error::from(io::ErrorKind::NotADirectory).into()),
-                Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                    return Err(WalletFileError::DirectoryMissing {
-                        dir: dir.to_path_buf(),
-                    });
-                }
-                Err(e) => return Err(e.into()),
-            }
+        // A group wallet is its own handle (`GroupWalletFile`); refused before
+        // anything is written.
+        if !matches!(params.capability, CapabilityContent::Full { .. }) {
+            return Err(WalletFileError::GroupWalletKeysFile);
         }
+        prepare_new_wallet_path(params.base_path)?;
         let keys_path = keys_path_from(params.base_path);
         let state_path = state_path_from(params.base_path);
         let pscan_path = pscan_state_path_from(params.base_path);
         let pending_path = pending_post_path_from(params.base_path);
-
-        if keys_path.exists() {
-            return Err(WalletFileError::KeysFileAlreadyExists {
-                path: keys_path.clone(),
-            });
-        }
-
-        // A freshly created wallet must start in a consistent "never scanned as P"
-        // state. A stale `.wallet.pscan` orphaned at this base path (a prior wallet
-        // deleted here — the keys-exists guard above does not cover it) was sealed
-        // under the *old* wallet's keys, so the new wallet could never open it and
-        // `start_pscan` would refuse on the envelope seed-block mismatch. Remove it:
-        // unlike the write-once `.wallet.keys`, the P-scan state is regenerable (a
-        // re-scan rebuilds it), so clearing an unreadable orphan is the right clean
-        // slate, not a refuse-to-create. (This `create` only runs when `.wallet.keys`
-        // is absent, so any `.wallet.pscan` here is necessarily orphaned, never the
-        // current wallet's live state.)
-        match std::fs::remove_file(&pscan_path) {
-            Ok(()) => {}
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-            Err(e) => return Err(WalletFileError::Io(e)),
-        }
-        // Same clean-slate rationale for an orphaned `.wallet.pending`: it was
-        // sealed under the old wallet's keys and is unreadable by the new one.
-        // Unlike a live pending post (which is money-adjacent), an *orphan* is
-        // by construction a prior deleted wallet's residue — never this
-        // wallet's state — so removal is the consistent posture.
-        match std::fs::remove_file(&pending_path) {
-            Ok(()) => {}
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-            Err(e) => return Err(WalletFileError::Io(e)),
-        }
 
         let keys_bytes = seal_keys_file(
             params.password,
@@ -423,12 +365,6 @@ impl WalletFile {
         let state_bytes = seal_state_file(params.password, &keys_bytes, &framed)?;
         atomic_write_file(&state_path, &state_bytes)?;
 
-        // Derive the prefs HMAC key once so every subsequent
-        // `load_prefs`/`save_prefs` on this handle avoids re-running
-        // the envelope's Argon2id wrap. See `docs/WALLET_PREFS.md §2.2`
-        // for the derivation formula and security argument.
-        let prefs_hmac_key =
-            PrefsHmacKey::derive(&opened.file_kek, &opened.expected_classical_address);
         let wrap_key_region_2 =
             derive_wrap_key_region_2(&opened.file_kek, &opened.expected_classical_address);
 
@@ -446,7 +382,6 @@ impl WalletFile {
             capability,
             // Provisioning path: no user session → no overrides.
             overrides: SafetyOverrides::none(),
-            prefs_hmac_key,
             wrap_key_region_2,
         })
     }
@@ -482,8 +417,8 @@ impl WalletFile {
     ///
     /// # Safety overrides
     ///
-    /// `overrides` supplies the CLI-ephemeral layer of the three-layer
-    /// preference model (see `docs/WALLET_PREFS.md` §2.3). The struct
+    /// `overrides` supplies the session-override layer (see
+    /// `docs/WALLET_SETTINGS.md` §3). The struct
     /// is `Copy` and stored on the handle for the session. GUI callers
     /// pass [`SafetyOverrides::none`]. CLI callers may pass a
     /// non-empty struct; on open, every active field produces a
@@ -561,11 +496,6 @@ impl WalletFile {
         // regardless of what the caller does next.
         overrides.log_warn_if_active(network);
 
-        // Derive the prefs HMAC key once from the envelope's
-        // `file_kek` and `expected_classical_address`; cache for the
-        // session so prefs I/O does not pay Argon2id per call.
-        let prefs_hmac_key =
-            PrefsHmacKey::derive(&opened.file_kek, &opened.expected_classical_address);
         let wrap_key_region_2 =
             derive_wrap_key_region_2(&opened.file_kek, &opened.expected_classical_address);
 
@@ -582,7 +512,6 @@ impl WalletFile {
             network,
             capability,
             overrides,
-            prefs_hmac_key,
             wrap_key_region_2,
         };
         Ok((handle, outcome))
@@ -878,12 +807,10 @@ impl WalletFile {
     ///
     /// # Companion files
     ///
-    /// `<base>.address.txt` and `<base>.prefs.toml` are **not**
-    /// relocated by this method. The address file is a UX cosmetic
-    /// regenerated on demand by the caller; the prefs file is the
-    /// caller's responsibility to copy or rewrite. We deliberately
-    /// keep `save_as` tightly scoped to the canonical wallet pair so
-    /// the atomicity guarantee is precise.
+    /// `<base>.address.txt` is **not** relocated by this method: it is
+    /// a UX cosmetic regenerated on demand by the caller. We deliberately
+    /// keep `save_as` tightly scoped to the canonical wallet pair so the
+    /// atomicity guarantee is precise.
     pub fn save_as(
         &mut self,
         new_base_path: &Path,
@@ -978,52 +905,6 @@ impl WalletFile {
         Ok(())
     }
 
-    /// Load the wallet's user preferences from the co-located
-    /// `<base>.prefs.toml` / `<base>.prefs.toml.hmac` pair, verifying
-    /// the HMAC with the session-cached [`PrefsHmacKey`]. The
-    /// advisory failure policy in `docs/WALLET_PREFS.md §5` applies:
-    ///
-    /// * Files absent → [`PrefsLoadOutcome::Missing`] + defaults.
-    /// * Files present & verified → [`PrefsLoadOutcome::Loaded`] with
-    ///   the parsed [`WalletPrefs`].
-    /// * HMAC mismatch, oversize body, parse failure, Bucket-3
-    ///   collision → offenders are quarantined to
-    ///   `<orig>.tampered-<unix_secs>[.N]`, a `WARN` line is logged,
-    ///   and [`PrefsLoadOutcome::Tampered`] is returned carrying
-    ///   defaults. Callers can surface the tamper event in the UI
-    ///   without treating it as a refuse-to-open.
-    ///
-    /// Only hard errors (I/O failure, internal HMAC-length bug) are
-    /// surfaced as [`WalletFileError`]; every advisory tamper
-    /// signal folds into the `LoadOutcome::Tampered` arm so the
-    /// wallet still opens.
-    pub fn load_prefs(&self) -> Result<PrefsLoadOutcome, WalletFileError> {
-        let outcome = prefs_load_prefs(&self.state_path, &self.prefs_hmac_key)?;
-        Ok(outcome)
-    }
-
-    /// Persist `prefs` to `<base>.prefs.toml` + `<base>.prefs.toml.hmac`.
-    /// Both files are written atomically (tmp → fsync → rename →
-    /// fsync(parent)); the TOML body is HMACed with the
-    /// session-cached key. A crash between the two renames leaves a
-    /// body-without-matching-HMAC which the next `load_prefs` treats
-    /// as a tamper event and quarantines — the same code path as an
-    /// attacker-tampered file.
-    ///
-    /// # Errors
-    ///
-    /// * [`WalletFileError::Prefs`] — serialization failure (shouldn't
-    ///   happen for `WalletPrefs`'s built-in schema), HMAC-length bug,
-    ///   or Bucket-3 field slipped through an earlier parser.
-    /// * [`WalletFileError::Io`] / [`WalletFileError::SaveStep`]
-    ///   — filesystem failures are currently surfaced via the
-    ///   prefs crate's own `PrefsError::Io`; callers should treat
-    ///   both variants as "try again later / check disk".
-    pub fn save_prefs(&self, prefs: &WalletPrefs) -> Result<(), WalletFileError> {
-        prefs_save_prefs(&self.state_path, &self.prefs_hmac_key, prefs)?;
-        Ok(())
-    }
-
     /// Path to the `.wallet.keys` file backing this handle.
     pub fn keys_path(&self) -> &Path {
         &self.keys_path
@@ -1078,7 +959,7 @@ impl WalletFile {
     }
 
     /// Capability profile of this wallet. Always [`Capability::Full`] —
-    /// the only capability (rule 23; decision log 2026-09-07) — but
+    /// the only capability of this handle (rule 23; decision log 2026-09-07) — but
     /// decoded through the typed parse boundary at open/create time so
     /// "capability was validated" stays a type-level fact.
     pub fn capability(&self) -> Capability {
@@ -1127,7 +1008,7 @@ impl WalletFile {
     /// Starting height for a from-scratch scan. Applies only on paths
     /// that do not have a persisted `SyncStateBlock` to anchor them
     /// (fresh wallet, lost-`.wallet` recovery, explicit rescan).
-    /// See `docs/WALLET_PREFS.md` §3.3.
+    /// See `docs/WALLET_SETTINGS.md` §3.
     pub fn effective_skip_to_height(&self) -> BlockHeight {
         self.overrides.effective_skip_to_height()
     }
@@ -1146,6 +1027,58 @@ impl WalletFile {
 /// the byte that just went through `seal_keys_file`) and `open` (which
 /// vets a byte read from disk) share one implementation, keeping the
 /// defensive-decode path auditable in a single place.
+/// Ready `base_path` for a new wallet, solo or group: its directory exists,
+/// no keys file is there, and the orphaned sibling files of a wallet deleted
+/// from this path are gone.
+fn prepare_new_wallet_path(base_path: &Path) -> Result<(), WalletFileError> {
+    if let Some(dir) = base_path.parent().filter(|d| !d.as_os_str().is_empty()) {
+        // Only absence is "missing". Any other failure to read the
+        // directory keeps its own cause, so a permission refusal is not
+        // reported as a directory to create.
+        match std::fs::metadata(dir) {
+            Ok(meta) if meta.is_dir() => {}
+            Ok(_) => return Err(io::Error::from(io::ErrorKind::NotADirectory).into()),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                return Err(WalletFileError::DirectoryMissing {
+                    dir: dir.to_path_buf(),
+                });
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+    let keys_path = keys_path_from(base_path);
+
+    if keys_path.exists() {
+        return Err(WalletFileError::KeysFileAlreadyExists { path: keys_path });
+    }
+
+    // A freshly created wallet must start with no sibling of a wallet that
+    // was deleted from this path. Those files were sealed under the old
+    // wallet's keys, so the new wallet could never open them: `.wallet.pscan`
+    // (a re-scan rebuilds it), `.wallet.pending` (a prior wallet's post, not
+    // this one's), and `.wallet.multisig` (a prior group's ceremony records).
+    // This runs only when `.wallet.keys` is absent, so each sibling here is
+    // an orphan.
+    for path in [
+        pscan_state_path_from(base_path),
+        pending_post_path_from(base_path),
+        multisig_state_path_from(base_path),
+    ] {
+        remove_orphaned_sibling(&path)?;
+    }
+    Ok(())
+}
+
+/// Delete an orphaned sibling. Absence is the clean slate; any other error
+/// is the removal's own.
+fn remove_orphaned_sibling(path: &Path) -> Result<(), WalletFileError> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(WalletFileError::Io(e)),
+    }
+}
+
 fn decode_network(v: u8) -> Result<Network, WalletFileError> {
     Network::from_code(v).ok_or(WalletFileError::UnknownNetwork(v))
 }
@@ -1235,6 +1168,12 @@ fn is_cross_device_error(e: &io::Error) -> bool {
         false
     }
 }
+
+// A group wallet's handle (R-30): a child module, for the keys-file wrapper
+// and the helpers it shares with the solo handle.
+#[path = "group_wallet_file.rs"]
+mod group_wallet_file;
+pub use group_wallet_file::{GroupCreateParams, GroupOpenOutcome, GroupWalletFile};
 
 #[cfg(test)]
 mod tests {
@@ -2070,7 +2009,7 @@ mod tests {
     }
 
     /// Capability accessor contract: a freshly created wallet exposes
-    /// `Capability::Full` (the only capability, rule 23) through the
+    /// `Capability::Full` (this handle's only capability, rule 23) through the
     /// typed accessor, alongside the other decoded-once metadata.
     #[test]
     fn handle_exposes_capability_and_network() {
@@ -2123,7 +2062,7 @@ mod tests {
     /// `effective_*` accessors without affecting any other field, and
     /// must survive beyond the `open` call on the handle. This pins
     /// the "request-scoped but handle-lifetimed" policy documented in
-    /// `docs/WALLET_PREFS.md` §3.3 and in the `overrides` module
+    /// `docs/WALLET_SETTINGS.md` §3 and in the `overrides` module
     /// header.
     #[test]
     fn open_with_overrides_propagates_to_effective_accessors() {

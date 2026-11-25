@@ -107,6 +107,14 @@ impl IntentSeedFingerprint {
     pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
+
+    /// A fingerprint read back from a member's own record of the seeds it
+    /// has seen (`.wallet.multisig`). A fingerprint is public and one-way:
+    /// making one from bytes opens nothing a seed does.
+    #[must_use]
+    pub const fn from_recorded(bytes: &[u8; 32]) -> Self {
+        Self(*bytes)
+    }
 }
 
 impl std::fmt::Debug for IntentSeed {

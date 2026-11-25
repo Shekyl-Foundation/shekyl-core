@@ -81,8 +81,13 @@ pub(crate) fn walk(
         Some(Source::Cli | Source::File { .. })
     )
     .then_some(config.data_dir.as_path());
-    shekyl_daemon_config::paths::check_service_data_home(platform, config.run_mode, explicit)
-        .map_err(one)?;
+    shekyl_daemon_config::paths::check_service_data_home(
+        platform,
+        config.run_mode,
+        explicit,
+        &config.data_dir,
+    )
+    .map_err(one)?;
     Lock::creatable(&config.data_dir).map_err(one)?;
     let network_id = network.network_id();
     marker::read(&config.data_dir, network, network_id).map_err(one)?;
@@ -304,7 +309,7 @@ mod tests {
     /// the directory's lock.
     #[test]
     fn config_verify_accepts_and_creates_nothing_even_while_the_lock_is_held() {
-        let d = tempfile::tempdir().unwrap();
+        let d = shekyl_os_account::test_fixture::tempdir().unwrap();
         let data = d.path().join("deep").join("data");
         let log = d.path().join("logs").join("shekyld.log");
         let a = offline_regtest(&data, &log);
@@ -332,10 +337,11 @@ mod tests {
     /// and the marker it disagreed with is left byte for byte.
     #[test]
     fn config_verify_refuses_what_a_start_refuses_and_leaves_the_marker_as_it_was() {
-        let d = tempfile::tempdir().unwrap();
+        let d = shekyl_os_account::test_fixture::tempdir().unwrap();
         let data = d.path().join("data");
         let log = d.path().join("shekyld.log");
-        std::fs::create_dir(&data).unwrap();
+        // Owner-only, so the refusal is the marker's and not the mode's.
+        shekyl_os_account::create_account_dir_all(&data).unwrap();
         let other = marker::render(shekyl_daemon_config::Network::Testnet, [9u8; 16]);
         std::fs::write(data.join("shekyld.network"), &other).unwrap();
         let a = offline_regtest(&data, &log);
@@ -356,7 +362,7 @@ mod tests {
     /// still record the schedule a start would.
     #[test]
     fn the_walk_refuses_an_owner_value_in_the_rows_terms_without_latching() {
-        let d = tempfile::tempdir().unwrap();
+        let d = shekyl_os_account::test_fixture::tempdir().unwrap();
         let data = d.path().join("data");
         let log = d.path().join("shekyld.log");
         let mut a = offline_regtest(&data, &log);
@@ -407,7 +413,7 @@ mod tests {
     /// drop the load from [`walk`] (`persistent_onion` is `None`).
     #[test]
     fn the_walk_loads_the_onion_key_tor_wrote() {
-        let d = tempfile::tempdir().unwrap();
+        let d = shekyl_os_account::test_fixture::tempdir().unwrap();
         let data = d.path().join("data");
         let log = d.path().join("shekyld.log");
         let key = d.path().join("hs_ed25519_secret_key");
@@ -433,7 +439,7 @@ mod tests {
     #[test]
     fn a_named_onion_key_that_cannot_be_used_refuses_the_start() {
         use std::os::unix::fs::PermissionsExt;
-        let d = tempfile::tempdir().unwrap();
+        let d = shekyl_os_account::test_fixture::tempdir().unwrap();
         let data = d.path().join("data");
         let log = d.path().join("shekyld.log");
         let missing = d.path().join("missing");
@@ -468,7 +474,7 @@ mod tests {
     /// the posture's, for clearnet off.
     #[test]
     fn the_walk_warns_about_a_managed_tor_it_cannot_pin_and_accepts() {
-        let d = tempfile::tempdir().unwrap();
+        let d = shekyl_os_account::test_fixture::tempdir().unwrap();
         let data = d.path().join("data");
         let log = d.path().join("shekyld.log");
         let missing = d.path().join("no-such-tor");
@@ -555,7 +561,7 @@ mod tests {
         .encode()
         .unwrap();
         let notice_lines = |cli: &[&str]| -> Vec<String> {
-            let d = tempfile::tempdir().unwrap();
+            let d = shekyl_os_account::test_fixture::tempdir().unwrap();
             let data = d.path().join("data");
             let log = d.path().join("shekyld.log");
             let mut full = vec![
@@ -642,7 +648,7 @@ mod tests {
             .service_rendezvous
             .clone()
             .expect("this platform names a service rendezvous directory");
-        let d = tempfile::tempdir().unwrap();
+        let d = shekyl_os_account::test_fixture::tempdir().unwrap();
         // This account: the owner of a directory it just made.
         let me = std::fs::metadata(d.path()).unwrap().uid();
         if me != 0 {
@@ -679,7 +685,7 @@ mod tests {
     #[test]
     fn a_console_key_reset_does_not_need_the_rendezvous_directory() {
         use std::os::unix::fs::{MetadataExt, PermissionsExt};
-        let d = tempfile::tempdir().unwrap();
+        let d = shekyl_os_account::test_fixture::tempdir().unwrap();
         let me = std::fs::metadata(d.path()).unwrap().uid();
         if me == 0 {
             return;

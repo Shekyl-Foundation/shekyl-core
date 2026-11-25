@@ -12,8 +12,7 @@
 //! [`shekyl_engine_state::WalletLedger`] and
 //! [`shekyl_engine_state::LedgerIndexes`] under interior-mutability
 //! `RwLock` per the `LedgerEngine` trait contract — the trait itself
-//! is `pub(crate)` per `V3_ENGINE_TRAIT_BOUNDARIES.md` §1.4),
-//! preferences ([`shekyl_engine_prefs::WalletPrefs`]), the daemon RPC
+//! is `pub(crate)` per `V3_ENGINE_TRAIT_BOUNDARIES.md` §1.4), the daemon RPC
 //! client (via the `DaemonEngine` trait, default `D = DaemonClient`,
 //! also `pub(crate)` per §1.4), and the per-process scanning
 //! surface into a single audited domain orchestrator. `Engine<S, D, L>`
@@ -110,7 +109,6 @@
 //! | `indexes`             | [`shekyl_engine_state::LedgerIndexes`]               | rebuilt at open from `ledger`           |
 //! | `reservations`        | `BTreeMap<ReservationId, Reservation>`               | runtime-only `PendingTx` tracker        |
 //! | `next_reservation_id` | `u64`                                                | process-local monotonic counter         |
-//! | `prefs`               | [`shekyl_engine_prefs::WalletPrefs`]                 | plaintext-with-HMAC layer 2             |
 //! | `daemon`              | [`DaemonClient`]                                     | thin wrapper around `HttpRpc`  |
 //! | `network`             | [`Network`]                                          | cached from `file.network()`            |
 //! | `capability`          | [`Capability`]                                       | cached from `file.capability()`         |
@@ -331,6 +329,9 @@ pub(crate) mod fee_variant;
 /// design (§19.8.2 wall-clock budget).
 #[cfg(all(test, feature = "gf7-hooks"))]
 mod gf7_sealing_run;
+pub(crate) mod group_destination;
+#[cfg(feature = "multisig")]
+mod group_wallet;
 pub(crate) mod key_actor;
 /// §5.3 B9 dispatch-overhead bench support. Gated behind
 /// `bench-internals`; re-exported through [`crate::__bench_internals`]
@@ -453,8 +454,8 @@ pub use diagnostics::{
     TracingDiagnosticSink, WatchdogAlarmReason, WatchdogProbeOutcome,
 };
 pub use error::{
-    ChangePasswordError, CurveTreeIngestFault, IoError, KeyError, OpenError, PendingTxError,
-    PersistenceError, RefreshError, ReservationAfterSubmit, SendError, SignerFault, SubmitError,
+    CurveTreeIngestFault, IoError, KeyError, OpenError, PendingTxError, PersistenceError,
+    RefreshError, ReservationAfterSubmit, SendError, SignerFault, SubmitError,
 };
 pub use fee_estimator::{DaemonFeeEstimator, FeeEstimationContext, FeeEstimator};
 // `ValidatedFeeEstimates` is the type of `FeeEstimationContext`'s public
@@ -485,9 +486,9 @@ pub use output_selector::{
     OutputCandidate, OutputSelector, SelectedInputs, SelectedOutputs, WalletGreedyOutputSelector,
 };
 pub use pending::{
-    FeePriority, PendingTx, ReservationExtension, ReservationId, ReservationTTLConfig, SnapshotId,
-    SubmitOutcome, TxDestination, TxHash, TxRecipient, TxRecipientSummary, TxRequest,
-    DEFAULT_RESERVATION_TTL,
+    FeePriority, GroupDestination, PendingTx, ReservationExtension, ReservationId,
+    ReservationTTLConfig, SnapshotId, SubmitOutcome, TxDestination, TxHash, TxRecipient,
+    TxRecipientSummary, TxRequest, DEFAULT_RESERVATION_TTL,
 };
 pub use submit::SubmitReceipt;
 // The P-scan lifecycle surface (WI-1): handle + start error + cadence default,
@@ -507,6 +508,10 @@ pub use drain_read::DrainBalanceReadError;
 // drain façade's outcome/error pair and the `stake_in` error the handler
 // matches on for its refusal codes.
 pub use drain_facade::{DrainOutcome, DrainToPrincipalError};
+/// A group wallet's files and member file (R-30) — only under
+/// `--features multisig`.
+#[cfg(feature = "multisig")]
+pub use group_wallet::{GroupWallet, GroupWalletCreate, GroupWalletError};
 pub use principal_stake::StakeInError;
 pub use pscan::start::{PScanHandle, PScanStartError, DEFAULT_PSCAN_CADENCE};
 pub use refresh::{
@@ -532,7 +537,6 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use shekyl_engine_file::WalletFile;
-use shekyl_engine_prefs::WalletPrefs;
 
 use crate::engine::curve_tree_actor::CurveTreeHandle;
 use crate::engine::key_actor::{HandleDerivationViewSecret, KeyEngineHandle};
@@ -625,10 +629,6 @@ pub struct Engine<
 
     /// HKDF-derived `wrap_key_region_2` for steady-state ledger seals (F5(b)).
     state_wrap_key: StateWrapKey,
-
-    /// HKDF-derived prefs integrity key; copied from the open path before
-    /// [`WalletFile::zeroize_transient_file_kek`].
-    prefs_hmac_key: shekyl_engine_prefs::PrefsHmacKey,
 
     /// Handle to the wallet's [`KeyActor`](crate::engine::key_actor::KeyActor), which
     /// owns the full [`AllKeysBlob`](shekyl_crypto_pq::account::AllKeysBlob) inside its own task (Stage 2,
@@ -743,11 +743,6 @@ pub struct Engine<
     /// the merge write-lock.
     pub(in crate::engine) submit_driver:
         tokio::sync::Mutex<submit_lifecycle::SubmitLifecycleDriver>,
-
-    /// User preferences per the layer-2 plaintext+HMAC contract in
-    /// `docs/WALLET_PREFS.md`. Loaded at open, saved on
-    /// [`Engine::change_password`] / [`Engine::close`].
-    prefs: WalletPrefs,
 
     /// Engine → daemon connection. Cloneable; shared by clone with the
     /// scanner and the tx-submission paths so each can issue daemon
@@ -938,7 +933,7 @@ impl<
     ///   stringly-typed leak path here.
     /// - `merge_view_secret` — never printed. Carries a raw view scalar
     ///   ([`HandleDerivationViewSecret`]); redacted for the same reason.
-    /// - `ledger`, `prefs` — printed as opaque `<…>` markers. The
+    /// - `ledger` — printed as an opaque `<…>` marker. The
     ///   `ledger` field is the [`LocalLedger`] aggregate (the
     ///   [`shekyl_engine_state::WalletLedger`] plus the rebuilt-on-open
     ///   [`shekyl_engine_state::LedgerIndexes`]); both halves contain
@@ -966,13 +961,11 @@ impl<
         f.debug_struct("Engine")
             .field("persistence", &"<redacted>")
             .field("state_wrap_key", &self.state_wrap_key)
-            .field("prefs_hmac_key", &self.prefs_hmac_key)
             .field("key", &"<redacted: KeyEngineHandle>")
             .field("curve_tree", &"<opaque: CurveTreeHandle>")
             .field("merge_view_secret", &"<redacted: view secret>")
             .field("ledger", &"<…>")
             .field("outstanding_pending_txs", &self.pending.outstanding())
-            .field("prefs", &"<…>")
             .field("daemon", &self.daemon)
             .field("network", &self.network)
             .field("capability", &self.capability)
@@ -1053,25 +1046,6 @@ impl<
     /// Steady-state region-2 sealing key for this session.
     pub(crate) fn state_wrap_key(&self) -> &StateWrapKey {
         &self.state_wrap_key
-    }
-
-    /// Session prefs HMAC key (orchestrator copy; see [`WalletFile`] for the
-    /// handle's cached copy used by inherent prefs I/O).
-    pub(crate) fn prefs_hmac_key(&self) -> &shekyl_engine_prefs::PrefsHmacKey {
-        &self.prefs_hmac_key
-    }
-
-    /// Borrow user preferences. Read-only; preference rotation goes
-    /// through dedicated methods that re-HMAC the body and atomic-write
-    /// both files together.
-    pub fn prefs(&self) -> &WalletPrefs {
-        &self.prefs
-    }
-
-    /// Test-only: mutate in-memory prefs before `change_password` flush tests.
-    #[cfg(test)]
-    pub(crate) fn prefs_mut(&mut self) -> &mut WalletPrefs {
-        &mut self.prefs
     }
 
     /// Borrow the daemon RPC client. Cloneable for handing to the
@@ -1171,14 +1145,12 @@ impl<
         let Engine {
             persistence,
             state_wrap_key,
-            prefs_hmac_key,
             key,
             curve_tree,
             merge_view_secret,
             ledger,
             pending,
             submit_driver,
-            prefs,
             daemon,
             network,
             capability,
@@ -1193,14 +1165,12 @@ impl<
         Engine {
             persistence,
             state_wrap_key,
-            prefs_hmac_key,
             key,
             curve_tree,
             merge_view_secret,
             ledger,
             pending,
             submit_driver,
-            prefs,
             daemon,
             network,
             capability,
@@ -1230,14 +1200,12 @@ impl<
         let Engine {
             persistence,
             state_wrap_key,
-            prefs_hmac_key,
             key,
             curve_tree,
             merge_view_secret,
             ledger,
             pending: _old,
             submit_driver,
-            prefs,
             daemon,
             network,
             capability,
@@ -1252,14 +1220,12 @@ impl<
         Engine {
             persistence,
             state_wrap_key,
-            prefs_hmac_key,
             key,
             curve_tree,
             merge_view_secret,
             ledger,
             pending,
             submit_driver,
-            prefs,
             daemon,
             network,
             capability,

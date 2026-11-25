@@ -6,7 +6,7 @@
 //! Wallet birthday scan floor: resolution, ledger anchor, and refresh
 //! preflight.
 //!
-//! Per `docs/WALLET_PREFS.md` §3.1 / §3.3 and
+//! Per `docs/WALLET_SETTINGS.md` §2 / §3 and
 //! `docs/design/REFRESH_DESIGN_LANDSCAPE.md` §7, the producer must not
 //! scan blocks below the effective birthday floor. The merge gate
 //! requires `processed_height_range.start == synced_height + 1`, so a

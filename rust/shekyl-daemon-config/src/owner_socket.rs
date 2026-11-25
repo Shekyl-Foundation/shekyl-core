@@ -25,9 +25,7 @@ use shekyl_options::{Code, Diagnostic, Source};
 use shekyl_rpc_rendezvous::{rendezvous_name, Instance};
 
 #[cfg(unix)]
-use crate::directory::{
-    require_service_account, DirectoryAccount, ACCOUNT_ONLY_MODE, GROUP_OR_OTHER_WRITE,
-};
+use crate::directory::{require_service_account, DirectoryFacts, OWNER_ONLY_DIR_MODE};
 use crate::marker::NetworkId;
 use crate::platform::{Platform, RunMode};
 use crate::sections::DaemonConfig;
@@ -236,14 +234,14 @@ pub fn service_rendezvous(
 fn check_service_dir(dir: &std::path::Path, me: u32) -> Result<(), String> {
     require_service_account(me)?;
     let shown = dir.display().to_string();
-    let account = DirectoryAccount::inspect(dir).map_err(|fault| fault.clause(Some(&shown)))?;
-    let account = account
+    let facts = DirectoryFacts::inspect(dir).map_err(|fault| fault.clause(Some(&shown)))?;
+    let facts = facts
         .require_owner(me)
         .map_err(|fault| fault.clause(Some(&shown)))?;
-    let mode = account.mode();
-    if mode & GROUP_OR_OTHER_WRITE != 0 {
+    if facts.group_or_other_can_write() {
         return Err(format!(
-            "{shown} is writable by its group or by others (mode {mode:04o})"
+            "{shown} is writable by its group or by others (mode {:04o})",
+            facts.mode()
         ));
     }
     Ok(())
@@ -279,14 +277,14 @@ pub fn assert_dir(dir: &std::path::Path) -> Result<u32, String> {
 /// [`assert_dir`] for the account `me`.
 #[cfg(unix)]
 fn assert_dir_as(dir: &std::path::Path, me: u32) -> Result<u32, String> {
-    let account = DirectoryAccount::inspect(dir).map_err(|fault| fault.clause(None))?;
-    let account = account
+    let facts = DirectoryFacts::inspect(dir).map_err(|fault| fault.clause(None))?;
+    let facts = facts
         .require_owner(me)
         .map_err(|fault| fault.clause(None))?;
-    let mode = account.mode();
-    if mode != ACCOUNT_ONLY_MODE {
+    if !facts.is_owner_only_mode() {
         return Err(format!(
-            "its mode is {mode:04o}, not {ACCOUNT_ONLY_MODE:04o}"
+            "its mode is {:04o}, not {OWNER_ONLY_DIR_MODE:04o}",
+            facts.mode()
         ));
     }
     if !is_local(dir).map_err(|e| format!("its filesystem cannot be read: {e}"))? {

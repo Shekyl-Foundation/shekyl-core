@@ -6,7 +6,7 @@
 (`.wallet.keys` seed block) and region 2 (`.wallet` state cache). Does not
 change on-disk byte layout, `file_version`, or wrap-layer semantics.
 **Parent spec:** [`WALLET_FILE_FORMAT_V1.md`](../WALLET_FILE_FORMAT_V1.md) §2.6.
-**Related:** [`WALLET_PREFS.md`](../WALLET_PREFS.md) §2.2,
+**Related:** [`WALLET_PREFS.md`](../completed/WALLET_PREFS.md) §2.2 (retired),
 Stage 1 PR 6 PersistenceEngine / F5(b) steady-state wrap-key caching.
 
 ## 1. Problem statement
@@ -30,8 +30,7 @@ local wallets.
 ## 3. Normative derivation
 
 All expansions use **HKDF-SHA-256 in expand-only mode** with `file_kek` as the
-PRK (`HKDF-Expand`; no Extract step; no salt). Same pattern as
-`shekyl-engine-prefs`.
+PRK (`HKDF-Expand`; no Extract step; no salt).
 
 **`file_kek` provenance (normative).** `file_kek` MUST be generated from a
 cryptographically secure random source at wallet creation. It MUST NOT be
@@ -68,7 +67,7 @@ from ciphertext (Minimum-Leak: no address bytes outside region 1).
 ### 3.1 Rationale
 
 1. **One key, one purpose.** Independent 32-byte AEAD keys per region.
-2. **F5(b) blast radius.** Cache `wrap_key_region_2` + `prefs_hmac_key`; zeroize
+2. **F5(b) blast radius.** Cache `wrap_key_region_2`; zeroize
    `file_kek` and `wrap_key_region_1` after open.
 3. **Label-only region 1.** Cross-wallet region-1 swap was never practical with
    CSPRNG-random per-wallet `file_kek`; addr binding on region 1 was redundant
@@ -80,7 +79,7 @@ from ciphertext (Minimum-Leak: no address bytes outside region 1).
 
 1. Argon2 → unwrap `file_kek`.
 2. HKDF → `wrap_key_region_1` (label-only) → decrypt region 1 → read `addr`.
-3. HKDF → `wrap_key_region_2` + `prefs_hmac_key` → decrypt region 2 (if present).
+3. HKDF → `wrap_key_region_2` → decrypt region 2 (if present).
 4. Zeroize `file_kek` and `wrap_key_region_1` (PR 6 / F5(b)).
 
 ### 4.2 Password rotation

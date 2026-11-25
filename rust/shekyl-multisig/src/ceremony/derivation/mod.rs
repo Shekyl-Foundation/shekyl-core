@@ -7,14 +7,15 @@
 //! `PQC_MULTISIG.md` §9.5): [`DerivedSpend`].
 //!
 //! A member builds the group's transaction from the validated intent, its
-//! own ledger's records of the outputs the intent spends
-//! ([`GroupOutputRecord`], looked up through [`GroupOutputs`]), and the
+//! own ledger's coins of the outputs the intent spends
+//! ([`GroupCoin`], looked up through [`GroupOutputs`]), and the
 //! membership paths its own curve tree assembled, matched to the intent
-//! once ([`SpendPaths`], R-26). A record holds public values and the
-//! output's `0x06` ciphertext only; the spend secrets are
+//! once ([`SpendPaths`], R-26). A coin holds public values and the
+//! output's `0x06` ciphertext only, and exists only for an output the
+//! member's receive check passed; the spend secrets are
 //! re-derived from that ciphertext under the group's key
 //! (`shekyl_crypto_pq::multisig_output::recover_group_spend`) and checked
-//! against the record's key image and leaf point. The outputs, their `tx_extra` and the committed base
+//! against the coin's key image and leaf point. The outputs, their `tx_extra` and the committed base
 //! come from the builder every spend uses (`shekyl_tx_builder::outputs`),
 //! under the transaction key the intent's seed derives; each input's
 //! pseudo-out blind and rerandomization seed come from the same seed
@@ -41,18 +42,19 @@
 //! use shekyl_crypto_pq::multisig_intent::RerandomizationSeed;
 //! use shekyl_crypto_pq::multisig_output::GroupSpendSecrets;
 //! use shekyl_curve_tree::AssembledPath;
-//! use shekyl_multisig::ceremony::{GroupOutputRecord, InputContext};
+//! use shekyl_engine_state::GroupCoin;
+//! use shekyl_multisig::ceremony::InputContext;
 //! use zeroize::Zeroizing;
 //!
 //! fn forge(
-//!     record: GroupOutputRecord,
+//!     coin: GroupCoin,
 //!     path: AssembledPath,
 //!     secrets: GroupSpendSecrets,
 //!     blind: [u8; 32],
 //!     rerandomization_seed: RerandomizationSeed,
 //! ) -> InputContext {
 //!     InputContext {
-//!         record,
+//!         coin,
 //!         path,
 //!         secrets,
 //!         pseudo_out_blind: Zeroizing::new(blind),
@@ -62,8 +64,6 @@
 //! ```
 
 use shekyl_address::multisig_address::MultisigAddressPayload;
-use shekyl_crypto_pq::kem::X25519_KEM_CT_LEN;
-use shekyl_crypto_pq::leaf_commitment::PQC_LEAF_POINT_LEN;
 use shekyl_crypto_pq::multisig::MultisigCommittedForm;
 use shekyl_crypto_pq::multisig_intent::RerandomizationSeed;
 use shekyl_crypto_pq::multisig_output::{
@@ -74,6 +74,7 @@ use shekyl_crypto_pq::{CryptoError, TxKey};
 use shekyl_ct_balance::PseudoOutBlinds;
 use shekyl_curve_primitives::Commitment;
 use shekyl_curve_tree::{AssembledPath, TreeContext};
+use shekyl_engine_state::{GroupCoin, GroupLedgerBlock};
 use shekyl_fcmp::frost_sal::{FrostSalError, SalSigningParams, SpentOutput};
 use shekyl_fcmp::proof::{BranchLayer, ProveInputLeafChunk};
 use shekyl_fcmp::PqcLeafScalar;
@@ -90,64 +91,42 @@ use super::spend_paths::SpendPaths;
 use crate::intent::ResolvedPayee;
 use crate::invariants::ValidatedIntent;
 
-/// A spendable output paid to the group, as this member's ledger stores
-/// it: public values, the `0x06` ciphertext its secrets are re-derived
-/// from, and this member's own `0x0D` ciphertexts. No path and nothing
-/// secret (R-26): the paths arrive as one batch from the curve tree when
-/// the output is spent ([`SpendPaths`]).
-#[derive(Clone)]
-pub struct GroupOutputRecord {
-    /// The output's global index, by which an intent names it.
-    pub global_index: u64,
-    /// The output's index in its transaction (the derivations bind it).
-    pub output_index: u64,
-    /// The output's key `O`.
-    pub output_key: [u8; 32],
-    /// The output's commitment `C`.
-    pub commitment: [u8; 32],
-    /// The output's `0x06` X25519 ciphertext, to the group's KEM key.
-    pub source_x25519_ct: [u8; X25519_KEM_CT_LEN],
-    /// The output's `0x06` ML-KEM-768 ciphertext, to the group's KEM key.
-    pub source_ml_kem_ct: Vec<u8>,
-    /// The output's key image, as the scan derived it.
-    pub key_image: KeyImage,
-    /// The output's PQC leaf commitment point `CM`, as published.
-    pub leaf_point: [u8; PQC_LEAF_POINT_LEN],
-    /// The committed form the output's leaf binds (`0x02 ‖ n ‖ m ‖ h_1 … h_n`).
-    pub committed_form: MultisigCommittedForm,
-    /// This member's own `0x0D` X25519 ciphertext for the output.
-    pub own_x25519_ct: [u8; X25519_KEM_CT_LEN],
-    /// This member's own `0x0D` ML-KEM-768 ciphertext for the output.
-    pub own_ml_kem_ct: Vec<u8>,
-}
-
-impl GroupOutputRecord {
-    fn source(&self) -> GroupOutputSource<'_> {
-        GroupOutputSource {
-            output_index: self.output_index,
-            output_key: &self.output_key,
-            x25519_ct: &self.source_x25519_ct,
-            ml_kem_ct: &self.source_ml_kem_ct,
-            committed_form: &self.committed_form,
-        }
+/// What [`recover_group_spend`] reads from a coin: the `0x06` ciphertext
+/// its secrets are re-derived from, and the public values they are checked
+/// against.
+fn source(coin: &GroupCoin) -> GroupOutputSource<'_> {
+    GroupOutputSource {
+        output_index: coin.internal_output_index().to_raw(),
+        output_key: coin.output_key(),
+        x25519_ct: &coin.source_ciphertext().x25519,
+        ml_kem_ct: &coin.source_ciphertext().ml_kem,
+        committed_form: coin.committed_form(),
     }
 }
 
 /// A member's ledger of the group's spendable outputs, as
-/// [`DerivedSpend::derive`] reads it: one record per global index (R-26).
+/// [`DerivedSpend::derive`] reads it: one coin per global index (R-26).
 /// It holds no path: those come from the curve tree, matched to the intent
 /// as [`SpendPaths`].
 pub trait GroupOutputs {
-    /// The record of the output at `global_index`, or `None` when the group
-    /// does not hold that output spendable.
-    fn record(&self, global_index: u64) -> Option<GroupOutputRecord>;
+    /// The unspent coin at `global_index`, or `None` when the group does not
+    /// hold that output spendable by this member.
+    fn coin(&self, global_index: u64) -> Option<GroupCoin>;
 }
 
-/// One spent input, as this member signs it: its ledger record, its
-/// membership path, the secrets re-derived from the record, and the
+impl GroupOutputs for GroupLedgerBlock {
+    fn coin(&self, global_index: u64) -> Option<GroupCoin> {
+        self.unspent_coins()
+            .find(|coin| coin.global_output_index().to_raw() == global_index)
+            .cloned()
+    }
+}
+
+/// One spent input, as this member signs it: its ledger coin, its
+/// membership path, the secrets re-derived from the coin, and the
 /// pseudo-out blind and rerandomization seed the intent derives for it.
 pub struct InputContext {
-    record: GroupOutputRecord,
+    coin: GroupCoin,
     path: AssembledPath,
     secrets: GroupSpendSecrets,
     pseudo_out_blind: Zeroizing<[u8; 32]>,
@@ -158,12 +137,12 @@ impl InputContext {
     /// The input's key image.
     #[must_use]
     pub fn key_image(&self) -> KeyImage {
-        self.record.key_image
+        *self.coin.key_image()
     }
 
     /// The committed form the spent output's leaf binds.
     pub(crate) fn committed_form(&self) -> &MultisigCommittedForm {
-        &self.record.committed_form
+        self.coin.committed_form()
     }
 
     /// The input's signing parameters over `signable`. Every signer builds
@@ -175,8 +154,8 @@ impl InputContext {
         SalSigningParams::new(
             &self.rerandomization_seed,
             &SpentOutput {
-                output_key: &self.record.output_key,
-                commitment: &self.record.commitment,
+                output_key: self.coin.output_key(),
+                commitment: self.coin.commitment(),
                 spend_scalar: self.secrets.spend_scalar(),
                 y_kem: self.secrets.y_kem(),
                 commitment_mask: self.secrets.commitment_mask(),
@@ -186,7 +165,7 @@ impl InputContext {
         )
     }
 
-    /// The prover's leaf chunk for this input: the record's public path
+    /// The prover's leaf chunk for this input: the coin's public path
     /// joined to the leaf point and the blind its secrets derive.
     pub(crate) fn leaf_chunk(&self) -> ProveInputLeafChunk {
         let path = &self.path;
@@ -199,7 +178,7 @@ impl InputContext {
                 .collect()
         };
         ProveInputLeafChunk {
-            pqc_leaf_commitment: self.record.leaf_point,
+            pqc_leaf_commitment: *self.coin.leaf_point(),
             pqc_leaf_blind: *self.secrets.leaf_blind(),
             leaf_outputs: path
                 .leaf_chunk()
@@ -223,8 +202,8 @@ impl InputContext {
     pub(crate) fn own_ciphertext(&self, n: u8) -> MemberOwnCiphertext<'_> {
         MemberOwnCiphertext {
             n,
-            own_x25519_ct: &self.record.own_x25519_ct,
-            own_ml_kem_ct: &self.record.own_ml_kem_ct,
+            own_x25519_ct: &self.coin.own_ciphertext().x25519,
+            own_ml_kem_ct: &self.coin.own_ciphertext().ml_kem,
         }
     }
 }
@@ -435,8 +414,8 @@ impl DerivedSpend {
             .zip(blinds)
             .enumerate()
             .map(
-                |(position, ((record, path, secrets), pseudo_out_blind))| InputContext {
-                    record,
+                |(position, ((coin, path, secrets), pseudo_out_blind))| InputContext {
+                    coin,
                     path,
                     secrets,
                     pseudo_out_blind,
@@ -494,31 +473,31 @@ fn spendable(
     global_index: u64,
     amount: AtomicUnits,
     path: AssembledPath,
-) -> Result<(GroupOutputRecord, AssembledPath, GroupSpendSecrets), DeriveError> {
+) -> Result<(GroupCoin, AssembledPath, GroupSpendSecrets), DeriveError> {
     let record = ledger
-        .record(global_index)
+        .coin(global_index)
         .ok_or(DeriveError::MissingInput { global_index })?;
     let secrets =
-        recover_group_spend(key, &record.source()).map_err(|source| DeriveError::Secrets {
+        recover_group_spend(key, &source(&record)).map_err(|source| DeriveError::Secrets {
             global_index,
             source,
         })?;
-    if secrets.key_image() != record.key_image {
+    if secrets.key_image() != *record.key_image() {
         return Err(DeriveError::KeyImage { global_index });
     }
-    if secrets.leaf_point() != &record.leaf_point {
+    if secrets.leaf_point() != record.leaf_point() {
         return Err(DeriveError::Leaf { global_index });
     }
-    let cm_x = PqcLeafScalar::from_commitment_point(&record.leaf_point)
+    let cm_x = PqcLeafScalar::from_commitment_point(record.leaf_point())
         .ok_or(DeriveError::Leaf { global_index })?;
-    if !secrets.commitment_opens(&record.commitment, amount.to_raw()) {
+    if !secrets.commitment_opens(record.commitment(), amount.to_raw()) {
         return Err(DeriveError::InputCommitment { global_index });
     }
     // Consensus does not forbid two leaves with one `(O, C)` in a chunk;
     // `CM.x` names the spent one.
     if !path.leaf_chunk().iter().any(|leaf| {
-        leaf.output_key.to_bytes() == record.output_key
-            && leaf.commitment.to_bytes() == record.commitment
+        leaf.output_key.to_bytes() == *record.output_key()
+            && leaf.commitment.to_bytes() == *record.commitment()
             && leaf.cm_x == cm_x.0
     }) {
         return Err(DeriveError::Path { global_index });

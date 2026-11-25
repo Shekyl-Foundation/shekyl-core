@@ -61,9 +61,9 @@ fn run_child_if_requested() {
 }
 
 /// The test's directory, laid out as an installer lays out a service's.
-fn workdir() -> tempfile::TempDir {
+fn workdir() -> shekyl_os_account::test_fixture::FixtureDir {
     use std::os::unix::fs::DirBuilderExt;
-    let dir = tempfile::tempdir().expect("a directory");
+    let dir = shekyl_os_account::test_fixture::tempdir().expect("a directory");
     std::fs::DirBuilder::new()
         .mode(0o700)
         .create(dir.path().join("shekyl"))
@@ -141,6 +141,78 @@ fn a_refused_service_start_leaves_its_refusal_in_the_log() {
     assert!(
         log.contains(line),
         "the log does not hold the refusal {line:?}\nlog:\n{log}"
+    );
+}
+
+/// A start a store refuses on its file writes none of the daemon's state:
+/// the data directory holds the refused file, unchanged, and the lock the
+/// start took, with no marker, chain store or RPC file beside them. The
+/// refusal is in the log. Red edit: drop `Node::preflight` from the start,
+/// and the marker and the channel's files appear.
+#[test]
+fn a_start_a_store_refuses_leaves_only_its_lock_and_its_log() {
+    const NAME: &str = "a_start_a_store_refuses_leaves_only_its_lock_and_its_log";
+    const POOL_FILE: &str = "pool.db";
+    const FOREIGN: &[u8] = b"these bytes were never a redb database, and are not an empty file";
+    run_child_if_requested();
+    use std::os::unix::fs::DirBuilderExt;
+    let dir = workdir();
+    let data = dir.path().join("data");
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&data)
+        .expect("the data directory");
+    std::fs::write(data.join(POOL_FILE), FOREIGN).expect("the foreign pool file");
+    let socket_dir = dir.path().join("socket");
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&socket_dir)
+        .expect("the socket directory");
+
+    let (code, stderr, log) = run(
+        NAME,
+        dir.path(),
+        &[
+            "--data-dir",
+            data.to_str().expect("a UTF-8 path"),
+            "--rpc-socket-dir",
+            socket_dir.to_str().expect("a UTF-8 path"),
+        ],
+    );
+    assert_ne!(code, 0, "the start was refused\nstderr:\n{stderr}");
+    let expected = "the node did not start";
+    assert!(stderr.contains(expected), "stderr:\n{stderr}");
+    let log = log.unwrap_or_else(|| panic!("no log file\nstderr:\n{stderr}"));
+    assert!(log.contains(expected), "log:\n{log}");
+
+    let mut entries: Vec<String> = std::fs::read_dir(&data)
+        .expect("the data directory")
+        .map(|entry| {
+            entry
+                .expect("an entry")
+                .file_name()
+                .into_string()
+                .expect("UTF-8")
+        })
+        .collect();
+    entries.sort();
+    let mut allowed = vec![
+        shekyl_daemon_config::lock::LOCK_FILE.to_owned(),
+        POOL_FILE.to_owned(),
+    ];
+    allowed.sort();
+    assert_eq!(entries, allowed, "stderr:\n{stderr}");
+    assert_eq!(
+        std::fs::read(data.join(POOL_FILE)).expect("the pool file"),
+        FOREIGN,
+        "the refused file was written"
+    );
+    assert_eq!(
+        std::fs::read_dir(&socket_dir)
+            .expect("the socket directory")
+            .count(),
+        0,
+        "a refused start bound its socket"
     );
 }
 

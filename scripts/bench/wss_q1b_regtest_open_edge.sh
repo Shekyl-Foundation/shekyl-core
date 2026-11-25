@@ -21,7 +21,10 @@ SCRATCH="${SCRATCH:-${TMPDIR:-/tmp}/wss-q1b}"
 mkdir -p "$SCRATCH"
 BIN="${SHEKYLD_BIN:-$WT/build/bin/shekyld}"
 PORT="${PORT:-28591}"
-DATA="${DATA:-${TMPDIR:-/tmp}/skl-oe-run}"
+# Under the account's home: the daemon refuses a data directory under a
+# directory another account can write, /tmp included.
+DATA="${DATA:-$HOME/.shekyl-test/$$-oe-run}"
+mkdir -p -m 0700 "$(dirname "$DATA")"
 ADDR="${1:?usage: wss_q1b_regtest_open_edge.sh <mining-address> [blocks]}"
 BLOCKS="${2:-40}"
 # The sample is derived from what was mined, not fixed: the fetch used to start
@@ -34,7 +37,8 @@ if [ "$BLOCKS" -lt 2 ]; then
   echo "blocks must be at least 2 (one genesis, one sampled); got $BLOCKS"; exit 7
 fi
 
-rm -rf "$DATA"; mkdir -p "$DATA"
+# Owner-only: the daemon refuses an existing data directory others can enter.
+rm -rf "$DATA"; mkdir -p -m 0700 "$DATA"
 # The daemon exits on stdin EOF (its own log says so: "EOF on stdin, exiting"),
 # which is why the Rust harness gives it a piped stdin and holds the handle.
 # Nothing reads the daemon's stdin without `--console`, so a closed stdin

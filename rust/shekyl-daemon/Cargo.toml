@@ -63,6 +63,8 @@ tracing = "0.1"
 shekyl-win-sec = { path = "../shekyl-win-sec" }
 
 [dev-dependencies]
+# A test's data directory, where the daemon's real check passes it.
+shekyl-os-account = { path = "../shekyl-os-account", features = ["test-fixture"] }
 tempfile = "3"
 # The owning connection's tests (tests/owning_connection.rs) call the
 # daemon as a GUI does: "this computer"'s client on the owner's leg, the

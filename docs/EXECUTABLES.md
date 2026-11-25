@@ -1,7 +1,7 @@
 # Shekyl Executables
 
 This document describes every binary produced by a Shekyl build.
-All binaries are placed in `build/release/bin/` (or `build/debug/bin/`).
+`cargo xtask build` stages them in `build/bin/`.
 
 ## Quick reference
 
@@ -10,9 +10,7 @@ All binaries are placed in `build/release/bin/` (or `build/debug/bin/`).
 | `shekyld` | Full-node daemon (P2P, consensus, RPC) |
 | `shekyl-cli` | Interactive command-line wallet (Rust) |
 | `shekyl-wallet-rpc` | Headless wallet exposed via JSON-RPC |
-| `shekyl-utils-deserialize` | Decode hex blobs to human-readable JSON |
-
-The `shekyl-utils-*` executables are only built when `BUILD_DEBUG_UTILITIES=ON`.
+| `shekyl-rpc-tunnel` | Reaches a daemon's RPC channel from another host (`docs/design/RPC_CHANNEL.md` §8) |
 
 ---
 
@@ -380,21 +378,6 @@ shekyl-wallet-rpc --wallet-dir ~/wallets \
                   --rpc-bind 192.168.1.20:29500 \
                   --rpc-login user:password
 ```
-
-## 4. Debug Utilities
-
-Built only when `BUILD_DEBUG_UTILITIES=ON` is set at CMake configure time.
-
-### `shekyl-utils-deserialize`
-
-Decodes a hex-encoded block, transaction, or `tx_extra` blob into
-human-readable JSON.
-
-```bash
-shekyl-utils-deserialize --input <hex-string>
-```
-
----
 
 ## Common options
 

@@ -13,7 +13,7 @@ use super::task::{
     spawn_serving_task, ServingConfig, CLAIM_SOURCE_TIMEOUT, SERVING_MAX_STREAMS,
     SERVING_VIRTUAL_PORT,
 };
-use super::tor_config::{tor_service_config, TorConfigError};
+use super::tor_config::{tor_service_config, TorConfigError, TorFile};
 use super::ServingHandle;
 
 /// Why a staker's serving host could not be started.
@@ -124,7 +124,7 @@ where
     /// # No filesystem I/O under the engine lock
     ///
     /// The read borrow clones spawn inputs (stake handle, curve-tree handle,
-    /// wallet path, device prefs). Directory creation and the loopback
+    /// wallet path). Directory creation and the loopback
     /// transport constructor run after the lock is released — the same
     /// discipline [`start_pscan`](Self::start_pscan) documents.
     ///
@@ -138,15 +138,19 @@ where
     /// the embedder's open-time start and the cadence driver's
     /// serving-liveness leg, and losing it means the other starter won — one
     /// host is up either way.
+    ///
+    /// `tor_file` is the serving host's `tor-file` option, resolved when the
+    /// host read its options ([`TorFile`]).
     pub async fn start_serving_if_staker(
         self_arc: std::sync::Arc<tokio::sync::RwLock<Self>>,
         daemon: &shekyl_rpc_transport::DaemonTarget,
+        tor_file: &TorFile,
     ) -> Result<Option<ServingHandle>, ServingStartError> {
         // Brief read borrow: clone the spawn inputs. Filesystem work stays
         // outside this lock — `tor_service_config` creates and chmods a
         // directory, and holding the engine `RwLock` across that would stall
         // every other reader on disk.
-        let (stake, curve_tree, base_path, device, synced_height) = {
+        let (stake, curve_tree, base_path, synced_height) = {
             let g = self_arc.read().await;
             let stake = match g.stake_handle() {
                 Some(stake) => stake,
@@ -162,12 +166,11 @@ where
                 stake,
                 g.curve_tree.clone(),
                 g.persistence().base_path().to_path_buf(),
-                g.prefs().device.clone(),
                 synced_height,
             )
         };
 
-        let tor = tor_service_config(&base_path, &device).map_err(ServingStartError::TorConfig)?;
+        let tor = tor_service_config(&base_path, tor_file).map_err(ServingStartError::TorConfig)?;
 
         let Some(active) = stake
             .active_persona()
@@ -322,6 +325,7 @@ mod tests {
         let started = Engine::<SoloSigner>::start_serving_if_staker(
             arc.clone(),
             &shekyl_rpc_transport::DaemonTarget::address("http://127.0.0.1:1"),
+            &TorFile::discover(),
         )
         .await
         .expect("non-staker auto-start must not error");
@@ -339,6 +343,7 @@ mod tests {
         let started = Engine::<SoloSigner>::start_serving_if_staker(
             arc.clone(),
             &shekyl_rpc_transport::DaemonTarget::address("http://127.0.0.1:1"),
+            &TorFile::discover(),
         )
         .await
         .expect("idle staker is Ok(None), not an error");
@@ -360,6 +365,7 @@ mod tests {
         let Err(err) = Engine::<SoloSigner>::start_serving_if_staker(
             arc.clone(),
             &shekyl_rpc_transport::DaemonTarget::address("http://example.com:18081"),
+            &TorFile::discover(),
         )
         .await
         else {
@@ -390,6 +396,7 @@ mod tests {
         let first = Engine::<SoloSigner>::start_serving_if_staker(
             arc.clone(),
             &shekyl_rpc_transport::DaemonTarget::address("http://127.0.0.1:1"),
+            &TorFile::discover(),
         )
         .await
         .expect("first start")
@@ -399,6 +406,7 @@ mod tests {
         match Engine::<SoloSigner>::start_serving_if_staker(
             arc.clone(),
             &shekyl_rpc_transport::DaemonTarget::address("http://127.0.0.1:1"),
+            &TorFile::discover(),
         )
         .await
         {
