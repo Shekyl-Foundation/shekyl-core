@@ -209,22 +209,24 @@ fn send_lifecycle_errors_are_typed_end_to_end() {
 /// terminal or a pipe.
 #[test]
 fn scripted_create_writes_seed_file_and_restore_round_trips() {
-    use shekyl_cli::commands::scripted::{run_create, run_restore, CreateArgs, RestoreArgs};
+    use shekyl_cli::commands::scripted::{run_create, run_restore, PasswordSource};
+    use shekyl_cli::outcome::{Presentation, Render, Transcript};
 
     let dir = tempfile::tempdir().expect("tempdir");
     let rpc = host(dir.path());
 
     let seed_out = dir.path().join("seed.txt");
     let pw_file = dir.path().join("pw");
-    std::fs::write(&pw_file, "s3cret\n").expect("write password file");
-
-    let create = CreateArgs {
-        name: "orig".into(),
-        seed_out: seed_out.clone(),
-        password_file: Some(pw_file.clone()),
-        password_stdin: false,
+    shekyl_os_account::private_file::write_private(&pw_file, b"s3cret\n")
+        .expect("write password file");
+    let source = PasswordSource::File(pw_file.clone());
+    let scripted = Presentation {
+        transcript: Transcript::Scripted,
+        render: Render::Human,
+        debug: false,
     };
-    run_create(&rpc, &create).expect("scripted create");
+
+    run_create(&rpc, &scripted, Some(&source), "orig", &seed_out).expect("scripted create");
 
     // Seed written owner-only and non-empty; the seed never reached stdout.
     // The Unix half is a mode; the Windows half is a DACL set at creation,
@@ -248,30 +250,23 @@ fn scripted_create_writes_seed_file_and_restore_round_trips() {
         "seed file must hold the backup"
     );
 
-    // O_EXCL: refuse to overwrite an existing seed-out path (the check runs
-    // before create_wallet, so nothing is created on this refusal).
-    let clobber = CreateArgs {
-        name: "orig2".into(),
-        seed_out: seed_out.clone(),
-        password_file: Some(pw_file.clone()),
-        password_stdin: false,
-    };
-    run_create(&rpc, &clobber).expect_err("must refuse to overwrite an existing seed file");
-
     let orig_addr = rpc.call("get_primary_address", json!({})).expect("address")["address"]
         .as_str()
         .expect("address string")
         .to_owned();
     rpc.call("close_wallet", json!({})).expect("close");
+    rpc.set_closed();
 
-    let restore = RestoreArgs {
-        name: "rest".into(),
-        seed_file: seed_out.clone(),
-        restore_height: None,
-        password_file: Some(pw_file.clone()),
-        password_stdin: false,
-    };
-    run_restore(&rpc, &restore).expect("scripted restore");
+    // O_EXCL: refuse to overwrite an existing file (the check runs before
+    // create_wallet, so nothing is created on this refusal).
+    let clobbered = run_create(&rpc, &scripted, Some(&source), "orig2", &seed_out)
+        .expect_err("must refuse to overwrite an existing seed file");
+    assert!(
+        format!("{clobbered:?}").contains("must not already exist"),
+        "{clobbered:?}"
+    );
+
+    run_restore(&rpc, &scripted, Some(&source), "rest", &seed_out, None).expect("scripted restore");
 
     let rest_addr = rpc.call("get_primary_address", json!({})).expect("address")["address"]
         .as_str()
@@ -283,6 +278,7 @@ fn scripted_create_writes_seed_file_and_restore_round_trips() {
     );
 
     rpc.call("close_wallet", json!({})).expect("close");
+    rpc.set_closed();
     assert_eq!(rpc.shutdown(), WalletClose::NotOpen);
 }
 
@@ -297,7 +293,8 @@ fn scripted_create_writes_seed_file_and_restore_round_trips() {
 /// reserved fails the seed file's open.
 #[test]
 fn the_wallet_dir_is_made_only_to_make_a_wallet() {
-    use shekyl_cli::commands::scripted::{run_create, CreateArgs};
+    use shekyl_cli::commands::scripted::{run_create, PasswordSource};
+    use shekyl_cli::outcome::{Presentation, Render, Transcript};
 
     let dir = tempfile::tempdir().expect("tempdir");
     let wallets = dir.path().join("wallets").join("stagenet");
@@ -309,17 +306,25 @@ fn the_wallet_dir_is_made_only_to_make_a_wallet() {
     );
 
     let pw_file = dir.path().join("pw");
-    std::fs::write(&pw_file, "s3cret\n").expect("write password file");
-    let create = CreateArgs {
-        name: "made".into(),
-        seed_out: wallets.join("seed.txt"),
-        password_file: Some(pw_file),
-        password_stdin: false,
+    shekyl_os_account::private_file::write_private(&pw_file, b"s3cret\n")
+        .expect("write password file");
+    let scripted = Presentation {
+        transcript: Transcript::Scripted,
+        render: Render::Human,
+        debug: false,
     };
-    run_create(&rpc, &create).expect("scripted create makes its folder");
+    run_create(
+        &rpc,
+        &scripted,
+        Some(&PasswordSource::File(pw_file)),
+        "made",
+        &wallets.join("seed.txt"),
+    )
+    .expect("scripted create makes its folder");
     assert!(wallets.is_dir(), "a create makes the wallet folder");
 
     rpc.call("close_wallet", json!({})).expect("close");
+    rpc.set_closed();
     assert_eq!(rpc.shutdown(), WalletClose::NotOpen);
 }
 

@@ -87,14 +87,6 @@ pub struct Remote {
     pub bundle_file: PathBuf,
 }
 
-/// The channel address an enrollment needs when `daemon-bundle-file` is set.
-///
-/// The CLI's daemon address otherwise defaults to the plaintext RPC port.
-/// `rpc-listen` has no default port, so that default is not a channel.
-pub const CHANNEL_ADDRESS_REQUIRED: &str = "This command reaches the node over its channel, so it \
-     needs the channel's address (--daemon-address): an IP and a port, or an onion and a port. \
-     The usual daemon port is the plaintext listener, which is not the channel.";
-
 /// This client's key file when `--rpc-key-file` is unset: the account root
 /// and `rpc-shekyl-cli-<network>.key` (IG-Q108). The root is the daemon's
 /// (`paths::root`), not a home directory joined by hand.
@@ -108,45 +100,33 @@ fn default_key_file(network: Network) -> Result<PathBuf, String> {
     Ok(root.join(format!("rpc-shekyl-cli-{}.key", network.name())))
 }
 
-/// The channel leg for an enrollment on another host.
-///
-/// `address` is a peer-endpoint and `proxy`, when set, an endpoint: the
-/// kinds `daemon-endpoint` and `daemon-socks` have. A URL, a hostname, or
-/// an onion without a proxy is refused with that kind's diagnostic.
+/// The channel leg to a node at `peer`, through `socks` when set: an IP
+/// directly or through the proxy, an onion only through it.
 ///
 /// # Errors
 ///
-/// The value is not the kind, or the onion has no proxy.
-pub fn channel_leg(address: &str, proxy: Option<&str>) -> Result<Leg, String> {
-    use shekyl_options::{EndpointRule, Kind, PeerEndpoint, PeerRule, Source, Value};
-    let peer = Kind::PeerEndpoint(PeerRule::Any)
-        .parse_text(address)
-        .map_err(|fault| fault.at("--daemon-address", Source::Cli).render())?;
-    let proxy = match proxy {
-        None => None,
-        Some(text) => match Kind::Endpoint(EndpointRule::Any)
-            .parse_text(text)
-            .map_err(|fault| fault.at("--proxy", Source::Cli).render())?
-        {
-            Value::Endpoint(addr) => Some(addr),
-            _ => unreachable!("an endpoint kind produces an endpoint"),
-        },
-    };
+/// An onion with no proxy.
+pub fn channel_leg(
+    peer: &shekyl_options::PeerEndpoint,
+    socks: Option<std::net::SocketAddr>,
+) -> Result<Leg, shekyl_options::Diagnostic> {
+    use shekyl_options::PeerEndpoint;
     match peer {
-        Value::Peer(PeerEndpoint::Ip(addr)) => Ok(Leg::ip(addr, proxy)),
-        Value::Peer(PeerEndpoint::Onion { host, port }) => {
-            let Some(proxy) = proxy else {
+        PeerEndpoint::Ip(addr) => Ok(Leg::ip(*addr, socks)),
+        PeerEndpoint::Onion { host, port } => {
+            let Some(proxy) = socks else {
                 return Err(shekyl_options::Diagnostic::new(
                     shekyl_options::Code::ValueRequires,
                     shekyl_options::Source::Cli,
                 )
-                .option("--daemon-address")
-                .param("requires", "--proxy, an IP and a port, to reach an onion")
-                .render());
+                .option("daemon-endpoint")
+                .param(
+                    "requires",
+                    "daemon-socks, an IP and a port, to reach an onion",
+                ));
             };
-            Ok(Leg::onion(host, port, proxy))
+            Ok(Leg::onion(host.clone(), *port, proxy))
         }
-        _ => unreachable!("a peer-endpoint kind produces a peer"),
     }
 }
 
@@ -276,24 +256,29 @@ fn key_show(path: &Path) -> Result<String, String> {
 mod tests {
     use super::*;
 
-    /// The channel leg is a peer-endpoint. A URL and a hostname are refused
-    /// by that kind, and an onion without a proxy is refused. Red edit:
-    /// strip `://` and a trailing slash in `channel_leg`, and the URL is
-    /// dialed.
+    /// An IP goes directly or through the proxy, and an onion only through
+    /// it. The kinds refuse a URL or a hostname before this is reached. Red
+    /// edit: make the onion arm dial with no proxy, and `missing` is `Ok`.
     #[test]
-    fn the_channel_leg_is_a_peer_endpoint() {
-        let ip = channel_leg("203.0.113.5:29501", None).expect("an address");
-        assert!(matches!(ip, Leg::Ip { proxy: None, .. }));
-        let proxied =
-            channel_leg("203.0.113.5:29501", Some("127.0.0.1:9050")).expect("through a proxy");
-        assert!(matches!(proxied, Leg::Ip { proxy: Some(_), .. }));
-        assert!(channel_leg("http://203.0.113.5:29501/json_rpc", None).is_err());
-        assert!(channel_leg("node.example:29501", None).is_err());
-        assert!(channel_leg("socks5h://127.0.0.1:9050", None).is_err());
-        let onion = "gj56z5xbxm7mi6iucpe3apa3raxkkiwub4vbc2who5sm6slpzikuqiyd.onion:14021";
-        let missing = channel_leg(onion, None).expect_err("an onion needs a proxy");
-        assert!(missing.contains("proxy"), "{missing}");
-        assert!(channel_leg(onion, Some("not-an-endpoint")).is_err());
-        assert!(channel_leg(onion, Some("127.0.0.1:9050")).is_ok());
+    fn the_channel_leg_needs_a_proxy_for_an_onion() {
+        use shekyl_options::PeerEndpoint;
+        let addr = "203.0.113.5:29501".parse().expect("an address");
+        let socks: std::net::SocketAddr = "127.0.0.1:9050".parse().expect("a proxy");
+        let ip = PeerEndpoint::Ip(addr);
+        assert!(matches!(
+            channel_leg(&ip, None),
+            Ok(Leg::Ip { proxy: None, .. })
+        ));
+        assert!(matches!(
+            channel_leg(&ip, Some(socks)),
+            Ok(Leg::Ip { proxy: Some(_), .. })
+        ));
+        let onion = PeerEndpoint::Onion {
+            host: "gj56z5xbxm7mi6iucpe3apa3raxkkiwub4vbc2who5sm6slpzikuqiyd.onion".to_owned(),
+            port: 14021,
+        };
+        let missing = channel_leg(&onion, None).expect_err("an onion needs a proxy");
+        assert!(missing.render().contains("daemon-socks"));
+        assert!(channel_leg(&onion, Some(socks)).is_ok());
     }
 }

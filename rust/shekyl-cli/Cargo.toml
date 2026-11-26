@@ -27,7 +27,7 @@ shekyl-version = { path = "../shekyl-version" }
 # the wallet RPC (SV-D).
 shekyl-shard-visual = { path = "../shekyl-shard-visual" }
 # The outbound-endpoint disclosure (`network_posture`) and the host extractor
-# `--rpc-url` validation shares with it; already in this binary's graph
+# `wallet-rpc-endpoint` validation shares with it; already in this binary's graph
 # through shekyl-wallet-rpc.
 shekyl-rpc-transport = { path = "../shekyl-rpc-transport" }
 # `SyncDaemon`'s error. The shell reads a connection failure from it.
@@ -51,7 +51,6 @@ shekyl-os-account = { path = "../shekyl-os-account" }
 # (`paths::wallet_dir_in`), named once beside the wallet files it holds.
 shekyl-engine-file = { path = "../shekyl-engine-file" }
 shekyl-rpc-rendezvous = { path = "../shekyl-rpc-rendezvous" }
-clap = { version = "4", features = ["derive"] }
 rustyline = "15"
 tokio = { version = "1", features = ["full"] }
 # Derives the request shapes in `rpc_client::params`, whose borrowed `&str`

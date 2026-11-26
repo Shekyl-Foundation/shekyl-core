@@ -11,7 +11,7 @@
 //!
 //! This module lives in the transport crate, next to the endpoint parser it
 //! classifies for, so that `shekyl-cli` and `shekyl-wallet-rpc` disclose the
-//! same `--daemon-address` in the same words: the outbound twin of
+//! same `daemon-endpoint` in the same words: the outbound twin of
 //! [`crate::listen`], which serves both binaries' listen addresses. It is
 //! pure — every function returns the text to emit, and each binary says it
 //! in its own voice (the CLI to stderr, the server through `tracing`).
@@ -44,7 +44,7 @@
 //!   daemons and read correctly by the operator of their own remote node
 //!   (the supported case): it is discouragement where it is consumed, not a
 //!   grade. A proxy hides the *path*; it cannot hide the wallet from the
-//!   daemon it is talking to, which is why this warning ignores `--proxy`.
+//!   daemon it is talking to, which is why this warning ignores `daemon-socks`.
 //! - **No configuration ever draws an assurance.** This is the load-bearing
 //!   half. A positive "your connection is private" claim derived from an
 //!   endpoint check asserts a property the check cannot measure: the check sees
@@ -80,7 +80,7 @@ pub enum ProxyResolution {
     /// The transport honors the proxy URL's scheme: `socks5://` / `socks4://`
     /// resolve the endpoint hostname at the local resolver (the leak),
     /// `socks5h://` / `socks4a://` at the proxy. The ureq clients — the
-    /// `--rpc-url` session and the REPL's direct daemon client — are this.
+    /// `wallet-rpc-endpoint` session and the REPL's direct daemon client — are this.
     HonorsScheme,
     /// The transport hands the hostname to the proxy regardless of scheme
     /// (SOCKS5h semantics always), so there is no local lookup to disclose.
@@ -117,7 +117,7 @@ pub enum Exposure {
 /// `rsplit_once(':')` on `[::1]:11028` yields `[::1]` (fine) but on a bare
 /// `::1` yields `::` — silently misclassifying a loopback address as remote.
 ///
-/// Public because `rpc_client`'s `--rpc-url` acceptance check uses the *same*
+/// Public because `rpc_client`'s `wallet-rpc-endpoint` acceptance check uses the *same*
 /// extractor: a hostless `http://` must be rejected there rather than reaching
 /// this module and producing a warning about an empty host. Two parsers could
 /// disagree about what a host is; one cannot.
@@ -217,7 +217,7 @@ pub fn classify(endpoint: &str, proxy: Option<&str>) -> Exposure {
 }
 
 /// The warning text for a clear-network endpoint whose connection **can** be
-/// proxied (the `--rpc-url` client and the REPL's direct daemon client); it
+/// proxied (the `wallet-rpc-endpoint` client and the REPL's direct daemon client); it
 /// therefore fires only when no proxy is configured. `label` names which
 /// endpoint (so an operator with several configured knows which one to fix).
 ///
@@ -228,14 +228,14 @@ pub fn classify(endpoint: &str, proxy: Option<&str>) -> Exposure {
 #[must_use]
 pub fn warning_for(label: &str, host: &str) -> String {
     // Endpoint-neutral wording: this text serves both the wallet-RPC endpoint
-    // (`--rpc-url`) and the REPL's direct daemon client, so it must not say
+    // (`wallet-rpc-endpoint`) and the REPL's direct daemon client, so it must not say
     // "node" — `label` already names which endpoint is being reported.
     format!(
         "Warning: {label} '{host}' is not loopback and no proxy is configured. \
          An observer on the network path can see that you connect to a remote \
          endpoint — that you run a Shekyl wallet, and when it is active — which \
          holds regardless of who operates the far end and even if the link is \
-         encrypted. Route it through a proxy (--proxy), or point it at an \
+         encrypted. Route it through a proxy (daemon-socks), or point it at an \
          endpoint on this machine."
     )
 }
@@ -267,7 +267,7 @@ fn proxy_resolves_locally(proxy: &str) -> bool {
 pub fn warning_for_dns_leak(label: &str, host: &str, proxy: &str) -> String {
     let scheme = proxy.split("://").next().unwrap_or_default();
     format!(
-        "Warning: --proxy uses '{scheme}://', which resolves target hostnames \
+        "Warning: daemon-socks uses '{scheme}://', which resolves target hostnames \
          locally, so connecting to {label} '{host}' leaks that hostname to your \
          system resolver in cleartext before the proxy is involved — defeating \
          much of what the proxy is for. (A .onion address cannot be resolved \
@@ -337,7 +337,7 @@ fn path_warning(
 /// reverse proxy on this host at a LAN address falsifies the former, and
 /// who controls the daemon is exactly what an address cannot say. The
 /// operator of their own remote node reads it as true of themselves, which
-/// is why it names the supported case instead of instructing; `--proxy`
+/// is why it names the supported case instead of instructing; `daemon-socks`
 /// does not silence it because a proxy hides the path, not the wallet from
 /// its daemon. It is end-user text (rule 80): no design-document citation —
 /// the docs carry the pointer.
@@ -386,7 +386,7 @@ impl IntoIterator for DaemonDisclosures {
 
 /// The [`DaemonDisclosures`] for a **daemon** endpoint, from one
 /// classification. Daemon-only by design: the wallet-RPC endpoint
-/// (`--rpc-url`) has a different far end and takes [`disclose`] alone.
+/// (`wallet-rpc-endpoint`) has a different far end and takes [`disclose`] alone.
 #[must_use]
 pub fn daemon_disclosures(
     label: &str,
@@ -774,7 +774,7 @@ mod tests {
         );
     }
 
-    /// The self-hosted daemon scan now honors --proxy (SOCKS5h), so it is
+    /// The self-hosted daemon scan now honors daemon-socks (SOCKS5h), so it is
     /// disclosed via `disclose` like every other daemon connection — there is
     /// no longer an "unproxyable" path. A non-loopback daemon with no proxy
     /// warns; a remote-resolving proxy silences it.

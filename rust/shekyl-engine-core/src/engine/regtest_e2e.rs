@@ -1510,17 +1510,25 @@ impl RegtestDaemon {
                  beside SHEKYLD_BIN"
             );
         });
+        // Named and empty, so a file in the account's real root never
+        // reaches the run. It sits in the fixture, below no directory another
+        // account can write, as the load requires.
+        let config_dir = shekyl_os_account::test_fixture::tempdir().expect("a fixture directory");
+        let config = config_dir.path().join("cli.toml");
+        shekyl_os_account::private_file::write_private(&config, b"").expect("the config file");
         let mut cmd = std::process::Command::new(bin);
-        cmd.args([
-            "--daemon-address",
-            &format!("http://127.0.0.1:{}", self.rpc_port),
-            "--network",
-            network,
-        ])
-        .args(command.split_whitespace())
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
+        cmd.arg("--config-file")
+            .arg(&config)
+            .args([
+                "--daemon-endpoint",
+                &format!("127.0.0.1:{}", self.rpc_port),
+                "--network",
+                network,
+            ])
+            .args(command.split_whitespace())
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
         let child = shekyl_spawn::spawn_lock::spawn(&mut cmd).expect("spawn shekyl-cli");
         let output = child.wait_with_output().expect("wait for shekyl-cli");
         let mut text = String::from_utf8_lossy(&output.stdout).into_owned();

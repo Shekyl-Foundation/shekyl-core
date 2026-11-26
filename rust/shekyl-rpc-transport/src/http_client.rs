@@ -70,7 +70,7 @@ impl std::error::Error for SocksTunnel {}
 /// Errors constructing or using the client.
 #[derive(Debug)]
 pub(crate) enum HttpError {
-    /// The `--proxy` value was not a usable SOCKS5 `host:port`.
+    /// The `daemon-socks` value was not a usable SOCKS5 `host:port`.
     InvalidProxy(String),
     /// The TLS connector could not be built (no roots available).
     Tls(String),
@@ -85,7 +85,7 @@ impl HttpError {
     pub(crate) fn fault(self) -> crate::TransportFault {
         match self {
             Self::InvalidProxy(detail) => crate::TransportFault::Proxy(format!(
-                "invalid --proxy for the daemon transport: {detail}"
+                "invalid daemon-socks for the daemon transport: {detail}"
             )),
             Self::Tls(detail) => {
                 crate::TransportFault::Tls(format!("TLS connector unavailable: {detail}"))
@@ -100,7 +100,7 @@ impl std::fmt::Display for HttpError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::InvalidProxy(detail) => {
-                write!(f, "invalid --proxy for the daemon transport: {detail}")
+                write!(f, "invalid daemon-socks for the daemon transport: {detail}")
             }
             Self::Tls(detail) => write!(f, "TLS connector unavailable: {detail}"),
             Self::ProxyTunnel(detail) | Self::Request(detail) => write!(f, "{detail}"),

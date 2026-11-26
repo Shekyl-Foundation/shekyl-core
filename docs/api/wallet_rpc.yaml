@@ -603,7 +603,12 @@ info:
   # user can act on) where they returned -32603. One failure has one name:
   # wire-encode is retired, and a final encoding refused on any path is the
   # builder's wire. api_version stays 1.
-  version: 0.24.0
+  # 0.25.0: create, restore and open gain -29018
+  # DERIVATION_SELF_CHECK_FAILED (Rick, 2026-11-23). The wallet checks its
+  # own address-derivation corpus before it derives anything, and refuses
+  # when the check fails, naming the build's platform in data.platform.
+  # api_version stays 1.
+  version: 0.25.0
   description: >
     JSON-RPC 2.0 interface served by `shekyl-wallet-rpc` (Phase 4 of the
     wallet rewrite; replaces the C++ `wallet_rpc_server`). One wallet-bearing
@@ -900,6 +905,7 @@ components:
         - -29015   # CURVE_TREE_UNAVAILABLE
         - -29016   # CURVE_TREE_STORE_UNUSABLE
         - -29017   # RANDOM_SOURCE_CHECK_FAILED
+        - -29018   # DERIVATION_SELF_CHECK_FAILED
         - -29100   # INVALID_RECIPIENT
         - -29101   # INSUFFICIENT_FUNDS
         - -29102   # FEE_ESTIMATION_FAILED
@@ -1101,6 +1107,13 @@ components:
                                           means this computer — open the
                                           wallet on another. The grade stays
                                           in the server log
+          -29018 DERIVATION_SELF_CHECK_FAILED create, restore, open: this
+                                          binary failed its address-derivation
+                                          self-check, so it derived no keys
+                                          and changed no file. The wallet and
+                                          its seed are not at fault: install
+                                          the release for data.platform
+                                          (<os> <arch>) again
 
           -29100 INVALID_RECIPIENT        build/proofs: the address is not
                                           one this wallet can pay

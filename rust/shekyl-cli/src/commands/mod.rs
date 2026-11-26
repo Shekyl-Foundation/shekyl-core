@@ -85,7 +85,7 @@ pub enum CommandSource {
     Terminal,
     /// Stdin, one command per line. A pipe, not a conversation.
     Stdin,
-    /// `--script`. The file has already been read.
+    /// `script-file`. The file has already been read.
     File(Vec<String>),
     /// One-shot argv. The shell already split the words.
     One(Vec<String>),
@@ -96,6 +96,7 @@ pub fn run(
     rpc: RpcSession,
     daemon_client: Option<&DaemonClient>,
     enroll: &crate::enroll::EnrollOptions,
+    password: Option<&scripted::PasswordSource>,
     network: Network,
     presentation: Presentation,
     source: CommandSource,
@@ -208,16 +209,28 @@ pub fn run(
             // The seed is shown inside the handler, between the announcement
             // and the return, then wiped. The result carries only the name,
             // so the human formatter has nothing left to print.
-            ResolvedCommand::Create { filename } => present(
+            ResolvedCommand::Create {
+                filename,
+                mnemonic_file: None,
+            } => present(
                 &presentation,
                 "wallet create",
                 lifecycle::cmd_create(&rpc, &presentation, &filename),
                 |_| {},
             ),
+            ResolvedCommand::Create {
+                filename,
+                mnemonic_file: Some(path),
+            } => present(
+                &presentation,
+                "wallet create",
+                scripted::run_create(&rpc, &presentation, password, &filename, &path),
+                scripted::show_created_wallet,
+            ),
             ResolvedCommand::Open { filename } => present(
                 &presentation,
                 "wallet open",
-                lifecycle::cmd_open(&rpc, &presentation, &filename),
+                lifecycle::cmd_open(&rpc, &presentation, password, &filename),
                 lifecycle::show_opened,
             ),
             ResolvedCommand::Close => present(
@@ -228,12 +241,30 @@ pub fn run(
             ),
             ResolvedCommand::Restore {
                 filename,
-                seed_words,
+                mnemonic_file: None,
+                restore_height,
             } => present(
                 &presentation,
                 "wallet restore",
-                lifecycle::cmd_restore(&rpc, &presentation, &filename, &seed_words),
+                lifecycle::cmd_restore(&rpc, &presentation, &filename, restore_height),
                 lifecycle::show_restored,
+            ),
+            ResolvedCommand::Restore {
+                filename,
+                mnemonic_file: Some(path),
+                restore_height,
+            } => present(
+                &presentation,
+                "wallet restore",
+                scripted::run_restore(
+                    &rpc,
+                    &presentation,
+                    password,
+                    &filename,
+                    &path,
+                    restore_height,
+                ),
+                scripted::show_restored_wallet,
             ),
             ResolvedCommand::Refresh => present(
                 &presentation,
@@ -881,7 +912,7 @@ pub fn publish_wallet_open(
     )
 }
 
-/// The hidden `--complete-tree-foundation` stake, through the same printer.
+/// The `archival-complete-tree` stake, through the same printer.
 /// The command name is the flag: it is not a prompt verb.
 pub fn publish_foundation_stake(
     presentation: &Presentation,
@@ -890,7 +921,7 @@ pub fn publish_foundation_stake(
 ) -> bool {
     present(
         presentation,
-        "complete-tree-foundation",
+        "archival-complete-tree",
         staking::post_foundation_stake(rpc, password),
         staking::show_foundation,
     )

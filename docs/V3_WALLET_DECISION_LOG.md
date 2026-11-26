@@ -4472,6 +4472,18 @@ payload_version)`. The pipeline bytes themselves remain frozen as of
 the 2026-06-10 entry; the landed items harden enforcement, not
 definition.
 
+**The operator surface moved (Rick, 2026-11-23).** `shekyl-cli
+derivation-freeze-self-check` is deleted. `wallet create`, `wallet restore`
+and every wallet open now call `address_derivation_manifest_self_check()`
+before any derivation and refuse on failure, naming the binary's platform
+(`-29018 DERIVATION_SELF_CHECK_FAILED`). The ruling set one condition on the
+open path, a cost under about 50 ms on the floor device. Measured on a
+4 GB Raspberry Pi 4 (Cortex-A72, no SHA-2 instructions; a 77,007-byte
+corpus; release build, rustc 1.94.0): 0.619 ms median over repeated calls
+(p99 at most 0.706 ms, maximum 0.883 ms), 0.774 ms median for the first call
+in a fresh process (maximum 0.966 ms), and 1.390 ms median with the page
+cache dropped (maximum 1.538 ms).
+
 **Reference.** `rust/shekyl-crypto-pq/src/account.rs` module docstring
 (authoritative diagram); `docs/WALLET_FILE_FORMAT_V1.md`;
 `docs/design/WALLET_REWRITE_PLAN.md` §"Key signature";

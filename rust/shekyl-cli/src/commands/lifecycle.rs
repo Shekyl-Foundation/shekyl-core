@@ -8,7 +8,6 @@
 
 use crate::outcome::{failed, CommandResult, Presentation};
 use serde_json::{json, Value};
-use zeroize::Zeroizing;
 
 use super::{read_password, require_closed, require_open};
 use crate::rpc_client::{params, RpcError, RpcSession};
@@ -16,7 +15,7 @@ use crate::rpc_client::{params, RpcError, RpcSession};
 const SEED_FILE_HINT: &str = "\
 Refusing to create a wallet whose one-time seed backup cannot be shown here.\n\
 For a script or for JSON output, use:\n  \
-shekyl-cli create <name> --seed-out <path> --password-file <path>";
+shekyl-cli --wallet-password-file <path> wallet create <name> --mnemonic-file <path>";
 
 const SEED_NOT_SHOWN: &str = "\
 The output closed before the seed backup could be shown. \
@@ -28,7 +27,7 @@ pub fn cmd_create(rpc: &RpcSession, presentation: &Presentation, filename: &str)
     // Gate the one-time seed display BEFORE creating anything. The server never
     // re-exposes the seed, so a wallet created here whose backup we then cannot
     // safely show would be permanently unrecoverable. Refuse and create nothing.
-    // The file command is the deliberate path: `create --seed-out`.
+    // The file command is the deliberate path: `--mnemonic-file`.
     if !presentation.shows_seed_on_stdout() {
         return failed(SEED_FILE_HINT);
     }
@@ -99,15 +98,23 @@ pub fn open_with_password(rpc: &RpcSession, filename: &str, password: &str) -> C
     }
 }
 
-pub fn cmd_open(rpc: &RpcSession, presentation: &Presentation, filename: &str) -> CommandResult {
+pub fn cmd_open(
+    rpc: &RpcSession,
+    presentation: &Presentation,
+    source: Option<&super::scripted::PasswordSource>,
+    filename: &str,
+) -> CommandResult {
     require_closed(rpc)?;
-    if !presentation.interactive() {
-        return failed(
-            "A script cannot prompt for a wallet password. \
-             Start with --wallet <name> --password-file <path>.",
-        );
-    }
-    let password = read_password("Wallet password: ")?;
+    let password = match source {
+        Some(source) => source.read()?,
+        None if presentation.interactive() => read_password("Wallet password: ")?,
+        None => {
+            return failed(
+                "A script cannot prompt for a wallet password. \
+                 Set wallet-password-file to a file or stdin.",
+            );
+        }
+    };
     open_with_password(rpc, filename, &password)
 }
 
@@ -135,36 +142,46 @@ pub fn cmd_restore(
     rpc: &RpcSession,
     presentation: &Presentation,
     filename: &str,
-    seed_words: &[String],
+    restore_height: Option<u64>,
 ) -> CommandResult {
     require_closed(rpc)?;
     if !presentation.shows_seed_on_stdout() {
         return failed(
-            "wallet restore here would put the seed on the script or the JSON transcript. \
-             Use: shekyl-cli restore <name> --seed-file <path> --password-file <path>",
+            "wallet restore here cannot ask for the seed. Use: shekyl-cli \
+             --wallet-password-file <path> wallet restore <name> --mnemonic-file <path>",
         );
     }
-    // Seed material: wiped on drop like the password, on every path out of
-    // this function rather than on the paths somebody remembered to annotate.
-    let mnemonic = Zeroizing::new(seed_words.join(" "));
+    // Asked for without echo, so the words reach no line, history or
+    // transcript (IG-Q24). `Zeroizing` wipes them on every path out.
+    let mnemonic = read_password("Seed backup (not shown as you type): ")?;
     let password = read_password("New wallet password: ")?;
-
-    crate::err_inline!(
-        "Restore from block (the first block to scan; 0 = scan from the genesis block): "
-    );
-    drop(std::io::Write::flush(&mut std::io::stderr()));
-    let mut height_input = String::new();
-    if std::io::stdin().read_line(&mut height_input).is_err() {
-        return failed("Failed to read the block to restore from.");
+    let confirm = read_password("Confirm password: ")?;
+    if password != confirm {
+        return failed("Passwords do not match.");
     }
-    let height_input = height_input.trim();
-    let restore_height: u64 = if height_input.is_empty() {
-        0
-    } else {
-        match height_input.parse() {
-            Ok(h) => h,
-            Err(_) => {
-                return failed("Invalid block to restore from: expected a block number.");
+    drop(confirm);
+
+    let restore_height = match restore_height {
+        Some(height) => height,
+        None => {
+            crate::err_inline!(
+                "Restore from block (the first block to scan; 0 = scan from the genesis block): "
+            );
+            drop(std::io::Write::flush(&mut std::io::stderr()));
+            let mut height_input = String::new();
+            if std::io::stdin().read_line(&mut height_input).is_err() {
+                return failed("Failed to read the block to restore from.");
+            }
+            let height_input = height_input.trim();
+            if height_input.is_empty() {
+                0
+            } else {
+                match height_input.parse() {
+                    Ok(h) => h,
+                    Err(_) => {
+                        return failed("Invalid block to restore from: expected a block number.");
+                    }
+                }
             }
         }
     };
@@ -175,7 +192,7 @@ pub fn cmd_restore(
         params::Restore {
             name: filename,
             password: &password,
-            mnemonic: &mnemonic,
+            mnemonic: mnemonic.trim(),
             restore_height,
         },
     );

@@ -5,8 +5,8 @@
 
 //! Configuration types for [`crate::init`].
 //!
-//! A [`Config`] bundles a binary's default filter level, optional file
-//! sink, and rotation policy. Binaries build one via the helper
+//! A [`Config`] bundles a binary's filter, optional file sink, and rotation
+//! policy. Binaries build one via the helper
 //! constructors ([`Config::stderr_only`] and [`Config::with_file_sink`])
 //! or by assembling the struct directly.
 
@@ -177,48 +177,26 @@ impl FileSink {
 /// common shapes.
 #[derive(Debug, Clone)]
 pub struct Config {
-    /// Filter level applied when no `SHEKYL_LOG` env var is set.
-    ///
-    /// An unset `SHEKYL_LOG` at startup produces an explicit bare-level
-    /// directive from this ([`crate::filter::resolve_env_filter`]) instead
-    /// of the "empty directive => no filter" landmine described in the
-    /// crate README.
-    pub fallback_default: Level,
+    /// The filter. It comes from the binary's configuration and never from
+    /// the environment (`INPUT_GRAMMAR.md` IG-13). It is a [`Directive`], so
+    /// a retired target was refused when it was parsed.
+    pub directive: Directive,
 
-    /// Optional file sink.
-    ///
-    /// `None` means stderr-only. This struct is consumed by the Rust
-    /// binary crates that call [`crate::init`] directly:
-    ///
-    /// * `shekyl-cli` — always `None` (stderr-only).
-    /// * `shekyl-wallet-rpc` — `None` by default; populated with
-    ///   `Some(FileSink::unrotated(...))` when the user passes
-    ///   `--log-file <path>`. See `rust/shekyl-wallet-rpc/src/main.rs`
-    ///   for the exact mapping.
-    /// * `shekyld` — the Rust `main()` builds [`FileSink::within_budget`]
-    ///   from the logging section, so the live file and its archives
-    ///   share one byte budget.
+    /// Optional file sink; `None` is stderr only. Every binary builds it
+    /// from its `log-file` and `log-size-max` rows with
+    /// [`FileSink::within_budget`], so the live file and its archives share
+    /// one byte budget. `shekyld` and `shekyl-rpc-tunnel` default to a file;
+    /// `shekyl-cli` and `shekyl-wallet-rpc` write one only when `log-file`
+    /// names it, so nothing about wallet activity lands on disk unasked.
     pub file_sink: Option<FileSink>,
-
-    /// An explicit filter directive. When set, it is the filter and the
-    /// environment is not read: the daemon's configuration owns its filter
-    /// (`INPUT_GRAMMAR.md` IG-13, `log-level` and `log-category`). `None`
-    /// keeps the `SHEKYL_LOG` precedence the wallet binaries use. The
-    /// value is a [`Directive`], so a retired target was refused when the
-    /// directive was parsed.
-    pub directive: Option<Directive>,
 }
 
 impl Config {
-    /// stderr-only, no file sink.
-    ///
-    /// Correct for CLI tools and for wallet-rpc in its
-    /// "no `--log-file` passed" default state.
-    pub fn stderr_only(fallback_default: Level) -> Self {
+    /// stderr only, every target at `level`.
+    pub fn stderr_only(level: Level) -> Self {
         Self {
-            fallback_default,
+            directive: Directive::level(level),
             file_sink: None,
-            directive: None,
         }
     }
 
@@ -226,19 +204,15 @@ impl Config {
     /// [`crate::subsystem::directive`] or its words form.
     #[must_use]
     pub fn with_directive(mut self, directive: Directive) -> Self {
-        self.directive = Some(directive);
+        self.directive = directive;
         self
     }
 
-    /// stderr + rotating file sink.
-    ///
-    /// Correct for daemons whose default is a file on disk. Callers that
-    /// want to honor a user-provided path pass the directory explicitly.
-    pub fn with_file_sink(fallback_default: Level, file_sink: FileSink) -> Self {
+    /// stderr and a file sink, every target at `level`.
+    pub fn with_file_sink(level: Level, file_sink: FileSink) -> Self {
         Self {
-            fallback_default,
+            directive: Directive::level(level),
             file_sink: Some(file_sink),
-            directive: None,
         }
     }
 }

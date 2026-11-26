@@ -146,7 +146,7 @@ returned the answer flagged `untrusted=true`.
 inherited flows that contradict the threat model are migrated, not
 rationalized). The forward inverts Shekyl's daemon posture — own node by
 default; a remote is the *wallet's* explicit, user-visible choice
-(`--daemon-address`, onion). It moved the wallet's most identifying query
+(`--daemon-endpoint`, onion). It moved the wallet's most identifying query
 pattern to a node the user never chose, selected by the daemon from peer
 gossip, over clearnet unless a proxy was also configured, and flagged it with a
 field no wallet in this tree reads. The wallet can already do the honest
@@ -228,7 +228,7 @@ is refused as `OutsideTheGrant` (`-32002`) before its handler runs.
 |---------|--------|
 | Local | The owner's socket or pipe ("this computer": this account's node, the peer checked on every dial), the default for `shekyl-cli` and the wallet. The plaintext listeners (`rpc-admin-listen`, `rpc-view-listen`) bind loopback only: a wildcard or a network bind is refused at the Rust bind seam (RT-1/RT-2). shekyld does **not** register `--rpc-login` or `--rpc-ssl*`. |
 | Remote (your other machine) | The authenticated channel (`rpc-listen`): hybrid post-quantum Noise, enrolled keys only (`rpc client add`); `shekyl-rpc-tunnel` fronts it for a tool that speaks plain HTTP. Still operator-to-operator. |
-| Wallet-RPC | Separate Rust process. `--rpc-login` (HTTP Basic) on loopback; any non-loopback bind requires it and wildcard binds are refused; there is no `--rpc-ssl*` — the encrypted remote leg is pinned mutual TLS (`docs/design/RPC_TRANSPORT_POSTURE.md` RT-4). |
+| Wallet-RPC | Separate Rust process. `rpc-username` and `rpc-password` (HTTP Basic, in its configuration file) on loopback; any non-loopback listen requires them and wildcard binds are refused; there is no `--rpc-ssl*` — the encrypted remote leg is pinned mutual TLS (`docs/design/RPC_TRANSPORT_POSTURE.md` RT-4). |
 | CLI outbound | Daemon commands are `shekyl-cli` words. `shekyld` takes options only; a bare word is refused before it loads. |
 
 **Rule-21 reopen for in-daemon clearnet TLS / digest auth:** named production

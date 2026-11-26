@@ -205,13 +205,7 @@ impl Logging {
     /// refuses anything else, so a built section's words are in that set.
     #[must_use]
     pub fn directive(&self) -> shekyl_logging::filter::Directive {
-        let overrides: Vec<(&str, &str)> = self
-            .categories
-            .iter()
-            .map(|(subsystem, level)| (subsystem.as_str(), *level))
-            .collect();
-        shekyl_logging::subsystem::directive_from_words(self.level, &overrides)
-            .expect("the table admits only level words and subsystem keys")
+        log_directive(self.level, &self.categories)
     }
 
     /// The file sink, sized within the budget by the logging owner.
@@ -227,6 +221,19 @@ impl Logging {
         );
         shekyl_logging::FileSink::within_budget(dir, prefix, self.size_max)
     }
+}
+
+/// The filter for a base level and per-subsystem levels.
+fn log_directive(
+    level: &str,
+    categories: &[(String, &'static str)],
+) -> shekyl_logging::filter::Directive {
+    let overrides: Vec<(&str, &str)> = categories
+        .iter()
+        .map(|(subsystem, level)| (subsystem.as_str(), *level))
+        .collect();
+    shekyl_logging::subsystem::directive_from_words(level, &overrides)
+        .expect("the table admits only level words and subsystem keys")
 }
 
 /// The notify runner's three commands.
@@ -516,6 +523,45 @@ pub fn logging(resolved: &Resolved, file: PathBuf) -> Result<Logging, Vec<Diagno
         return Err(r.faults);
     }
     Ok(logging.expect("the logging rows were read or a fault was recorded"))
+}
+
+/// The logging of a binary that writes a file only when `log-file` names
+/// one (`shekyl-cli` and `shekyl-wallet-rpc`, Rick 2026-11-23): nothing about
+/// a wallet's activity lands on disk unasked. Its rows are the daemon's
+/// kinds. Unnamed, it logs to standard error at the same filter; named, the
+/// file and its archives share the `log-size-max` budget.
+///
+/// # Errors
+/// A logging row absent where the table fills it, or a word outside it.
+pub fn logging_to_named_file(
+    resolved: &Resolved,
+) -> Result<shekyl_logging::Config, Vec<Diagnostic>> {
+    let mut r = Reader::new(resolved);
+    let file = match r.optional_path("log-file") {
+        Read::Present(path) => Some(path),
+        Read::Absent | Read::Unreadable => None,
+    };
+    let words = read_log_words(&mut r);
+    let size_max = r.required_bytes("log-size-max");
+    if !r.faults.is_empty() {
+        return Err(r.faults);
+    }
+    let (level, categories) = words.expect("the logging rows were read or a fault was recorded");
+    let size_max = size_max.expect("the logging rows were read or a fault was recorded");
+    let directive = log_directive(level, &categories);
+    let file_sink = file.map(|file| {
+        Logging {
+            file,
+            level,
+            categories,
+            size_max,
+        }
+        .file_sink()
+    });
+    Ok(shekyl_logging::Config {
+        directive,
+        file_sink,
+    })
 }
 
 /// Installs the logging rows on the live filter.
