@@ -274,18 +274,24 @@ pub fn verify_reserve_proof(
 
     let output_count = u32::from_le_bytes(proof_bytes[65..69].try_into().unwrap()) as usize;
 
+    // The count is refused before the length derived from it. A count that
+    // is not the chain list's length is malformed at any size, and the
+    // length `69 + 192 * count` is only meaningful for the count the caller
+    // handed in. Checking the length first hides that compare until the
+    // input is already that long: a fuzzer that has reached a header-sized
+    // proof then has no edge to follow, and stops.
+    if output_count != on_chain_outputs.len() {
+        return Err(ProofError::InvalidFormat(format!(
+            "proof has {output_count} outputs but {} on-chain outputs provided",
+            on_chain_outputs.len(),
+        )));
+    }
+
     let expected_len = HEADER_SIZE + output_count * PER_OUTPUT_SIZE;
     if proof_bytes.len() != expected_len {
         return Err(ProofError::InvalidFormat(format!(
             "proof length {}, expected {expected_len} for {output_count} outputs",
             proof_bytes.len(),
-        )));
-    }
-
-    if output_count != on_chain_outputs.len() {
-        return Err(ProofError::InvalidFormat(format!(
-            "proof has {output_count} outputs but {} on-chain outputs provided",
-            on_chain_outputs.len(),
         )));
     }
 
@@ -380,4 +386,29 @@ pub fn verify_reserve_proof(
 /// Compute the expected proof size for a reserve proof.
 pub const fn reserve_proof_size(output_count: usize) -> usize {
     HEADER_SIZE + output_count * PER_OUTPUT_SIZE
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_header_whose_count_is_not_the_chain_list_is_refused_for_the_count() {
+        let mut header = vec![0u8; HEADER_SIZE];
+        header[0] = CURRENT_PROOF_VERSION;
+        header[65..69].copy_from_slice(&99u32.to_le_bytes());
+        let on_chain = [ReserveOnChainOutput {
+            output_key: [0u8; 32],
+            commitment: [0u8; 32],
+            enc_amount: [0u8; 8],
+        }];
+        let refused =
+            verify_reserve_proof(&[0u8; 16], &header, b"addr", b"msg", &[0u8; 32], &on_chain)
+                .expect_err("a count that is not the chain list is refused");
+        let text = refused.to_string();
+        assert!(
+            text.contains("on-chain outputs provided"),
+            "the count is refused before the length derived from it, got {text}"
+        );
+    }
 }
