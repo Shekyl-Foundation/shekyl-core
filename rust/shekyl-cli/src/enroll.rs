@@ -100,36 +100,6 @@ fn default_key_file(network: Network) -> Result<PathBuf, String> {
     Ok(root.join(format!("rpc-shekyl-cli-{}.key", network.name())))
 }
 
-/// The channel leg to a node at `peer`, through `socks` when set: an IP
-/// directly or through the proxy, an onion only through it.
-///
-/// # Errors
-///
-/// An onion with no proxy.
-pub fn channel_leg(
-    peer: &shekyl_options::PeerEndpoint,
-    socks: Option<std::net::SocketAddr>,
-) -> Result<Leg, shekyl_options::Diagnostic> {
-    use shekyl_options::PeerEndpoint;
-    match peer {
-        PeerEndpoint::Ip(addr) => Ok(Leg::ip(*addr, socks)),
-        PeerEndpoint::Onion { host, port } => {
-            let Some(proxy) = socks else {
-                return Err(shekyl_options::Diagnostic::new(
-                    shekyl_options::Code::ValueRequires,
-                    shekyl_options::Source::Cli,
-                )
-                .option("daemon-endpoint")
-                .param(
-                    "requires",
-                    "daemon-socks, an IP and a port, to reach an onion",
-                ));
-            };
-            Ok(Leg::onion(host.clone(), *port, proxy))
-        }
-    }
-}
-
 /// Run one word.
 ///
 /// # Errors
@@ -250,35 +220,4 @@ fn key_show(path: &Path) -> Result<String, String> {
                 path.display()
             )
         })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// An IP goes directly or through the proxy, and an onion only through
-    /// it. The kinds refuse a URL or a hostname before this is reached. Red
-    /// edit: make the onion arm dial with no proxy, and `missing` is `Ok`.
-    #[test]
-    fn the_channel_leg_needs_a_proxy_for_an_onion() {
-        use shekyl_options::PeerEndpoint;
-        let addr = "203.0.113.5:29501".parse().expect("an address");
-        let socks: std::net::SocketAddr = "127.0.0.1:9050".parse().expect("a proxy");
-        let ip = PeerEndpoint::Ip(addr);
-        assert!(matches!(
-            channel_leg(&ip, None),
-            Ok(Leg::Ip { proxy: None, .. })
-        ));
-        assert!(matches!(
-            channel_leg(&ip, Some(socks)),
-            Ok(Leg::Ip { proxy: Some(_), .. })
-        ));
-        let onion = PeerEndpoint::Onion {
-            host: "gj56z5xbxm7mi6iucpe3apa3raxkkiwub4vbc2who5sm6slpzikuqiyd.onion".to_owned(),
-            port: 14021,
-        };
-        let missing = channel_leg(&onion, None).expect_err("an onion needs a proxy");
-        assert!(missing.render().contains("daemon-socks"));
-        assert!(channel_leg(&onion, Some(socks)).is_ok());
-    }
 }

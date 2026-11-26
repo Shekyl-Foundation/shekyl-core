@@ -59,6 +59,9 @@ serde_json = { workspace = true }
 # network whose id the name hashes.
 shekyl-rpc-rendezvous = { path = "../shekyl-rpc-rendezvous" }
 shekyl-network = { path = "../shekyl-network" }
+# A grammar peer (`PeerEndpoint`) is the route a client dials. The plaintext
+# HTTP base and the channel leg are both that route (`channel::PeerRoute`).
+shekyl-options = { path = "../shekyl-options" }
 
 # The account's root and, on Unix, the peer's account for the owner's leg's
 # check (`SO_PEERCRED`, `getpeereid`): the leaf with no network stack that

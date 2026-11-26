@@ -480,15 +480,33 @@ fn taken_path(r: &mut Reader<'_>, option: &str) -> PathBuf {
     }
 }
 
-fn logging_section(r: &mut Reader<'_>, file: PathBuf) -> Option<Logging> {
+/// The logging rows, read once: the level, the per-subsystem overrides, and
+/// the byte budget. Both words and the budget are read before either is
+/// required, so one bad row does not hide the other.
+struct LogRead {
+    level: &'static str,
+    categories: Vec<(String, &'static str)>,
+    size_max: u64,
+}
+
+fn read_logging(r: &mut Reader<'_>) -> Option<LogRead> {
     let words = read_log_words(r);
     let size_max = r.required_bytes("log-size-max");
     let (level, categories) = words?;
-    Some(Logging {
-        file,
+    Some(LogRead {
         level,
         categories,
         size_max: size_max?,
+    })
+}
+
+fn logging_section(r: &mut Reader<'_>, file: PathBuf) -> Option<Logging> {
+    let read = read_logging(r)?;
+    Some(Logging {
+        file,
+        level: read.level,
+        categories: read.categories,
+        size_max: read.size_max,
     })
 }
 
@@ -541,20 +559,18 @@ pub fn logging_to_named_file(
         Read::Present(path) => Some(path),
         Read::Absent | Read::Unreadable => None,
     };
-    let words = read_log_words(&mut r);
-    let size_max = r.required_bytes("log-size-max");
+    let read = read_logging(&mut r);
     if !r.faults.is_empty() {
         return Err(r.faults);
     }
-    let (level, categories) = words.expect("the logging rows were read or a fault was recorded");
-    let size_max = size_max.expect("the logging rows were read or a fault was recorded");
-    let directive = log_directive(level, &categories);
+    let read = read.expect("the logging rows were read or a fault was recorded");
+    let directive = log_directive(read.level, &read.categories);
     let file_sink = file.map(|file| {
         Logging {
             file,
-            level,
-            categories,
-            size_max,
+            level: read.level,
+            categories: read.categories,
+            size_max: read.size_max,
         }
         .file_sink()
     });
