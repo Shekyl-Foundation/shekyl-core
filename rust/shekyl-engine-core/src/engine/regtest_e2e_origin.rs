@@ -74,7 +74,7 @@ pub(super) struct StemSinkPair {
 }
 
 /// `tx_list` for one id, as `rpc`'s caller is answered.
-async fn tx_slot(rpc: &HttpRpc, txid: TxHash) -> Slot<wire::tx::TxEntry> {
+async fn tx_slot(rpc: &impl Rpc, txid: TxHash) -> Slot<wire::tx::TxEntry> {
     rpc.call::<wire::TxList>(wire::tx::TxListQuery {
         id: vec![HashHex::from_bytes(txid.to_bytes())],
         prune: true,
@@ -402,7 +402,7 @@ async fn restricted_listener_hides_a_transaction_this_node_has_not_broadcast() {
         "the admin listener reports the session the pair was started with"
     );
 
-    let (wallet, _tmp, address) = mainnet_wallet(origin.rpc_port(), 0x5e).await;
+    let (wallet, _tmp, address) = mainnet_wallet(origin.wallet_rpc(), 0x5e);
     let arc = Arc::new(RwLock::new(wallet));
     mine_until_spendable(origin, &arc, MINE_BATCH_BLOCKS, MAX_MINE_BATCHES).await;
 
@@ -571,7 +571,7 @@ async fn restricted_listener_names_a_transaction_this_node_shows() {
     let restricted = HttpRpc::new(daemon.restricted_url().to_owned())
         .await
         .expect("restricted rpc client");
-    let (wallet, _tmp, address) = mainnet_wallet(daemon.rpc_port(), 0x5f).await;
+    let (wallet, _tmp, address) = mainnet_wallet(daemon.wallet_rpc(), 0x5f);
     let arc = Arc::new(RwLock::new(wallet));
     mine_until_spendable(&daemon, &arc, MINE_BATCH_BLOCKS, MAX_MINE_BATCHES).await;
 

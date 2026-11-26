@@ -396,7 +396,7 @@ impl Draws {
 async fn e2e_complete_tree_bond_fills_serves_pulls_and_reconciles() {
     let seed = [0x5Au8; shekyl_crypto_pq::account::SEED_BYTES];
     let daemon = armed_daemon(&seed).await;
-    let wallet = staker_wallet(daemon.rpc_port, &seed, PSlot::from_raw(SLOT)).await;
+    let wallet = staker_wallet(daemon.wallet_rpc(), &seed, PSlot::from_raw(SLOT)).await;
     let base = wallet.1.path().join("wallet");
     let pscan_seal = shekyl_engine_file::paths::pscan_state_path_from(&base);
 
@@ -572,9 +572,7 @@ async fn e2e_complete_tree_bond_fills_serves_pulls_and_reconciles() {
         .expect("close the staker");
     std::fs::remove_file(shekyl_engine_file::paths::p_store_path_from(&base))
         .expect("delete the persona body store");
-    let rpc = HttpRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port))
-        .await
-        .expect("wallet rpc (reopen)");
+    let rpc = daemon.wallet_rpc();
     let arc: Shared = Arc::new(RwLock::new(
         super::super::Engine::<super::super::SoloSigner>::open_full(
             &base,
@@ -662,7 +660,7 @@ async fn e2e_complete_tree_bond_fills_serves_pulls_and_reconciles() {
 async fn e2e_market_bond_refuses_a_shard_that_is_not_final_then_fills_posts_and_serves() {
     let seed = [0x5Bu8; shekyl_crypto_pq::account::SEED_BYTES];
     let daemon = armed_daemon(&seed).await;
-    let wallet = staker_wallet(daemon.rpc_port, &seed, PSlot::from_raw(SLOT)).await;
+    let wallet = staker_wallet(daemon.wallet_rpc(), &seed, PSlot::from_raw(SLOT)).await;
     let pscan_seal =
         shekyl_engine_file::paths::pscan_state_path_from(&wallet.1.path().join("wallet"));
     let zero = close_shard(
@@ -757,9 +755,7 @@ async fn e2e_a_running_total_altered_in_transit_fails_the_archival_step() {
     let seed = [0x5Cu8; shekyl_crypto_pq::account::SEED_BYTES];
     let daemon = RegtestDaemon::start_for_seed(&seed).await;
     daemon.generate_blocks(BLOCKS).await;
-    let honest = HttpRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port))
-        .await
-        .expect("daemon rpc");
+    let honest = daemon.wallet_rpc();
     let altered = AlterTotal {
         inner: honest.clone(),
         at: ALTERED,
@@ -809,7 +805,7 @@ async fn e2e_a_running_total_altered_in_transit_fails_the_archival_step() {
 /// bodies are the daemon's own.
 #[derive(Clone)]
 struct AlterTotal {
-    inner: HttpRpc,
+    inner: DaemonTransport,
     at: u64,
 }
 

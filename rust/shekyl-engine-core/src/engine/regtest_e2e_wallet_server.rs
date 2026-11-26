@@ -211,9 +211,7 @@ pub(super) async fn create_wallet(
 ) {
     let creds = super::super::lifecycle::Credentials::password_only(PASSWORD.as_bytes());
     let base = dir.join(format!("{name}.wallet"));
-    let rpc = shekyl_rpc_transport::HttpRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port))
-        .await
-        .expect("daemon rpc");
+    let rpc = daemon.wallet_rpc();
     let created = super::super::Engine::<super::super::SoloSigner>::create(
         regtest_params(&base, &creds, seed),
         super::super::DaemonClient::verifying(rpc, regtest_expectation()),

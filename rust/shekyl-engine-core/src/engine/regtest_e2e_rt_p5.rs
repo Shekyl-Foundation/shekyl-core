@@ -58,7 +58,9 @@ use tokio::sync::RwLock;
 use super::super::pending::{FeePriority, ReservationId, TxDestination, TxRecipient, TxRequest};
 use super::super::refresh::RefreshOptions;
 use super::super::{Engine, SoloSigner};
-use super::{assert_tx_confirmed, create_wallet, require_fresh_accept, RegtestDaemon};
+use super::{
+    assert_tx_confirmed, create_wallet, loopback_rpc, require_fresh_accept, RegtestDaemon,
+};
 
 /// The largest record payload a message is split at: the channel's
 /// largest record less its occupancy field (`RPC_CHANNEL.md` §4.4).
@@ -274,9 +276,17 @@ async fn run_cell(cell: &Cell) {
     let wallet_proxy = CountingProxy::start(upstream);
     let restore_proxy = CountingProxy::start(upstream);
 
-    let (funder, _funder_dir) = create_wallet(funder_proxy.port, &funder_seed, b"rt-p5-f").await;
+    let (funder, _funder_dir) = create_wallet(
+        loopback_rpc(funder_proxy.port).await,
+        &funder_seed,
+        b"rt-p5-f",
+    );
     let funder = Arc::new(RwLock::new(funder));
-    let (wallet, _wallet_dir) = create_wallet(wallet_proxy.port, &wallet_seed, b"rt-p5-w").await;
+    let (wallet, _wallet_dir) = create_wallet(
+        loopback_rpc(wallet_proxy.port).await,
+        &wallet_seed,
+        b"rt-p5-w",
+    );
     let wallet = Arc::new(RwLock::new(wallet));
     let funder_address = address_of(&funder).await;
     let wallet_address = address_of(&wallet).await;
@@ -394,8 +404,11 @@ async fn run_cell(cell: &Cell) {
 
     // 4. A wallet restored from the same seed syncs the whole chain from
     //    genesis.
-    let (restored, _restored_dir) =
-        create_wallet(restore_proxy.port, &wallet_seed, b"rt-p5-r").await;
+    let (restored, _restored_dir) = create_wallet(
+        loopback_rpc(restore_proxy.port).await,
+        &wallet_seed,
+        b"rt-p5-r",
+    );
     let restored = Arc::new(RwLock::new(restored));
     refresh(&restored).await;
 

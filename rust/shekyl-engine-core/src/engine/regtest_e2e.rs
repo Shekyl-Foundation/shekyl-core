@@ -7,7 +7,7 @@
 //!
 //! These tests spawn a real `shekyld --network regtest` daemon and drive the production
 //! [`Engine`] against it over the real RPC transport ([`DaemonClient`] /
-//! [`HttpRpc`]). Unlike the rest of the engine test suite (which uses
+//! [`DaemonTransport`]). Unlike the rest of the engine test suite (which uses
 //! the in-memory `TestDaemon` mock), the point here is the **submit/verify
 //! direction**: a wallet-built FCMP++ proof, serialized into a tx and sent over
 //! the wire, must be accepted by the daemon's consensus `shekyl_fcmp_verify`
@@ -53,7 +53,10 @@ fn regtest_expectation() -> super::DaemonExpectation {
 
 use serde_json::json;
 use shekyl_rpc_client::{wire, Rpc};
-use shekyl_rpc_transport::HttpRpc;
+use shekyl_rpc_transport::{
+    local::{LocalRpc, LocalTarget},
+    DaemonTransport, HttpRpc,
+};
 use shekyl_rpc_types::hash::HashHex;
 use shekyl_rpc_types::kinds::{Count, NoParams};
 use shekyl_rpc_types::wire::block::{BlockSelect, BlockShowSelect, HeaderSelect};
@@ -210,7 +213,8 @@ pub(super) struct RegtestDaemon {
     /// file (`private_config_dir`). Removed with the daemon.
     config_dir: PathBuf,
     rpc_port: u16,
-    rpc: HttpRpc,
+    rpc: DaemonTransport,
+    owner: LocalTarget,
     /// Base URL of the second, restricted listener, when one was
     /// asked for. `None` for the ordinary spawn, so no existing test grows a
     /// listener it did not ask for.
@@ -799,6 +803,11 @@ fn config_base() -> Result<PathBuf, Vec<PathBuf>> {
 }
 
 impl RegtestDaemon {
+    /// A fresh wallet client with the normal request deadline and its own refusal state.
+    pub(super) fn wallet_rpc(&self) -> DaemonTransport {
+        LocalRpc::new(self.owner.clone()).into()
+    }
+
     /// This daemon as the wallet's daemon target: its RPC listener on
     /// loopback, the address the persona's loopback transport accepts.
     fn target(&self) -> shekyl_rpc_transport::DaemonTarget {
@@ -1154,15 +1163,27 @@ impl RegtestDaemon {
         let child = shekyl_spawn::spawn_lock::spawn(&mut cmd)
             .unwrap_or_else(|e| panic!("spawn {}: {e}", bin.display()));
 
-        // Base URL only — `Rpc::call` appends the `json_rpc` route itself.
-        // Long timeout: `generate_blocks` late in a deep-tree mine takes well over
-        // the 30s default (each block ~2.5s; the depth-3 mine is ~750 blocks).
-        let rpc = HttpRpc::with_custom_timeout(
-            format!("http://127.0.0.1:{rpc_port}"),
-            Duration::from_secs(180),
-        )
-        .await
-        .expect("construct rpc client");
+        // Deep-tree mining batches can take longer than the usual request deadline.
+        let within = Duration::from_secs(180);
+        let owner_network = match network {
+            SpawnNetwork::Regtest => shekyl_network::Network::Regtest,
+            SpawnNetwork::Testnet => shekyl_network::Network::Testnet,
+        };
+        let owner = LocalTarget::test_override(
+            owner_network,
+            &shekyl_rpc_rendezvous::Instance::Default,
+            Some(&config_dir),
+            None,
+        );
+        let rpc = if released {
+            // The mixed-version peer predates the owner rendezvous.
+            HttpRpc::with_custom_timeout(format!("http://127.0.0.1:{rpc_port}"), within)
+                .await
+                .expect("released daemon client")
+                .into()
+        } else {
+            LocalRpc::within(owner.clone(), within).into()
+        };
 
         let mut daemon = RegtestDaemon {
             child,
@@ -1171,12 +1192,10 @@ impl RegtestDaemon {
             config_dir,
             rpc_port,
             rpc,
+            owner,
             restricted_url: restricted_port.map(|p| format!("http://127.0.0.1:{p}")),
             schedule,
-            cli_network: match network {
-                SpawnNetwork::Regtest => "regtest",
-                SpawnNetwork::Testnet => "testnet",
-            },
+            cli_network: owner_network.name(),
             armed: matches!(network, SpawnNetwork::Regtest),
             offline,
             posts_at_open,
@@ -1261,10 +1280,7 @@ impl RegtestDaemon {
             tokio::time::sleep(Duration::from_millis(250)).await;
         }
         let tail = log_tail(&log_path);
-        panic!(
-            "daemon RPC never became ready (port {}) after 60s: {last_err}; log tail:\n{tail}",
-            self.rpc_port,
-        );
+        panic!("daemon RPC never became ready after 60s: {last_err}; log tail:\n{tail}");
     }
 
     /// The daemon's state, as the harness's listener is told it.
@@ -2103,7 +2119,7 @@ fn job_is_full(
 /// Mine `n` blocks (`dev_block_generate`, an armed lever). The daemon pays
 /// its configured `mine-address` (N2); the request names no address.
 pub(super) async fn try_generate_blocks(
-    rpc: &HttpRpc,
+    rpc: &impl Rpc,
     n: u64,
 ) -> Result<GenerateBlocksResp, shekyl_rpc_client::RpcError> {
     let generated = rpc
@@ -2246,7 +2262,7 @@ impl MidScan {
         use super::refresh::{RefreshOptions, RefreshPhase};
         let seed = [seed_byte; shekyl_crypto_pq::account::SEED_BYTES];
         let daemon = RegtestDaemon::start_for_seed(&seed).await;
-        let (wallet, tmp) = create_wallet(daemon.rpc_port, &seed, password).await;
+        let (wallet, tmp) = create_wallet(daemon.wallet_rpc(), &seed, password);
         let before = wallet.ledger().ledger.synced_count();
         let mined = daemon.generate_blocks(Self::CHAIN).await;
         assert!(
@@ -2292,13 +2308,10 @@ impl MidScan {
     async fn reopen_where_it_was(
         tmp: &tempfile::TempDir,
         password: &[u8],
-        rpc_port: u16,
+        rpc: DaemonTransport,
         before: Option<shekyl_types::ChainCount>,
     ) {
         let creds = super::lifecycle::Credentials::password_only(password);
-        let rpc = HttpRpc::new(format!("http://127.0.0.1:{rpc_port}"))
-            .await
-            .expect("wallet rpc (reopen)");
         let reopened = super::Engine::<super::SoloSigner>::open_full(
             &tmp.path().join("wallet"),
             &creds,
@@ -2366,7 +2379,7 @@ async fn a_close_during_a_scan_keeps_the_wallet_and_the_daemon_stops() {
         "the close must come mid-scan, so the scan ends Cancelled: {joined:?}"
     );
     closed.expect("a wallet closed mid-scan closes");
-    MidScan::reopen_where_it_was(&tmp, password, daemon.rpc_port, before).await;
+    MidScan::reopen_where_it_was(&tmp, password, daemon.wallet_rpc(), before).await;
 
     let asked = Instant::now();
     let status = terminate(&mut daemon).await;
@@ -2436,7 +2449,7 @@ async fn a_daemon_stopped_mid_scan_exits_and_the_wallet_keeps_its_place() {
             )
         })
         .expect("the wallet closes after its daemon stopped");
-    MidScan::reopen_where_it_was(&tmp, password, daemon.rpc_port, before).await;
+    MidScan::reopen_where_it_was(&tmp, password, daemon.wallet_rpc(), before).await;
 }
 
 /// The daemon's own last line of a stop, from its log file.
@@ -2469,9 +2482,7 @@ async fn regtest_daemon_spawns_and_mines_to_wallet_address() {
     let serial = serial_lock().lock_owned().await;
     let daemon =
         RegtestDaemon::spawn(RegtestSpawn::new(Some(serial)).with_mine_address(mine_address)).await;
-    let rpc = HttpRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port))
-        .await
-        .expect("wallet rpc");
+    let rpc = daemon.wallet_rpc();
     let daemon_client = DaemonClient::verifying(rpc, regtest_expectation());
 
     let tmp = tempfile::tempdir().expect("wallet tempdir");
@@ -2575,7 +2586,7 @@ async fn the_armed_switch_serves_two_levers_and_knows_no_third() {
 /// One JSON-RPC request by a name this build's table does not hold — an
 /// old or deleted name a test probes — returning the reply envelope whole.
 pub(super) async fn raw_call(
-    rpc: &HttpRpc,
+    rpc: &impl Rpc,
     method: &str,
     params: serde_json::Value,
 ) -> serde_json::Value {
@@ -2614,9 +2625,7 @@ async fn e2e_refresh_scans_coinbase_balance() {
     let daemon = RegtestDaemon::start_for_seed(&seed).await;
 
     // Create the wallet (FAKECHAIN = mainnet address format; see the get_curve_tree test).
-    let rpc = HttpRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port))
-        .await
-        .expect("wallet rpc");
+    let rpc = daemon.wallet_rpc();
     let tmp = tempfile::tempdir().expect("wallet tempdir");
     let wallet_path = tmp.path().join("wallet");
     let creds = super::lifecycle::Credentials::password_only(b"track2-refresh");
@@ -2714,13 +2723,11 @@ async fn e2e_fcmp_spend_accepted_by_daemon() {
     // the still-in-memory created engine would skip the open path (envelope decrypt,
     // ledger load, scan-state restore) that every production spend session starts from.
     let creds = super::lifecycle::Credentials::password_only(b"track2-spend");
-    let (created, tmp) = create_wallet(daemon.rpc_port, &seed, b"track2-spend").await;
+    let (created, tmp) = create_wallet(daemon.wallet_rpc(), &seed, b"track2-spend");
     let wallet_path = tmp.path().join("wallet");
     created.close(&creds).await.expect("close created wallet");
 
-    let rpc = HttpRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port))
-        .await
-        .expect("wallet rpc (reopen)");
+    let rpc = daemon.wallet_rpc();
     let wallet = Engine::<SoloSigner>::open_full(
         &wallet_path,
         &creds,
@@ -2880,13 +2887,11 @@ async fn e2e_fcmp_spend_reorg_restores_pool_and_fee() {
     let seed = [0x35u8; shekyl_crypto_pq::account::SEED_BYTES];
     let daemon = RegtestDaemon::start_for_seed(&seed).await;
     let creds = super::lifecycle::Credentials::password_only(b"track2-spend-reorg");
-    let (created, tmp) = create_wallet(daemon.rpc_port, &seed, b"track2-spend-reorg").await;
+    let (created, tmp) = create_wallet(daemon.wallet_rpc(), &seed, b"track2-spend-reorg");
     let wallet_path = tmp.path().join("wallet");
     created.close(&creds).await.expect("close created wallet");
 
-    let rpc = HttpRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port))
-        .await
-        .expect("wallet rpc (reopen)");
+    let rpc = daemon.wallet_rpc();
     let wallet = Engine::<SoloSigner>::open_full(
         &wallet_path,
         &creds,
@@ -3079,29 +3084,34 @@ fn regtest_params<'a>(
 /// Create a Mainnet wallet (FAKECHAIN uses the mainnet address format) pointed at
 /// the daemon RPC. Returns the engine, its tempdir (caller keeps it alive — it owns
 /// the wallet files), and the encoded primary address.
-async fn mainnet_wallet(
-    rpc_port: u16,
+fn mainnet_wallet(
+    rpc: DaemonTransport,
     seed_byte: u8,
 ) -> (super::Engine<super::SoloSigner>, tempfile::TempDir, String) {
     let seed = [seed_byte; shekyl_crypto_pq::account::SEED_BYTES];
-    let (wallet, tmp) = create_wallet(rpc_port, &seed, b"track2").await;
+    let (wallet, tmp) = create_wallet(rpc, &seed, b"track2");
     let address = wallet.primary_address().encode().expect("encode address");
     (wallet, tmp, address)
 }
 
+/// The measurement proxy and external benchmark driver supply a TCP port.
+async fn loopback_rpc(port: u16) -> DaemonTransport {
+    HttpRpc::new(format!("http://127.0.0.1:{port}"))
+        .await
+        .expect("measurement RPC")
+        .into()
+}
+
 /// The shared create step behind [`mainnet_wallet`] and [`staker_wallet`]:
-/// tempdir, credentials, wallet RPC against the daemon port, and
+/// tempdir, credentials, the supplied daemon transport, and
 /// `Engine::create` over [`regtest_params`]. Callers layer their own
 /// follow-ons (address derivation; the staker's persist → close → reopen).
 /// The wallet base path is `tmp.path().join("wallet")`.
-async fn create_wallet(
-    rpc_port: u16,
+fn create_wallet(
+    rpc: DaemonTransport,
     seed: &[u8; shekyl_crypto_pq::account::SEED_BYTES],
     password: &'static [u8],
 ) -> (super::Engine<super::SoloSigner>, tempfile::TempDir) {
-    let rpc = HttpRpc::new(format!("http://127.0.0.1:{rpc_port}"))
-        .await
-        .expect("wallet rpc");
     let tmp = tempfile::tempdir().expect("wallet tempdir");
     let wallet_path = tmp.path().join("wallet");
     let creds = super::lifecycle::Credentials::password_only(password);
@@ -3157,7 +3167,7 @@ async fn e2e_fcmp_spend_over_depth3_tree() {
 
     let daemon =
         RegtestDaemon::start_for_seed(&[0x44u8; shekyl_crypto_pq::account::SEED_BYTES]).await;
-    let (wallet, _tmp, address) = mainnet_wallet(daemon.rpc_port, 0x44).await;
+    let (wallet, _tmp, address) = mainnet_wallet(daemon.wallet_rpc(), 0x44);
 
     // Mine (no refresh needed — depth is the daemon's, not the wallet's) until the
     // tree reaches the target depth, then one more batch so the REFERENCE block
@@ -3460,7 +3470,7 @@ async fn e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx() {
 
     let daemon =
         RegtestDaemon::start_for_seed(&[0x79u8; shekyl_crypto_pq::account::SEED_BYTES]).await;
-    let (wallet, _tmp, address) = mainnet_wallet(daemon.rpc_port, 0x79).await;
+    let (wallet, _tmp, address) = mainnet_wallet(daemon.wallet_rpc(), 0x79);
     let arc = Arc::new(RwLock::new(wallet));
     let Overfilled {
         median,
@@ -3743,7 +3753,7 @@ async fn e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx() {
 async fn e2e_cxx_template_fills_to_its_median() {
     let daemon =
         RegtestDaemon::start_for_seed(&[0x77u8; shekyl_crypto_pq::account::SEED_BYTES]).await;
-    let (wallet, _tmp, address) = mainnet_wallet(daemon.rpc_port, 0x77).await;
+    let (wallet, _tmp, address) = mainnet_wallet(daemon.wallet_rpc(), 0x77);
     let arc = Arc::new(RwLock::new(wallet));
     let Overfilled {
         median,
@@ -3971,10 +3981,10 @@ async fn generate_ct2_tier_b_fixture() {
 
     let daemon =
         RegtestDaemon::start_for_seed(&[0x44u8; shekyl_crypto_pq::account::SEED_BYTES]).await;
-    let (wallet, _tmp, _) = mainnet_wallet(daemon.rpc_port, 0x44).await;
+    let (wallet, _tmp, _) = mainnet_wallet(daemon.wallet_rpc(), 0x44);
     // A second wallet for its address only — the spend recipient (a real
     // non-change regular output, distinct from the self-send change).
-    let (_recipient_wallet, _tmp2, recipient) = mainnet_wallet(daemon.rpc_port, 0x55).await;
+    let (_recipient_wallet, _tmp2, recipient) = mainnet_wallet(daemon.wallet_rpc(), 0x55);
     let arc = Arc::new(RwLock::new(wallet));
 
     // --- fund + spend (main chain): a transfer to `recipient` yields a multi-tx
@@ -4250,21 +4260,18 @@ type StakerWallet = (
 /// (caller keeps it alive — it owns the wallet files), and the principal's
 /// encoded primary address.
 pub(super) async fn staker_wallet(
-    rpc_port: u16,
+    rpc: DaemonTransport,
     seed: &[u8; shekyl_crypto_pq::account::SEED_BYTES],
     slot: super::stake_engine::PSlot,
 ) -> StakerWallet {
     let creds = super::lifecycle::Credentials::password_only(b"pr4-staker");
-    let (engine, tmp) = create_wallet(rpc_port, seed, b"pr4-staker").await;
+    let (engine, tmp) = create_wallet(rpc.clone(), seed, b"pr4-staker");
     let base_path = tmp.path().join("wallet");
     engine
         .persist_bond_record(slot)
         .expect("persist bond record");
     engine.close(&creds).await.expect("close created wallet");
 
-    let rpc = HttpRpc::new(format!("http://127.0.0.1:{rpc_port}"))
-        .await
-        .expect("wallet rpc (reopen)");
     let opened = super::Engine::<super::SoloSigner>::open_full(
         &base_path,
         &creds,
@@ -4796,7 +4803,7 @@ async fn stake_persona_and_submit_bond(
     let slot = PSlot::from_raw(slot_raw);
     let (arc, tmp, principal) = match wallet {
         Some(opened) => opened,
-        None => staker_wallet(daemon.rpc_port, seed, slot).await,
+        None => staker_wallet(daemon.wallet_rpc(), seed, slot).await,
     };
 
     // The bond fee is caller-chosen at this seam (the RPC stake entry's
@@ -5350,7 +5357,7 @@ async fn e2e_emission_claim_accepted_and_applied() {
     // retention prune that discards their bodies two epochs after the
     // shard closes; a wallet opened after that prune cannot scan them from
     // this node (the helper's docs).
-    let wallet = staker_wallet(daemon.rpc_port, &seed, slot).await;
+    let wallet = staker_wallet(daemon.wallet_rpc(), &seed, slot).await;
     let pscan_seal =
         shekyl_engine_file::paths::pscan_state_path_from(&wallet.1.path().join("wallet"));
     // The persona's serving host runs its own tor, whose notice log is in
@@ -6213,7 +6220,7 @@ async fn e2e_release_accepted_and_connected() {
     // retention prune that discards their bodies two epochs after the
     // shard closes; a wallet opened after that prune cannot scan them from
     // this node (the helper's docs).
-    let wallet = staker_wallet(daemon.rpc_port, &seed, slot).await;
+    let wallet = staker_wallet(daemon.wallet_rpc(), &seed, slot).await;
     let pscan_seal =
         shekyl_engine_file::paths::pscan_state_path_from(&wallet.1.path().join("wallet"));
     let closed = shard::close_shard_through_the_daemon(
@@ -6437,7 +6444,7 @@ async fn e2e_unstake_collect_retire_composed_arc() {
     // retention prune that discards their bodies two epochs after the
     // shard closes; a wallet opened after that prune cannot scan them from
     // this node (the helper's docs).
-    let wallet = staker_wallet(daemon.rpc_port, &seed, slot).await;
+    let wallet = staker_wallet(daemon.wallet_rpc(), &seed, slot).await;
     let pscan_seal =
         shekyl_engine_file::paths::pscan_state_path_from(&wallet.1.path().join("wallet"));
     let closed = shard::close_shard_through_the_daemon(
@@ -6728,7 +6735,7 @@ async fn e2e_arm3_phantom_slot_collected_at_open() {
     // `staker_wallet` IS the crash fixture: it persists the bond record (the
     // durable point) and reopens — no assemble, no pending post, no
     // broadcast ever happens. The reopened wallet is the W2 phantom staker.
-    let (arc, tmp, _) = staker_wallet(daemon.rpc_port, &seed, slot).await;
+    let (arc, tmp, _) = staker_wallet(daemon.wallet_rpc(), &seed, slot).await;
     {
         let g = arc.read().await;
         assert!(g.ledger().staking.staking_enabled);
@@ -6772,9 +6779,7 @@ async fn e2e_arm3_phantom_slot_collected_at_open() {
         .close(&creds)
         .await
         .expect("close phantom staker");
-    let rpc = HttpRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port))
-        .await
-        .expect("wallet rpc (reopen)");
+    let rpc = daemon.wallet_rpc();
     let reopened = super::Engine::<super::SoloSigner>::open_full(
         &tmp.path().join("wallet"),
         &creds,

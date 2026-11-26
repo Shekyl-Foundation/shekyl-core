@@ -194,8 +194,8 @@ TEST_ONLY: dict[tuple[str, str], str] = {
     "Production names \"this computer\" by its network alone "
     "(LocalTarget::this_computer, DaemonTarget::ThisComputer), so no client "
     "can name a wrong directory or leave the service's out (Rick, "
-    "2026-11-18). Enabled from the transport's own, the CLI's, the tunnel's "
-    "and the daemon's dev edges",
+    "2026-11-18). Enabled from the transport's own, the CLI's, the tunnel's, "
+    "the engine's and the daemon's dev edges",
     (
         "shekyl-curve-tree",
         "test-tamper",

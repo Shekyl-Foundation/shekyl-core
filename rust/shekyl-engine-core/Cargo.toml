@@ -259,6 +259,9 @@ kameo = { workspace = true }
 shekyl-win-sec = { path = "../shekyl-win-sec" }
 
 [dev-dependencies]
+# Live regtest nodes publish their owner socket or pipe in a private fixture directory.
+shekyl-rpc-transport = { path = "../shekyl-rpc-transport", features = ["test-override"] }
+shekyl-rpc-rendezvous = { path = "../shekyl-rpc-rendezvous" }
 # `test-tamper` compiles `CurveTreeClient::test_tamper_poison`, which the
 # curve-tree actor's in-place recovery tests poison a client with;
 # `test-paths` compiles `AssembledPaths::from_parts_unchecked`, the
