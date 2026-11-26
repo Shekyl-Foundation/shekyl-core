@@ -370,7 +370,9 @@ fn write_seed(file: &mut File, seed: &str) -> Result<(), std::io::Error> {
 
 #[cfg(test)]
 mod tests {
-    use super::{read_secret_text, strip_one_trailing_newline, PasswordSource};
+    use super::strip_one_trailing_newline;
+    #[cfg(unix)]
+    use super::{read_secret_text, PasswordSource};
 
     /// A password or recovery-words file another account can read is
     /// refused with the typed code, naming the file and not its contents;
