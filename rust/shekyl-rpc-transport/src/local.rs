@@ -1026,13 +1026,12 @@ mod tests {
             }
         );
         assert!(!fault.is_security_failure());
-        assert_eq!(
-            fault.to_string(),
-            format!(
-                "The node on this computer runs as a service. Until wallets reach a service \
-                 over the channel, set daemon-address = {view_at}"
-            )
+        let text = fault.to_string();
+        assert!(
+            text.contains("runs as a service") && text.contains("channel"),
+            "{text}"
         );
+        assert!(!text.contains("daemon-address"), "{text}");
         for listener in [&view, &channel] {
             listener.set_nonblocking(true).unwrap();
             assert!(
@@ -1058,8 +1057,8 @@ mod tests {
             "{fault:?}"
         );
         let text = fault.to_string();
-        assert!(text.contains("serves no wallet leg"), "{text}");
-        assert!(text.contains("rpc-view-listen"), "{text}");
+        assert!(text.contains("rpc-listen"), "{text}");
+        assert!(!text.contains("daemon-address"), "{text}");
 
         std::fs::write(&record, b"shekyl-service-rendezvous 1\n").unwrap();
         assert!(

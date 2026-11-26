@@ -411,7 +411,11 @@ where
 fn refill_outcome(e: &FillFailure) -> ShardRefill {
     let (refill, kind) = match e {
         FillFailure::Discarded { .. } => (ShardRefill::Discarded, "the node discarded it"),
-        FillFailure::LocalNodeRequired { .. } => (ShardRefill::Failed, "the node is not local"),
+        FillFailure::LocalNodeRequired => (
+            ShardRefill::Failed,
+            "the plaintext daemon is not on this computer",
+        ),
+        FillFailure::Channel(_) => (ShardRefill::Failed, "the channel to the node failed"),
         FillFailure::DaemonSyncing => (ShardRefill::Failed, "the node is synchronizing"),
         FillFailure::DaemonUnreachable { .. } => (ShardRefill::Failed, "the node is unreachable"),
         FillFailure::ScanStateUnreadable { .. } => {

@@ -5,12 +5,13 @@
 
 //! The shell's daemon client.
 //!
-//! One target (`RPC_CHANNEL.md` RT-15; RT-W10 step 5): "this computer",
-//! reached as the enrollment words reach it (a service's console leg when one
-//! runs here, otherwise the owner's leg), or a named address through one
-//! [`SyncDaemon`]. Connected on the first request. The SOCKS proxy, the
-//! down-hint and the timeout are this client's; the bytes are the shared
-//! transports'.
+//! One target (`RPC_CHANNEL.md` RT-15; RT-W10 step 5): "this computer"
+//! (a local service's enrolled channel, otherwise the owner's leg), an
+//! enrolled channel, or a plaintext address through one [`SyncDaemon`].
+//! Connected on the first request, and reused. A channel session requests
+//! the grants on the target, so one `daemon_status` is shown every part
+//! those grants admit. The SOCKS proxy, the down-hint and the timeout are
+//! this client's; the bytes are the shared transports'.
 
 use serde_json::Value;
 use std::fmt;
@@ -18,13 +19,12 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use shekyl_rpc_client::{wire, RpcMethod};
-use shekyl_rpc_grants::GrantSet;
-use shekyl_rpc_transport::channel::ChannelFault;
-use shekyl_rpc_transport::local::LocalFault;
+use shekyl_rpc_transport::channel::{ChannelDaemon, ChannelFault};
+use shekyl_rpc_transport::local::{LocalFault, LocalTarget};
 use shekyl_rpc_transport::network_posture::{host_of, is_loopback_host};
-use shekyl_rpc_transport::{DaemonTarget, JsonRpcError, PostFault, SyncDaemon, TransportFault};
-
-use crate::node_leg::{LegError, NodeLeg};
+use shekyl_rpc_transport::{
+    DaemonTarget, JsonRpcError, PostFault, ResolvedDaemon, SyncDaemon, TransportFault,
+};
 use shekyl_rpc_types::kinds::{Count, NoParams};
 use shekyl_rpc_types::wire::daemon::DaemonStatus;
 use shekyl_rpc_types::wire::node::{MineStart, MineStatus, Threads};
@@ -160,10 +160,12 @@ pub fn is_loopback_endpoint(address: &str) -> bool {
 
 /// The connection a client opened on its first request.
 enum Connection {
-    /// A named address.
+    /// Plaintext HTTP.
     Address(SyncDaemon),
-    /// This computer's node.
-    ThisComputer(NodeLeg),
+    /// The owner's socket or pipe.
+    Owner(LocalTarget),
+    /// One enrolled session, holding the target's grants.
+    Channel(ChannelDaemon),
 }
 
 /// How "this computer" is named in copy that names the endpoint.
@@ -186,10 +188,10 @@ impl DaemonClient {
         network: Network,
     ) -> Result<Self, DaemonError> {
         let label = match &target {
-            DaemonTarget::HttpFixture { url, .. } if url.is_empty() => {
+            DaemonTarget::Address { url, .. } if url.is_empty() => {
                 return Err(DaemonError::NotConfigured)
             }
-            DaemonTarget::HttpFixture { url, .. } => daemon_url(url),
+            DaemonTarget::Address { url, .. } => daemon_url(url),
             DaemonTarget::Channel { node, .. } => node.leg.to_string(),
             DaemonTarget::Owner(_) | DaemonTarget::ThisComputer { .. } => THIS_COMPUTER.to_owned(),
         };
@@ -225,23 +227,25 @@ impl DaemonClient {
 
     /// Dial the target. Not stored: [`Self::connect`] stores the one that
     /// won, and a closed channel session is removed rather than reused.
+    ///
+    /// A channel is opened once, requesting the grants on the target. Later
+    /// calls reuse that session, so a reply whose parts depend on the grant
+    /// set (`daemon_status`) sees the whole request.
     fn open(&self) -> Result<Connection, DaemonError> {
-        match &self.target {
-            DaemonTarget::HttpFixture { url, proxy, .. } => Ok(Connection::Address(
-                SyncDaemon::connect(daemon_url(url), proxy.clone(), DAEMON_TIMEOUT)
-                    .map_err(|error| self.error_of_post(error))?,
+        match self.target.resolve().map_err(Self::channel_error)? {
+            ResolvedDaemon::Address { url, proxy } => {
+                if url.is_empty() {
+                    return Err(DaemonError::NotConfigured);
+                }
+                Ok(Connection::Address(
+                    SyncDaemon::connect(daemon_url(&url), proxy, DAEMON_TIMEOUT)
+                        .map_err(|error| self.error_of_post(error))?,
+                ))
+            }
+            ResolvedDaemon::Channel { target, request } => Ok(Connection::Channel(
+                ChannelDaemon::connect(&target, request).map_err(Self::channel_error)?,
             )),
-            DaemonTarget::Channel { .. } => self
-                .channel_connection(GrantSet::EMPTY)?
-                .ok_or(DaemonError::NotConfigured),
-            DaemonTarget::Owner(target) => {
-                Ok(Connection::ThisComputer(NodeLeg::Owner(target.clone())))
-            }
-            DaemonTarget::ThisComputer { network, .. } => {
-                Ok(Connection::ThisComputer(NodeLeg::Owner(
-                    shekyl_rpc_transport::local::LocalTarget::this_computer(*network),
-                )))
-            }
+            ResolvedDaemon::Owner { target, .. } => Ok(Connection::Owner(target)),
         }
     }
 
@@ -316,9 +320,12 @@ impl DaemonClient {
             Connection::Address(rpc) => rpc
                 .json_rpc(name, &NoParams)
                 .map_err(|error| self.error_of_json_rpc(error)),
-            Connection::ThisComputer(leg) => leg.json_rpc(name, &NoParams).map_err(|error| {
+            Connection::Owner(target) => target
+                .json_rpc(name, &NoParams)
+                .map_err(|error| reply_error(error, |fault| self.owner_fault(fault))),
+            Connection::Channel(channel) => channel.json_rpc(name, &NoParams).map_err(|error| {
                 self.note_closed(connection, &error);
-                self.error_of_leg(error)
+                reply_error(error, Self::channel_error)
             }),
         }
     }
@@ -354,32 +361,8 @@ impl DaemonClient {
         DaemonError::Other(advice)
     }
 
-    fn channel_connection(&self, request: GrantSet) -> Result<Option<Connection>, DaemonError> {
-        let target = self.target.channel_target().map_err(Self::channel_error)?;
-        target
-            .map(|target| {
-                shekyl_rpc_transport::channel::ChannelDaemon::connect(&target, request)
-                    .map(|daemon| Connection::ThisComputer(NodeLeg::Channel(daemon)))
-                    .map_err(Self::channel_error)
-            })
-            .transpose()
-    }
-
-    fn command_channel<M: RpcMethod>(&self) -> Result<Option<Arc<Connection>>, DaemonError> {
-        let request = match M::POLICY {
-            shekyl_rpc_types::method::Policy::Grant(grant) => GrantSet::of(&[grant]),
-            _ => GrantSet::EMPTY,
-        };
-        self.channel_connection(request)
-            .map(|connection| connection.map(Arc::new))
-    }
-
     /// Call method `M` after the handshake.
     pub(crate) fn call<M: RpcMethod>(&self, request: &M::Request) -> Result<M::Reply, DaemonError> {
-        if let Some(connection) = self.command_channel::<M>()? {
-            self.check_identity_on(&connection)?;
-            return self.call_on::<M>(request, &connection);
-        }
         self.ensure_identity()?;
         self.call_on::<M>(request, &self.connect()?)
     }
@@ -391,11 +374,7 @@ impl DaemonClient {
         &self,
         request: &M::Request,
     ) -> Result<M::Reply, DaemonError> {
-        let connection = match self.command_channel::<M>()? {
-            Some(connection) => connection,
-            None => self.connect()?,
-        };
-        self.call_on::<M>(request, &connection)
+        self.call_on::<M>(request, &self.connect()?)
     }
 
     fn call_on<M: RpcMethod>(
@@ -407,9 +386,12 @@ impl DaemonClient {
             Connection::Address(rpc) => rpc
                 .call::<M>(request)
                 .map_err(|error| self.error_of_json_rpc(error)),
-            Connection::ThisComputer(leg) => leg.call::<M>(request).map_err(|error| {
+            Connection::Owner(target) => target
+                .call::<M>(request)
+                .map_err(|error| reply_error(error, |fault| self.owner_fault(fault))),
+            Connection::Channel(channel) => channel.call::<M>(request).map_err(|error| {
                 self.note_closed(connection, &error);
-                self.error_of_leg(error)
+                reply_error(error, Self::channel_error)
             }),
         }
     }
@@ -429,11 +411,7 @@ impl DaemonClient {
     /// handshake hands it to [`IdentityExpectation::read`], and the `version`
     /// word to [`shekyl_rpc_types::daemon_rpc_version`].
     pub fn get_version_result(&self) -> Result<Value, DaemonError> {
-        let connection = match self.command_channel::<wire::Version>()? {
-            Some(connection) => connection,
-            None => self.connect()?,
-        };
-        self.read_version(&connection)
+        self.read_version(&self.connect()?)
     }
 
     /// Operator coverage list (`shard_coverage`); the daemon orders the rows.
@@ -469,7 +447,7 @@ impl DaemonClient {
         match &self.target {
             DaemonTarget::Owner(_) | DaemonTarget::ThisComputer { .. } => true,
             DaemonTarget::Channel { node, .. } => is_loopback_endpoint(&node.leg.to_string()),
-            DaemonTarget::HttpFixture { url, .. } => is_loopback_endpoint(url),
+            DaemonTarget::Address { url, .. } => is_loopback_endpoint(url),
         }
     }
 
@@ -556,23 +534,9 @@ impl DaemonClient {
 
     /// A closed channel session is this connection's end. The call that
     /// met it is returned as that error and is not sent again.
-    fn note_closed(&self, connection: &Arc<Connection>, error: &LegError) {
-        if matches!(
-            error,
-            LegError::Channel(JsonRpcError::Transport(ChannelFault::Closed))
-        ) {
+    fn note_closed(&self, connection: &Arc<Connection>, error: &JsonRpcError<ChannelFault>) {
+        if matches!(error, JsonRpcError::Transport(ChannelFault::Closed)) {
             self.forget_closed(connection);
-        }
-    }
-
-    /// A failure on this computer's node's leg: the owner's leg's failed
-    /// peer check, and a service there, are their own errors. Any other
-    /// owner's-leg fault is the node not running or not answering, with
-    /// this client's hint. The console leg's faults are the channel's words.
-    fn error_of_leg(&self, error: LegError) -> DaemonError {
-        match error {
-            LegError::Owner(error) => reply_error(error, |fault| self.owner_fault(fault)),
-            LegError::Channel(error) => reply_error(error, Self::channel_error),
         }
     }
 
@@ -731,7 +695,8 @@ mod tests {
         let DaemonError::Service(line) = service else {
             panic!("a service is not a refused connection: {service:?}")
         };
-        assert!(line.contains("127.0.0.1:12030"), "{line}");
+        assert!(line.contains("channel"), "{line}");
+        assert!(!line.contains("daemon-address"), "{line}");
         assert!(!line.contains("Start the testnet daemon"), "{line}");
         let down = client.owner_fault(LocalFault::NotRunning {
             node: "testnet".into(),
@@ -753,14 +718,12 @@ mod tests {
         use shekyl_rpc_transport::local::LocalTarget;
 
         let leg = || {
-            std::sync::Arc::new(super::Connection::ThisComputer(
-                crate::node_leg::NodeLeg::Owner(LocalTarget::test_override(
-                    super::Network::Regtest,
-                    &Instance::Default,
-                    Some(Path::new("dir")),
-                    None,
-                )),
-            ))
+            std::sync::Arc::new(super::Connection::Owner(LocalTarget::test_override(
+                super::Network::Regtest,
+                &Instance::Default,
+                Some(Path::new("dir")),
+                None,
+            )))
         };
         let dead = leg();
         let later = leg();

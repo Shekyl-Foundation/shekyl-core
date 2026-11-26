@@ -27,8 +27,9 @@
 //! chain up to that horizon; a market bond owes the shards it names, each of
 //! which must be final.
 //!
-//! **Where the bytes come from.** The wallet's own node, on the persona's
-//! loopback transport ([`WalletNodeRpc`]); a non-loopback daemon is a typed
+//! **Where the bytes come from.** The wallet's configured node
+//! ([`open_chain_reader`](super::prpc::open_chain_reader)): this computer, or
+//! an enrolled channel. A plaintext address on another computer is a typed
 //! refusal. A shard the node has already discarded answers `archived`
 //! (`SB-Q2`), and its bodies come back only through the node's recovery
 //! fetch (§6.5.4, the `WSS-Q9` handoff), which is not built, so it is a
@@ -50,7 +51,7 @@ use tokio::sync::RwLock;
 
 use std::sync::Arc;
 
-use super::prpc::WalletNodeRpc;
+use super::prpc::{open_chain_reader, ChainOpen};
 use super::pscan::block_source::{daemon_claimed_tip, BlockSourceError};
 use super::pscan::start::load_pscan_state_for_engine;
 use super::signer::EngineSignerKind;
@@ -98,15 +99,12 @@ impl FilledHoldings {
 /// store write).
 #[derive(Debug, thiserror::Error)]
 pub enum FillFailure {
-    /// The fill reads the wallet's own node on loopback, and this wallet's
-    /// daemon is elsewhere.
-    #[error(
-        "filling the persona body store needs the wallet's own node on this computer: {detail}"
-    )]
-    LocalNodeRequired {
-        /// The transport constructor's refusal.
-        detail: String,
-    },
+    /// The fill's plaintext daemon address is not this computer.
+    #[error("{}", shekyl_rpc_transport::PLAINTEXT_NOT_THIS_COMPUTER)]
+    LocalNodeRequired,
+    /// The enrolled channel refused before the fill could read the node.
+    #[error("{0}")]
+    Channel(shekyl_rpc_client::WalletChannelFault),
     /// The node reports that it is still synchronizing, so it has no tip to
     /// judge finality against.
     #[error("the node is still synchronizing; retry once it has caught up")]
@@ -207,7 +205,7 @@ pub(crate) enum MarketFillError {
 /// (`body_reconcile`) reads the same, so the two cannot disagree about what
 /// is final or where a shard's blocks are.
 pub(crate) struct FillContext {
-    rpc: WalletNodeRpc,
+    rpc: shekyl_rpc_transport::DaemonTransport,
     pub(crate) bodies: BodyStoreHandle,
     pub(crate) fold: ArchivalFold,
     pub(crate) scanned: BlockHeight,
@@ -216,8 +214,8 @@ pub(crate) struct FillContext {
 }
 
 impl FillContext {
-    /// The persona's loopback transport to the wallet's own node.
-    pub(crate) fn rpc(&self) -> &WalletNodeRpc {
+    /// The daemon this fill reads.
+    pub(crate) fn rpc(&self) -> &shekyl_rpc_transport::DaemonTransport {
         &self.rpc
     }
 
@@ -298,11 +296,21 @@ where
         self_arc: Arc<RwLock<Self>>,
         daemon: &DaemonTarget,
     ) -> Result<FillContext, FillFailure> {
-        let rpc = WalletNodeRpc::new(daemon, FILL_RPC_TIMEOUT)
-            .await
-            .map_err(|e| FillFailure::LocalNodeRequired {
-                detail: e.to_string(),
-            })?;
+        let rpc =
+            open_chain_reader(daemon, FILL_RPC_TIMEOUT)
+                .await
+                .map_err(|error| match error {
+                    ChainOpen::PlaintextNotLocal => FillFailure::LocalNodeRequired,
+                    ChainOpen::Fault(shekyl_rpc_client::DaemonFault::Channel(fault)) => {
+                        FillFailure::Channel(fault)
+                    }
+                    ChainOpen::Fault(other) => FillFailure::DaemonUnreachable {
+                        detail: other.to_string(),
+                    },
+                    ChainOpen::Unusable(error) => FillFailure::DaemonUnreachable {
+                        detail: error.to_string(),
+                    },
+                })?;
         let bodies = {
             let g = self_arc.read().await;
             g.stake_handle()

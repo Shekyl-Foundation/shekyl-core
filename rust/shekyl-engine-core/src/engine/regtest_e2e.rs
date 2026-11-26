@@ -5333,7 +5333,7 @@ async fn e2e_emission_claim_accepted_and_applied() {
     use super::claim_dispatch::EmissionClaimRequestError;
     use super::claim_orchestrator::ClaimOrchestrationError;
     use super::emission_source::fetch_emission_claim_source;
-    use super::prpc::WalletNodeRpc;
+    use super::prpc::open_chain_reader;
     use super::stake_engine::PSlot;
     use super::traits::DaemonEngine;
     use shekyl_curve_tree::reference::REF_ANCHOR_AGE;
@@ -5780,7 +5780,7 @@ async fn e2e_emission_claim_accepted_and_applied() {
             .economy
             .calculate_fee_from_weight(EMISSION_NON_CLAIMS_RESERVE_BYTES + 2048)
     };
-    let claim_rpc = WalletNodeRpc::new(&daemon.target(), Duration::from_secs(10))
+    let claim_rpc = open_chain_reader(&daemon.target(), Duration::from_secs(10))
         .await
         .expect("loopback claim transport");
     let pruning_landed = SpentRecordsDurablyPruned::for_test();
@@ -6260,7 +6260,7 @@ async fn e2e_drain_wire_shape_matches_a_real_transfer() {
 async fn e2e_release_accepted_and_connected() {
     use super::bond_assembly::{BondAssemblyError, SpentRecordsDurablyPruned};
     use super::emission_source::fetch_claim_source_for;
-    use super::prpc::WalletNodeRpc;
+    use super::prpc::open_chain_reader;
     use super::release_dispatch::ReleaseRequestError;
     use super::stake_engine::{PSlot, StakeEngineError};
     use shekyl_archival_retention::bond_floor;
@@ -6348,7 +6348,7 @@ async fn e2e_release_accepted_and_connected() {
     // transport — the SAME fetch the seam rides. The positive balance here
     // is what makes the post-connect zero an observed *transition* rather
     // than a state that could have held all along.
-    let release_rpc = WalletNodeRpc::new(&daemon.target(), Duration::from_secs(10))
+    let release_rpc = open_chain_reader(&daemon.target(), Duration::from_secs(10))
         .await
         .expect("loopback exit transport");
     let before = fetch_claim_source_for(&release_rpc, fixture.persona_id)
@@ -6485,7 +6485,7 @@ async fn e2e_release_accepted_and_connected() {
 #[ignore = "slow lane (run_live_daemon_gates.sh ARMED_SLOW): requires SHEKYLD_BIN; a market-bond walk (close and price the shard, fund, stake, unstake, collect, retire)"]
 async fn e2e_unstake_collect_retire_composed_arc() {
     use super::emission_source::fetch_claim_source_for;
-    use super::prpc::WalletNodeRpc;
+    use super::prpc::open_chain_reader;
     use super::stake_engine::PSlot;
     use super::unstake_facade::{
         CollectOutcome, CollectUnstakedError, UnstakeError, UnstakeOutcome,
@@ -6567,7 +6567,7 @@ async fn e2e_unstake_collect_retire_composed_arc() {
 
     // Pre-read: the positive balance that makes the post-connect zero a
     // transition (the PR-B walk's discipline).
-    let record_rpc = WalletNodeRpc::new(&daemon_address, Duration::from_secs(10))
+    let record_rpc = open_chain_reader(&daemon_address, Duration::from_secs(10))
         .await
         .expect("loopback record transport");
     let before = fetch_claim_source_for(&record_rpc, fixture.persona_id)

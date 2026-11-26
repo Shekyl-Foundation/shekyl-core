@@ -180,8 +180,9 @@ impl Rpc for DaemonTransport {
 }
 
 /// What a wallet is configured to reach (`RPC_CHANNEL.md` RT-15): "this
-/// computer" when no `daemon-endpoint` is given, otherwise the address named.
-/// Exactly one; [`Self::connect`] makes its one [`DaemonTransport`].
+/// computer" when no `daemon-endpoint` is given, otherwise the enrolled node.
+/// [`Self::resolve`] is the one reading of that choice. [`Self::connect`]
+/// opens it.
 #[derive(Clone)]
 pub enum DaemonTarget {
     /// An already resolved owner rendezvous. A harness supplies its instance here.
@@ -202,14 +203,57 @@ pub enum DaemonTarget {
     ThisComputer {
         /// The wallet's network: which node's rendezvous.
         network: shekyl_network::Network,
-        /// Used only when the local node runs as a service.
+        /// Used when the local node runs as a service.
         account: ChannelAccount,
     },
-    /// An HTTP peer supplied by a test fixture. Only the test feature
-    /// exposes its constructor.
-    #[non_exhaustive]
-    HttpFixture {
+    /// Plaintext HTTP. Wallet binaries do not build this: a named node is a
+    /// [`Self::Channel`]. The desktop wallet still does, until its channel
+    /// migration, and tests use it as a stand-in for this computer.
+    Address {
         /// The daemon's base URL; may carry digest credentials.
+        url: String,
+        /// The SOCKS5h proxy; `None` is direct.
+        proxy: Option<String>,
+    },
+}
+
+/// Why a plaintext address is not a persona's node.
+///
+/// A persona read (a fill, a serve-set, a claim, an exit record) uses this
+/// computer or an enrolled channel. A plaintext address is accepted only when
+/// it is this computer: loopback, direct, and `http`. The refusal names that
+/// fact and never the address.
+#[derive(Clone, Debug)]
+pub enum PlaintextGate {
+    /// The address is not this computer: another host, a proxy, or `https`.
+    NotThisComputer,
+    /// The address is not a base URL this transport can dial.
+    Unusable(RpcError),
+}
+
+/// The target [`DaemonTarget::resolve`] produces. One match, no second pass.
+pub enum ResolvedDaemon {
+    /// An enrolled channel and the grants its sessions request.
+    Channel {
+        /// The dialed identity. Boxed: it carries the daemon's public bundle,
+        /// which is much larger than the other arms.
+        target: Box<channel::ChannelTarget>,
+        /// The grants requested at the handshake.
+        request: shekyl_rpc_grants::GrantSet,
+    },
+    /// The owner's socket or pipe.
+    ///
+    /// `within` is `None` when the caller asked for [`local::LocalRpc`]'s own
+    /// default. An explicit bound, including the owner-target default, is `Some`.
+    Owner {
+        /// The rendezvous.
+        target: local::LocalTarget,
+        /// The per-call bound, when the caller set one.
+        within: Option<Duration>,
+    },
+    /// Plaintext HTTP, as given.
+    Address {
+        /// The daemon's base URL.
         url: String,
         /// The SOCKS5h proxy; `None` is direct.
         proxy: Option<String>,
@@ -254,7 +298,7 @@ impl std::fmt::Debug for DaemonTarget {
                 .debug_struct("ThisComputer")
                 .field("network", network)
                 .finish(),
-            Self::HttpFixture { url, proxy } => f
+            Self::Address { url, proxy } => f
                 .debug_struct("Address")
                 .field("url", &redacted_endpoint(url))
                 .field("proxy", &proxy.as_deref().map(redacted_endpoint))
@@ -263,40 +307,78 @@ impl std::fmt::Debug for DaemonTarget {
     }
 }
 
+/// The sentence a persona read uses when a plaintext address is not this
+/// computer. It names no host and no credential.
+pub const PLAINTEXT_NOT_THIS_COMPUTER: &str = "This reads your own node. A plaintext address on another computer is not that node. Leave the daemon endpoint unset for this computer, or name the node with its bundle.";
+
 impl DaemonTarget {
+    /// A plaintext daemon URL. The desktop wallet still calls this for an
+    /// address a person typed. Wallet binaries build a [`Self::Channel`].
+    #[must_use]
+    pub fn address(url: impl Into<String>) -> Self {
+        Self::Address {
+            url: url.into(),
+            proxy: None,
+        }
+    }
+
     /// Construct a direct HTTP peer in a test.
     #[cfg(any(test, feature = "test-override"))]
     #[must_use]
     pub fn fixture_address(url: impl Into<String>) -> Self {
-        Self::fixture_with_proxy(url.into(), None)
+        Self::address(url)
     }
 
     /// Construct an HTTP test peer with an explicit route.
     #[cfg(any(test, feature = "test-override"))]
     #[must_use]
     pub fn fixture_with_proxy(url: String, proxy: Option<String>) -> Self {
-        Self::HttpFixture { url, proxy }
+        Self::Address { url, proxy }
     }
 
-    /// Resolve an enrolled channel before the first dial. The owner socket
-    /// needs no account key. An invalid service record is a hard refusal.
-    pub fn channel_target(&self) -> Result<Option<channel::ChannelTarget>, channel::ChannelFault> {
+    /// Read this target once. A channel or a local service resolves here,
+    /// before any dial. An owner socket and a plaintext address do not.
+    ///
+    /// # Errors
+    ///
+    /// [`channel::ChannelFault`]: the account key, the bundle, or the local
+    /// service record.
+    pub fn resolve(&self) -> Result<ResolvedDaemon, channel::ChannelFault> {
         match self {
             Self::Channel {
                 network,
                 node,
                 account,
-            } => Ok(Some(channel::account_target(
-                *network,
-                node.leg.clone(),
-                node.bundle()?,
-                account.key_file.as_deref(),
-            )?)),
+            } => Ok(ResolvedDaemon::Channel {
+                target: Box::new(channel::account_target(
+                    *network,
+                    node.leg.clone(),
+                    node.bundle()?,
+                    account.key_file.as_deref(),
+                )?),
+                request: account.request,
+            }),
             Self::ThisComputer { network, account } => {
-                let target = local::LocalTarget::this_computer(*network);
-                target.wallet_channel(*network, account)
+                let local = local::LocalTarget::this_computer(*network);
+                match local.wallet_channel(*network, account)? {
+                    Some(target) => Ok(ResolvedDaemon::Channel {
+                        target: Box::new(target),
+                        request: account.request,
+                    }),
+                    None => Ok(ResolvedDaemon::Owner {
+                        target: local,
+                        within: None,
+                    }),
+                }
             }
-            Self::HttpFixture { .. } | Self::Owner(_) => Ok(None),
+            Self::Owner(target) => Ok(ResolvedDaemon::Owner {
+                target: target.clone(),
+                within: None,
+            }),
+            Self::Address { url, proxy } => Ok(ResolvedDaemon::Address {
+                url: url.clone(),
+                proxy: proxy.clone(),
+            }),
         }
     }
 
@@ -308,44 +390,67 @@ impl DaemonTarget {
     /// A named address this transport cannot dial (see
     /// [`HttpRpc::with_proxy`]). "This computer" does not fail here: a node
     /// that is not running, a service, or a failed peer check is the first
-    /// call's error.
+    /// call's error. An enrolled channel that is not yet enrolled fails here,
+    /// as [`channel::ChannelFault`].
     pub async fn connect(&self, timeout: Option<Duration>) -> Result<DaemonTransport, RpcError> {
-        if let Some(target) = self.channel_target()? {
-            let request = match self {
-                Self::Channel { account, .. } | Self::ThisComputer { account, .. } => {
-                    account.request
-                }
-                Self::HttpFixture { .. } | Self::Owner(_) => {
-                    unreachable!("legacy address cannot resolve to a channel")
-                }
+        let mut resolved = self.resolve()?;
+        if let ResolvedDaemon::Owner { within, .. } = &mut resolved {
+            *within = match (&self, timeout) {
+                (Self::Owner(_), timeout) => Some(timeout.unwrap_or(local::CALL_WITHIN)),
+                (_, timeout) => timeout,
             };
-            return Ok(DaemonTransport::Channel(channel::WalletChannel::new(
-                target,
-                request,
-                timeout.unwrap_or(DEFAULT_TIMEOUT),
-            )));
         }
+        resolved.open(timeout).await
+    }
+}
+
+impl ResolvedDaemon {
+    /// A plaintext address may stand in for this computer only when it is
+    /// loopback, direct, and `http`. Anything else is [`PlaintextGate`].
+    /// An enrolled channel and the owner's socket are this computer's doors
+    /// and pass.
+    ///
+    /// # Errors
+    ///
+    /// [`PlaintextGate::NotThisComputer`] or [`PlaintextGate::Unusable`].
+    pub fn require_this_computer(&self) -> Result<(), PlaintextGate> {
+        let Self::Address { url, proxy } = self else {
+            return Ok(());
+        };
+        if proxy.is_some() {
+            return Err(PlaintextGate::NotThisComputer);
+        }
+        let parsed = parse_endpoint(url.clone()).map_err(PlaintextGate::Unusable)?;
+        if parsed.credentials.is_some() || !matches!(parsed.tls, TransportTls::Off) {
+            return Err(PlaintextGate::NotThisComputer);
+        }
+        if network_posture::is_loopback_host(network_posture::host_of(url)) {
+            Ok(())
+        } else {
+            Err(PlaintextGate::NotThisComputer)
+        }
+    }
+
+    /// Open the resolved target.
+    ///
+    /// # Errors
+    ///
+    /// [`RpcError`] from the plaintext client, or a [`channel::ChannelFault`]
+    /// carried as [`RpcError::Channel`].
+    pub async fn open(self, timeout: Option<Duration>) -> Result<DaemonTransport, RpcError> {
+        let within = timeout.unwrap_or(DEFAULT_TIMEOUT);
         match self {
-            Self::Owner(target) => Ok(DaemonTransport::ThisComputer(local::LocalRpc::within(
-                target.clone(),
-                timeout.unwrap_or(local::CALL_WITHIN),
-            ))),
-            Self::Channel { .. } => unreachable!("a named channel always resolves or fails"),
-            Self::ThisComputer { network, .. } => {
-                let target = local::LocalTarget::this_computer(*network);
-                Ok(DaemonTransport::ThisComputer(match timeout {
-                    Some(within) => local::LocalRpc::within(target, within),
-                    None => local::LocalRpc::new(target),
-                }))
-            }
-            Self::HttpFixture { url, proxy } => Ok(DaemonTransport::Address(
-                HttpRpc::with_options(
-                    url.clone(),
-                    timeout.unwrap_or(DEFAULT_TIMEOUT),
-                    proxy.clone(),
-                )
-                .await
-                .map_err(RpcError::from)?,
+            Self::Channel { target, request } => Ok(DaemonTransport::Channel(
+                channel::WalletChannel::new(*target, request, within),
+            )),
+            Self::Owner { target, within } => Ok(DaemonTransport::ThisComputer(match within {
+                Some(bound) => local::LocalRpc::within(target, bound),
+                None => local::LocalRpc::new(target),
+            })),
+            Self::Address { url, proxy } => Ok(DaemonTransport::Address(
+                HttpRpc::with_options(url, within, proxy)
+                    .await
+                    .map_err(RpcError::from)?,
             )),
         }
     }

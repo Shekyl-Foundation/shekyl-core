@@ -149,16 +149,14 @@ pub enum RpcError {
 /// 2026-11-17): the one wording, which every layer that reports it uses.
 #[must_use]
 pub fn service_refusal(view: Option<core::net::SocketAddr>) -> String {
+    let channel = "The node on this computer runs as a service. Leave the daemon endpoint unset \
+         to use its channel, and enroll this account if the node asks.";
     match view {
-        Some(view) => format!(
-            "The node on this computer runs as a service. Until wallets reach a service over \
-             the channel, set daemon-address = {view}"
+        Some(_) => channel.to_owned(),
+        None => format!(
+            "{channel} If it has not published a channel, set rpc-listen to a loopback address \
+             on the node."
         ),
-        None => "The node on this computer runs as a service and serves no wallet leg: it has \
-                 no view listener. Until wallets reach a service over the channel, its \
-                 operator sets rpc-view-listen, and this wallet sets daemon-address to that \
-                 listener."
-            .to_string(),
     }
 }
 

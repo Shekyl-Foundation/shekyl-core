@@ -3,10 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The channel end to end (RT-W10 step 4): the listener on a real socket,
-//! the real handshake from the client's side, the record stream, and HTTP
-//! over it into the router. No mock transport. Each test names the change
-//! that makes it fail.
+//! The channel end to end (RT-W10 step 4). Wallet enrollment is in [`wallet_client`].
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -46,10 +43,10 @@ fn network_id() -> NetworkId {
 }
 
 /// The host's administrator, as the owner's leg stamps it.
-const HOST: Authority = Authority::owner(false);
+pub(super) const HOST: Authority = Authority::owner(false);
 
 /// A served channel and its data directory.
-struct Served {
+pub(super) struct Served {
     _dir: tempfile::TempDir,
     data_dir: PathBuf,
     channel: Arc<Channel>,
@@ -263,7 +260,7 @@ impl Session {
     }
 }
 
-fn code(reply: &Value) -> Option<&str> {
+pub(super) fn code(reply: &Value) -> Option<&str> {
     reply["error"]["data"]["code"].as_str()
 }
 
@@ -999,152 +996,4 @@ fn the_console_key_reset_replaces_the_console_and_nothing_else() {
     );
 }
 
-/// Drive the actual wallet connection against a responding daemon. The key
-/// and bundle come from disk, as they do at the wallet's first remote use.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn wallet_enrollment_wrong_bundle_and_revocation() {
-    let served = Served::start(false).await;
-    let dir = tempfile::tempdir().unwrap();
-    let key_file = dir.path().join("client.key");
-    let bundle_file = dir.path().join("bundle");
-    std::fs::write(
-        &bundle_file,
-        client::bundle_text(&served.channel.bundle_show().bundle.0),
-    )
-    .unwrap();
-    let node = client::RemoteNode {
-        leg: client::Leg::ip(served.addr, None),
-        bundle_file,
-    };
-    let open = || {
-        client::account_target(
-            shekyl_network::Network::Regtest,
-            node.leg.clone(),
-            node.bundle().unwrap(),
-            Some(&key_file),
-        )
-    };
-    let first = open().err().expect("first use creates a key and stops");
-    let key = client::read_client_key(&key_file).unwrap().unwrap();
-    let fingerprint = *key.public().fingerprint().as_bytes();
-    assert_eq!(first, client::ChannelFault::NotEnrolled { fingerprint });
-    let network = shekyl_network::Network::Regtest;
-    let instance = shekyl_rpc_rendezvous::Instance::Default;
-    let local = shekyl_rpc_transport::local::LocalTarget::test_override(
-        network,
-        &instance,
-        Some(dir.path()),
-        Some(dir.path()),
-    );
-    let service = shekyl_rpc_rendezvous::ServiceRecord {
-        channel: Some(shekyl_rpc_rendezvous::ServiceChannel {
-            address: served.addr,
-            bundle: served.channel.bundle_show().bundle.0,
-        }),
-        view: None,
-    };
-    std::fs::write(
-        shekyl_rpc_rendezvous::service_record_path(dir.path(), &network.network_id(), &instance),
-        service.bytes(),
-    )
-    .unwrap();
-    let local_wallet = || {
-        client::WalletChannel::new(
-            local
-                .wallet_channel(
-                    network,
-                    &shekyl_rpc_transport::ChannelAccount {
-                        key_file: Some(key_file.clone()),
-                        ..Default::default()
-                    },
-                )
-                .unwrap()
-                .expect("the service published a channel"),
-            Preset::Wallet.grants(),
-            Duration::from_secs(5),
-        )
-    };
-    let body = br#"{"jsonrpc":"2.0","id":1,"method":"version","params":{}}"#;
-    let connect = || {
-        client::WalletChannel::new(
-            open().unwrap(),
-            Preset::Wallet.grants(),
-            Duration::from_secs(5),
-        )
-    };
-    assert_eq!(
-        connect().post("json_rpc", body.to_vec()).await.unwrap_err(),
-        first
-    );
-    assert_eq!(
-        local_wallet()
-            .post("json_rpc", body.to_vec())
-            .await
-            .unwrap_err(),
-        first
-    );
-    served.enroll(&key, &[CeilingWord::Wallet]);
-    let wallet = connect();
-    let reply = wallet.post("json_rpc", body.to_vec()).await.unwrap();
-    assert_eq!(
-        local_wallet()
-            .post("json_rpc", body.to_vec())
-            .await
-            .unwrap(),
-        reply
-    );
-    // The fixture deliberately has no node handles. Version reaches the handler
-    // and returns that application's typed refusal over the admitted channel.
-    let version: Value = serde_json::from_slice(&reply).unwrap();
-    assert_eq!(code(&version), Some("daemon.unready"), "{version}");
-    served.channel.client_remove(HOST, fingerprint).unwrap();
-    assert_eq!(
-        wallet.post("json_rpc", body.to_vec()).await.unwrap_err(),
-        client::ChannelFault::Revoked { fingerprint }
-    );
-    let other = StaticKeypair::generate().unwrap();
-    std::fs::write(
-        &node.bundle_file,
-        client::bundle_text(&super::bundle(&other)),
-    )
-    .unwrap();
-    let wrong = connect();
-    for _ in 0..2 {
-        assert!(matches!(
-            wrong.post("json_rpc", body.to_vec()).await,
-            Err(client::ChannelFault::NotRecognised { .. })
-        ));
-    }
-    // A complete, invalid second message is a different failure than a real
-    // daemon closing before it sends its proof.
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let answer = tokio::spawn(async move {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        let (mut stream, _) = listener.accept().await.unwrap();
-        let mut hello = vec![0; shekyl_rpc_channel::handshake::MESSAGE1_LEN];
-        stream.read_exact(&mut hello).await.unwrap();
-        stream
-            .write_all(&vec![0; shekyl_rpc_channel::handshake::MESSAGE2_LEN])
-            .await
-            .unwrap();
-    });
-    let target = client::account_target(
-        network,
-        client::Leg::ip(addr, None),
-        node.bundle().unwrap(),
-        Some(&key_file),
-    )
-    .unwrap();
-    let wallet =
-        client::WalletChannel::new(target, Preset::Wallet.grants(), Duration::from_secs(5));
-    for _ in 0..2 {
-        assert!(matches!(
-            wallet.post("json_rpc", body.to_vec()).await,
-            Err(client::ChannelFault::NotTheDaemon { .. })
-        ));
-    }
-    answer.await.unwrap();
-    served.stop.send_replace(true);
-    served.serving.await.unwrap().unwrap();
-}
+mod wallet_client;

@@ -190,7 +190,7 @@ fn verify(options: &Options) {
             std::process::exit(EXIT_REFUSED);
         }
     }
-    if let DaemonTarget::HttpFixture { url, proxy, .. } = &options.daemon {
+    if let DaemonTarget::Address { url, proxy, .. } = &options.daemon {
         if let Err(e) = shekyl_rpc_transport::validate_endpoint(url, proxy.as_deref()) {
             shekyl_cli::err_line!("{PROGRAM}: {e}");
             std::process::exit(EXIT_REFUSED);
@@ -285,7 +285,7 @@ fn disclose_network_posture(options: &Options, endpoints: &Endpoints) {
     }
     // "This computer" is no network path: nothing to disclose.
     if let DaemonEndpoint {
-        target: DaemonTarget::HttpFixture { url, proxy, .. },
+        target: DaemonTarget::Address { url, proxy, .. },
         resolution,
     } = endpoints.daemon()
     {
@@ -380,13 +380,11 @@ fn daemon_down_hint(network: Network, target: &DaemonTarget) -> Option<String> {
         // on "127.0.0.1" would accept 127.0.0.1.evil.com and miss
         // 127.0.0.0/8. Loopback-only hint — "start shekyld" is true of this
         // machine, not of a remote node the operator named.
-        DaemonTarget::HttpFixture { url, .. } if daemon::is_loopback_endpoint(url) => {
-            Some(format!(
-                "Start the {network} daemon with: shekyld{flag} (its RPC answers on port {port}).",
-                port = network.ports().rpc,
-            ))
-        }
-        DaemonTarget::Channel { .. } | DaemonTarget::HttpFixture { .. } => None,
+        DaemonTarget::Address { url, .. } if daemon::is_loopback_endpoint(url) => Some(format!(
+            "Start the {network} daemon with: shekyld{flag} (its RPC answers on port {port}).",
+            port = network.ports().rpc,
+        )),
+        DaemonTarget::Channel { .. } | DaemonTarget::Address { .. } => None,
     }
 }
 

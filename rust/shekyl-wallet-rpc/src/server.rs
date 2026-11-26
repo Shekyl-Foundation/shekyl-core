@@ -401,7 +401,7 @@ fn validate_daemon_endpoint(config: &ServerConfig) -> Result<(), BoxErr> {
         node.bundle()?;
         return Ok(());
     }
-    let DaemonTarget::HttpFixture { url, proxy, .. } = &config.daemon else {
+    let DaemonTarget::Address { url, proxy, .. } = &config.daemon else {
         // "This computer" has no address to check: its rendezvous is read at
         // each call.
         return Ok(());
@@ -433,7 +433,7 @@ fn daemon_disclosures(config: &ServerConfig) -> DaemonDisclosures {
     match &config.daemon {
         DaemonTarget::Channel { node, .. } => node.leg.disclosures("daemon-endpoint"),
         DaemonTarget::Owner(_) | DaemonTarget::ThisComputer { .. } => DaemonDisclosures::default(),
-        DaemonTarget::HttpFixture { url, proxy, .. } => {
+        DaemonTarget::Address { url, proxy, .. } => {
             shekyl_rpc_transport::network_posture::daemon_disclosures(
                 "daemon-endpoint",
                 url,

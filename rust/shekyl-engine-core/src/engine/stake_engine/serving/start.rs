@@ -40,22 +40,15 @@ pub enum ServingStartError {
     /// `StakeEngineError` (same shape as `PScanStartError::LoadFailed`).
     #[error("the persona's serving identity is unavailable")]
     Identity(#[source] Box<dyn std::error::Error + Send + Sync>),
-    /// The daemon this wallet talks to is not on loopback, so there is no
-    /// persona-isolated transport to derive the serve-set over.
-    ///
-    /// Serving currently requires an **own node** — which is the documented
-    /// privacy default (SP-T2: "run-your-own-node is the privacy default"), and
-    /// the ② remote posture that would lift this is the unbuilt 2c
-    /// config-source slice. Refused loudly with the remedy named rather than
-    /// silently serving a set derived over the principal's shared connection.
-    ///
-    /// The source may name the refused URL; do not stringify it onto a client
-    /// surface.
-    #[error(
-        "serving derives its shard set over a persona-isolated transport, which \
-         currently requires your own node on loopback"
-    )]
-    DaemonNotLoopback(#[source] Box<dyn std::error::Error + Send + Sync>),
+    /// A plaintext daemon address is not this computer. The serve-set is
+    /// read from this computer or from an enrolled channel. The value does
+    /// not carry the address.
+    #[error("{}", shekyl_rpc_transport::PLAINTEXT_NOT_THIS_COMPUTER)]
+    PlaintextNotLocal,
+    /// The daemon target failed before a serve-set could be read. A channel
+    /// refusal keeps its own remedy.
+    #[error("{0}")]
+    Daemon(shekyl_rpc_client::DaemonFault),
     /// A serving host is already running for this wallet — the single-flight
     /// slot is held. Two hosts would publish the same onion and fight over
     /// one Tor data directory.
@@ -114,12 +107,9 @@ where
     ///
     /// # The daemon endpoint is the caller's
     ///
-    /// The serve-set is derived over a persona-isolated transport, and the
-    /// wallet's daemon address lives with the embedder rather than on the
-    /// `Engine` — the same shape `submit_emission_claim` already uses for the
-    /// claim path. The caller passes the address it already holds; this method
-    /// builds the ① local-posture transport from it and refuses anything that
-    /// is not loopback.
+    /// The serve-set is read from the wallet's configured daemon: this
+    /// computer, or an enrolled channel. A plaintext address on another
+    /// computer is refused before anything is derived.
     ///
     /// # No filesystem I/O under the engine lock
     ///
@@ -210,17 +200,19 @@ where
                 .map_err(|e| ServingStartError::Identity(Box::new(e)))?,
         );
 
-        // ① local posture. `WalletNodeRpc` refuses a non-loopback URL by
-        // construction, so the refusal below is the type's, not a check here.
-        let claim_rpc = crate::engine::prpc::WalletNodeRpc::new(daemon, CLAIM_SOURCE_TIMEOUT)
+        let claim_rpc = crate::engine::prpc::open_chain_reader(daemon, CLAIM_SOURCE_TIMEOUT)
             .await
-            .map_err(|e| ServingStartError::DaemonNotLoopback(Box::new(e)))?;
+            .map_err(|error| match error {
+                crate::engine::prpc::ChainOpen::PlaintextNotLocal => {
+                    ServingStartError::PlaintextNotLocal
+                }
+                crate::engine::prpc::ChainOpen::Fault(fault) => ServingStartError::Daemon(fault),
+                crate::engine::prpc::ChainOpen::Unusable(error) => {
+                    ServingStartError::Daemon(error.fault())
+                }
+            })?;
 
-        // The `SF-D5` gate's height (`WSS-24`), on the same loopback transport,
-        // cloned rather than re-derived: one construction, one loopback proof,
-        // and no second place that could be pointed somewhere else. (The
-        // circled numerals elsewhere in this file number the *postures*, not
-        // these steps — this is still ① local.)
+        // The `SF-D5` gate's height (`WSS-24`), on this same reader.
         //
         // Both timings come off the block target, which is already
         // single-sourced here for the staleness bound below.
@@ -372,7 +364,7 @@ mod tests {
             panic!("non-loopback must fail closed");
         };
         assert!(
-            matches!(err, ServingStartError::DaemonNotLoopback(_)),
+            matches!(err, ServingStartError::PlaintextNotLocal),
             "got {err:?}"
         );
         assert!(

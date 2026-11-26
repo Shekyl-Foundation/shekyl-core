@@ -977,9 +977,10 @@ fn stake_fill_error(fill: shekyl_engine_core::CompleteTreeFillError) -> WalletRp
             scanned: scanned.to_raw(),
             needed: needed.to_raw(),
         },
-        C::Fill(F::LocalNodeRequired { detail }) => {
-            WalletRpcError::StakeLocalNodeRequired { detail }
-        }
+        C::Fill(F::LocalNodeRequired) => WalletRpcError::StakeLocalNodeRequired {
+            detail: shekyl_rpc_transport::PLAINTEXT_NOT_THIS_COMPUTER.to_owned(),
+        },
+        C::Fill(F::Channel(fault)) => WalletRpcError::Channel(fault),
         C::Fill(F::DaemonSyncing) => WalletRpcError::StakeDaemonSyncing,
         C::Fill(F::DaemonUnreachable { detail }) => {
             WalletRpcError::StakeDaemonUnreachable { detail }
@@ -1274,8 +1275,8 @@ mod tests {
 
     use serde_json::json;
     use shekyl_crypto_pq::wallet_envelope::KdfParams;
-    use shekyl_engine_core::__test_helpers::make_staker_for_test;
     use shekyl_engine_core::Network;
+    use shekyl_engine_core::__test_helpers::make_staker_for_test;
     use tokio::sync::Mutex;
 
     /// The fastest valid Argon2 profile (`m_log2` lower bound 8, `t`/`p` = 1) —

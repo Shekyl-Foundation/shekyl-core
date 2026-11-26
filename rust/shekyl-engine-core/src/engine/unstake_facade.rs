@@ -106,7 +106,7 @@ use super::fee_policy::FeeEstimatorError;
 use super::fee_snapshot::map_daemon_engine_fee_error;
 use super::pending::TxHash;
 use super::pending_post_gate::{ForegroundSession, UserPendingPost};
-use super::prpc::WalletNodeRpc;
+use super::prpc::{open_chain_reader, ChainOpen};
 use super::release_dispatch::ReleaseRequestError;
 use super::signer::EngineSignerKind;
 use super::stake_engine::StakeEngineError;
@@ -192,8 +192,8 @@ pub enum UnstakeError {
          chain disagree; resync and retry"
     )]
     NoBondRecord,
-    /// The exit-transport constructor refused the daemon address (the ①
-    /// local posture accepts loopback only).
+    /// The exit's record fetch was given a plaintext daemon address that
+    /// is not this computer. An enrolled channel is not this refusal.
     #[error("exit transport: {detail}")]
     Transport {
         /// The constructor's own reason.
@@ -666,10 +666,9 @@ where
     /// and the exit pays `P`'s own base address (never the principal — the
     /// P↔principal edge is drawn only by the later, separate
     /// [`Self::collect_unstaked`] sweep). `daemon_address` is the
-    /// embedder-held endpoint (the [`Self::start_serving_if_staker`] shape);
-    /// the record fetch rides the ① local-posture transport built from it,
-    /// which refuses a non-loopback URL by construction (posture *selection*
-    /// remains the DQ-T2.3 slice).
+    /// embedder-held endpoint (the [`Self::start_serving_if_staker`] shape).
+    /// The record fetch uses that daemon: this computer, or an enrolled
+    /// channel. A plaintext address on another computer is refused.
     pub async fn unstake(
         engine: Arc<RwLock<Engine<S, D, LocalLedger, E, R, P, WalletFile>>>,
         daemon: &shekyl_rpc_transport::DaemonTarget,
@@ -711,11 +710,21 @@ where
                 UnstakeTarget::NothingStaked => return Err(UnstakeError::NothingStaked),
             };
 
-        // ① local posture; refuses non-loopback by construction.
-        let release_rpc = WalletNodeRpc::new(daemon, EXIT_FETCH_TIMEOUT)
+        let release_rpc = open_chain_reader(daemon, EXIT_FETCH_TIMEOUT)
             .await
-            .map_err(|e| UnstakeError::Transport {
-                detail: e.to_string(),
+            .map_err(|error| match error {
+                ChainOpen::PlaintextNotLocal => UnstakeError::Transport {
+                    detail: shekyl_rpc_transport::PLAINTEXT_NOT_THIS_COMPUTER.to_owned(),
+                },
+                ChainOpen::Fault(shekyl_rpc_client::DaemonFault::Channel(fault)) => {
+                    UnstakeError::DaemonTarget(shekyl_rpc_client::DaemonFault::Channel(fault))
+                }
+                ChainOpen::Fault(other) => UnstakeError::DaemonUnreachable {
+                    detail: other.to_string(),
+                },
+                ChainOpen::Unusable(error) => UnstakeError::DaemonUnreachable {
+                    detail: error.to_string(),
+                },
             })?;
 
         let witness = SpentRecordsDurablyPruned::arm1_watch_pruning_live();

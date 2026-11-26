@@ -1380,13 +1380,11 @@ pub enum WalletRpcError {
         /// Which daemon query failed, and the transport's own reason.
         detail: String,
     },
-    /// `unstake` (`-29528`): the exit lane needs the wallet's own loopback
-    /// node; this server points at a non-loopback daemon.
+    /// `unstake` (`-29528`): the exit's record fetch uses this computer or
+    /// an enrolled channel. A plaintext address on another computer is neither.
     #[error(
-        "unstake needs this wallet's own node: the exit's record fetch runs \
-         over loopback only — point the wallet server's daemon address at a \
-         local node (remote-daemon support for the exit arrives with \
-         transport-posture selection)"
+        "unstake reads the exit from your own node or from the enrolled channel. \
+         A plaintext address on another computer is not that node."
     )]
     UnstakeLocalNodeRequired {
         /// The transport constructor's own refusal.
@@ -1524,12 +1522,12 @@ pub enum WalletRpcError {
         /// What disagreed.
         detail: String,
     },
-    /// `stake` (`-29541`): the persona body store is filled from the
-    /// wallet's own node over loopback; this server's daemon address is not
-    /// loopback.
+    /// `stake` (`-29541`): the persona body store is filled from this
+    /// computer or an enrolled channel. A plaintext address on another
+    /// computer is neither.
     #[error(
-        "staking needs this wallet's own node: the shards a bond holds are read from it over \
-         loopback — point the wallet server's daemon address at a local node"
+        "staking reads the bond's shards from your own node or from the enrolled channel. \
+         A plaintext address on another computer is not that node."
     )]
     StakeLocalNodeRequired {
         /// The transport constructor's own refusal.
@@ -1620,32 +1618,7 @@ impl WalletRpcError {
             Self::DaemonProtocolViolation => WalletRpcErrorCode::DaemonProtocolViolation,
             Self::DaemonGrantRefused => WalletRpcErrorCode::DaemonGrantRefused,
             Self::DaemonPeerCheckFailed => WalletRpcErrorCode::DaemonPeerCheckFailed,
-            Self::Channel(fault) => match fault {
-                shekyl_rpc_client::WalletChannelFault::NotEnrolled(_) => {
-                    WalletRpcErrorCode::ChannelNotEnrolled
-                }
-                shekyl_rpc_client::WalletChannelFault::NotTheDaemon => {
-                    WalletRpcErrorCode::ChannelNotTheDaemon
-                }
-                shekyl_rpc_client::WalletChannelFault::NotRecognised => {
-                    WalletRpcErrorCode::ChannelNotRecognised
-                }
-                shekyl_rpc_client::WalletChannelFault::Unreachable => {
-                    WalletRpcErrorCode::ChannelUnreachable
-                }
-                shekyl_rpc_client::WalletChannelFault::TimedOut => {
-                    WalletRpcErrorCode::ChannelTimedOut
-                }
-                shekyl_rpc_client::WalletChannelFault::Busy => WalletRpcErrorCode::ChannelBusy,
-                shekyl_rpc_client::WalletChannelFault::PoolFull => {
-                    WalletRpcErrorCode::ChannelPoolFull
-                }
-                shekyl_rpc_client::WalletChannelFault::SessionCap => {
-                    WalletRpcErrorCode::ChannelSessionCap
-                }
-                shekyl_rpc_client::WalletChannelFault::Closed => WalletRpcErrorCode::ChannelClosed,
-                shekyl_rpc_client::WalletChannelFault::Local => WalletRpcErrorCode::ChannelLocal,
-            },
+            Self::Channel(fault) => channel_rpc_code(*fault),
             Self::DaemonIsAService { .. } => WalletRpcErrorCode::DaemonIsAService,
             Self::ChainUnstable => WalletRpcErrorCode::ChainUnstable,
             Self::ResyncRequired { .. } => WalletRpcErrorCode::ResyncRequired,
@@ -2086,10 +2059,11 @@ impl From<ServingStartError> for WalletRpcError {
                 tracing::warn!(error = %source, "serving start: persona identity unavailable");
                 Self::ServingIdentityUnavailable
             }
-            ServingStartError::DaemonNotLoopback(source) => {
-                tracing::warn!(error = %source, "serving start: daemon is not loopback");
+            ServingStartError::PlaintextNotLocal => {
+                tracing::warn!("serving start: plaintext daemon is not this computer");
                 Self::ServingLocalNodeRequired
             }
+            ServingStartError::Daemon(fault) => from_daemon_fault(fault, "serving start"),
         }
     }
 }
@@ -2188,6 +2162,24 @@ impl From<SignFault> for WalletRpcError {
 // ---------------------------------------------------------------------------
 // The daemon: each fault, named where it was raised, to its own code.
 // ---------------------------------------------------------------------------
+
+/// The wallet RPC code for a channel failure. A new fault is named here.
+/// [`WalletRpcError::code`] does not grow an inner match.
+const fn channel_rpc_code(fault: shekyl_rpc_client::WalletChannelFault) -> WalletRpcErrorCode {
+    use shekyl_rpc_client::WalletChannelFault as Fault;
+    match fault {
+        Fault::NotEnrolled(_) => WalletRpcErrorCode::ChannelNotEnrolled,
+        Fault::NotTheDaemon => WalletRpcErrorCode::ChannelNotTheDaemon,
+        Fault::NotRecognised => WalletRpcErrorCode::ChannelNotRecognised,
+        Fault::Unreachable => WalletRpcErrorCode::ChannelUnreachable,
+        Fault::TimedOut => WalletRpcErrorCode::ChannelTimedOut,
+        Fault::Busy => WalletRpcErrorCode::ChannelBusy,
+        Fault::PoolFull => WalletRpcErrorCode::ChannelPoolFull,
+        Fault::SessionCap => WalletRpcErrorCode::ChannelSessionCap,
+        Fault::Closed => WalletRpcErrorCode::ChannelClosed,
+        Fault::Local => WalletRpcErrorCode::ChannelLocal,
+    }
+}
 
 /// A daemon failure by its [`DaemonFault`]. `detail` is the failure's own
 /// rendering and can carry text the daemon sent, so it goes to the log
@@ -4851,24 +4843,24 @@ mod tests {
         ]
     }
 
-    /// A service at "this computer" says what to set (Rick, 2026-11-17):
-    /// the view listener as the `daemon-address`, or, with none, that the
-    /// node serves no wallet leg and `rpc-view-listen`. A failed peer check
-    /// is reported as the security failure it is.
+    /// A service at "this computer" is reached over its channel. The view
+    /// address stays in `data` and is not a `daemon-address` to set. A
+    /// failed peer check is reported as the security failure it is.
     #[test]
     fn a_service_here_names_the_setting_and_a_peer_check_is_a_security_failure() {
         let view = from_daemon_fault(
             DaemonFault::Service(Some("127.0.0.1:11030".parse().unwrap())),
             DAEMON_TEXT,
         );
-        assert_eq!(
-            view.message(),
-            "The node on this computer runs as a service. Until wallets reach a service over \
-             the channel, set daemon-address = 127.0.0.1:11030"
+        assert!(view.message().contains("channel"), "{}", view.message());
+        assert!(
+            !view.message().contains("daemon-address"),
+            "{}",
+            view.message()
         );
         let none = from_daemon_fault(DaemonFault::Service(None), DAEMON_TEXT).message();
-        assert!(none.contains("serves no wallet leg"), "{none}");
-        assert!(none.contains("rpc-view-listen"), "{none}");
+        assert!(none.contains("rpc-listen"), "{none}");
+        assert!(!none.contains("daemon-address"), "{none}");
         let peer = from_daemon_fault(DaemonFault::PeerCheck, DAEMON_TEXT).message();
         assert!(peer.contains("did not connect"), "{peer}");
 
