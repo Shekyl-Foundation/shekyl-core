@@ -18,6 +18,29 @@ use super::handshake::ChannelTarget;
 use super::session::Session;
 use super::ChannelFault;
 
+/// How one lent exchange ended. A deadline is not a hangup: only
+/// [`ExchangeEnd::HungUp`] is rechecked for revocation.
+enum ExchangeEnd {
+    /// The node answered.
+    Answer(Vec<u8>),
+    /// The session ended under the call. Do not resend the body.
+    HungUp,
+    /// The call's bound elapsed. Do not dial.
+    Budget,
+    /// The exchange failed for a reason that is not a hangup.
+    Failed(ChannelFault),
+}
+
+/// `finished` is `None` when the call bound elapsed before the exchange did.
+fn exchange_end(finished: Option<Result<Vec<u8>, ChannelFault>>) -> ExchangeEnd {
+    match finished {
+        Some(Ok(body)) => ExchangeEnd::Answer(body),
+        Some(Err(ChannelFault::Closed)) => ExchangeEnd::HungUp,
+        Some(Err(fault)) => ExchangeEnd::Failed(fault),
+        None => ExchangeEnd::Budget,
+    }
+}
+
 /// How long a pool's extra session may sit idle before the pool closes it.
 ///
 /// **Assumption** (Rick, 2026-11-15). Basis: a session costs each side
@@ -222,6 +245,38 @@ impl Pool {
         })
     }
 
+    /// One POST on a lent session, bounded by `within`.
+    ///
+    /// A session that ends under the call is rechecked for revocation, and
+    /// the body is not sent again. A budget expiry is [`ChannelFault::Budget`]:
+    /// the in-flight session is dropped and the pool does not dial.
+    ///
+    /// # Errors
+    ///
+    /// [`ChannelFault`], from lending, the exchange, the budget, or the
+    /// revocation recheck.
+    pub async fn post(
+        &self,
+        route: &str,
+        body: Vec<u8>,
+        within: Duration,
+    ) -> Result<Vec<u8>, ChannelFault> {
+        let mut lent = self.lend().await?;
+        let exchange = async {
+            lent.session().confirm().await?;
+            lent.session().post(route, body).await
+        };
+        match exchange_end(tokio::time::timeout(within, exchange).await.ok()) {
+            ExchangeEnd::Answer(body) => {
+                self.give_back(lent);
+                Ok(body)
+            }
+            ExchangeEnd::HungUp => Err(self.closed_exchange(lent).await),
+            ExchangeEnd::Budget => Err(ChannelFault::Budget),
+            ExchangeEnd::Failed(fault) => Err(fault),
+        }
+    }
+
     /// Give a session back after its exchange. A closed one is dropped.
     pub fn give_back(&self, lent: Lent) {
         let Lent { session, _slot } = lent;
@@ -337,6 +392,24 @@ impl Pool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A deadline is not a closed connection, so it does not recheck revocation.
+    #[test]
+    fn a_deadline_is_not_a_closed_connection() {
+        assert!(matches!(exchange_end(None), ExchangeEnd::Budget));
+        assert!(matches!(
+            exchange_end(Some(Err(ChannelFault::Closed))),
+            ExchangeEnd::HungUp
+        ));
+        assert!(matches!(
+            exchange_end(Some(Err(ChannelFault::TimedOut))),
+            ExchangeEnd::Failed(ChannelFault::TimedOut)
+        ));
+        assert!(matches!(
+            exchange_end(Some(Ok(b"ok".to_vec()))),
+            ExchangeEnd::Answer(body) if body == b"ok"
+        ));
+    }
 
     /// The kept session stays however long it idles. An extra past
     /// [`EXTRA_SESSION_IDLE`] goes, unless it is promoted into the empty

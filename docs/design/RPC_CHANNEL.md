@@ -1218,10 +1218,10 @@ internals); the log may be specific.
 
 | Failure | Client can distinguish? | Client says | Daemon log says |
 |---|---|---|---|
-| Client holds a stale or wrong daemon bundle; client is on another network; version mismatch | No — all close after message 1, no reply | "The node at ADDRESS closed the connection without answering. It does not recognise this client's copy of its key, is on a different network, or runs a different version. The node's log records which." | Rate-limited, aggregated per source: "unauthenticated channel handshake from IP: the sender does not hold this node's current key, is on another network, or speaks another channel version" |
-| Client fingerprint not enrolled | Yes — daemon answered, then closed after message 3 | "The node answered but has not enrolled this client. Enroll it on the node with: `shekyl-cli rpc client add FINGERPRINT --ceiling GRANTS`." | "refused unenrolled client FINGERPRINT from IP" — the fingerprint is printed so the operator can enroll it |
+| Client holds a stale or wrong daemon bundle; client is on another network; version mismatch | No — all close after message 1, no reply | "The node at ADDRESS closed the connection before sending its proof. Check daemon-bundle-file, the network, and the channel version against that node. The node's log records which." | Rate-limited, aggregated per source: "unauthenticated channel handshake from IP: the sender does not hold this node's current key, is on another network, or speaks another channel version" |
+| Client fingerprint not enrolled | Yes — daemon answered, then closed after message 3 | "The node answered but has not enrolled this client. Enroll it on the node with: `shekyl-cli rpc client add FINGERPRINT wallet`." | "refused unenrolled client FINGERPRINT from IP" — the fingerprint is printed so the operator can enroll it |
 | Client fails the post-quantum confirmation (first record does not decrypt) | Yes — closed after message 4 | "The node rejected this client's identity. Its key files may be damaged; regenerate and re-enroll." | **Warning:** "client FINGERPRINT from IP passed classical authentication and failed post-quantum confirmation" — security-significant |
-| Message 2 does not decrypt at the client | Yes | "Something answered at ADDRESS that is not the node you enrolled with. Do not connect; check the address." No retry | Nothing — a daemon with a different key never sends message 2 |
+| Message 2 does not decrypt at the client | Yes | "Something answered at ADDRESS that is not the node in daemon-bundle-file. Do not connect; check the address and obtain the bundle from your node." No retry | Nothing — a daemon with a different key never sends message 2 |
 | Requested grant exceeds the ceiling | Yes — message 4 carries the ceiling, and the client clamps its request to it | "Connected with GRANT; this client is enrolled for at most CEILING." | "client FINGERPRINT requested REQUEST, granted GRANT" |
 | A call for host-only data or an armed test lever from an enrolled key, whatever its ceiling | Yes | "METHOD is served only on the node's own computer, to its administrator." | — |
 | A request over a resource bound (§6.3) | Yes | "This request asks for N; the node serves at most LIMIT per request." Never truncated | — |
@@ -1231,7 +1231,7 @@ internals); the log may be specific.
 | The node's handshake budget is spent (§4.3) | Yes — a busy reply, verified, in place of message 2. The client backs off and retries, and says so only when its handshake deadline expires | "The node is busy and did not accept the connection in time. Try again shortly." | Aggregated: "answered N handshakes busy in the last minute (budget: B a second)" |
 | Both a service and a run-as-me default daemon answer for one network (the overlap before the run-as-me daemon stands down) | Yes — both rendezvous answer | Nothing: "this computer" resolves to the service (RT-16). A client enrolled only with the run-as-me node is told "The node answered but has not enrolled this client", as that row | Run-as-me daemon: "a service node for NETWORK is now running on this computer; shutting down" then a clean shutdown |
 | Starting a run-as-me default daemon while a service default instance answers for its network | (Daemon, at start) "A Shekyl node is already running on this computer as a service for NETWORK." Refuses to start | Same line |
-| Session closed by revocation (§5) | Yes | "The node revoked this client's enrollment." | "revoked FINGERPRINT; closed N open sessions" |
+| Session closed by revocation (§5) | Yes | "The node revoked this client's enrollment. Enroll it again on the node with: `shekyl-cli rpc client add FINGERPRINT wallet`." | "revoked FINGERPRINT; closed N open sessions" |
 
 **The local leg and target resolution (RT-15).**
 
@@ -1248,7 +1248,7 @@ internals); the log may be specific.
 | Service mode: the console key file is missing, unreadable by this user, or damaged | "This command needs the node's console key, which is missing or cannot be read. Run it as an administrator; if the key is lost, stop the node and reset it (§5)." Never falls back to another leg | — (the daemon is not contacted) |
 | A listener answers at the rendezvous and **fails the peer check** (wrong owner, wrong integrity level) | "Something other than your Shekyl node is answering at its local address. Not connecting." Hard stop; no retry, no other leg | — (the daemon is not the party answering) |
 | Windows: the daemon runs for this user in **another logon session** (the pipe admits its own session only) | "Your Shekyl node is running in another sign-in session and can only be reached from there." Known from the rendezvous before dialling | — |
-| Target "this computer" is a service, and this client is not enrolled | As the channel's not-enrolled row: "The node answered but has not enrolled this client. Enroll it with: `shekyl-cli rpc client add FINGERPRINT --ceiling GRANTS`." | "refused unenrolled client FINGERPRINT from IP" |
+| Target "this computer" is a service, and this client is not enrolled | As the channel's not-enrolled row: "The node answered but has not enrolled this client. Enroll it on the node with: `shekyl-cli rpc client add FINGERPRINT wallet`." | "refused unenrolled client FINGERPRINT from IP" |
 
 ---
 

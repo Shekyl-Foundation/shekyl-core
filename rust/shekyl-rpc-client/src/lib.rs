@@ -27,11 +27,30 @@ use shekyl_types::{BlockHash, ChainCount};
 
 pub mod tx_fee;
 
+/// The operator command that enrolls `fingerprint` on its node.
+///
+/// One spelling: the wallet wire, the channel's own sentence, and a
+/// revocation all name this command.
+#[must_use]
+pub fn enrollment_command(fingerprint: &[u8; 32]) -> String {
+    format!(
+        "shekyl-cli rpc client add {} wallet",
+        hex::encode(fingerprint)
+    )
+}
+
+/// What the operator is told when a call exceeds the bound it was opened under.
+///
+/// Distinct from a handshake timeout and from a connection the node closed.
+/// The request is not sent again. A submission may already have been received.
+pub const CALL_BUDGET_EXCEEDED: &str = "The call exceeded its time limit. The node may still be \
+    working. Check its status before repeating a submission.";
+
 /// A wallet-visible channel failure, safe to carry across engine boundaries.
 #[derive(Clone, Copy, Debug, thiserror::Error, PartialEq, Eq, Hash)]
 pub enum WalletChannelFault {
     /// This client key needs enrollment on the wallet’s node.
-    #[error("Enroll this wallet on your node with: shekyl-cli rpc client add {} wallet", hex::encode(.0))]
+    #[error("Enroll this wallet on your node with: {}", enrollment_command(.0))]
     NotEnrolled([u8; 32]),
     /// The daemon proof does not match daemon-bundle-file. Check the endpoint and obtain the bundle from your node.
     #[error("The daemon proof does not match daemon-bundle-file. Check the endpoint and obtain the bundle from your node.")]
@@ -61,6 +80,9 @@ pub enum WalletChannelFault {
     /// The node closed the connection during the call. Check its status before repeating a submission.
     #[error("The node closed the connection during the call. Check its status before repeating a submission.")]
     Closed,
+    /// The call exceeded the bound it was opened under. The request was not sent again.
+    #[error("{CALL_BUDGET_EXCEEDED}")]
+    Budget,
     /// The wallet could not open the channel. Check its key and daemon bundle files and the local log.
     #[error("The wallet could not open the channel. Check its key and daemon bundle files and the local log.")]
     Local,

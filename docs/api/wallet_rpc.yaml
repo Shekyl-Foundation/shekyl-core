@@ -609,7 +609,9 @@ info:
   # when the check fails, naming the build's platform in data.platform.
   # api_version stays 1.
   # 0.26.0: authenticated channel failures have distinct codes. Enrollment
-  # refusals carry data.fingerprint and the node operator's command.
+  # refusals carry data.fingerprint and the node operator's command. A call
+  # that exceeds its own bound is -29225 CHANNEL_BUDGET, distinct from a
+  # connection the node closed.
   version: 0.26.0
   description: >
     JSON-RPC 2.0 interface served by `shekyl-wallet-rpc` (Phase 4 of the
@@ -971,6 +973,7 @@ components:
         - -29222   # CHANNEL_SESSION_CAP
         - -29223   # CHANNEL_CLOSED
         - -29224   # CHANNEL_LOCAL
+        - -29225   # CHANNEL_BUDGET
         - -29300   # PROOF_MALFORMED
         - -29301   # PROOF_TX_SECRET_UNAVAILABLE
         - -29302   # PROOF_NO_PROVABLE_OUTPUTS
@@ -1525,6 +1528,7 @@ components:
           -29222 CHANNEL_SESSION_CAP  This account has reached the node's channel session limit. Close an unused client session.
           -29223 CHANNEL_CLOSED  The node closed the connection during the call. Check its status before repeating a submission.
           -29224 CHANNEL_LOCAL  The wallet could not open the channel. Check its key and daemon bundle files and the local log.
+          -29225 CHANNEL_BUDGET  The call exceeded its time limit. The node may still be working. Check its status before repeating a submission.
           -29214 DAEMON_IS_A_SERVICE      any daemon operation: this
                                           computer's node runs as a
                                           service. data: {"view": address

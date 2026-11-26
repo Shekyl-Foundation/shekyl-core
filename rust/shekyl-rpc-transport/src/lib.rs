@@ -28,10 +28,11 @@ mod http_client;
 pub mod listen;
 pub mod local;
 pub mod network_posture;
+mod target;
 pub mod wallet_http;
-use http_client::{error_chain, HttpClient, HttpError, TransportTls};
 
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
+use http_client::{error_chain, HttpClient, HttpError, TransportTls};
+pub use target::{DaemonTarget, PlaintextGate, ResolvedDaemon, PLAINTEXT_NOT_THIS_COMPUTER};
 
 /// A failure of the connection itself, classified where it is raised.
 ///
@@ -179,260 +180,6 @@ impl Rpc for DaemonTransport {
     }
 }
 
-/// What a wallet is configured to reach (`RPC_CHANNEL.md` RT-15): "this
-/// computer" when no `daemon-endpoint` is given, otherwise the enrolled node.
-/// [`Self::resolve`] is the one reading of that choice. [`Self::connect`]
-/// opens it.
-#[derive(Clone)]
-pub enum DaemonTarget {
-    /// An already resolved owner rendezvous. A harness supplies its instance here.
-    Owner(local::LocalTarget),
-    /// An explicitly named, authenticated node.
-    Channel {
-        /// The wallet network.
-        network: shekyl_network::Network,
-        /// The endpoint and operator-provided bundle.
-        node: channel::RemoteNode,
-        /// Account identity and requested wallet grants.
-        account: ChannelAccount,
-    },
-    /// The node this account runs on this computer, over its owner's leg
-    /// ([`local::LocalTarget::this_computer`]). The network is all a wallet
-    /// names: where this account's node and the machine's service keep
-    /// their rendezvous is this platform's to say, never the wallet's.
-    ThisComputer {
-        /// The wallet's network: which node's rendezvous.
-        network: shekyl_network::Network,
-        /// Used when the local node runs as a service.
-        account: ChannelAccount,
-    },
-    /// Plaintext HTTP. Wallet binaries do not build this: a named node is a
-    /// [`Self::Channel`]. The desktop wallet still does, until its channel
-    /// migration, and tests use it as a stand-in for this computer.
-    Address {
-        /// The daemon's base URL; may carry digest credentials.
-        url: String,
-        /// The SOCKS5h proxy; `None` is direct.
-        proxy: Option<String>,
-    },
-}
-
-/// Why a plaintext address is not a persona's node.
-///
-/// A persona read (a fill, a serve-set, a claim, an exit record) uses this
-/// computer or an enrolled channel. A plaintext address is accepted only when
-/// it is this computer: loopback, direct, and `http`. The refusal names that
-/// fact and never the address.
-#[derive(Clone, Debug)]
-pub enum PlaintextGate {
-    /// The address is not this computer: another host, a proxy, or `https`.
-    NotThisComputer,
-    /// The address is not a base URL this transport can dial.
-    Unusable(RpcError),
-}
-
-/// The target [`DaemonTarget::resolve`] produces. One match, no second pass.
-pub enum ResolvedDaemon {
-    /// An enrolled channel. The target is boxed because it holds the daemon's public bundle.
-    Channel(Box<channel::ChannelTarget>),
-    /// The owner's socket or pipe.
-    ///
-    /// `within` is `None` when the caller asked for [`local::LocalRpc`]'s own
-    /// default. An explicit bound, including the owner-target default, is `Some`.
-    Owner {
-        /// The rendezvous.
-        target: local::LocalTarget,
-        /// The per-call bound, when the caller set one.
-        within: Option<Duration>,
-    },
-    /// Plaintext HTTP, as given.
-    Address {
-        /// The daemon's base URL.
-        url: String,
-        /// The SOCKS5h proxy; `None` is direct.
-        proxy: Option<String>,
-    },
-}
-
-/// The account's identity on an enrolled connection.
-#[derive(Clone, Debug, Default)]
-pub struct ChannelAccount {
-    /// Explicit key location, or the account-wide default.
-    pub key_file: Option<std::path::PathBuf>,
-}
-
-/// Manual: an address may carry digest credentials in its authority, so it
-/// renders through [`redacted_endpoint`], as the proxy does.
-impl std::fmt::Debug for DaemonTarget {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Owner(target) => target.fmt(f),
-            Self::Channel {
-                network,
-                node,
-                account,
-            } => f
-                .debug_struct("Channel")
-                .field("network", network)
-                .field("node", node)
-                .field("account", account)
-                .finish(),
-            Self::ThisComputer { network, .. } => f
-                .debug_struct("ThisComputer")
-                .field("network", network)
-                .finish(),
-            Self::Address { url, proxy } => f
-                .debug_struct("Address")
-                .field("url", &redacted_endpoint(url))
-                .field("proxy", &proxy.as_deref().map(redacted_endpoint))
-                .finish(),
-        }
-    }
-}
-
-/// The sentence a persona read uses when a plaintext address is not this
-/// computer. It names no host and no credential.
-pub const PLAINTEXT_NOT_THIS_COMPUTER: &str = "This reads your own node. A plaintext address on another computer is not that node. Leave the daemon endpoint unset for this computer, or name the node with its bundle.";
-
-impl DaemonTarget {
-    /// A plaintext daemon URL. The desktop wallet still calls this for an
-    /// address a person typed. Wallet binaries build a [`Self::Channel`].
-    #[must_use]
-    pub fn address(url: impl Into<String>) -> Self {
-        Self::Address {
-            url: url.into(),
-            proxy: None,
-        }
-    }
-
-    /// Construct a direct HTTP peer in a test.
-    #[cfg(any(test, feature = "test-override"))]
-    #[must_use]
-    pub fn fixture_address(url: impl Into<String>) -> Self {
-        Self::address(url)
-    }
-
-    /// Construct an HTTP test peer with an explicit route.
-    #[cfg(any(test, feature = "test-override"))]
-    #[must_use]
-    pub fn fixture_with_proxy(url: String, proxy: Option<String>) -> Self {
-        Self::Address { url, proxy }
-    }
-
-    /// Read this target once. A channel or a local service resolves here,
-    /// before any dial. An owner socket and a plaintext address do not.
-    ///
-    /// # Errors
-    ///
-    /// [`channel::ChannelFault`]: the account key, the bundle, or the local
-    /// service record.
-    pub fn resolve(&self) -> Result<ResolvedDaemon, channel::ChannelFault> {
-        match self {
-            Self::Channel {
-                network,
-                node,
-                account,
-            } => Ok(ResolvedDaemon::Channel(Box::new(channel::account_target(
-                *network,
-                node.leg.clone(),
-                node.bundle()?,
-                account.key_file.as_deref(),
-            )?))),
-            Self::ThisComputer { network, account } => {
-                let local = local::LocalTarget::this_computer(*network);
-                match local.wallet_channel(*network, account)? {
-                    Some(target) => Ok(ResolvedDaemon::Channel(Box::new(target))),
-                    None => Ok(ResolvedDaemon::Owner {
-                        target: local,
-                        within: None,
-                    }),
-                }
-            }
-            Self::Owner(target) => Ok(ResolvedDaemon::Owner {
-                target: target.clone(),
-                within: None,
-            }),
-            Self::Address { url, proxy } => Ok(ResolvedDaemon::Address {
-                url: url.clone(),
-                proxy: proxy.clone(),
-            }),
-        }
-    }
-
-    /// This target's transport, each call bounded by `timeout`, or by the
-    /// transport's default when `None`.
-    ///
-    /// # Errors
-    ///
-    /// A named address this transport cannot dial (see
-    /// [`HttpRpc::with_proxy`]). "This computer" does not fail here: a node
-    /// that is not running, a service, or a failed peer check is the first
-    /// call's error. An enrolled channel that is not yet enrolled fails here,
-    /// as [`channel::ChannelFault`].
-    pub async fn connect(&self, timeout: Option<Duration>) -> Result<DaemonTransport, RpcError> {
-        let mut resolved = self.resolve()?;
-        if let ResolvedDaemon::Owner { within, .. } = &mut resolved {
-            *within = match (&self, timeout) {
-                (Self::Owner(_), timeout) => Some(timeout.unwrap_or(local::CALL_WITHIN)),
-                (_, timeout) => timeout,
-            };
-        }
-        resolved.open(timeout).await
-    }
-}
-
-impl ResolvedDaemon {
-    /// A plaintext address may stand in for this computer only when it is
-    /// loopback, direct, and `http`. Anything else is [`PlaintextGate`].
-    /// An enrolled channel and the owner's socket are this computer's doors
-    /// and pass.
-    ///
-    /// # Errors
-    ///
-    /// [`PlaintextGate::NotThisComputer`] or [`PlaintextGate::Unusable`].
-    pub fn require_this_computer(&self) -> Result<(), PlaintextGate> {
-        let Self::Address { url, proxy } = self else {
-            return Ok(());
-        };
-        if proxy.is_some() {
-            return Err(PlaintextGate::NotThisComputer);
-        }
-        let parsed = parse_endpoint(url.clone()).map_err(PlaintextGate::Unusable)?;
-        if parsed.credentials.is_some() || !matches!(parsed.tls, TransportTls::Off) {
-            return Err(PlaintextGate::NotThisComputer);
-        }
-        if network_posture::is_loopback_host(network_posture::host_of(url)) {
-            Ok(())
-        } else {
-            Err(PlaintextGate::NotThisComputer)
-        }
-    }
-
-    /// Open the resolved target.
-    ///
-    /// # Errors
-    ///
-    /// [`RpcError`] from the plaintext client, or a [`channel::ChannelFault`]
-    /// carried as [`RpcError::Channel`].
-    pub async fn open(self, timeout: Option<Duration>) -> Result<DaemonTransport, RpcError> {
-        let within = timeout.unwrap_or(DEFAULT_TIMEOUT);
-        match self {
-            Self::Channel(target) => Ok(DaemonTransport::Channel(channel::WalletChannel::new(
-                *target, within,
-            ))),
-            Self::Owner { target, within } => Ok(DaemonTransport::ThisComputer(match within {
-                Some(bound) => local::LocalRpc::within(target, bound),
-                None => local::LocalRpc::new(target),
-            })),
-            Self::Address { url, proxy } => Ok(DaemonTransport::Address(
-                HttpRpc::with_options(url, within, proxy)
-                    .await
-                    .map_err(RpcError::from)?,
-            )),
-        }
-    }
-}
-
 /// An HTTP(S) transport for the RPC.
 ///
 /// Requires tokio.
@@ -454,18 +201,18 @@ pub struct HttpRpc {
 
 /// The offline half of construction: the daemon URL parsed and normalized,
 /// with any authority credentials split out.
-struct ParsedEndpoint {
+pub(crate) struct ParsedEndpoint {
     /// Credential-free base URL, no trailing `/`.
-    url: String,
+    pub(crate) url: String,
     /// Path component of `url` (`""` when it has none).
-    path_prefix: String,
+    pub(crate) path_prefix: String,
     /// `(username, password)` from the URL's authority, if present —
     /// already split and shape-checked, so the offline validator and the
     /// constructor share one credential grammar structurally.
-    credentials: Option<(Zeroizing<String>, Zeroizing<String>)>,
+    pub(crate) credentials: Option<(Zeroizing<String>, Zeroizing<String>)>,
     /// Whether the client builds a TLS layer. `http://` never loads a
     /// root store (see `HttpClient`).
-    tls: TransportTls,
+    pub(crate) tls: TransportTls,
 }
 
 /// Locate a URL's authority userinfo '@' — the credential terminator:
@@ -506,7 +253,7 @@ pub fn redacted_endpoint(url: &str) -> String {
     }
 }
 
-fn parse_endpoint(url: String) -> Result<ParsedEndpoint, RpcError> {
+pub(crate) fn parse_endpoint(url: String) -> Result<ParsedEndpoint, RpcError> {
     // See `authority_at`: only the authority's '@' selects the credential
     // split; the rest of the URL is never consulted.
     let (after_scheme, at_in_authority) = authority_at(&url);
@@ -654,7 +401,7 @@ impl HttpRpc {
     /// A daemon requiring authentication can be used via including the username and password in the
     /// URL.
     pub async fn new(url: String) -> Result<HttpRpc, RpcError> {
-        Self::with_options(url, DEFAULT_TIMEOUT, None)
+        Self::with_options(url, local::CALL_WITHIN, None)
             .await
             .map_err(RpcError::from)
     }
@@ -680,12 +427,12 @@ impl HttpRpc {
     /// A daemon requiring authentication can be used via including the username and password in the
     /// URL.
     pub async fn with_proxy(url: String, proxy: Option<String>) -> Result<HttpRpc, RpcError> {
-        Self::with_options(url, DEFAULT_TIMEOUT, proxy)
+        Self::with_options(url, local::CALL_WITHIN, proxy)
             .await
             .map_err(RpcError::from)
     }
 
-    async fn with_options(
+    pub(crate) async fn with_options(
         url: String,
         request_timeout: Duration,
         proxy: Option<String>,

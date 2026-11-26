@@ -191,7 +191,7 @@ fn the_daemon_down_hint_is_loopback_only_and_names_the_network() {
         testnet,
         &DaemonTarget::ThisComputer {
             network: testnet,
-            account: Default::default(),
+            key_file: None,
         },
     )
     .expect("this computer gets a hint");

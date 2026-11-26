@@ -46,6 +46,9 @@ pub enum ChannelFault {
     },
     /// The handshake did not finish within its deadline, retried once.
     TimedOut,
+    /// The call's own bound elapsed. The request is not sent again, and the
+    /// pool does not dial to decide whether the key was revoked.
+    Budget,
     /// The node answered busy until the handshake deadline.
     Busy,
     /// No session came free within the handshake deadline: this client
@@ -69,23 +72,28 @@ impl std::fmt::Display for ChannelFault {
             }
             Self::NotRecognised { at } => write!(
                 f,
-                "The node at {at} closed the connection without answering. It does not \
-                 recognise this client's copy of its key, is on a different network, or runs \
-                 a different version. The node's log records which."
+                "The node at {at} closed the connection before sending its proof. Check \
+                 daemon-bundle-file, the network, and the channel version against that node. \
+                 The node's log records which."
             ),
             Self::NotTheDaemon { at } => write!(
                 f,
-                "Something answered at {at} that is not the node you enrolled with. Do not \
-                 connect; check the address."
+                "Something answered at {at} that is not the node in daemon-bundle-file. Do not \
+                 connect; check the address and obtain the bundle from your node."
             ),
             Self::NotEnrolled { fingerprint } => write!(
                 f,
                 "The node answered but has not enrolled this client. Enroll it on the node \
-                 with: shekyl-cli rpc client add {} --ceiling GRANTS",
-                hex::encode(fingerprint)
+                 with: {}",
+                shekyl_rpc_client::enrollment_command(fingerprint)
             ),
-            Self::Revoked { .. } => f.write_str("The node revoked this client's enrollment."),
+            Self::Revoked { fingerprint } => write!(
+                f,
+                "The node revoked this client's enrollment. Enroll it again on the node with: {}",
+                shekyl_rpc_client::enrollment_command(fingerprint)
+            ),
             Self::TimedOut => f.write_str("The node did not complete the handshake in time."),
+            Self::Budget => f.write_str(shekyl_rpc_client::CALL_BUDGET_EXCEEDED),
             Self::Busy => f.write_str(
                 "The node is busy and did not accept the connection in time. Try again shortly.",
             ),
@@ -115,6 +123,7 @@ impl From<ChannelFault> for shekyl_rpc_client::RpcError {
             ChannelFault::NotRecognised { .. } => Wallet::NotRecognised,
             ChannelFault::Unreachable { .. } => Wallet::Unreachable,
             ChannelFault::TimedOut => Wallet::TimedOut,
+            ChannelFault::Budget => Wallet::Budget,
             ChannelFault::Busy => Wallet::Busy,
             ChannelFault::PoolFull => Wallet::PoolFull,
             ChannelFault::SessionCap => Wallet::SessionCap,

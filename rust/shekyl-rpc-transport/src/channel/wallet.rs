@@ -104,21 +104,18 @@ impl WalletChannel {
     }
 
     /// One engine POST in a session exclusively lent for this exchange.
+    ///
+    /// The pool's call bound is this channel's bound. A deadline is
+    /// [`ChannelFault::Budget`]. A connection that ends under the call is
+    /// rechecked for revocation, and the body is not sent again.
     pub async fn post(&self, route: &str, body: Vec<u8>) -> Result<Vec<u8>, ChannelFault> {
-        let mut lent = self.pool.lend().await?;
-        let response = tokio::time::timeout(self.within, async {
-            lent.session().confirm().await?;
-            lent.session().post(route, body).await
-        })
-        .await
-        .map_err(|_| ChannelFault::Closed)?;
-        match response {
-            Ok(body) => {
-                self.pool.give_back(lent);
-                Ok(body)
-            }
-            Err(ChannelFault::Closed) => Err(self.pool.closed_exchange(lent).await),
-            Err(fault) => Err(fault),
-        }
+        self.pool.post(route, body, self.within).await
+    }
+
+    /// The bound this channel was opened under.
+    #[cfg(any(test, feature = "test-override"))]
+    #[must_use]
+    pub fn bound(&self) -> Duration {
+        self.within
     }
 }

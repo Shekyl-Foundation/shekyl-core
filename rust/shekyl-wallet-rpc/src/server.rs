@@ -1238,7 +1238,7 @@ mod tests {
         );
         config.daemon = DaemonTarget::ThisComputer {
             network: Network::Stagenet,
-            account: Default::default(),
+            key_file: None,
         };
         assert!(
             daemon_disclosures(&config).is_empty(),

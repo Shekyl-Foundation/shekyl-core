@@ -6,6 +6,10 @@ use super::{client, code, CeilingWord, Duration, Served, StaticKeypair, Value, H
 async fn wallet_enrollment_wrong_bundle_and_revocation() {
     let served = Served::start(false).await;
     let dir = tempfile::tempdir().unwrap();
+    // The owner rendezvous and the service record share a file name on
+    // Windows (`shekyl-<name>`). They live in different directories, which
+    // is also how a machine publishes them.
+    let service_dir = tempfile::tempdir().unwrap();
     let key_file = dir.path().join("client.key");
     let bundle_file = dir.path().join("bundle");
     std::fs::write(
@@ -35,7 +39,7 @@ async fn wallet_enrollment_wrong_bundle_and_revocation() {
         network,
         &instance,
         Some(dir.path()),
-        Some(dir.path()),
+        Some(service_dir.path()),
     );
     let service = shekyl_rpc_rendezvous::ServiceRecord {
         channel: Some(shekyl_rpc_rendezvous::ServiceChannel {
@@ -45,19 +49,18 @@ async fn wallet_enrollment_wrong_bundle_and_revocation() {
         view: None,
     };
     std::fs::write(
-        shekyl_rpc_rendezvous::service_record_path(dir.path(), &network.network_id(), &instance),
+        shekyl_rpc_rendezvous::service_record_path(
+            service_dir.path(),
+            &network.network_id(),
+            &instance,
+        ),
         service.bytes(),
     )
     .unwrap();
     let local_wallet = || {
         client::WalletChannel::new(
             local
-                .wallet_channel(
-                    network,
-                    &shekyl_rpc_transport::ChannelAccount {
-                        key_file: Some(key_file.clone()),
-                    },
-                )
+                .wallet_channel(network, Some(&key_file))
                 .unwrap()
                 .expect("the service published a channel"),
             Duration::from_secs(5),

@@ -54,8 +54,9 @@ use zeroize::Zeroizing;
 
 use crate::JsonRpcError;
 
-/// How long one call on the owner's leg may take, connect to last byte,
-/// unless the caller names its own bound.
+/// The default bound on one daemon call, connect to last byte, when the
+/// caller does not name one. The owner socket, the enrolled channel, and
+/// plaintext all use it.
 pub const CALL_WITHIN: Duration = Duration::from_secs(30);
 
 /// Why a call on "this computer" did not reach the daemon. The two classes
@@ -275,7 +276,7 @@ impl LocalTarget {
     pub fn wallet_channel(
         &self,
         network: Network,
-        account: &crate::ChannelAccount,
+        key_file: Option<&std::path::Path>,
     ) -> Result<Option<crate::channel::ChannelTarget>, crate::channel::ChannelFault> {
         use crate::{channel, listen};
         // Prefer this account's rendezvous when both records exist. The
@@ -312,7 +313,7 @@ impl LocalTarget {
             network,
             channel::Leg::ip(service.address, None),
             bundle,
-            account.key_file.as_deref(),
+            key_file,
         )
         .map(Some)
     }
@@ -813,6 +814,14 @@ impl LocalRpc {
             within,
             refused: Arc::new(std::sync::Mutex::new(None)),
         }
+    }
+
+    /// The bound [`Self::within`] stored. Tests pin that a caller's duration
+    /// survives resolution.
+    #[cfg(any(test, feature = "test-override"))]
+    #[must_use]
+    pub fn bound(&self) -> Duration {
+        self.within
     }
 }
 

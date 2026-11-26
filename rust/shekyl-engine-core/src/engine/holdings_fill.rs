@@ -28,7 +28,7 @@
 //! which must be final.
 //!
 //! **Where the bytes come from.** The wallet's configured node
-//! ([`open_chain_reader`](super::prpc::open_chain_reader)): this computer, or
+//! ([`open_chain_reader`]): this computer, or
 //! an enrolled channel. A plaintext address on another computer is a typed
 //! refusal. A shard the node has already discarded answers `archived`
 //! (`SB-Q2`), and its bodies come back only through the node's recovery
@@ -301,11 +301,14 @@ where
                 .await
                 .map_err(|error| match error {
                     ChainOpen::PlaintextNotLocal => FillFailure::LocalNodeRequired,
-                    ChainOpen::Fault(shekyl_rpc_client::DaemonFault::Channel(fault)) => {
-                        FillFailure::Channel(fault)
-                    }
-                    ChainOpen::Fault(other) => FillFailure::DaemonUnreachable {
-                        detail: other.to_string(),
+                    ChainOpen::Fault { fault, detail } => match fault {
+                        shekyl_rpc_client::DaemonFault::Channel(channel) => {
+                            tracing::warn!(%detail, "the fill could not open the channel");
+                            FillFailure::Channel(channel)
+                        }
+                        other => FillFailure::DaemonUnreachable {
+                            detail: format!("{other} ({detail})"),
+                        },
                     },
                     ChainOpen::Unusable(error) => FillFailure::DaemonUnreachable {
                         detail: error.to_string(),

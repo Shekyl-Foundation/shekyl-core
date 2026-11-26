@@ -24,8 +24,10 @@ impl WalletChainReader for DaemonTransport {}
 pub(crate) enum ChainOpen {
     /// A plaintext address is not this computer. The address is not carried.
     PlaintextNotLocal,
-    /// The enrolled channel, or another classified daemon fault.
-    Fault(DaemonFault),
+    /// A classified daemon fault. `detail` is the transport's own sentence,
+    /// including a local path, and is what a log records beside the operator
+    /// sentence.
+    Fault { fault: DaemonFault, detail: String },
     /// The plaintext URL is not a base this transport can dial. The sentence
     /// is the transport's, which does not echo credentials.
     Unusable(RpcError),
@@ -37,7 +39,14 @@ impl std::fmt::Display for ChainOpen {
             Self::PlaintextNotLocal => {
                 f.write_str(shekyl_rpc_transport::PLAINTEXT_NOT_THIS_COMPUTER)
             }
-            Self::Fault(fault) => fault.fmt(f),
+            Self::Fault { fault, detail } => {
+                let operator = fault.to_string();
+                if detail.is_empty() || *detail == operator {
+                    f.write_str(&operator)
+                } else {
+                    write!(f, "{operator} ({detail})")
+                }
+            }
             Self::Unusable(error) => error.fmt(f),
         }
     }
@@ -45,7 +54,11 @@ impl std::fmt::Display for ChainOpen {
 
 impl ChainOpen {
     fn from_channel(fault: shekyl_rpc_transport::channel::ChannelFault) -> Self {
-        Self::Fault(RpcError::from(fault).fault())
+        let detail = fault.to_string();
+        Self::Fault {
+            fault: RpcError::from(fault).fault(),
+            detail,
+        }
     }
 }
 
@@ -64,15 +77,16 @@ pub(crate) async fn open_chain_reader(
 ) -> Result<DaemonTransport, ChainOpen> {
     let resolved = daemon.resolve().map_err(ChainOpen::from_channel)?;
     resolved
-        .require_this_computer()
+        .refuse_foreign_plaintext()
         .map_err(|gate| match gate {
             PlaintextGate::NotThisComputer => ChainOpen::PlaintextNotLocal,
             PlaintextGate::Unusable(error) => ChainOpen::Unusable(error),
         })?;
-    resolved.open(Some(request_timeout)).await.map_err(|error| {
+    resolved.open(request_timeout).await.map_err(|error| {
         let fault = error.fault();
+        let detail = error.to_string();
         match fault {
-            DaemonFault::Channel(_) => ChainOpen::Fault(fault),
+            DaemonFault::Channel(_) => ChainOpen::Fault { fault, detail },
             _ => ChainOpen::Unusable(error),
         }
     })
@@ -189,5 +203,27 @@ mod tests {
         rpc.post("json_rpc", b"{}".to_vec())
             .await
             .expect_err("port 1 refuses; the delegated post must surface it");
+    }
+
+    /// A persona read on the owner socket keeps the bound the caller named.
+    /// Fill asks for 60s and a claim for 10s; neither is the transport default.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_owner_reader_keeps_the_call_bound() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = shekyl_rpc_transport::DaemonTarget::Owner(
+            shekyl_rpc_transport::local::LocalTarget::test_override(
+                shekyl_network::Network::Regtest,
+                &shekyl_rpc_rendezvous::Instance::Default,
+                Some(dir.path()),
+                None,
+            ),
+        );
+        let rpc = open_chain_reader(&target, Duration::from_secs(60))
+            .await
+            .expect("opening the owner socket does not dial");
+        let shekyl_rpc_transport::DaemonTransport::ThisComputer(local) = rpc else {
+            panic!("the owner rendezvous is the owner socket");
+        };
+        assert_eq!(local.bound(), Duration::from_secs(60));
     }
 }

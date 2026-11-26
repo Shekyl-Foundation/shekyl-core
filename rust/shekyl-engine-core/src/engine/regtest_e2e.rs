@@ -7512,9 +7512,7 @@ async fn handlers_apply_their_own_request_caps() {
             leg: shekyl_rpc_transport::channel::Leg::ip(endpoint, None),
             bundle_file,
         },
-        account: shekyl_rpc_transport::ChannelAccount {
-            key_file: Some(key_file),
-        },
+        key_file: Some(key_file),
     }
     .connect(None)
     .await

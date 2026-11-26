@@ -206,7 +206,10 @@ where
                 crate::engine::prpc::ChainOpen::PlaintextNotLocal => {
                     ServingStartError::PlaintextNotLocal
                 }
-                crate::engine::prpc::ChainOpen::Fault(fault) => ServingStartError::Daemon(fault),
+                crate::engine::prpc::ChainOpen::Fault { fault, detail } => {
+                    tracing::warn!(%detail, "serving could not open the claim source");
+                    ServingStartError::Daemon(fault)
+                }
                 crate::engine::prpc::ChainOpen::Unusable(error) => {
                     ServingStartError::Daemon(error.fault())
                 }

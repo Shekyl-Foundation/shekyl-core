@@ -291,9 +291,7 @@ pub fn daemon_of(
     faults: &mut Vec<Diagnostic>,
 ) -> Option<DaemonTarget> {
     use shekyl_rpc_transport::channel::{Leg, RemoteNode};
-    let account = shekyl_rpc_transport::ChannelAccount {
-        key_file: path_of(resolved, "rpc-key-file"),
-    };
+    let key_file = path_of(resolved, "rpc-key-file");
     let proxy = match resolved.get("daemon-socks") {
         Some(Value::Endpoint(addr)) => Some(*addr),
         _ => None,
@@ -307,7 +305,7 @@ pub fn daemon_of(
                     "daemon-endpoint, the node that exported this bundle",
                 ));
             }
-            return Some(DaemonTarget::ThisComputer { network, account });
+            return Some(DaemonTarget::ThisComputer { network, key_file });
         }
         Some(Value::Peer(PeerEndpoint::Ip(addr))) => Leg::ip(*addr, proxy),
         Some(Value::Peer(PeerEndpoint::Onion { host, port })) => {
@@ -332,7 +330,7 @@ pub fn daemon_of(
     Some(DaemonTarget::Channel {
         network,
         node: RemoteNode { leg, bundle_file },
-        account,
+        key_file,
     })
 }
 

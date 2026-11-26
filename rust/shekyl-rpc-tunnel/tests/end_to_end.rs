@@ -523,7 +523,13 @@ fn enroll_dial_call_revoke_and_a_refused_call_after() {
         std::thread::sleep(POLL);
     };
     if let Some(refused) = refused {
-        assert_eq!(refused, "The node revoked this client's enrollment.");
+        assert!(
+            refused.starts_with("The node revoked this client's enrollment.")
+                && refused.contains(&fingerprint)
+                && refused.contains("rpc client add")
+                && refused.contains("wallet"),
+            "{refused}"
+        );
     }
     let deadline = Instant::now() + Duration::from_secs(30);
     let ended = loop {

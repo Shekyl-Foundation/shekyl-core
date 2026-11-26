@@ -243,7 +243,7 @@ impl DaemonClient {
             ResolvedDaemon::Channel(target) => Ok(Connection::Channel(
                 ChannelDaemon::connect_enrolled(&target).map_err(Self::channel_error)?,
             )),
-            ResolvedDaemon::Owner { target, .. } => Ok(Connection::Owner(target)),
+            ResolvedDaemon::Owner(target) => Ok(Connection::Owner(target)),
         }
     }
 
@@ -343,20 +343,11 @@ impl DaemonClient {
         }
     }
 
+    // CLIPPY: `map_err` and `reply_error` pass the owned fault. The sentence
+    // borrows it; the signature is the callback's.
+    #[allow(clippy::needless_pass_by_value)]
     fn channel_error(fault: ChannelFault) -> DaemonError {
-        let advice = match fault {
-            ChannelFault::NotEnrolled { fingerprint } | ChannelFault::Revoked { fingerprint } => {
-                shekyl_rpc_client::WalletChannelFault::NotEnrolled(fingerprint).to_string()
-            }
-            ChannelFault::NotRecognised { .. } => {
-                shekyl_rpc_client::WalletChannelFault::NotRecognised.to_string()
-            }
-            ChannelFault::NotTheDaemon { .. } => {
-                shekyl_rpc_client::WalletChannelFault::NotTheDaemon.to_string()
-            }
-            other => other.to_string(),
-        };
-        DaemonError::Other(advice)
+        DaemonError::Other(fault.to_string())
     }
 
     /// Call method `M` after the handshake.
@@ -680,7 +671,7 @@ mod tests {
         let client = super::DaemonClient::new(
             shekyl_rpc_transport::DaemonTarget::ThisComputer {
                 network: super::Network::Testnet,
-                account: Default::default(),
+                key_file: None,
             },
             Some("Start the testnet daemon with: shekyld --network testnet".into()),
             super::Network::Testnet,

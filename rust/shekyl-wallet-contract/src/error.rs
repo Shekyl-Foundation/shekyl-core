@@ -353,6 +353,8 @@ wallet_rpc_error_codes! {
     ChannelClosed = -29223 => "CHANNEL_CLOSED",
     /// The wallet could not open the channel. Check its key and daemon bundle files and the local log.
     ChannelLocal = -29224 => "CHANNEL_LOCAL",
+    /// The call exceeded its time limit. The node may still be working. Check its status before repeating a submission.
+    ChannelBudget = -29225 => "CHANNEL_BUDGET",
     /// `check_*`: proof string failed decode / framing / size caps.
     ProofMalformed = -29300 => "PROOF_MALFORMED",
     /// `get_tx_proof` OUTBOUND: no retained per-tx secret for the txid.
@@ -2177,6 +2179,7 @@ const fn channel_rpc_code(fault: shekyl_rpc_client::WalletChannelFault) -> Walle
         Fault::PoolFull => WalletRpcErrorCode::ChannelPoolFull,
         Fault::SessionCap => WalletRpcErrorCode::ChannelSessionCap,
         Fault::Closed => WalletRpcErrorCode::ChannelClosed,
+        Fault::Budget => WalletRpcErrorCode::ChannelBudget,
         Fault::Local => WalletRpcErrorCode::ChannelLocal,
     }
 }
@@ -4768,6 +4771,11 @@ mod tests {
             (
                 DaemonFault::Channel(Channel::Closed),
                 C::ChannelClosed,
+                None,
+            ),
+            (
+                DaemonFault::Channel(Channel::Budget),
+                C::ChannelBudget,
                 None,
             ),
             (DaemonFault::Channel(Channel::Local), C::ChannelLocal, None),
