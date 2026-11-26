@@ -206,25 +206,22 @@ pub fn run(
             },
             ResolvedCommand::Exit => break,
 
-            // The seed is shown inside the handler, between the announcement
-            // and the return, then wiped. The result carries only the name,
-            // so the human formatter has nothing left to print.
+            // The screen path shows the seed inside the handler, between the
+            // announcement and the return, then wipes it. The file path's
+            // receipt names the file. One password policy covers both.
             ResolvedCommand::Create {
                 filename,
-                mnemonic_file: None,
+                mnemonic_file,
             } => present(
                 &presentation,
                 "wallet create",
-                lifecycle::cmd_create(&rpc, &presentation, &filename),
-                |_| {},
-            ),
-            ResolvedCommand::Create {
-                filename,
-                mnemonic_file: Some(path),
-            } => present(
-                &presentation,
-                "wallet create",
-                scripted::run_create(&rpc, &presentation, password, &filename, &path),
+                lifecycle::create_wallet(
+                    &rpc,
+                    &presentation,
+                    password,
+                    &filename,
+                    mnemonic_file.as_deref(),
+                ),
                 scripted::show_created_wallet,
             ),
             ResolvedCommand::Open { filename } => present(
@@ -241,30 +238,20 @@ pub fn run(
             ),
             ResolvedCommand::Restore {
                 filename,
-                mnemonic_file: None,
+                mnemonic_file,
                 restore_height,
             } => present(
                 &presentation,
                 "wallet restore",
-                lifecycle::cmd_restore(&rpc, &presentation, &filename, restore_height),
-                lifecycle::show_restored,
-            ),
-            ResolvedCommand::Restore {
-                filename,
-                mnemonic_file: Some(path),
-                restore_height,
-            } => present(
-                &presentation,
-                "wallet restore",
-                scripted::run_restore(
+                lifecycle::restore_wallet(
                     &rpc,
                     &presentation,
                     password,
                     &filename,
-                    &path,
+                    mnemonic_file.as_deref(),
                     restore_height,
                 ),
-                scripted::show_restored_wallet,
+                lifecycle::show_restored,
             ),
             ResolvedCommand::Refresh => present(
                 &presentation,
