@@ -12,10 +12,10 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use shekyl_daemon_config::announce::effective_configuration;
-use shekyl_daemon_config::{load_table, logging_to_named_file, Platform, Resolved};
+use shekyl_daemon_config::{load_table, logging_to_named_file, paths, Platform, Resolved, RunMode};
 use shekyl_options::{read_cli_then_words, Code, Diagnostic, PeerEndpoint, Source, Value};
 use shekyl_rpc_transport::DaemonTarget;
-use shekyl_wallet_rpc::config::{daemon_of, socks_of};
+use shekyl_wallet_rpc::config::{daemon_of, proxy_without_endpoint, socks_of};
 use shekyl_wallet_rpc::server::{TorFile, TOR_FILE_OPTION};
 use shekyl_wallet_rpc::Network;
 
@@ -141,12 +141,21 @@ where
             None
         }
     };
+    // A check runs no commands, so standard input carries none. A script
+    // file or a command word is the command stream, and standard input is
+    // free for a password.
+    let stdin = Stdin {
+        carries_commands: !verify
+            && words.is_empty()
+            && path_of(&loaded.resolved, "script-file").is_none(),
+        is_terminal: stdin_is_terminal,
+    };
     let options = build(
         &loaded.resolved,
         loaded.network,
+        platform,
         &words,
-        verify,
-        stdin_is_terminal,
+        &stdin,
         effective,
         &mut faults,
     );
@@ -164,20 +173,36 @@ where
     }
 }
 
+/// How standard input stands for a password on this run.
+struct Stdin {
+    /// The commands come from standard input, so a password cannot.
+    carries_commands: bool,
+    /// A terminal would show a password read as a line.
+    is_terminal: bool,
+}
+
 fn build(
     resolved: &Resolved,
     network: Network,
+    platform: &Platform,
     words: &[String],
-    verify: bool,
-    stdin_is_terminal: bool,
+    stdin: &Stdin,
     effective: String,
     faults: &mut Vec<Diagnostic>,
 ) -> Option<Options> {
     let socks = socks_of(resolved);
     let wallet_rpc = wallet_rpc_of(resolved, socks.is_some(), faults);
     let external = wallet_rpc.is_some();
-    let (wallet, wallet_dir) = wallet_of(resolved, external, faults);
-    let daemon = daemon_of(resolved, network, external, faults);
+    let (wallet, named_dir) = wallet_of(resolved, external, faults);
+    let wallet_dir = hosted_wallet_dir(named_dir, external, network, platform, faults);
+    // The proxy may be the external wallet server's. With no such server it
+    // has to be the daemon's, and this computer's node is not reached through it.
+    if !external {
+        if let Some(fault) = proxy_without_endpoint(resolved) {
+            faults.push(fault);
+        }
+    }
+    let daemon = daemon_of(resolved, network, faults);
     let enroll_remote = match daemon.as_ref() {
         Some(DaemonTarget::Channel { node, .. }) => Some(node.clone()),
         _ => None,
@@ -186,13 +211,7 @@ fn build(
     if script_file.is_some() && !words.is_empty() {
         faults.push(conflict("script-file", "a command is given"));
     }
-    let password = password_of(
-        resolved,
-        // A check runs no commands, so standard input carries none.
-        !verify && words.is_empty() && script_file.is_none(),
-        stdin_is_terminal,
-        faults,
-    );
+    let password = password_of(resolved, stdin, faults);
     let archival_complete_tree = switch_of(resolved, "archival-complete-tree");
     if archival_complete_tree && wallet.is_none() {
         faults.push(requires("archival-complete-tree", "wallet-file"));
@@ -347,6 +366,35 @@ fn wallet_of(
     (Some(name), Some(folder))
 }
 
+/// The directory a self-hosted run uses.
+///
+/// `named` is `wallet-dir`, or the folder of `wallet-file`. When it is set,
+/// that is the directory. When it is unset and `external` is set, the
+/// server's computer holds the wallets and this returns `None`. When both
+/// are unset, the directory is `wallets/<network>` under the account root,
+/// and a missing home is pushed as `config.path.no-home`.
+fn hosted_wallet_dir(
+    named: Option<PathBuf>,
+    external: bool,
+    network: Network,
+    platform: &Platform,
+    faults: &mut Vec<Diagnostic>,
+) -> Option<PathBuf> {
+    if let Some(dir) = named {
+        return Some(dir);
+    }
+    if external {
+        return None;
+    }
+    match paths::root(platform, RunMode::User, "wallet-dir") {
+        Ok(root) => Some(shekyl_engine_file::paths::wallet_dir_in(&root, network)),
+        Err(fault) => {
+            faults.push(fault);
+            None
+        }
+    }
+}
+
 fn wallet_path_parts(file: &Path) -> Option<(PathBuf, String)> {
     if file.extension()?.to_str()? != WALLET_EXTENSION {
         return None;
@@ -363,20 +411,19 @@ fn wallet_path_parts(file: &Path) -> Option<(PathBuf, String)> {
 /// hidden prompt is the way to give a password.
 fn password_of(
     resolved: &Resolved,
-    stdin_carries_commands: bool,
-    stdin_is_terminal: bool,
+    stdin: &Stdin,
     faults: &mut Vec<Diagnostic>,
 ) -> Option<PasswordSource> {
     match resolved.get("wallet-password-file") {
         Some(Value::Path(path)) => Some(PasswordSource::File(path.clone())),
         Some(Value::Word(word)) if *word == PASSWORD_STDIN => {
-            if stdin_is_terminal {
+            if stdin.is_terminal {
                 faults.push(conflict(
                     "wallet-password-file",
                     "standard input is a terminal, which would show the password: leave the \
                      option unset and the prompt asks without echoing",
                 ));
-            } else if stdin_carries_commands {
+            } else if stdin.carries_commands {
                 faults.push(conflict(
                     "wallet-password-file",
                     "standard input carries the commands: give a command, a script-file, or a \
@@ -432,8 +479,8 @@ mod tests {
     }
 
     /// The default run is mainnet, this computer's node, no wallet, no log
-    /// file. Red edit: default `log-file` to a path, and `a_log_file` in
-    /// the shared mapping fails; here the run still names none.
+    /// file, and the per-network wallet directory under the account root.
+    /// Red edit: leave `wallet_dir` unset, and the session resolves it again.
     #[test]
     fn the_defaults_are_this_computers_node_on_mainnet() {
         let (options, words) = run(&[]);
@@ -447,6 +494,54 @@ mod tests {
                 ..
             }
         ));
+        let dir = options
+            .wallet_dir
+            .expect("the directory is resolved at load");
+        assert!(
+            dir.ends_with(std::path::Path::new("wallets").join("mainnet")),
+            "{dir:?}"
+        );
+    }
+
+    /// A self-hosted run with no home cannot name the default directory, so
+    /// the load refuses with the typed code. An external server holds the
+    /// wallets, so the same account runs when the file is named. Red edit:
+    /// resolve the directory in the session, and the first case is accepted.
+    #[test]
+    fn the_wallet_directory_is_resolved_at_load() {
+        let dir = shekyl_os_account::test_fixture::tempdir().expect("a fixture directory");
+        let file = dir.path().join("shekyl-cli.toml");
+        shekyl_os_account::private_file::write_private(&file, b"").expect("the configuration file");
+        let no_home = Platform::default();
+        let file_arg = file.into_os_string();
+        let Err(refused) = load(
+            [std::ffi::OsString::from("--config-file"), file_arg.clone()],
+            &no_home,
+            false,
+        ) else {
+            panic!("a self-hosted run with no home was accepted");
+        };
+        assert!(
+            refused.iter().any(|fault| fault.code == Code::PathNoHome
+                && fault.option.as_deref() == Some("wallet-dir")),
+            "{refused:?}"
+        );
+
+        let external = load(
+            [
+                std::ffi::OsString::from("--config-file"),
+                file_arg,
+                std::ffi::OsString::from("--wallet-rpc-endpoint"),
+                std::ffi::OsString::from("127.0.0.1:29500"),
+            ],
+            &no_home,
+            false,
+        )
+        .expect("an external server needs no local directory");
+        let Action::Run { options, .. } = external else {
+            panic!("not a run");
+        };
+        assert!(options.wallet_dir.is_none());
     }
 
     /// Options end at the first word: a word's own flags are the catalog's,

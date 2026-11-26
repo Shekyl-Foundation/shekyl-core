@@ -106,8 +106,9 @@ fn an_external_server_is_not_self_hosted() {
 #[test]
 fn the_default_wallet_dir_is_per_network() {
     let dir_of = |args: &[&str]| {
-        let options = options(args);
-        resolved_wallet_dir(&options, options.network).unwrap()
+        options(args)
+            .wallet_dir
+            .expect("a self-hosted run resolves the wallet directory at load")
     };
     let home = shekyl_os_account::account_home().expect("the test account has a home");
     let wallets = home

@@ -310,31 +310,22 @@ fn build_session(
             options.socks.as_deref(),
             options.debug,
         )?),
-        Endpoints::SelfHosted { network, daemon } => host_session(
-            resolved_wallet_dir(options, *network)?,
-            *network,
-            daemon.target.clone(),
-            options.tor_file.clone(),
-            options.debug,
-            shekyl_os_account::per_account_root().as_deref(),
-        ),
+        Endpoints::SelfHosted { network, daemon } => {
+            let Some(wallet_dir) = options.wallet_dir.clone() else {
+                return Err(
+                    "a self-hosted run has no wallet directory; the load resolves it".into(),
+                );
+            };
+            host_session(
+                wallet_dir,
+                *network,
+                daemon.target.clone(),
+                options.tor_file.clone(),
+                options.debug,
+                shekyl_os_account::per_account_root().as_deref(),
+            )
+        }
     }
-}
-
-/// The wallet-file directory: the one the options name, else `network`'s
-/// default `wallets/<network>/` in this account's per-account root (CU-1;
-/// rule 83 IG-13: `~/.shekyl`, or `%LOCALAPPDATA%\Shekyl` on Windows, read
-/// from the account interface, never `HOME`;
-/// `shekyl_engine_file::paths::wallet_dir_in` names it), so a testnet wallet
-/// file can never collide with a mainnet one, the Electrum isolation shape.
-/// Only consulted for a self-hosted session.
-fn resolved_wallet_dir(options: &Options, network: Network) -> Result<std::path::PathBuf, String> {
-    if let Some(dir) = &options.wallet_dir {
-        return Ok(dir.clone());
-    }
-    let root = shekyl_os_account::per_account_root()
-        .ok_or("this account has no home folder; set wallet-dir")?;
-    Ok(shekyl_engine_file::paths::wallet_dir_in(&root, network))
 }
 
 /// A self-hosted session's start, everything `build_session` does past

@@ -91,8 +91,8 @@ fn main() -> ExitCode {
 /// `config-verify` (IG-Q63): the checks a start makes, with nothing bound or
 /// created. The effective configuration is on standard output.
 fn verify(loaded: &Loaded) -> ExitCode {
-    if let Err(e) = check_server_config(&loaded.server) {
-        complain(e);
+    if let Err(error) = check_server_config(&loaded.server) {
+        complain(error);
         return exit(EXIT_REFUSED);
     }
     say(format_args!(
@@ -113,6 +113,10 @@ async fn serve(loaded: Loaded) -> Result<(), Box<dyn std::error::Error + Send + 
         default_wallet_dir,
     } = loaded;
     let _guard = shekyl_logging::init(logging)?;
+    // The listen posture and the daemon endpoint are refused before any
+    // directory is made. The load already refused them; this is the
+    // bind-time assertion, and it arms the stops.
+    let armed = arm_server(server)?;
     // A required announcement (IG-14): every server start, whatever the
     // level, on standard error and in the log file when one is named.
     shekyl_logging::announce(&format!("{PROGRAM}: {effective}"), &effective);
@@ -122,12 +126,6 @@ async fn serve(loaded: Loaded) -> Result<(), Box<dyn std::error::Error + Send + 
         std::fs::create_dir_all(&dir)
             .map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
     }
-
-    // Armed before the bind, then served until a stop (SIGTERM, SIGINT,
-    // SIGHUP; on Windows every console event), which closes the open
-    // wallet; a second stop exits at once. The line the start owes about
-    // an inherited ignore is said here, on standard error (IG-14).
-    let armed = arm_server(server)?;
     if let Some(line) = armed.notice() {
         complain(line);
     }

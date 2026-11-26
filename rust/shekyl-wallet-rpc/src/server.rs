@@ -29,7 +29,9 @@ use axum::routing::post;
 use axum::{Json, Router};
 use shekyl_crypto_pq::wallet_envelope::KdfParams;
 use shekyl_engine_core::Network;
+use shekyl_options::{Code, Diagnostic, Source};
 use shekyl_process::stop::{FirstStop, Inherited, Stops};
+use shekyl_rpc_transport::listen::{classify_listen, ListenClass, WILDCARD_REASON};
 use shekyl_rpc_transport::network_posture::{DaemonDisclosures, ProxyResolution};
 use shekyl_rpc_types::endpoint::{unrouted_path, JSON_RPC_PATH};
 use tokio::net::TcpListener;
@@ -453,35 +455,28 @@ const LOCAL_ENDPOINT_HINT: &str = if cfg!(unix) {
     ""
 };
 
-/// Apply the wallet's local-only listener policy before startup or verification.
-fn validate_listen(config: &ServerConfig) -> Result<(), BoxErr> {
-    let addr = match &config.listen {
+/// Enforce the local-only wallet listener policy during configuration load and at bind.
+pub(crate) fn tcp_listen_posture(listen: &ListenAddr, source: Source) -> Result<(), Diagnostic> {
+    let addr = match listen {
         ListenAddr::Tcp(addr) => addr,
         #[cfg(unix)]
         ListenAddr::Uds(_) => return Ok(()),
         #[cfg(windows)]
         ListenAddr::SelfHostedPipe(_) => return Ok(()),
     };
-    // One classifier for every Shekyl listener (`shekyl_rpc_transport::listen`),
-    // so the wallet and the daemon cannot disagree on what a spelling names.
-    use shekyl_rpc_transport::listen::{ListenClass, WILDCARD_REASON};
-    match shekyl_rpc_transport::listen::classify_listen(*addr) {
-        // The reason is the one copy every listener shares; the remedy is
-        // this listener's.
-        ListenClass::Wildcard => Err(format!(
-            "refusing to bind the wallet RPC to the wildcard address {addr}: {WILDCARD_REASON}. \
-             Bind 127.0.0.1 or [::1]{LOCAL_ENDPOINT_HINT}."
-        )
-        .into()),
-        ListenClass::Loopback => Ok(()),
-        ListenClass::Addressed => Err(format!(
-            "refusing to serve the wallet RPC on {addr}: wallet requests and credentials would \
-             cross the network in plaintext. Bind 127.0.0.1 or [::1]{LOCAL_ENDPOINT_HINT}. \
-             For remote access, forward the local listener over your own encrypted transport, \
-             such as SSH or WireGuard."
-        )
-        .into()),
-    }
+    let rule = match classify_listen(*addr) {
+        ListenClass::Loopback => return Ok(()),
+        ListenClass::Wildcard => format!("a wildcard address. {WILDCARD_REASON}. Bind 127.0.0.1 or [::1]{LOCAL_ENDPOINT_HINT}."),
+        ListenClass::Addressed => format!("wallet requests and credentials would cross the network in plaintext. Bind 127.0.0.1 or [::1]{LOCAL_ENDPOINT_HINT}. For remote access, forward the local listener over your own encrypted transport, such as SSH or WireGuard."),
+    };
+    Err(Diagnostic::new(Code::ValueRange, source)
+        .option("rpc-listen")
+        .param("value", addr.to_string())
+        .param("rule", rule))
+}
+
+fn validate_listen(config: &ServerConfig) -> Result<(), BoxErr> {
+    Ok(tcp_listen_posture(&config.listen, Source::Machine)?)
 }
 
 /// The program's name in the line its start says about its stops.
