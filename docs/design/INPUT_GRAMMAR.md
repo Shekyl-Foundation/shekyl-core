@@ -667,7 +667,7 @@ The catalog `shekyl-cli` serves (IG-Q25). The C++ console is deleted (R8, DC-N2,
 | `stop_daemon`, `exit` | `daemon stop` | | IG-Q33: no bare word in the shared shell stops the daemon |
 | `save`, `flush_cache [bad-txs] [bad-blocks]` | — | | –: LMDB and C++ cache internals |
 | `version` | `version` | | |
-| — | `rpc client add <fingerprint> --ceiling <grants>`, `rpc client set <fingerprint> --ceiling <grants>`, `rpc client remove <fingerprint>`, `rpc client list`, `rpc bundle show` | a hash; a list of grant and preset keywords | built by RT-W10 step 4 (IG-Q87): enrollment over the channel, under the `enroll` grant |
+| — | `rpc client add <fingerprint> <grant-or-preset>`, `rpc client add <fingerprint> --ceiling <grants>`, `rpc client set <fingerprint> --ceiling <grants>`, `rpc client remove <fingerprint>`, `rpc client list`, `rpc bundle show` | a hash; a list of grant and preset keywords | built by RT-W10 step 4 (IG-Q87): enrollment over the channel, under the `enroll` grant |
 | — | `rpc key create`, `rpc key show` | | IG-Q109: this client's channel key, made only when asked and refused if one is there; each prints the fingerprint as `rpc client list` does |
 
 ## 14. The utilities and the tools
@@ -1539,11 +1539,13 @@ The `pow` switch on a header read has no code (IG-F24), and a bounded `chain_coi
 - **No keyword and no code segment is a term IG-4 refuses**, as Part E refused `not-installed`: `reference_not_found` is `reference-unknown`, `no_view` is `unpeered`.
 - **A diagnostic code is dotted segments**, each lowercase and `-`-joined, none an IG-4 term. The first names what refused: a glossary subject (`mine`, `block`, `tx`, `txpool`, `p2p`, `daemon`), or `grant` or `bound` for RW-Q3's two classes that belong to no method. The rename PR rewrites every RPC code to that form and lists each in the registry `RPC_WIRE.md` RW-Q3 keeps: `mine.no_address` is `mine.address.unset`, and `rpc.grant.host_only` is `grant.host-only`. A code names one source. `node.not_ready` is raised for several today — a handle not yet supplied, a pool that was never supplied, a retired pool, a relay with no driver (`D/handles.rs:124-151`) — and each takes its own code; none is labelled with another's cause. The full list is the PR's error-code mapping, reviewed with it.
 
-**IG-Q87 — enrollment's names — RULED 2026-11-10, as recommended.** `RPC_CHANNEL.md` §5 names enrollment `shekyld rpc-enroll FINGERPRINT --ceiling GRANTS` and `shekyld rpc-revoke FINGERPRINT`. Both contradict landed rulings. IG-Q8 (2026-11-03): a bare word on `shekyld` is `config.cli.syntax`, and daemon commands are `shekyl-cli` words. IG-3: a command is a path, not a hyphenated verb. And §5 itself says enrollment runs over the channel, so each act is a method with a grant (`enroll`), and its `shekyl-cli` word is that method's path. *Question:* names for five acts: enroll a fingerprint with a ceiling; change an enrolled ceiling; revoke; list the enrolled set; show this daemon's public bundle. *Recommended:* the `ban` pattern, one verb per change (IG-Q44):
+**IG-Q87 — enrollment's names — RULED 2026-11-10, amended 2026-11-25.** On `add`, one positional grant or preset supplies the entire ceiling. The wallet enrollment command is `shekyl-cli rpc client add <fingerprint> wallet`. Combining the positional ceiling with flags is refused. Multiple ceiling words use the repeated flag.
+
+`RPC_CHANNEL.md` §5 names enrollment `shekyld rpc-enroll FINGERPRINT --ceiling GRANTS` and `shekyld rpc-revoke FINGERPRINT`. Both contradict landed rulings. IG-Q8 (2026-11-03): a bare word on `shekyld` is `config.cli.syntax`, and daemon commands are `shekyl-cli` words. IG-3: a command is a path, not a hyphenated verb. And §5 itself says enrollment runs over the channel, so each act is a method with a grant (`enroll`), and its `shekyl-cli` word is that method's path. *Question:* names for five acts: enroll a fingerprint with a ceiling; change an enrolled ceiling; revoke; list the enrolled set; show this daemon's public bundle. *Recommended:* the `ban` pattern, one verb per change (IG-Q44):
 
 | Word | Method | Parameters | Grant |
 |---|---|---|---|
-| `rpc client add <fingerprint> --ceiling <grants>` | `rpc_client_add` | `fingerprint`, `ceiling` | enroll |
+| `rpc client add <fingerprint> <grant-or-preset>` or `rpc client add <fingerprint> --ceiling <grants>` | `rpc_client_add` | `fingerprint`, `ceiling` | enroll |
 | `rpc client set <fingerprint> --ceiling <grants>` | `rpc_client_set` | `fingerprint`, `ceiling` | enroll |
 | `rpc client remove <fingerprint>` | `rpc_client_remove` | `fingerprint` | enroll |
 | `rpc client list` | `rpc_client_list` | — | enroll |

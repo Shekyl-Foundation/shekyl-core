@@ -191,7 +191,7 @@ impl View {
 /// key (`INPUT_GRAMMAR.md` IG-Q87, IG-Q109).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Enroll {
-    /// `rpc client add <fingerprint> --ceiling <word>...`.
+    /// `rpc client add <fingerprint> <word>` or a repeated `--ceiling <word>`.
     ClientAdd {
         fingerprint: String,
         ceiling: Vec<shekyl_rpc_types::wire::rpc::CeilingWord>,

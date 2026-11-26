@@ -473,7 +473,7 @@ fn meta(id: CommandId) -> Meta {
         RpcClient => interior("client", "rpc client", Some(Rpc)),
         RpcClientAdd => flagged(
             "add",
-            "rpc client add <fingerprint> --ceiling <grant> [--ceiling <grant>]...",
+            "rpc client add <fingerprint> <grant-or-preset> | rpc client add <fingerprint> --ceiling <grant> [--ceiling <grant>]...",
             RpcClient,
             CEILING_FLAGS,
         ),
