@@ -411,7 +411,7 @@ mod tests {
             assert_eq!(refused(&[old]), [Code::NameRejected]);
         }
         assert_eq!(refused(&["--disable-rpc-login"]), [Code::NameUnknown]);
-        assert_eq!(refused(&["--rpc-grant", "view"]), [Code::NameUnknown]);
+        assert_eq!(refused(&["--rpc-grant"]), [Code::NameUnknown]);
         assert_eq!(refused(&["serve"]), [Code::CliSyntax]);
     }
 
