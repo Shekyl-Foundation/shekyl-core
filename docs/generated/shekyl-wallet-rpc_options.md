@@ -10,7 +10,6 @@
 | `rpc-socket-file` | absolute path | — | both | no | A Unix socket to listen on in place of rpc-listen, in a directory only this account can enter. Not on Windows. |
 | `rpc-username` | secret (file only, never shown) | — | file | no | The HTTP basic user clients must give. Set with rpc-password, or neither. |
 | `rpc-password` | secret (file only, never shown) | — | file | no | The HTTP basic password clients must give. Set with rpc-username, or neither. |
-| `rpc-grant` | list of `health` / `status` / `chain` / `pool` / `peers` / `submit` / `mining-work` / `mining-control` / `bans` / `node` / `config` / `enroll` / `view` / `wallet` / `miner` / `admin` (`none` for empty) | `wallet` | both | no | The grants requested for wallet operations. Repeat for additional grants. The node limits the request to the enrolled ceiling. |
 | `daemon-bundle-file` | absolute path | — | both | no | The node's public bundle exported by shekyl-cli rpc bundle show. Required with daemon-endpoint. |
 | `rpc-key-file` | absolute path | this account's root and rpc-client.key | both | no | The owner-only account key, created on first channel use. |
 | `daemon-endpoint` | IP endpoint or v3 onion with a port | — | both | no | The daemon on another computer: an IP address and a port, or an onion and a port (reached through daemon-socks). Unset is this computer's node. |

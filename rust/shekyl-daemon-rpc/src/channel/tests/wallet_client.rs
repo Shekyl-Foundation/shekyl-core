@@ -1,4 +1,4 @@
-use super::{client, code, CeilingWord, Duration, Preset, Served, StaticKeypair, Value, HOST};
+use super::{client, code, CeilingWord, Duration, Served, StaticKeypair, Value, HOST};
 
 /// Drive the actual wallet connection against a responding daemon. The key
 /// and bundle come from disk, as they do at the wallet's first remote use.
@@ -56,23 +56,15 @@ async fn wallet_enrollment_wrong_bundle_and_revocation() {
                     network,
                     &shekyl_rpc_transport::ChannelAccount {
                         key_file: Some(key_file.clone()),
-                        ..Default::default()
                     },
                 )
                 .unwrap()
                 .expect("the service published a channel"),
-            Preset::Wallet.grants(),
             Duration::from_secs(5),
         )
     };
     let body = br#"{"jsonrpc":"2.0","id":1,"method":"version","params":{}}"#;
-    let connect = || {
-        client::WalletChannel::new(
-            open().unwrap(),
-            Preset::Wallet.grants(),
-            Duration::from_secs(5),
-        )
-    };
+    let connect = || client::WalletChannel::new(open().unwrap(), Duration::from_secs(5));
     assert_eq!(
         connect().post("json_rpc", body.to_vec()).await.unwrap_err(),
         first
@@ -137,8 +129,7 @@ async fn wallet_enrollment_wrong_bundle_and_revocation() {
         Some(&key_file),
     )
     .unwrap();
-    let wallet =
-        client::WalletChannel::new(target, Preset::Wallet.grants(), Duration::from_secs(5));
+    let wallet = client::WalletChannel::new(target, Duration::from_secs(5));
     for _ in 0..2 {
         assert!(matches!(
             wallet.post("json_rpc", body.to_vec()).await,
@@ -146,6 +137,62 @@ async fn wallet_enrollment_wrong_bundle_and_revocation() {
         ));
     }
     answer.await.unwrap();
+    served.stop.send_replace(true);
+    served.serving.await.unwrap().unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn wallet_and_console_receive_the_grants_enrolled_on_the_daemon() {
+    use shekyl_rpc_grants::Preset;
+    let served = Served::start(false).await;
+    let key = StaticKeypair::generate().unwrap();
+    let fingerprint = *key.public().fingerprint().as_bytes();
+    served.enroll(&key, &[CeilingWord::Wallet]);
+    let target = client::ChannelTarget::new(
+        super::network_id(),
+        served.bundle(),
+        key,
+        client::Leg::ip(served.addr, None),
+    );
+    let connect_console = || {
+        let target = target.clone();
+        std::thread::spawn(move || {
+            client::ChannelDaemon::connect_enrolled(&target)
+                .unwrap()
+                .granted()
+        })
+        .join()
+        .unwrap()
+    };
+    assert_eq!(connect_console(), Preset::Wallet.grants());
+
+    let wallet = client::WalletChannel::new(target.clone(), Duration::from_secs(5));
+    let mine_stop = br#"{"jsonrpc":"2.0","id":1,"method":"mine_stop","params":{}}"#;
+    let reply = wallet.post("json_rpc", mine_stop.to_vec()).await.unwrap();
+    assert_eq!(
+        code(&serde_json::from_slice(&reply).unwrap()),
+        Some("grant.outside")
+    );
+
+    served
+        .channel
+        .client_set(HOST, fingerprint, &[CeilingWord::Admin])
+        .unwrap();
+    assert_eq!(connect_console(), Preset::Admin.grants());
+    let reply = wallet.post("json_rpc", mine_stop.to_vec()).await.unwrap();
+    assert_eq!(
+        code(&serde_json::from_slice(&reply).unwrap()),
+        Some("grant.outside"),
+        "a raise applies on the next connection"
+    );
+
+    let wallet = client::WalletChannel::new(target, Duration::from_secs(5));
+    let reply = wallet.post("json_rpc", mine_stop.to_vec()).await.unwrap();
+    assert_eq!(
+        code(&serde_json::from_slice(&reply).unwrap()),
+        Some("daemon.unready")
+    );
+
     served.stop.send_replace(true);
     served.serving.await.unwrap().unwrap();
 }

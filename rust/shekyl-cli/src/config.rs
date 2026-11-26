@@ -565,6 +565,7 @@ mod tests {
     #[test]
     fn the_retired_spellings_are_unknown() {
         for name in [
+            "--rpc-grant",
             "--testnet",
             "--stagenet",
             "--engine-dir",

@@ -61,7 +61,6 @@ const ROWS: &[Row] = &[
     row("rpc-socket-file", Kind::PATH, Default::Unset, Surface::Both, "A Unix socket to listen on in place of rpc-listen, in a directory only this account can enter. Not on Windows."),
     row("rpc-username", Kind::Secret, Default::Unset, Surface::File, "The HTTP basic user clients must give. Set with rpc-password, or neither."),
     row("rpc-password", Kind::Secret, Default::Unset, Surface::File, "The HTTP basic password clients must give. Set with rpc-username, or neither."),
-    row("rpc-grant", Kind::List(&Kind::OneOf(shekyl_rpc_types::wire::rpc::CeilingWord::WORDS)), Default::Value("wallet"), Surface::Both, "The grants requested for wallet operations. Repeat for additional grants. The node limits the request to the enrolled ceiling."),
     rejected("daemon-address", "use daemon-endpoint and daemon-bundle-file for the node’s authenticated channel"),
     rejected("proxy", "use daemon-socks with daemon-endpoint to reach the node through SOCKS5"),
     row("daemon-bundle-file", Kind::PATH, Default::Unset, Surface::Both, "The node's public bundle exported by shekyl-cli rpc bundle show. Required with daemon-endpoint."),

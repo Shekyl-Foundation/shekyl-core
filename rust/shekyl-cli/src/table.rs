@@ -59,7 +59,6 @@ const ROWS: &[Row] = &[
     row("config-file", Kind::PATH, Default::Derived("this account's root and shekyl-cli-<network>.toml"), Surface::Cli, "The configuration file. A missing file at the default path means the defaults; a missing file at a named path is refused."),
     row("wallet-dir", Kind::PATH, Default::Derived("this account's root and wallets/<network>"), Surface::Both, "The directory of wallet files, for the wallet server this program hosts."),
     row("wallet-file", Kind::PATH, Default::Unset, Surface::Both, "The wallet to open at start, as the absolute path of its <name>.wallet file. Its folder is the wallet directory. Not with wallet-rpc-endpoint or wallet-rpc-socket-file: that server's wallets are on its computer, so use `wallet open <name>`."),
-    row("rpc-grant", Kind::List(&Kind::OneOf(shekyl_rpc_types::wire::rpc::CeilingWord::WORDS)), Default::Value("wallet"), Surface::Both, "The grants requested for wallet operations. Repeat for additional grants. The node limits the request to the enrolled ceiling."),
     rejected("daemon-address", "use daemon-endpoint and daemon-bundle-file for the node’s authenticated channel"),
     rejected("proxy", "use daemon-socks with daemon-endpoint to reach the node through SOCKS5"),
     row("daemon-endpoint", Kind::PeerEndpoint(PeerRule::Any), Default::Unset, Surface::Both, "The daemon on another computer: an IP address and a port, or an onion and a port (reached through daemon-socks). Unset is this computer's node."),

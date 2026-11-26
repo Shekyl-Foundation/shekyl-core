@@ -8,9 +8,8 @@
 //! One target (`RPC_CHANNEL.md` RT-15; RT-W10 step 5): "this computer"
 //! (a local service's enrolled channel, otherwise the owner's leg), an
 //! enrolled channel, or a plaintext address through one [`SyncDaemon`].
-//! Connected on the first request, and reused. A channel session requests
-//! the grants on the target, so one `daemon_status` is shown every part
-//! those grants admit. The SOCKS proxy, the down-hint and the timeout are
+//! Connected on the first request, and reused. The daemon supplies the enrolled
+//! grants for the channel, including which fields `daemon_status` can show. The SOCKS proxy, the down-hint and the timeout are
 //! this client's; the bytes are the shared transports'.
 
 use serde_json::Value;
@@ -228,9 +227,8 @@ impl DaemonClient {
     /// Dial the target. Not stored: [`Self::connect`] stores the one that
     /// won, and a closed channel session is removed rather than reused.
     ///
-    /// A channel is opened once, requesting the grants on the target. Later
-    /// calls reuse that session, so a reply whose parts depend on the grant
-    /// set (`daemon_status`) sees the whole request.
+    /// A channel opens with the grants enrolled on the daemon. Later calls
+    /// reuse it, including the status reads that disclose data by grant.
     fn open(&self) -> Result<Connection, DaemonError> {
         match self.target.resolve().map_err(Self::channel_error)? {
             ResolvedDaemon::Address { url, proxy } => {
@@ -242,8 +240,8 @@ impl DaemonClient {
                         .map_err(|error| self.error_of_post(error))?,
                 ))
             }
-            ResolvedDaemon::Channel { target, request } => Ok(Connection::Channel(
-                ChannelDaemon::connect(&target, request).map_err(Self::channel_error)?,
+            ResolvedDaemon::Channel(target) => Ok(Connection::Channel(
+                ChannelDaemon::connect_enrolled(&target).map_err(Self::channel_error)?,
             )),
             ResolvedDaemon::Owner { target, .. } => Ok(Connection::Owner(target)),
         }

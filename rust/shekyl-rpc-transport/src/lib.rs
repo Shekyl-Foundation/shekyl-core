@@ -233,14 +233,8 @@ pub enum PlaintextGate {
 
 /// The target [`DaemonTarget::resolve`] produces. One match, no second pass.
 pub enum ResolvedDaemon {
-    /// An enrolled channel and the grants its sessions request.
-    Channel {
-        /// The dialed identity. Boxed: it carries the daemon's public bundle,
-        /// which is much larger than the other arms.
-        target: Box<channel::ChannelTarget>,
-        /// The grants requested at the handshake.
-        request: shekyl_rpc_grants::GrantSet,
-    },
+    /// An enrolled channel. The target is boxed because it holds the daemon's public bundle.
+    Channel(Box<channel::ChannelTarget>),
     /// The owner's socket or pipe.
     ///
     /// `within` is `None` when the caller asked for [`local::LocalRpc`]'s own
@@ -260,22 +254,11 @@ pub enum ResolvedDaemon {
     },
 }
 
-/// The identity and grant a wallet uses on an enrolled connection.
-#[derive(Clone, Debug)]
+/// The account's identity on an enrolled connection.
+#[derive(Clone, Debug, Default)]
 pub struct ChannelAccount {
     /// Explicit key location, or the account-wide default.
     pub key_file: Option<std::path::PathBuf>,
-    /// The grant the wallet requests.
-    pub request: shekyl_rpc_grants::GrantSet,
-}
-
-impl Default for ChannelAccount {
-    fn default() -> Self {
-        Self {
-            key_file: None,
-            request: shekyl_rpc_grants::Preset::Wallet.grants(),
-        }
-    }
 }
 
 /// Manual: an address may carry digest credentials in its authority, so it
@@ -349,22 +332,16 @@ impl DaemonTarget {
                 network,
                 node,
                 account,
-            } => Ok(ResolvedDaemon::Channel {
-                target: Box::new(channel::account_target(
-                    *network,
-                    node.leg.clone(),
-                    node.bundle()?,
-                    account.key_file.as_deref(),
-                )?),
-                request: account.request,
-            }),
+            } => Ok(ResolvedDaemon::Channel(Box::new(channel::account_target(
+                *network,
+                node.leg.clone(),
+                node.bundle()?,
+                account.key_file.as_deref(),
+            )?))),
             Self::ThisComputer { network, account } => {
                 let local = local::LocalTarget::this_computer(*network);
                 match local.wallet_channel(*network, account)? {
-                    Some(target) => Ok(ResolvedDaemon::Channel {
-                        target: Box::new(target),
-                        request: account.request,
-                    }),
+                    Some(target) => Ok(ResolvedDaemon::Channel(Box::new(target))),
                     None => Ok(ResolvedDaemon::Owner {
                         target: local,
                         within: None,
@@ -440,9 +417,9 @@ impl ResolvedDaemon {
     pub async fn open(self, timeout: Option<Duration>) -> Result<DaemonTransport, RpcError> {
         let within = timeout.unwrap_or(DEFAULT_TIMEOUT);
         match self {
-            Self::Channel { target, request } => Ok(DaemonTransport::Channel(
-                channel::WalletChannel::new(*target, request, within),
-            )),
+            Self::Channel(target) => Ok(DaemonTransport::Channel(channel::WalletChannel::new(
+                *target, within,
+            ))),
             Self::Owner { target, within } => Ok(DaemonTransport::ThisComputer(match within {
                 Some(bound) => local::LocalRpc::within(target, bound),
                 None => local::LocalRpc::new(target),

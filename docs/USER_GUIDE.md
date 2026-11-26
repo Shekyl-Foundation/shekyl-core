@@ -557,7 +557,8 @@ to the wallet. For example, with an onion forwarded to the node's listener:
 For a LAN connection, use the node's IP and channel port. The first channel
 use creates an owner-only key for this OS account and shows its fingerprint.
 On the node, run `shekyl-cli rpc client add <fingerprint> wallet` on the
-same network, then reopen the wallet connection. You can set `rpc-key-file`
+same network, then reopen the wallet connection. The daemon uses the
+enrolled permissions for the connection and checks every RPC call. You can set `rpc-key-file`
 to select an existing account key. Two wallets may use the same node and
 account key. The node sees their chain requests and signed submissions.
 

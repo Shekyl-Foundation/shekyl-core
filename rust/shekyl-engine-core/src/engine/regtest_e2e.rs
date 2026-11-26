@@ -7514,7 +7514,6 @@ async fn handlers_apply_their_own_request_caps() {
         },
         account: shekyl_rpc_transport::ChannelAccount {
             key_file: Some(key_file),
-            ..Default::default()
         },
     }
     .connect(None)

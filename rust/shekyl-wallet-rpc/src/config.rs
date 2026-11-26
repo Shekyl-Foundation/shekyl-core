@@ -291,26 +291,8 @@ pub fn daemon_of(
     faults: &mut Vec<Diagnostic>,
 ) -> Option<DaemonTarget> {
     use shekyl_rpc_transport::channel::{Leg, RemoteNode};
-    use shekyl_rpc_types::method::Preset;
-    use shekyl_rpc_types::wire::rpc::CeilingWord;
-    let request = match resolved.get("rpc-grant") {
-        Some(Value::List(words)) => {
-            let mut grants = Vec::with_capacity(words.len());
-            for word in words {
-                let Value::Word(name) = word else {
-                    unreachable!("typed grant word")
-                };
-                grants.push(
-                    CeilingWord::from_name(name).expect("grant table uses CeilingWord::WORDS"),
-                );
-            }
-            CeilingWord::expand(&grants)
-        }
-        _ => Preset::Wallet.grants(),
-    };
     let account = shekyl_rpc_transport::ChannelAccount {
         key_file: path_of(resolved, "rpc-key-file"),
-        request,
     };
     let proxy = match resolved.get("daemon-socks") {
         Some(Value::Endpoint(addr)) => Some(*addr),
@@ -429,6 +411,7 @@ mod tests {
             assert_eq!(refused(&[old]), [Code::NameRejected]);
         }
         assert_eq!(refused(&["--disable-rpc-login"]), [Code::NameUnknown]);
+        assert_eq!(refused(&["--rpc-grant", "view"]), [Code::NameUnknown]);
         assert_eq!(refused(&["serve"]), [Code::CliSyntax]);
     }
 

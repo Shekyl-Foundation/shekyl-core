@@ -23,6 +23,15 @@ pub struct ChannelDaemon {
 }
 
 impl ChannelDaemon {
+    /// Open a session with the permissions enrolled on the daemon.
+    ///
+    /// # Errors
+    ///
+    /// As for [`Self::connect`].
+    pub fn connect_enrolled(target: &ChannelTarget) -> Result<Self, ChannelFault> {
+        Self::connect(target, GrantSet::ALL)
+    }
+
     /// Open a session to `target` asking for `request`.
     ///
     /// # Errors

@@ -16,7 +16,7 @@ The changes since the brief fall into four groups relevant to integration:
 | Surface | Landed behavior and consequence for RT-W12 |
 | --- | --- |
 | Wallet target and local service (D1) | `DaemonTarget::connect` constructs `LocalRpc` or `HttpRpc`. The local client reads a service record to report a refusal. The published record already holds a channel address and bundle. Use the enrolled account key for the service and the remote leg, including every chain read. Keep the privileged console key on its administrative path. [Transport](../../rust/shekyl-rpc-transport/src/lib.rs), [local resolver](../../rust/shekyl-rpc-transport/src/local.rs), [service record](../../rust/shekyl-rpc-rendezvous/src/place.rs), [console resolver](../../rust/shekyl-cli/src/node_leg.rs) |
-| Key and grants (D2–D3) | The tunnel can read and exclusively create an owner-only key. Its default filename includes the tunnel and network. The wallet uses one key per OS account with an explicit path override. First use must leave concurrent callers with one durable identity. Request the wallet preset for wallets and the command's grants for the daemon console. [Key format and creation](../../rust/shekyl-rpc-transport/src/channel/key.rs), [presets](../../rust/shekyl-rpc-grants/src/lib.rs) |
+| Key and grants (D2–D3) | The tunnel can read and exclusively create an owner-only key. Its default filename includes the tunnel and network. The wallet uses one key per OS account with an explicit path override. First use must leave concurrent callers with one durable identity. The daemon sets the session grants from the key’s enrollment. The wallet and CLI use that enrolled set for the life of the connection. The daemon checks each RPC call. [Key format and creation](../../rust/shekyl-rpc-transport/src/channel/key.rs), [presets](../../rust/shekyl-rpc-grants/src/lib.rs) |
 | Grammar and wallet contract (D4–D5) | The grammar PR introduces endpoint and SOCKS parsing and moves the wallet contract from landed 0.24.0 to 0.25.0 for the derivation refusal. Allocate channel faults against the merged contract. The enrollment advice is an executable command, `shekyl-cli rpc client add <fingerprint> wallet`. On 2026-11-25 Rick approved adding its positional ceiling to the existing repeated-flag grammar. [Enrollment parser](../../rust/shekyl-cli/src/grammar.rs), [wallet contract](../api/wallet_rpc.yaml) |
 | Failed identity and revocation (D5) | A wrong real bundle fails the daemon's message-1 MAC check. It closes before sending a proof. Rick ruled on 2026-11-25 that this is terminal `NotRecognised`, with bundle, network and channel-version advice. A received daemon proof that fails verification is terminal `NotTheDaemon`. Test both through wallet RPC. The pool currently latches `NotTheDaemon`, and turns refusal of a previously admitted key into `Revoked` without its fingerprint. A wallet must preserve the enrollment remedy after revocation and must never replay an uncertain submission. [Responder](../../rust/shekyl-daemon-rpc/src/channel/listener.rs), [initiator](../../rust/shekyl-rpc-transport/src/channel/handshake.rs), [pool](../../rust/shekyl-rpc-transport/src/channel/pool.rs) |
 | Submissions and batch limits (D6) | The existing session sends one buffered body, arms its own submission mark for `tx_submit`, and borrows the sender exclusively for the exchange. Exercise this route from the real engine. Drive the engine over an enrolled, bounded connection beyond a batch boundary. The existing handler-cap test calls the handlers directly and cannot establish engine paging. [Session](../../rust/shekyl-rpc-transport/src/channel/session.rs), [handler-cap test](../../rust/shekyl-engine-core/src/engine/regtest_e2e.rs) |
@@ -28,6 +28,14 @@ The changes since the brief fall into four groups relevant to integration:
 
 The gate-setting 4.x RT-P5 measurements already have F1 and F2 rulings. RT-P9 already has a completed floor-device run over LAN and onion, with 4 s and 11 s deadlines. RT-P10 has a registration in the RT-W11 pre-flight. This review found no landed floor-device results for the pool-load run. [RT-P5 findings](../benchmarks/rt_p5_rpc_message_sizes_20261115.md), [RT-P9 capture](../benchmarks/rt_p9_handshake_round_trips_20261020_captures/attempt2/summary.md), [RT-P10 registration](RPC_CHANNEL_RT_W11_PREFLIGHT.md)
 
+
+## Wallet and CLI grants, 2026-11-26
+
+The operator chooses the account key’s grants on the daemon. The wallet and
+CLI use the full enrolled set on each connection. The existing channel
+encoding selects that set with the all-grants mask and the daemon supplies
+the ceiling. The wallet binaries have no `rpc-grant` setting. The tunnel
+keeps its existing grant request and configuration.
 
 ## Step 1 verification, 2026-11-26
 

@@ -94,10 +94,11 @@ impl std::fmt::Debug for WalletChannel {
 }
 
 impl WalletChannel {
-    /// Construct a pool. Its first call dials the daemon.
-    pub fn new(target: ChannelTarget, request: GrantSet, within: Duration) -> Self {
+    /// Construct a pool that uses the permissions enrolled on the daemon.
+    /// The existing wire request mask uses all bits to select the full ceiling.
+    pub fn new(target: ChannelTarget, within: Duration) -> Self {
         Self {
-            pool: Pool::new(target, request),
+            pool: Pool::new(target, GrantSet::ALL),
             within,
         }
     }
