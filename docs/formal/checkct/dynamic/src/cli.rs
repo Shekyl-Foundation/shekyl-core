@@ -5,8 +5,10 @@
 
 //! The command line: `ct-dynamic [samples-per-class] [row-filter]
 //! [only-fixed|only-random]`, positional, each optional in order. An empty
-//! filter matches every row, so `ct-dynamic 200000 "" only-fixed` times one
-//! class of every row.
+//! filter matches every row. Separate alternatives with `+`
+//! (`half:+null: helio+control:`). An empty alternative is skipped. A
+//! filter made only of separators is refused. For example,
+//! `ct-dynamic 200000 "" only-fixed` times one class of every row.
 
 use core::fmt;
 use core::str::FromStr;
@@ -42,13 +44,38 @@ impl FromStr for SampleCount {
     }
 }
 
-/// Rows whose name contains the filter; no filter matches every row.
-#[derive(Clone, Debug, Default)]
-pub struct RowFilter(Option<String>);
+/// Rows whose name contains any requested substring.
+///
+/// [`RowFilter::All`] is an absent or empty argument. [`RowFilter::Any`]
+/// is parsed once from the `+`-separated argument.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum RowFilter {
+    #[default]
+    All,
+    Any(Vec<String>),
+}
 
 impl RowFilter {
+    fn parse(text: &str) -> Result<Self, CliError> {
+        if text.is_empty() {
+            return Ok(RowFilter::All);
+        }
+        let parts: Vec<String> = text
+            .split('+')
+            .filter(|part| !part.is_empty())
+            .map(str::to_owned)
+            .collect();
+        if parts.is_empty() {
+            return Err(CliError::RowFilter(text.to_owned()));
+        }
+        Ok(RowFilter::Any(parts))
+    }
+
     pub fn admits(&self, row: &str) -> bool {
-        self.0.as_deref().is_none_or(|part| row.contains(part))
+        match self {
+            RowFilter::All => true,
+            RowFilter::Any(parts) => parts.iter().any(|part| row.contains(part)),
+        }
     }
 }
 
@@ -93,6 +120,7 @@ pub struct Config {
 #[derive(Debug, PartialEq, Eq)]
 pub enum CliError {
     SampleCount(String),
+    RowFilter(String),
     ClassSelection(String),
     ExtraArguments(Vec<String>),
 }
@@ -103,6 +131,10 @@ impl fmt::Display for CliError {
             CliError::SampleCount(got) => write!(
                 f,
                 "samples per class must be an integer >= {MIN_SAMPLES_PER_CLASS}, got {got:?}"
+            ),
+            CliError::RowFilter(got) => write!(
+                f,
+                "a row filter needs a substring on at least one side of '+', got {got:?}"
             ),
             CliError::ClassSelection(got) => write!(
                 f,
@@ -122,7 +154,9 @@ impl Config {
         let samples = args
             .next()
             .map_or(Ok(SampleCount::DEFAULT), |a| a.parse())?;
-        let filter = RowFilter(args.next());
+        let filter = args
+            .next()
+            .map_or(Ok(RowFilter::All), |text| RowFilter::parse(&text))?;
         let classes = args
             .next()
             .map_or(Ok(ClassSelection::Both), |a| a.parse())?;
@@ -172,6 +206,22 @@ mod tests {
         assert!(c.filter.admits("helio square"));
         assert_eq!(c.classes, ClassSelection::Only(Class::Fixed));
         assert!(!c.classes.times(Class::Random));
+    }
+
+    #[test]
+    fn alternative_filters_keep_controls_without_admitting_other_rows() {
+        let c = parse(&["100", "half:+null: helio+control:+"]).unwrap();
+        assert!(c.filter.admits("half: U256::mul_wide"));
+        assert!(c.filter.admits("null: helio square"));
+        assert!(!c.filter.admits("null: fe25519 square"));
+        assert!(c.filter.admits("control: branch on a byte"));
+        assert!(!c.filter.admits("unrelated"));
+    }
+
+    #[test]
+    fn a_filter_of_only_separators_is_refused() {
+        assert!(matches!(parse(&["100", "+"]), Err(CliError::RowFilter(_))));
+        assert!(matches!(parse(&["100", "++"]), Err(CliError::RowFilter(_))));
     }
 
     #[test]

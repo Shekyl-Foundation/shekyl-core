@@ -399,6 +399,56 @@ vendored crate or upstream and re-measured flat with this harness on the
 direct path on both x86_64 hosts, with a note in the wallet's threat model
 for the release that predates it.
 
+### 2.1 Localisation, and ML-KEM decapsulation's validity gap (registered 2026-11-21)
+
+The [original registration](../formal/checkct/results/2026-11-21/ca2-localisation-registration.md)
+tests the inlined halves and sparse Montgomery `Field25519` rows.
+The [desktop amendment](../formal/checkct/results/2026-11-21/ca2-desktop-amendment.md)
+records the changed host and omits the suspect workstation's CPU-control
+follow-up from this PR. The [desktop results](../formal/checkct/results/2026-11-25/ca2-desktop-localisation.md)
+are flat: ordinary-release halves ≤2.50, fat-LTO halves ≤1.95,
+Montgomery-sparse square 3.16 and mul 1.18. The nulls and positive
+controls met their lines. These results do not localise the previously
+observed field timing effect, and CA-2 remains open.
+
+The same registration covers an observation from RT-P4 that belongs here.
+On the laptop, invalid ML-KEM-768 ciphertexts decapsulate slower than
+valid ones:
+- `valid-vs-invalid` 45.41, about 36 ns;
+- `fixed-vs-bitflip` 10.98;
+- the gap roughly doubled between runs of identical code.
+
+The maintainer has accepted it under `RPC_CHANNEL.md` §4.3's bounds
+(2026-10-25, reaffirmed 2026-11-21). The source holds no branch on
+validity:
+- `fips203` 0.5.0 computes `J(z‖c)` unconditionally (`ml_kem.rs:128`);
+- it selects the key with `conditional_assign` over `subtle`'s `ct_ne`
+  (`:144`).
+
+The hypothesis to test is this core's low-activity effect: a valid
+ciphertext's compare folds equal bytes. The registration times the compare
+alone (`ct_ne 1088` rows), and RT-P4's validity comparisons on other
+silicon and under DOITM, a pinned clock and turbostat. It predicts no gap
+on the floor device. The isolated desktop `ct_ne 1088` rows were
+flat at 1.42 and 1.99 with 100,000 batches per class, reduced to fit
+memory. The harness now keeps those rows on a windowed schedule: a window
+is built, then timed, with a cache pad written between the two, so the
+registered count fits. This figure is the run made before that. The full
+RT-P4 desktop run used one million samples per comparison.
+
+**Floor cross-check (2026-11-25).** The existing [RT-P4 fips203 0.5.0
+floor capture](../benchmarks/rt_p4_mlkem_decaps_timing_20261121_message.md#the-floor-device--pass)
+records `valid-vs-invalid` at 2.26 and `fixed-vs-bitflip` at 1.66.
+The nulls were 2.29 and 1.82, and the planted control was 1331.37.
+Both validity rows are flat under the registered CA-2 thresholds, as
+predicted for the Cortex-A72. This satisfies the floor cross-check.
+**Desktop cross-check (2026-11-25).** The physical i9-13900K
+MSVC build read 1.53 on `valid-vs-invalid` and 2.96 on
+`fixed-vs-bitflip`, with nulls 1.91 and 1.55 and positive control
+409.94. Both comparisons were flat. The desktop did not reproduce
+the Tiger Lake laptop's gap. Its cause remains unresolved. See the
+[desktop RT-P4 record](../formal/checkct/results/2026-11-25/ca2-desktop-rt-p4.md).
+
 ## 3. `CA-3` — no constant-time evidence for post-quantum signing
 
 **Opened 2026-11-21 by Rick's ruling**, from shekyl-core #1494's review of

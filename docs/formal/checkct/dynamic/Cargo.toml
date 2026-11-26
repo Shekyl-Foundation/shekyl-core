@@ -25,3 +25,13 @@ subtle = { version = "2", default-features = false }
 # Parity with rust/Cargo.toml [profile.release].
 panic = "abort"
 overflow-checks = true
+
+# CA-2's localisation (CRYPTO_AUDIT.md §2): the same build with fat LTO and
+# one codegen unit, so crypto-bigint's square_wide / mul_wide and the
+# vendored red512 inline into the `half:` rows' timed loop as the field's
+# own inlined square does. Not the shipped profile: an instrument for
+# locating the effect, named apart so no record mistakes it for the release.
+[profile.release-lto]
+inherits = "release"
+lto = "fat"
+codegen-units = 1

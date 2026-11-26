@@ -19,11 +19,19 @@ use helioselene::HelioseleneField;
 use crate::classes::Contrast;
 use crate::field::{decode, sink_word, FieldUnderTest};
 use crate::harness::Bench;
-use crate::operand::{Canonical, FromShape, Residue25519, Sample, Shape};
+use crate::operand::{
+    sparse_montgomery_fe25519, sparse_montgomery_fe25519_pair, Canonical, CtPair, FromShape,
+    Residue25519, Sample, Shape, ML_KEM_768_CIPHERTEXT_BYTES,
+};
 use crate::rng::Rng;
 
 /// The suffix that names a row's equal-familiarity companion.
 const FIXED_PAIR_SUFFIX: &str = "[fixed-pair]";
+
+/// The mark of the Montgomery-residue rows. They exist for `fe25519` only:
+/// `HelioseleneField` stores the canonical value, and its sparse rows are
+/// the counterpart. The both-fields check skips this mark.
+const MONTGOMERY_SPARSE_MARK: &str = "Montgomery-sparse";
 
 #[derive(Clone, Copy, Debug)]
 enum FieldId {
@@ -344,12 +352,61 @@ pub fn run(h: &mut impl Bench) {
         },
     );
 
+    h.section(
+        "CA-2: fe25519 with a sparse Montgomery residue (class 0: sparse residue; class 1: random)",
+    );
+    h.row(
+        &format!(
+            "property: {} {MONTGOMERY_SPARSE_MARK} square (direct)",
+            Field25519::LABEL
+        ),
+        Contrast::Shaped(Box::new(sparse_montgomery_fe25519)),
+        Field25519::sample,
+        |a| sink_word(&ff::Field::square(a)),
+    );
+    h.row(
+        &format!(
+            "property: {} {MONTGOMERY_SPARSE_MARK} mul (direct)",
+            Field25519::LABEL
+        ),
+        Contrast::Shaped(Box::new(sparse_montgomery_fe25519_pair)),
+        <(Field25519, Field25519)>::sample,
+        |(a, b)| sink_word(&(*a * *b)),
+    );
+
     h.section("crypto-bigint 0.5.5 Residue::pow with a secret exponent (BINSEC found a branch; unreached by our code)");
     tested(
         h,
         "residue pow (secret exponent)",
         <(Residue25519, U256)>::sample,
         |(a, e)| black_box(a.pow(e).retrieve()).as_limbs()[0].0,
+    );
+
+    h.section("CA-2: ML-KEM-768 ciphertext compare (subtle 2.6.1 [u8]::ct_ne, as fips203 0.5.0 ml_kem.rs:144). Class 0 is equal; class 1 is named by the row.");
+    let ct = ML_KEM_768_CIPHERTEXT_BYTES;
+    h.row(
+        &format!("property: ct_ne {ct} equal vs random"),
+        Contrast::Shaped(Box::new(CtPair::equal)),
+        CtPair::random,
+        CtPair::ne,
+    );
+    h.row(
+        &format!("property: ct_ne {ct} equal vs one bit flipped"),
+        Contrast::Shaped(Box::new(CtPair::equal)),
+        CtPair::bitflip,
+        CtPair::ne,
+    );
+    h.row(
+        &format!("null: ct_ne {ct} random pairs"),
+        Contrast::Null,
+        CtPair::random,
+        CtPair::ne,
+    );
+    h.row(
+        &format!("null: ct_ne {ct} equal pairs"),
+        Contrast::Null,
+        CtPair::equal,
+        CtPair::ne,
     );
 
     h.section("positive controls (must show a class difference)");
@@ -445,8 +502,25 @@ mod tests {
         };
         let mut helio = on(HelioseleneField::LABEL);
         // The halves are a decomposition of the HelioseleneField square.
-        helio.retain(|r| !r.starts_with("half: "));
-        assert_eq!(on(Field25519::LABEL), helio);
+        // Montgomery-sparse is fe25519 only; see MONTGOMERY_SPARSE_MARK.
+        helio.retain(|r| !r.starts_with("half: ") && !r.contains(MONTGOMERY_SPARSE_MARK));
+        let mut fe25519 = on(Field25519::LABEL);
+        fe25519.retain(|r| !r.contains(MONTGOMERY_SPARSE_MARK));
+        assert_eq!(fe25519, helio);
+    }
+
+    #[test]
+    fn montgomery_sparse_rows_name_fe25519_only() {
+        let rows = catalogue();
+        let sparse: Vec<&String> = rows
+            .iter()
+            .filter(|r| r.contains(MONTGOMERY_SPARSE_MARK))
+            .collect();
+        assert!(!sparse.is_empty());
+        assert!(sparse
+            .iter()
+            .all(|r| r.contains(&format!("{} ", Field25519::LABEL))));
+        assert!(sparse.iter().all(|r| !r.contains("Field25519")));
     }
 
     #[test]
@@ -468,7 +542,7 @@ mod tests {
         disposition: &'static str,
     }
 
-    const RETIRED_ROWS: [RetiredRow; 10] = {
+    const RETIRED_ROWS: [RetiredRow; 12] = {
         const FIRST_NULL: &str = "first design's null naming; now `null: <field> <operation>`";
         const REPEAT: &str = "one fresh value repeated through a batch runs faster whatever \
             the value: no value repeats inside a batch now, and the constant rows keep the \
@@ -476,6 +550,8 @@ mod tests {
         const ZERO: &str =
             "a zero fixed class; the constant and operand-property rows took its place";
         const PAIR: &str = "first fixed-pair naming; now `<row> [fixed-pair]`";
+        const MONTGOMERY_NAME: &str = "spelled with the type Field25519, which the both-fields \
+            check does not see; now `property: fe25519 Montgomery-sparse ...`";
         [
             RetiredRow {
                 name: "null: fe25519 mul random/random",
@@ -517,6 +593,14 @@ mod tests {
                 name: "fixed-pair: helio square",
                 disposition: PAIR,
             },
+            RetiredRow {
+                name: "property: Field25519 Montgomery-sparse square (direct)",
+                disposition: MONTGOMERY_NAME,
+            },
+            RetiredRow {
+                name: "property: Field25519 Montgomery-sparse mul (direct)",
+                disposition: MONTGOMERY_NAME,
+            },
         ]
     };
 
@@ -551,10 +635,13 @@ mod tests {
             for record in std::fs::read_dir(day).unwrap() {
                 let path = record.unwrap().path();
                 let file = path.file_name().unwrap().to_string_lossy();
-                if !file.starts_with("dynamic-") {
+                let text = std::fs::read_to_string(&path).unwrap();
+                // Older records are named dynamic-*. A harness log is also
+                // one whose first line is the program's own banner. Other
+                // text in the directory (RT-P4, disassembly) is not.
+                if !file.starts_with("dynamic-") && !text.starts_with("ct-dynamic:") {
                     continue;
                 }
-                let text = std::fs::read_to_string(&path).unwrap();
                 for row in recorded_rows(&text) {
                     let retired = RETIRED_ROWS.iter().any(|r| r.name == row);
                     assert!(
