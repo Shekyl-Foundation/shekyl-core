@@ -33,12 +33,11 @@
 
 use std::path::{Path, PathBuf};
 
-use shekyl_daemon_config::{paths, RunMode};
 use shekyl_rpc_client::wire;
 use shekyl_rpc_grants::GrantSet;
+use shekyl_rpc_transport::channel::default_key_file;
 use shekyl_rpc_transport::channel::{
-    bundle_from_text, bundle_text, create_client_key, fingerprint_hex, read_client_key,
-    ChannelDaemon, ChannelTarget, Leg,
+    account_target, bundle_text, create_client_key, fingerprint_hex, read_client_key, ChannelDaemon,
 };
 use shekyl_rpc_types::hash::HashHex;
 use shekyl_rpc_types::kinds::NoParams;
@@ -47,6 +46,9 @@ use shekyl_wallet_rpc::Network;
 
 use crate::node_leg::NodeLeg;
 use crate::resolve::Enroll;
+
+/// The authenticated endpoint used by the enrollment commands.
+pub use shekyl_rpc_transport::channel::RemoteNode as Remote;
 
 /// What the enrollment words need from the shell's options.
 #[derive(Clone, Debug)]
@@ -71,61 +73,7 @@ impl EnrollOptions {
     fn key_file(&self) -> Result<PathBuf, String> {
         match &self.key_file {
             Some(path) => Ok(path.clone()),
-            None => default_key_file(self.network),
-        }
-    }
-}
-
-/// A node on another host (IG-Q108).
-#[derive(Clone, Debug)]
-pub struct Remote {
-    /// The node's channel. Built from a peer-endpoint and, for an onion,
-    /// an endpoint (`INPUT_GRAMMAR.md` IG-Q31).
-    pub leg: Leg,
-    /// `daemon-bundle-file`: the node's bundle, as `rpc bundle show` prints
-    /// it.
-    pub bundle_file: PathBuf,
-}
-
-/// This client's key file when `--rpc-key-file` is unset: the account root
-/// and `rpc-shekyl-cli-<network>.key` (IG-Q108). The root is the daemon's
-/// (`paths::root`), not a home directory joined by hand.
-///
-/// # Errors
-///
-/// The account has no home (`config.path.no-home`).
-fn default_key_file(network: Network) -> Result<PathBuf, String> {
-    let platform = shekyl_process::platform::current();
-    let root = paths::root(&platform, RunMode::User, "rpc-key-file").map_err(|d| d.render())?;
-    Ok(root.join(format!("rpc-shekyl-cli-{}.key", network.name())))
-}
-
-/// The channel leg to a node at `peer`, through `socks` when set: an IP
-/// directly or through the proxy, an onion only through it.
-///
-/// # Errors
-///
-/// An onion with no proxy.
-pub fn channel_leg(
-    peer: &shekyl_options::PeerEndpoint,
-    socks: Option<std::net::SocketAddr>,
-) -> Result<Leg, shekyl_options::Diagnostic> {
-    use shekyl_options::PeerEndpoint;
-    match peer {
-        PeerEndpoint::Ip(addr) => Ok(Leg::ip(*addr, socks)),
-        PeerEndpoint::Onion { host, port } => {
-            let Some(proxy) = socks else {
-                return Err(shekyl_options::Diagnostic::new(
-                    shekyl_options::Code::ValueRequires,
-                    shekyl_options::Source::Cli,
-                )
-                .option("daemon-endpoint")
-                .param(
-                    "requires",
-                    "daemon-socks, an IP and a port, to reach an onion",
-                ));
-            };
-            Ok(Leg::onion(host.clone(), *port, proxy))
+            None => default_key_file(),
         }
     }
 }
@@ -203,32 +151,13 @@ fn resolve_leg(options: &EnrollOptions) -> Result<NodeLeg, String> {
     let Some(remote) = &options.remote else {
         return NodeLeg::this_computer(options.network, request);
     };
-    let text = std::fs::read_to_string(&remote.bundle_file).map_err(|error| {
-        format!(
-            "the node's bundle {} could not be read: {error}",
-            remote.bundle_file.display()
-        )
-    })?;
-    let daemon = bundle_from_text(&text).ok_or_else(|| {
-        format!(
-            "{} does not hold a node's bundle as `rpc bundle show` prints one",
-            remote.bundle_file.display()
-        )
-    })?;
-    let key_file = options.key_file()?;
-    let key = read_client_key(&key_file)?.ok_or_else(|| {
-        format!(
-            "this client has no key at {}; make one with `rpc key create`, then enroll \
-             its fingerprint on the node",
-            key_file.display()
-        )
-    })?;
-    let target = ChannelTarget::new(
-        options.network.network_id(),
-        daemon,
-        key,
+    let target = account_target(
+        options.network,
         remote.leg.clone(),
-    );
+        remote.bundle().map_err(|e| e.to_string())?,
+        options.key_file.as_deref(),
+    )
+    .map_err(|e| e.to_string())?;
     ChannelDaemon::connect(&target, request)
         .map(NodeLeg::Channel)
         .map_err(|fault| fault.to_string())
@@ -250,35 +179,4 @@ fn key_show(path: &Path) -> Result<String, String> {
                 path.display()
             )
         })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// An IP goes directly or through the proxy, and an onion only through
-    /// it. The kinds refuse a URL or a hostname before this is reached. Red
-    /// edit: make the onion arm dial with no proxy, and `missing` is `Ok`.
-    #[test]
-    fn the_channel_leg_needs_a_proxy_for_an_onion() {
-        use shekyl_options::PeerEndpoint;
-        let addr = "203.0.113.5:29501".parse().expect("an address");
-        let socks: std::net::SocketAddr = "127.0.0.1:9050".parse().expect("a proxy");
-        let ip = PeerEndpoint::Ip(addr);
-        assert!(matches!(
-            channel_leg(&ip, None),
-            Ok(Leg::Ip { proxy: None, .. })
-        ));
-        assert!(matches!(
-            channel_leg(&ip, Some(socks)),
-            Ok(Leg::Ip { proxy: Some(_), .. })
-        ));
-        let onion = PeerEndpoint::Onion {
-            host: "gj56z5xbxm7mi6iucpe3apa3raxkkiwub4vbc2who5sm6slpzikuqiyd.onion".to_owned(),
-            port: 14021,
-        };
-        let missing = channel_leg(&onion, None).expect_err("an onion needs a proxy");
-        assert!(missing.render().contains("daemon-socks"));
-        assert!(channel_leg(&onion, Some(socks)).is_ok());
-    }
 }

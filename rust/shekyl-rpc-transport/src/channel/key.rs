@@ -31,20 +31,36 @@ pub fn read_client_key(path: &std::path::Path) -> Result<Option<StaticKeypair>, 
 ///
 /// Something is at `path`, or the key could not be made or written.
 pub fn create_client_key(path: &std::path::Path) -> Result<StaticKeypair, String> {
-    if std::fs::symlink_metadata(path).is_ok() {
-        return Err(format!(
+    publish_client_key(path)?.ok_or_else(|| {
+        format!(
             "{} already holds a key; showing it prints its fingerprint",
             path.display()
-        ));
+        )
+    })
+}
+
+/// Publish complete owner-only bytes without replacing a concurrent creator.
+/// The private staging directory is on the same filesystem as the final key.
+pub(super) fn publish_client_key(path: &std::path::Path) -> Result<Option<StaticKeypair>, String> {
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(std::path::Path::new("."));
+    let at = |e: std::io::Error| format!("{}: {e}", path.display());
+    shekyl_os_account::create_account_dir_all(parent).map_err(at)?;
+    let stage = tempfile::tempdir_in(parent).map_err(at)?;
+    let source = stage.path().join("key");
+    let key = StaticKeypair::generate().map_err(|e| e.to_string())?;
+    shekyl_os_account::private_file::write_private(&source, &key.to_key_file())
+        .map_err(|e| e.to_string())?;
+    match std::fs::hard_link(&source, path) {
+        Ok(()) => {
+            shekyl_os_account::private_file::sync_dir(parent).map_err(at)?;
+            Ok(Some(key))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(None),
+        Err(e) => Err(at(e)),
     }
-    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
-        std::fs::create_dir_all(parent)
-            .map_err(|error| format!("{}: {error}", parent.display()))?;
-    }
-    let key = StaticKeypair::generate().map_err(|error| error.to_string())?;
-    shekyl_os_account::private_file::write_private(path, &key.to_key_file())
-        .map_err(|error| error.to_string())?;
-    Ok(key)
 }
 
 /// A fingerprint as `rpc client list` prints one, so the operator pastes it
@@ -84,6 +100,33 @@ pub fn bundle_from_text(text: &str) -> Option<StaticPublic> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn simultaneous_creators_publish_one_complete_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("identity").join("rpc-client.key");
+        let start = std::sync::Barrier::new(8);
+        let keys = std::thread::scope(|scope| {
+            let attempts: Vec<_> = (0..8)
+                .map(|_| {
+                    scope.spawn(|| {
+                        start.wait();
+                        publish_client_key(&file).unwrap()
+                    })
+                })
+                .collect();
+            attempts
+                .into_iter()
+                .filter_map(|attempt| attempt.join().unwrap())
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(keys.len(), 1);
+        let stored = read_client_key(&file).unwrap().unwrap();
+        assert_eq!(
+            stored.public().fingerprint(),
+            keys[0].public().fingerprint()
+        );
+    }
 
     /// A bundle printed as `rpc bundle show` prints it reads back as the
     /// same keys, and a short or mangled one does not. Red edit: print it as

@@ -213,6 +213,7 @@ pub(super) struct RegtestDaemon {
     /// file (`private_config_dir`). Removed with the daemon.
     config_dir: PathBuf,
     rpc_port: u16,
+    channel_port: Option<u16>,
     rpc: DaemonTransport,
     owner: LocalTarget,
     /// Base URL of the second, restricted listener, when one was
@@ -435,6 +436,7 @@ struct RegtestSpawn {
     serial: Option<OwnedMutexGuard<()>>,
     network: SpawnNetwork,
     schedule: Option<RegtestSchedule>,
+    measure_http: bool,
     restricted_listener: bool,
     peering: Peering,
     mine_address: Option<String>,
@@ -469,6 +471,7 @@ impl RegtestSpawn {
             serial,
             network: SpawnNetwork::Regtest,
             schedule: None,
+            measure_http: false,
             restricted_listener: false,
             peering: Peering::Offline,
             mine_address: None,
@@ -808,10 +811,9 @@ impl RegtestDaemon {
         LocalRpc::new(self.owner.clone()).into()
     }
 
-    /// This daemon as the wallet's daemon target: its RPC listener on
-    /// loopback, the address the persona's loopback transport accepts.
+    /// This instance’s owner rendezvous, including for staking chain operations.
     fn target(&self) -> shekyl_rpc_transport::DaemonTarget {
-        shekyl_rpc_transport::DaemonTarget::address(format!("http://127.0.0.1:{}", self.rpc_port))
+        shekyl_rpc_transport::DaemonTarget::Owner(self.owner.clone())
     }
 
     /// Resolve the daemon binary from `SHEKYLD_BIN`. Panics with a clear message
@@ -857,6 +859,17 @@ impl RegtestDaemon {
     /// `dev_block_generate` request's address.
     pub(super) async fn start() -> RegtestDaemon {
         Self::start_with_regtest_schedule(None).await
+    }
+
+    /// The measurement proxy and socket census explicitly observe TCP.
+    pub(super) async fn start_for_http_measurement(
+        seed: Option<&[u8; shekyl_crypto_pq::account::SEED_BYTES]>,
+    ) -> RegtestDaemon {
+        let mut spec = RegtestSpawn::new(Some(serial_lock().lock_owned().await));
+        spec.measure_http = true;
+        spec.mine_address =
+            seed.map(|seed| mine_address_from_seed(seed, shekyl_address::Network::Regtest));
+        Self::spawn(spec).await
     }
 
     /// Spawn mining coinbase to `seed`'s primary address.
@@ -960,6 +973,7 @@ impl RegtestDaemon {
             serial,
             network,
             schedule,
+            measure_http,
             restricted_listener,
             peering,
             mine_address,
@@ -1004,6 +1018,10 @@ impl RegtestDaemon {
         }
         let closed_peer = unanswered.as_ref().map(UnansweredPort::peer);
         let rpc_port = Self::free_port_excluding(&reserved);
+        reserved.push(rpc_port);
+        let channel_port = (!released).then(|| Self::free_port_excluding(&reserved));
+        reserved.extend(channel_port);
+
         let data_dir = shekyl_os_account::test_fixture::path(&format!("regtest-{rpc_port}"))
             .expect("a fixture path");
         drop(std::fs::remove_dir_all(&data_dir));
@@ -1061,9 +1079,14 @@ impl RegtestDaemon {
             ]),
             None => cmd.args(["--tor", "off"]),
         };
+        let admin = if released || measure_http {
+            format!("127.0.0.1:{rpc_port}")
+        } else {
+            "none".to_owned()
+        };
         cmd.args([
             "--rpc-admin-listen",
-            &format!("127.0.0.1:{rpc_port}"),
+            &admin,
             "--data-dir",
             chain_dir.to_str().expect("utf8 data dir"),
             "--config-file",
@@ -1079,6 +1102,9 @@ impl RegtestDaemon {
             "--log-level",
             "info",
         ]);
+        if let Some(port) = channel_port {
+            cmd.args(["--rpc-listen", &format!("127.0.0.1:{port}")]);
+        }
         // The owner's socket goes in the same private directory: this
         // account's, mode 0700, one per spawn. A harness names it, so a test
         // daemon never meets another's at the default rendezvous and needs no
@@ -1191,6 +1217,7 @@ impl RegtestDaemon {
             data_dir,
             config_dir,
             rpc_port,
+            channel_port,
             rpc,
             owner,
             restricted_url: restricted_port.map(|p| format!("http://127.0.0.1:{p}")),
@@ -1497,6 +1524,51 @@ impl RegtestDaemon {
         panic!("{context}: {err}; daemon log tail:\n{}", self.log_tail());
     }
 
+    /// Create a private client identity and enroll it through this instance's owner leg.
+    fn enrolled_client(
+        &self,
+        dir: &Path,
+        ceiling: shekyl_rpc_types::wire::rpc::CeilingWord,
+    ) -> (std::net::SocketAddr, std::path::PathBuf, std::path::PathBuf) {
+        use shekyl_rpc_client::wire::{RpcBundleShow, RpcClientAdd};
+        use shekyl_rpc_transport::channel::{bundle_text, create_client_key};
+        use shekyl_rpc_types::{hash::HashHex, kinds::NoParams, wire::rpc::ClientCeiling};
+        let port = self.channel_port.expect("current daemon channel");
+        let bundle = self
+            .owner
+            .call::<RpcBundleShow>(&NoParams)
+            .expect("owner exports the bundle");
+        let bundle_file = dir.join("daemon.bundle");
+        std::fs::write(&bundle_file, bundle_text(&bundle.bundle.0)).unwrap();
+        let key_file = dir.join("client.key");
+        let key = create_client_key(&key_file).unwrap();
+        self.owner
+            .call::<RpcClientAdd>(&ClientCeiling {
+                fingerprint: HashHex::from_bytes(*key.public().fingerprint().as_bytes()),
+                ceiling: vec![ceiling],
+            })
+            .expect("owner enrolls the subprocess");
+        (
+            std::net::SocketAddr::from(([127, 0, 0, 1], port)),
+            bundle_file,
+            key_file,
+        )
+    }
+
+    pub(super) fn configure_channel(
+        &self,
+        cmd: &mut Command,
+        dir: &Path,
+        ceiling: shekyl_rpc_types::wire::rpc::CeilingWord,
+    ) {
+        let (endpoint, bundle_file, key_file) = self.enrolled_client(dir, ceiling);
+        cmd.args(["--daemon-endpoint", &endpoint.to_string()])
+            .arg("--daemon-bundle-file")
+            .arg(bundle_file)
+            .arg("--rpc-key-file")
+            .arg(key_file);
+    }
+
     /// Run one §13 word through `shekyl-cli` against this daemon.
     ///
     /// The C++ console is gone, so the harness spawns the binary. The
@@ -1517,14 +1589,14 @@ impl RegtestDaemon {
         let config = config_dir.path().join("cli.toml");
         shekyl_os_account::private_file::write_private(&config, b"").expect("the config file");
         let mut cmd = std::process::Command::new(bin);
+        self.configure_channel(
+            &mut cmd,
+            config_dir.path(),
+            shekyl_rpc_types::wire::rpc::CeilingWord::Admin,
+        );
         cmd.arg("--config-file")
             .arg(&config)
-            .args([
-                "--daemon-endpoint",
-                &format!("127.0.0.1:{}", self.rpc_port),
-                "--network",
-                network,
-            ])
+            .args(["--network", network])
             .args(command.split_whitespace())
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
@@ -5079,7 +5151,7 @@ async fn stake_persona_and_submit_bond(
     let persona_id = *bound.persona();
     let swept_gindexes: Vec<u64> = post.funding_gindexes.iter().map(|g| g.to_raw()).collect();
     let daemon_client = { arc.read().await.daemon().clone() };
-    let submitter = BroadcastSubmitter::local(persona_id, Arc::new(daemon_client));
+    let submitter = BroadcastSubmitter::for_wallet(persona_id, Arc::new(daemon_client));
     let verdict = submitter
         .submit_bound(super::transaction_submitter::BoundForSend::Loaded(bound))
         .await;
@@ -5261,7 +5333,7 @@ async fn e2e_emission_claim_accepted_and_applied() {
     use super::claim_dispatch::EmissionClaimRequestError;
     use super::claim_orchestrator::ClaimOrchestrationError;
     use super::emission_source::fetch_emission_claim_source;
-    use super::prpc::LocalNodeRpc;
+    use super::prpc::WalletNodeRpc;
     use super::stake_engine::PSlot;
     use super::traits::DaemonEngine;
     use shekyl_curve_tree::reference::REF_ANCHOR_AGE;
@@ -5708,7 +5780,7 @@ async fn e2e_emission_claim_accepted_and_applied() {
             .economy
             .calculate_fee_from_weight(EMISSION_NON_CLAIMS_RESERVE_BYTES + 2048)
     };
-    let claim_rpc = LocalNodeRpc::new(&daemon.target(), Duration::from_secs(10))
+    let claim_rpc = WalletNodeRpc::new(&daemon.target(), Duration::from_secs(10))
         .await
         .expect("loopback claim transport");
     let pruning_landed = SpentRecordsDurablyPruned::for_test();
@@ -6188,7 +6260,7 @@ async fn e2e_drain_wire_shape_matches_a_real_transfer() {
 async fn e2e_release_accepted_and_connected() {
     use super::bond_assembly::{BondAssemblyError, SpentRecordsDurablyPruned};
     use super::emission_source::fetch_claim_source_for;
-    use super::prpc::LocalNodeRpc;
+    use super::prpc::WalletNodeRpc;
     use super::release_dispatch::ReleaseRequestError;
     use super::stake_engine::{PSlot, StakeEngineError};
     use shekyl_archival_retention::bond_floor;
@@ -6276,7 +6348,7 @@ async fn e2e_release_accepted_and_connected() {
     // transport — the SAME fetch the seam rides. The positive balance here
     // is what makes the post-connect zero an observed *transition* rather
     // than a state that could have held all along.
-    let release_rpc = LocalNodeRpc::new(&daemon.target(), Duration::from_secs(10))
+    let release_rpc = WalletNodeRpc::new(&daemon.target(), Duration::from_secs(10))
         .await
         .expect("loopback exit transport");
     let before = fetch_claim_source_for(&release_rpc, fixture.persona_id)
@@ -6413,7 +6485,7 @@ async fn e2e_release_accepted_and_connected() {
 #[ignore = "slow lane (run_live_daemon_gates.sh ARMED_SLOW): requires SHEKYLD_BIN; a market-bond walk (close and price the shard, fund, stake, unstake, collect, retire)"]
 async fn e2e_unstake_collect_retire_composed_arc() {
     use super::emission_source::fetch_claim_source_for;
-    use super::prpc::LocalNodeRpc;
+    use super::prpc::WalletNodeRpc;
     use super::stake_engine::PSlot;
     use super::unstake_facade::{
         CollectOutcome, CollectUnstakedError, UnstakeError, UnstakeOutcome,
@@ -6495,7 +6567,7 @@ async fn e2e_unstake_collect_retire_composed_arc() {
 
     // Pre-read: the positive balance that makes the post-connect zero a
     // transition (the PR-B walk's discipline).
-    let record_rpc = LocalNodeRpc::new(&daemon_address, Duration::from_secs(10))
+    let record_rpc = WalletNodeRpc::new(&daemon_address, Duration::from_secs(10))
         .await
         .expect("loopback record transport");
     let before = fetch_claim_source_for(&record_rpc, fixture.persona_id)
@@ -7352,12 +7424,11 @@ async fn get_output_histogram_stays_unrouted() {
     const DELETED_METHOD: &str = "get_output_histogram";
 
     let daemon = RegtestDaemon::start_with_restricted_listener().await;
-    let restricted = HttpRpc::new(daemon.restricted_url().to_owned())
+    let restricted: DaemonTransport = HttpRpc::new(daemon.restricted_url().to_owned())
         .await
-        .expect("restricted rpc client");
-    let admin = HttpRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port()))
-        .await
-        .expect("admin rpc client");
+        .expect("restricted rpc client")
+        .into();
+    let admin = daemon.wallet_rpc();
 
     for (name, listener) in [("restricted", &restricted), ("admin", &admin)] {
         let gone = raw_call(listener, DELETED_METHOD, json!({ "amounts": [] })).await;
@@ -7386,9 +7457,7 @@ async fn handlers_apply_their_own_request_caps() {
     let restricted = HttpRpc::new(daemon.restricted_url().to_owned())
         .await
         .expect("restricted rpc client");
-    let unrestricted = HttpRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port()))
-        .await
-        .expect("unrestricted rpc client");
+    let unrestricted = daemon.wallet_rpc();
 
     // Ids that resolve to nothing: the cap is a request-shape refusal and
     // fires before any lookup, so the chain's contents are irrelevant.
@@ -7431,6 +7500,43 @@ async fn handlers_apply_their_own_request_caps() {
         .expect_err("a bounded caller over the cap is refused");
     assert_eq!(ki_over.class, ErrorClass::OverResourceBound, "{ki_over:?}");
     assert_eq!(ki_over.diagnostic.code, "bound.key-image", "{ki_over:?}");
+
+    // The production wallet must handle a reserve larger than a single bounded
+    // request. Exercise its real reader on an enrolled wallet channel.
+    let dir = shekyl_os_account::test_fixture::tempdir().unwrap();
+    let (endpoint, bundle_file, key_file) =
+        daemon.enrolled_client(dir.path(), wire::rpc::CeilingWord::Wallet);
+    let wallet = shekyl_rpc_transport::DaemonTarget::Channel {
+        network: shekyl_network::Network::Regtest,
+        node: shekyl_rpc_transport::channel::RemoteNode {
+            leg: shekyl_rpc_transport::channel::Leg::ip(endpoint, None),
+            bundle_file,
+        },
+        account: shekyl_rpc_transport::ChannelAccount {
+            key_file: Some(key_file),
+            ..Default::default()
+        },
+    }
+    .connect(None)
+    .await
+    .unwrap();
+    let over = wallet
+        .call_or_refusal::<wire::ChainSpent>(wire::chain::SpentQuery {
+            key_image: ids(KI_CAP + 1),
+        })
+        .await
+        .unwrap()
+        .expect_err("the enrolled wallet has bounded resources");
+    assert_eq!(over.diagnostic.code, "bound.key-image");
+    let view = super::proofs_chain_facts::ProofChainView::open(&wallet)
+        .await
+        .unwrap();
+    let spent = view
+        .key_image_status(&wallet, ids(KI_CAP + 1))
+        .await
+        .unwrap();
+    assert_eq!(spent, vec![wire::chain::Spent::Unspent; KI_CAP + 1]);
+    view.seal(&wallet).await.unwrap();
 
     // Blast radius: the same over-cap request from the host is served; the
     // caps bound a caller, not the node.

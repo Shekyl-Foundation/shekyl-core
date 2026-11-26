@@ -3581,7 +3581,6 @@ dependencies = [
  "time",
  "tokio",
  "tracing",
- "ureq",
  "zeroize",
 ]
 
@@ -4002,7 +4001,6 @@ dependencies = [
  "shekyl-p-loopback",
  "shekyl-p-serve",
  "shekyl-p-store",
- "shekyl-p-transport",
  "shekyl-p2p-transport",
  "shekyl-proofs",
  "shekyl-relay",

@@ -27,9 +27,62 @@ use shekyl_types::{BlockHash, ChainCount};
 
 pub mod tx_fee;
 
+/// A wallet-visible channel failure, safe to carry across engine boundaries.
+#[derive(Clone, Copy, Debug, thiserror::Error, PartialEq, Eq, Hash)]
+pub enum WalletChannelFault {
+    /// This client key needs enrollment on the wallet’s node.
+    #[error("Enroll this wallet on your node with: shekyl-cli rpc client add {} wallet", hex::encode(.0))]
+    NotEnrolled([u8; 32]),
+    /// The daemon proof does not match daemon-bundle-file. Check the endpoint and obtain the bundle from your node.
+    #[error("The daemon proof does not match daemon-bundle-file. Check the endpoint and obtain the bundle from your node.")]
+    NotTheDaemon,
+    /// The node closed before sending its proof. Check daemon-bundle-file, the network and the channel version against your node.
+    #[error("The node closed before sending its proof. Check daemon-bundle-file, the network and the channel version against your node.")]
+    NotRecognised,
+    /// The channel endpoint did not answer. Check the node, daemon-endpoint and daemon-socks.
+    #[error(
+        "The channel endpoint did not answer. Check the node, daemon-endpoint and daemon-socks."
+    )]
+    Unreachable,
+    /// The channel handshake timed out. Check the connection to your node.
+    #[error("The channel handshake timed out. Check the connection to your node.")]
+    TimedOut,
+    /// The node is busy. Try again shortly.
+    #[error("The node is busy. Try again shortly.")]
+    Busy,
+    /// All this wallet's channel connections are busy. Wait for an outstanding call to finish.
+    #[error(
+        "All this wallet's channel connections are busy. Wait for an outstanding call to finish."
+    )]
+    PoolFull,
+    /// This account has reached the node's channel session limit. Close an unused client session.
+    #[error("This account has reached the node's channel session limit. Close an unused client session.")]
+    SessionCap,
+    /// The node closed the connection during the call. Check its status before repeating a submission.
+    #[error("The node closed the connection during the call. Check its status before repeating a submission.")]
+    Closed,
+    /// The wallet could not open the channel. Check its key and daemon bundle files and the local log.
+    #[error("The wallet could not open the channel. Check its key and daemon bundle files and the local log.")]
+    Local,
+}
+
+impl WalletChannelFault {
+    /// Whether the same configuration is refused on every attempt.
+    #[must_use]
+    pub const fn terminal(self) -> bool {
+        matches!(
+            self,
+            Self::NotEnrolled(_) | Self::NotTheDaemon | Self::NotRecognised | Self::Local
+        )
+    }
+}
+
 /// An error from the RPC.
 #[derive(Clone, PartialEq, Eq, Debug, thiserror::Error)]
 pub enum RpcError {
+    /// The authenticated channel failed. Local detail is retained for the server log.
+    #[error("{0} ({1})")]
+    Channel(WalletChannelFault, String),
     /// An internal error.
     #[error("internal error ({0})")]
     InternalError(String),
@@ -121,6 +174,8 @@ pub use shekyl_rpc_types::errors::{Diagnostic, ErrorClass, RpcError as Refusal};
 /// producer's error, `STAGE_1_PR_4_REFRESH_ENGINE.md` §5.4.7 R6).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DaemonFault {
+    /// The wallet's authenticated connection to its node.
+    Channel(WalletChannelFault),
     /// The daemon could not be reached, or did not answer. Retry, or check
     /// the daemon address.
     Unreachable,
@@ -151,6 +206,7 @@ pub enum DaemonFault {
 impl core::fmt::Display for DaemonFault {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            Self::Channel(fault) => core::fmt::Display::fmt(fault, f),
             Self::Unreachable => f.write_str("the daemon did not answer"),
             Self::Identity(mismatch) => {
                 write!(f, "the daemon was refused on its {}", mismatch.axis())
@@ -174,6 +230,9 @@ impl DaemonFault {
     /// refusal is cached by the client and repeats on every request.
     #[must_use]
     pub const fn is_retryable(self) -> bool {
+        if let Self::Channel(fault) = self {
+            return !fault.terminal();
+        }
         !matches!(
             self,
             Self::Identity(_) | Self::NotPermitted | Self::PeerCheck | Self::Service(_)
@@ -187,6 +246,9 @@ impl DaemonFault {
     /// also not retried, and they are not this.
     #[must_use]
     pub const fn is_target_refusal(self) -> bool {
+        if let Self::Channel(fault) = self {
+            return fault.terminal();
+        }
         matches!(self, Self::PeerCheck | Self::Service(_))
     }
 }
@@ -207,6 +269,7 @@ impl RpcError {
             Self::InvalidFee => DaemonFault::FeeResponse,
             Self::InternalError(_) | Self::InvalidPriority => DaemonFault::Internal,
             Self::NoSuchMethod(_) => DaemonFault::Protocol,
+            Self::Channel(fault, _) => DaemonFault::Channel(*fault),
             Self::PeerCheck(_) => DaemonFault::PeerCheck,
             Self::Service(view) => DaemonFault::Service(*view),
             Self::Refused(refusal) => match refusal.class {

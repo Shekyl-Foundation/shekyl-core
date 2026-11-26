@@ -28,6 +28,7 @@ mod http_client;
 pub mod listen;
 pub mod local;
 pub mod network_posture;
+pub mod wallet_http;
 use http_client::{error_chain, HttpClient, HttpError, TransportTls};
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -138,16 +139,16 @@ enum Authentication {
     },
 }
 
-/// A wallet's one daemon target (`RPC_CHANNEL.md` RT-15): "this computer",
-/// the owner's leg of the node this account runs, or a named address over
-/// HTTP until RT-W12. A client holds exactly one: it connects to it or says
-/// why it cannot, and never falls back to the other.
+/// The RPC connection chosen for one wallet. A local owner uses its private
+/// rendezvous. An enrolled wallet uses an authenticated channel.
 #[derive(Clone, Debug)]
 pub enum DaemonTransport {
     /// "This computer": the owner's socket or pipe ([`local::LocalRpc`]).
     ThisComputer(local::LocalRpc),
-    /// A named address.
+    /// Legacy HTTP adapter for explicit fixture and pre-cutover callers.
     Address(HttpRpc),
+    /// An enrolled channel to the operator’s node.
+    Channel(channel::WalletChannel),
 }
 
 impl From<HttpRpc> for DaemonTransport {
@@ -171,6 +172,7 @@ impl Rpc for DaemonTransport {
         async move {
             match self {
                 Self::ThisComputer(rpc) => rpc.post(route, body).await,
+                Self::Channel(rpc) => rpc.post(route, body).await.map_err(RpcError::from),
                 Self::Address(rpc) => rpc.post(route, body).await,
             }
         }
@@ -182,6 +184,17 @@ impl Rpc for DaemonTransport {
 /// Exactly one; [`Self::connect`] makes its one [`DaemonTransport`].
 #[derive(Clone)]
 pub enum DaemonTarget {
+    /// An already resolved owner rendezvous. A harness supplies its instance here.
+    Owner(local::LocalTarget),
+    /// An explicitly named, authenticated node.
+    Channel {
+        /// The wallet network.
+        network: shekyl_network::Network,
+        /// The endpoint and operator-provided bundle.
+        node: channel::RemoteNode,
+        /// Account identity and requested wallet grants.
+        account: ChannelAccount,
+    },
     /// The node this account runs on this computer, over its owner's leg
     /// ([`local::LocalTarget::this_computer`]). The network is all a wallet
     /// names: where this account's node and the machine's service keep
@@ -189,10 +202,13 @@ pub enum DaemonTarget {
     ThisComputer {
         /// The wallet's network: which node's rendezvous.
         network: shekyl_network::Network,
+        /// Used only when the local node runs as a service.
+        account: ChannelAccount,
     },
-    /// A named daemon address (plaintext HTTP until RT-W12), and the SOCKS5h
-    /// proxy its connections go through.
-    Address {
+    /// An HTTP peer supplied by a test fixture. Only the test feature
+    /// exposes its constructor.
+    #[non_exhaustive]
+    HttpFixture {
         /// The daemon's base URL; may carry digest credentials.
         url: String,
         /// The SOCKS5h proxy; `None` is direct.
@@ -200,16 +216,45 @@ pub enum DaemonTarget {
     },
 }
 
+/// The identity and grant a wallet uses on an enrolled connection.
+#[derive(Clone, Debug)]
+pub struct ChannelAccount {
+    /// Explicit key location, or the account-wide default.
+    pub key_file: Option<std::path::PathBuf>,
+    /// The grant the wallet requests.
+    pub request: shekyl_rpc_grants::GrantSet,
+}
+
+impl Default for ChannelAccount {
+    fn default() -> Self {
+        Self {
+            key_file: None,
+            request: shekyl_rpc_grants::Preset::Wallet.grants(),
+        }
+    }
+}
+
 /// Manual: an address may carry digest credentials in its authority, so it
 /// renders through [`redacted_endpoint`], as the proxy does.
 impl std::fmt::Debug for DaemonTarget {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::ThisComputer { network } => f
+            Self::Owner(target) => target.fmt(f),
+            Self::Channel {
+                network,
+                node,
+                account,
+            } => f
+                .debug_struct("Channel")
+                .field("network", network)
+                .field("node", node)
+                .field("account", account)
+                .finish(),
+            Self::ThisComputer { network, .. } => f
                 .debug_struct("ThisComputer")
                 .field("network", network)
                 .finish(),
-            Self::Address { url, proxy } => f
+            Self::HttpFixture { url, proxy } => f
                 .debug_struct("Address")
                 .field("url", &redacted_endpoint(url))
                 .field("proxy", &proxy.as_deref().map(redacted_endpoint))
@@ -219,12 +264,39 @@ impl std::fmt::Debug for DaemonTarget {
 }
 
 impl DaemonTarget {
-    /// A named address, dialled directly (no proxy).
+    /// Construct a direct HTTP peer in a test.
+    #[cfg(any(test, feature = "test-override"))]
     #[must_use]
-    pub fn address(url: impl Into<String>) -> Self {
-        Self::Address {
-            url: url.into(),
-            proxy: None,
+    pub fn fixture_address(url: impl Into<String>) -> Self {
+        Self::fixture_with_proxy(url.into(), None)
+    }
+
+    /// Construct an HTTP test peer with an explicit route.
+    #[cfg(any(test, feature = "test-override"))]
+    #[must_use]
+    pub fn fixture_with_proxy(url: String, proxy: Option<String>) -> Self {
+        Self::HttpFixture { url, proxy }
+    }
+
+    /// Resolve an enrolled channel before the first dial. The owner socket
+    /// needs no account key. An invalid service record is a hard refusal.
+    pub fn channel_target(&self) -> Result<Option<channel::ChannelTarget>, channel::ChannelFault> {
+        match self {
+            Self::Channel {
+                network,
+                node,
+                account,
+            } => Ok(Some(channel::account_target(
+                *network,
+                node.leg.clone(),
+                node.bundle()?,
+                account.key_file.as_deref(),
+            )?)),
+            Self::ThisComputer { network, account } => {
+                let target = local::LocalTarget::this_computer(*network);
+                target.wallet_channel(*network, account)
+            }
+            Self::HttpFixture { .. } | Self::Owner(_) => Ok(None),
         }
     }
 
@@ -238,15 +310,35 @@ impl DaemonTarget {
     /// that is not running, a service, or a failed peer check is the first
     /// call's error.
     pub async fn connect(&self, timeout: Option<Duration>) -> Result<DaemonTransport, RpcError> {
+        if let Some(target) = self.channel_target()? {
+            let request = match self {
+                Self::Channel { account, .. } | Self::ThisComputer { account, .. } => {
+                    account.request
+                }
+                Self::HttpFixture { .. } | Self::Owner(_) => {
+                    unreachable!("legacy address cannot resolve to a channel")
+                }
+            };
+            return Ok(DaemonTransport::Channel(channel::WalletChannel::new(
+                target,
+                request,
+                timeout.unwrap_or(DEFAULT_TIMEOUT),
+            )));
+        }
         match self {
-            Self::ThisComputer { network } => {
+            Self::Owner(target) => Ok(DaemonTransport::ThisComputer(local::LocalRpc::within(
+                target.clone(),
+                timeout.unwrap_or(local::CALL_WITHIN),
+            ))),
+            Self::Channel { .. } => unreachable!("a named channel always resolves or fails"),
+            Self::ThisComputer { network, .. } => {
                 let target = local::LocalTarget::this_computer(*network);
                 Ok(DaemonTransport::ThisComputer(match timeout {
                     Some(within) => local::LocalRpc::within(target, within),
                     None => local::LocalRpc::new(target),
                 }))
             }
-            Self::Address { url, proxy } => Ok(DaemonTransport::Address(
+            Self::HttpFixture { url, proxy } => Ok(DaemonTransport::Address(
                 HttpRpc::with_options(
                     url.clone(),
                     timeout.unwrap_or(DEFAULT_TIMEOUT),

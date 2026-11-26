@@ -333,6 +333,26 @@ wallet_rpc_error_codes! {
     /// only over the channel (RT-W12); until then it names the service's
     /// view listener as `daemon-address`. Nothing was dialled.
     DaemonIsAService = -29214 => "DAEMON_IS_A_SERVICE",
+    /// Enroll this wallet on your node with: shekyl-cli rpc client add the client fingerprint wallet
+    ChannelNotEnrolled = -29215 => "CHANNEL_NOT_ENROLLED",
+    /// The daemon proof does not match daemon-bundle-file. Check the endpoint and obtain the bundle from your node.
+    ChannelNotTheDaemon = -29216 => "CHANNEL_NOT_THE_DAEMON",
+    /// The node closed before sending its proof. Check daemon-bundle-file, the network and the channel version against your node.
+    ChannelNotRecognised = -29217 => "CHANNEL_NOT_RECOGNISED",
+    /// The channel endpoint did not answer. Check the node, daemon-endpoint and daemon-socks.
+    ChannelUnreachable = -29218 => "CHANNEL_UNREACHABLE",
+    /// The channel handshake timed out. Check the connection to your node.
+    ChannelTimedOut = -29219 => "CHANNEL_TIMED_OUT",
+    /// The node is busy. Try again shortly.
+    ChannelBusy = -29220 => "CHANNEL_BUSY",
+    /// All this wallet's channel connections are busy. Wait for an outstanding call to finish.
+    ChannelPoolFull = -29221 => "CHANNEL_POOL_FULL",
+    /// This account has reached the node's channel session limit. Close an unused client session.
+    ChannelSessionCap = -29222 => "CHANNEL_SESSION_CAP",
+    /// The node closed the connection during the call. Check its status before repeating a submission.
+    ChannelClosed = -29223 => "CHANNEL_CLOSED",
+    /// The wallet could not open the channel. Check its key and daemon bundle files and the local log.
+    ChannelLocal = -29224 => "CHANNEL_LOCAL",
     /// `check_*`: proof string failed decode / framing / size caps.
     ProofMalformed = -29300 => "PROOF_MALFORMED",
     /// `get_tx_proof` OUTBOUND: no retained per-tx secret for the txid.
@@ -536,6 +556,9 @@ impl WalletRpcErrorCode {
 /// convert into this enum at the lifecycle / send boundary.
 #[derive(Debug, Error)]
 pub enum WalletRpcError {
+    /// The authenticated wallet-to-node connection failed.
+    #[error("{0}")]
+    Channel(shekyl_rpc_client::WalletChannelFault),
     /// JSON body could not be parsed.
     #[error("parse error")]
     ParseError,
@@ -1597,6 +1620,32 @@ impl WalletRpcError {
             Self::DaemonProtocolViolation => WalletRpcErrorCode::DaemonProtocolViolation,
             Self::DaemonGrantRefused => WalletRpcErrorCode::DaemonGrantRefused,
             Self::DaemonPeerCheckFailed => WalletRpcErrorCode::DaemonPeerCheckFailed,
+            Self::Channel(fault) => match fault {
+                shekyl_rpc_client::WalletChannelFault::NotEnrolled(_) => {
+                    WalletRpcErrorCode::ChannelNotEnrolled
+                }
+                shekyl_rpc_client::WalletChannelFault::NotTheDaemon => {
+                    WalletRpcErrorCode::ChannelNotTheDaemon
+                }
+                shekyl_rpc_client::WalletChannelFault::NotRecognised => {
+                    WalletRpcErrorCode::ChannelNotRecognised
+                }
+                shekyl_rpc_client::WalletChannelFault::Unreachable => {
+                    WalletRpcErrorCode::ChannelUnreachable
+                }
+                shekyl_rpc_client::WalletChannelFault::TimedOut => {
+                    WalletRpcErrorCode::ChannelTimedOut
+                }
+                shekyl_rpc_client::WalletChannelFault::Busy => WalletRpcErrorCode::ChannelBusy,
+                shekyl_rpc_client::WalletChannelFault::PoolFull => {
+                    WalletRpcErrorCode::ChannelPoolFull
+                }
+                shekyl_rpc_client::WalletChannelFault::SessionCap => {
+                    WalletRpcErrorCode::ChannelSessionCap
+                }
+                shekyl_rpc_client::WalletChannelFault::Closed => WalletRpcErrorCode::ChannelClosed,
+                shekyl_rpc_client::WalletChannelFault::Local => WalletRpcErrorCode::ChannelLocal,
+            },
             Self::DaemonIsAService { .. } => WalletRpcErrorCode::DaemonIsAService,
             Self::ChainUnstable => WalletRpcErrorCode::ChainUnstable,
             Self::ResyncRequired { .. } => WalletRpcErrorCode::ResyncRequired,
@@ -1814,6 +1863,9 @@ impl WalletRpcError {
                 "ref_anchor_age": ref_anchor_age,
             })),
             Self::SubmitLoopBreakerTripped { cause } => Some(json!({ "cause": cause })),
+            Self::Channel(shekyl_rpc_client::WalletChannelFault::NotEnrolled(fingerprint)) => {
+                Some(serde_json::json!({"fingerprint": HashHex::from_bytes(*fingerprint)}))
+            }
             Self::DaemonIsAService { view } => {
                 Some(json!({ "view": view.map(|view| view.to_string()) }))
             }
@@ -2164,6 +2216,10 @@ pub(crate) fn from_daemon_fault(fault: DaemonFault, detail: &str) -> WalletRpcEr
         DaemonFault::NotPermitted => {
             tracing::warn!(detail, "daemon refused the call as outside the grant");
             WalletRpcError::DaemonGrantRefused
+        }
+        DaemonFault::Channel(channel) => {
+            tracing::info!(%channel, detail, "daemon channel call failed");
+            WalletRpcError::Channel(channel)
         }
         DaemonFault::PeerCheck => {
             tracing::error!(
@@ -4679,7 +4735,50 @@ mod tests {
     fn every_daemon_fault() -> Vec<(DaemonFault, WalletRpcErrorCode, Option<Value>)> {
         use WalletRpcErrorCode as C;
         let digest = |b| HashHex::from_bytes([b; 32]);
+        use shekyl_rpc_client::WalletChannelFault as Channel;
         vec![
+            (
+                DaemonFault::Channel(Channel::NotEnrolled([9; 32])),
+                C::ChannelNotEnrolled,
+                Some(json!({"fingerprint": digest(9)})),
+            ),
+            (
+                DaemonFault::Channel(Channel::NotTheDaemon),
+                C::ChannelNotTheDaemon,
+                None,
+            ),
+            (
+                DaemonFault::Channel(Channel::NotRecognised),
+                C::ChannelNotRecognised,
+                None,
+            ),
+            (
+                DaemonFault::Channel(Channel::Unreachable),
+                C::ChannelUnreachable,
+                None,
+            ),
+            (
+                DaemonFault::Channel(Channel::TimedOut),
+                C::ChannelTimedOut,
+                None,
+            ),
+            (DaemonFault::Channel(Channel::Busy), C::ChannelBusy, None),
+            (
+                DaemonFault::Channel(Channel::PoolFull),
+                C::ChannelPoolFull,
+                None,
+            ),
+            (
+                DaemonFault::Channel(Channel::SessionCap),
+                C::ChannelSessionCap,
+                None,
+            ),
+            (
+                DaemonFault::Channel(Channel::Closed),
+                C::ChannelClosed,
+                None,
+            ),
+            (DaemonFault::Channel(Channel::Local), C::ChannelLocal, None),
             (DaemonFault::Unreachable, C::DaemonUnreachable, None),
             (
                 wire(0x0003_001d, 0x0003_001c),

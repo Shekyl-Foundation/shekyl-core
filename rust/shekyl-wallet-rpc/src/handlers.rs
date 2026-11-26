@@ -158,10 +158,7 @@ mod tests {
         tokio::sync::Mutex::new(TenantState::new(
             std::env::temp_dir(),
             Network::Stagenet,
-            DaemonTarget::Address {
-                url: "http://127.0.0.1:1".into(),
-                proxy: None,
-            },
+            DaemonTarget::fixture_with_proxy("http://127.0.0.1:1".into(), None),
             crate::server::TorFile::discover(),
         ))
     }

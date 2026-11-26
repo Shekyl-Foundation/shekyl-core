@@ -245,6 +245,78 @@ impl LocalTarget {
         self.path.as_deref()
     }
 
+    /// The service published for this local target. An unreadable record
+    /// is a refusal, so callers cannot fall through to another transport.
+    pub(crate) fn service(&self) -> Result<Option<ServiceRecord>, super::channel::ChannelFault> {
+        let Some(place) = &self.service_record else {
+            return Ok(None);
+        };
+        let bytes = place.read().map_err(|e| {
+            super::channel::ChannelFault::Local(format!("service record {place}: {e}"))
+        })?;
+        bytes
+            .map(|bytes| {
+                ServiceRecord::parse(&bytes).ok_or_else(|| {
+                    super::channel::ChannelFault::Local(format!(
+                        "invalid service record at {place}"
+                    ))
+                })
+            })
+            .transpose()
+    }
+
+    /// Resolve a local service's enrolled wallet channel from its published record.
+    /// A run-as-me node without a service record uses the owner socket.
+    ///
+    /// # Errors
+    ///
+    /// A malformed or unreadable service record, unusable channel bundle, or an
+    /// account identity that needs enrollment.
+    pub fn wallet_channel(
+        &self,
+        network: Network,
+        account: &crate::ChannelAccount,
+    ) -> Result<Option<crate::channel::ChannelTarget>, crate::channel::ChannelFault> {
+        use crate::{channel, listen};
+        // Prefer this account's rendezvous when both records exist. The
+        // owner dial verifies the peer, including when its socket is stale.
+        if let Some(owner) = self.path() {
+            match std::fs::symlink_metadata(owner) {
+                Ok(_) => return Ok(None),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(channel::ChannelFault::Local(format!(
+                        "cannot inspect the owner rendezvous {}: {error}",
+                        owner.display()
+                    )))
+                }
+            }
+        }
+        let Some(record) = self.service()? else {
+            return Ok(None);
+        };
+        let service = record.channel.ok_or_else(|| channel::ChannelFault::Local(
+            "the local service has no channel listener. Set rpc-listen on the node to a loopback address".into()
+        ))?;
+        if !listen::is_loopback_ip(service.address.ip()) {
+            return Err(channel::ChannelFault::Local(
+                "the service record must name a loopback channel".into(),
+            ));
+        }
+        let bundle = channel::bundle_from_bytes(&service.bundle).ok_or_else(|| {
+            channel::ChannelFault::Local(
+                "the local service published an invalid channel bundle".into(),
+            )
+        })?;
+        channel::account_target(
+            network,
+            channel::Leg::ip(service.address, None),
+            bundle,
+            account.key_file.as_deref(),
+        )
+        .map(Some)
+    }
+
     /// Connect to the owner's leg and check its peer.
     ///
     /// # Errors

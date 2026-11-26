@@ -11,7 +11,7 @@
 //! its reply **unbroadcast** (the CB-3 discipline: the builder never
 //! self-schedules). This module is the other half of that routing: one
 //! explicit exit intent in, one assembled `Release` dispatched through the
-//! audited posture→submitter choke point ([`BroadcastSubmitter::local`] →
+//! audited posture→submitter choke point ([`BroadcastSubmitter::for_wallet`] →
 //! [`submit_bound`]) out — **immediately**. The exit draws no decorrelation
 //! offset and takes no dispatch plan: the event it follows — a release
 //! cooldown expiring — is already public on-chain, so a delay would defer an
@@ -35,7 +35,7 @@
 //! fetched as ONE read view through [`fetch_claim_source_for`] — the binding
 //! form, which pairs the response with the `P` it was requested for so a
 //! caller cannot answer readiness from one persona's record and build
-//! another's post. The transport is [`PersonaIsolatedTransport`]-bound for
+//! another's post. The transport is [`WalletChainReader`]-bound for
 //! the same §7.4 reason as the claim fetch: a `P`-keyed query on the
 //! principal's daemon session would draw the P↔principal edge off-chain.
 //!
@@ -111,7 +111,7 @@ use super::daemon::synced_chain_facts::TimelineBreak;
 use super::emission_source::{fetch_claim_source_for, ClaimSourceFor, EmissionSourceError};
 use super::fee_policy::FeeEstimatorError;
 use super::fee_snapshot::map_daemon_engine_fee_error;
-use super::prpc::PersonaIsolatedTransport;
+use super::prpc::WalletChainReader;
 use super::pscan::block_source::daemon_claimed_tip;
 use super::pscan::seal_basis::{load_seal_basis, SealBasisError};
 use super::pscan::start::pending_post_store_for_engine;
@@ -369,7 +369,7 @@ where
     // The `dead_code` staging allow retired with PR-C: the production caller
     // the rule-21 note reserved landed as
     // [`StakeFacade::unstake`](super::unstake_facade), which calls this seam.
-    pub(crate) async fn submit_release<T: PersonaIsolatedTransport>(
+    pub(crate) async fn submit_release<T: WalletChainReader>(
         self_arc: Arc<RwLock<Self>>,
         release_rpc: &T,
         p_slot: PSlot,
@@ -659,7 +659,7 @@ where
         //   lane from bricking: the lane reopens there, with the outcome.
         // - `RejectedRetryable` and `Ambiguous` keep the record live as
         //   before; the end date ends them too.
-        let submitter = BroadcastSubmitter::local(persona, Arc::new(daemon));
+        let submitter = BroadcastSubmitter::for_wallet(persona, Arc::new(daemon));
         match submitter
             .submit_bound(super::transaction_submitter::BoundForSend::Fresh(
                 assembled.bound_tx.clone(),
@@ -799,7 +799,7 @@ mod tests {
     ///    (`sweep_funding_outputs`) — one sweep implementation, no local
     ///    re-derivation of eligibility;
     /// 4. dispatch rides ONLY the audited posture→submitter choke point
-    ///    (`BroadcastSubmitter::local` + `submit_bound`) — never a bare
+    ///    (`BroadcastSubmitter::for_wallet` + `submit_bound`) — never a bare
     ///    submitter and never a raw `DaemonClient` (T-DS-2);
     /// 5. persist-before-dispatch: the pending-release seal (`seal_release`)
     ///    textually precedes the network send.
@@ -842,7 +842,7 @@ mod tests {
             "the funding sweep must be the bond path's own body"
         );
 
-        let choke_construct = "BroadcastSubmitter::local(";
+        let choke_construct = "BroadcastSubmitter::for_wallet(";
         assert!(
             code.contains(choke_construct),
             "submitter construction must stay on the audited choke point"

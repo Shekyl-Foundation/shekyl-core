@@ -28,7 +28,7 @@
 //! which must be final.
 //!
 //! **Where the bytes come from.** The wallet's own node, on the persona's
-//! loopback transport ([`LocalNodeRpc`]); a non-loopback daemon is a typed
+//! loopback transport ([`WalletNodeRpc`]); a non-loopback daemon is a typed
 //! refusal. A shard the node has already discarded answers `archived`
 //! (`SB-Q2`), and its bodies come back only through the node's recovery
 //! fetch (§6.5.4, the `WSS-Q9` handoff), which is not built, so it is a
@@ -50,7 +50,7 @@ use tokio::sync::RwLock;
 
 use std::sync::Arc;
 
-use super::prpc::LocalNodeRpc;
+use super::prpc::WalletNodeRpc;
 use super::pscan::block_source::{daemon_claimed_tip, BlockSourceError};
 use super::pscan::start::load_pscan_state_for_engine;
 use super::signer::EngineSignerKind;
@@ -207,7 +207,7 @@ pub(crate) enum MarketFillError {
 /// (`body_reconcile`) reads the same, so the two cannot disagree about what
 /// is final or where a shard's blocks are.
 pub(crate) struct FillContext {
-    rpc: LocalNodeRpc,
+    rpc: WalletNodeRpc,
     pub(crate) bodies: BodyStoreHandle,
     pub(crate) fold: ArchivalFold,
     pub(crate) scanned: BlockHeight,
@@ -217,7 +217,7 @@ pub(crate) struct FillContext {
 
 impl FillContext {
     /// The persona's loopback transport to the wallet's own node.
-    pub(crate) fn rpc(&self) -> &LocalNodeRpc {
+    pub(crate) fn rpc(&self) -> &WalletNodeRpc {
         &self.rpc
     }
 
@@ -298,7 +298,7 @@ where
         self_arc: Arc<RwLock<Self>>,
         daemon: &DaemonTarget,
     ) -> Result<FillContext, FillFailure> {
-        let rpc = LocalNodeRpc::new(daemon, FILL_RPC_TIMEOUT)
+        let rpc = WalletNodeRpc::new(daemon, FILL_RPC_TIMEOUT)
             .await
             .map_err(|e| FillFailure::LocalNodeRequired {
                 detail: e.to_string(),

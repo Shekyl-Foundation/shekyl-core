@@ -210,9 +210,9 @@ where
                 .map_err(|e| ServingStartError::Identity(Box::new(e)))?,
         );
 
-        // ① local posture. `LocalNodeRpc` refuses a non-loopback URL by
+        // ① local posture. `WalletNodeRpc` refuses a non-loopback URL by
         // construction, so the refusal below is the type's, not a check here.
-        let claim_rpc = crate::engine::prpc::LocalNodeRpc::new(daemon, CLAIM_SOURCE_TIMEOUT)
+        let claim_rpc = crate::engine::prpc::WalletNodeRpc::new(daemon, CLAIM_SOURCE_TIMEOUT)
             .await
             .map_err(|e| ServingStartError::DaemonNotLoopback(Box::new(e)))?;
 
@@ -324,7 +324,7 @@ mod tests {
         let arc = Arc::new(RwLock::new(engine));
         let started = Engine::<SoloSigner>::start_serving_if_staker(
             arc.clone(),
-            &shekyl_rpc_transport::DaemonTarget::address("http://127.0.0.1:1"),
+            &shekyl_rpc_transport::DaemonTarget::fixture_address("http://127.0.0.1:1"),
             &TorFile::discover(),
         )
         .await
@@ -342,7 +342,7 @@ mod tests {
         let arc = Arc::new(RwLock::new(engine));
         let started = Engine::<SoloSigner>::start_serving_if_staker(
             arc.clone(),
-            &shekyl_rpc_transport::DaemonTarget::address("http://127.0.0.1:1"),
+            &shekyl_rpc_transport::DaemonTarget::fixture_address("http://127.0.0.1:1"),
             &TorFile::discover(),
         )
         .await
@@ -364,7 +364,7 @@ mod tests {
         let arc = Arc::new(RwLock::new(engine));
         let Err(err) = Engine::<SoloSigner>::start_serving_if_staker(
             arc.clone(),
-            &shekyl_rpc_transport::DaemonTarget::address("http://example.com:18081"),
+            &shekyl_rpc_transport::DaemonTarget::fixture_address("http://example.com:18081"),
             &TorFile::discover(),
         )
         .await
@@ -395,7 +395,7 @@ mod tests {
         let arc = Arc::new(RwLock::new(engine));
         let first = Engine::<SoloSigner>::start_serving_if_staker(
             arc.clone(),
-            &shekyl_rpc_transport::DaemonTarget::address("http://127.0.0.1:1"),
+            &shekyl_rpc_transport::DaemonTarget::fixture_address("http://127.0.0.1:1"),
             &TorFile::discover(),
         )
         .await
@@ -405,7 +405,7 @@ mod tests {
 
         match Engine::<SoloSigner>::start_serving_if_staker(
             arc.clone(),
-            &shekyl_rpc_transport::DaemonTarget::address("http://127.0.0.1:1"),
+            &shekyl_rpc_transport::DaemonTarget::fixture_address("http://127.0.0.1:1"),
             &TorFile::discover(),
         )
         .await

@@ -263,31 +263,74 @@ pub fn daemon_of(
     proxy_has_another_use: bool,
     faults: &mut Vec<Diagnostic>,
 ) -> Option<DaemonTarget> {
-    let proxy = socks_of(resolved);
-    let url = match resolved.get("daemon-endpoint") {
-        None if proxy.is_some() && !proxy_has_another_use => {
-            faults.push(requires(
-                "daemon-socks",
-                "daemon-endpoint: this computer's node is reached on its owner's socket, never \
-                 through a proxy",
-            ));
-            return None;
+    use shekyl_rpc_transport::channel::{Leg, RemoteNode};
+    use shekyl_rpc_types::method::Preset;
+    use shekyl_rpc_types::wire::rpc::CeilingWord;
+    let request = match resolved.get("rpc-grant") {
+        Some(Value::List(words)) => {
+            let mut grants = Vec::with_capacity(words.len());
+            for word in words {
+                let Value::Word(name) = word else {
+                    unreachable!("typed grant word")
+                };
+                grants.push(
+                    CeilingWord::from_name(name).expect("grant table uses CeilingWord::WORDS"),
+                );
+            }
+            CeilingWord::expand(&grants)
         }
-        None => return Some(DaemonTarget::ThisComputer { network }),
-        Some(Value::Peer(PeerEndpoint::Ip(addr))) => format!("http://{addr}"),
+        _ => Preset::Wallet.grants(),
+    };
+    let account = shekyl_rpc_transport::ChannelAccount {
+        key_file: path_of(resolved, "rpc-key-file"),
+        request,
+    };
+    let proxy = match resolved.get("daemon-socks") {
+        Some(Value::Endpoint(addr)) => Some(*addr),
+        _ => None,
+    };
+    let bundle = path_of(resolved, "daemon-bundle-file");
+    let leg = match resolved.get("daemon-endpoint") {
+        None => {
+            if proxy.is_some() && !proxy_has_another_use {
+                faults.push(requires(
+                    "daemon-socks",
+                    "daemon-endpoint, to reach a node through a proxy",
+                ));
+            }
+            if bundle.is_some() {
+                faults.push(requires(
+                    "daemon-bundle-file",
+                    "daemon-endpoint, the node that exported this bundle",
+                ));
+            }
+            return Some(DaemonTarget::ThisComputer { network, account });
+        }
+        Some(Value::Peer(PeerEndpoint::Ip(addr))) => Leg::ip(*addr, proxy),
         Some(Value::Peer(PeerEndpoint::Onion { host, port })) => {
-            if proxy.is_none() {
+            let Some(proxy) = proxy else {
                 faults.push(requires(
                     "daemon-endpoint",
                     "daemon-socks, to reach an onion",
                 ));
                 return None;
-            }
-            format!("http://{host}:{port}")
+            };
+            Leg::onion(host.clone(), *port, proxy)
         }
-        Some(other) => unreachable!("daemon-endpoint is a peer endpoint, not {other:?}"),
+        _ => unreachable!("typed peer endpoint"),
     };
-    Some(DaemonTarget::Address { url, proxy })
+    let Some(bundle_file) = bundle else {
+        faults.push(requires(
+            "daemon-endpoint",
+            "daemon-bundle-file exported by the node with shekyl-cli rpc bundle show",
+        ));
+        return None;
+    };
+    Some(DaemonTarget::Channel {
+        network,
+        node: RemoteNode { leg, bundle_file },
+        account,
+    })
 }
 
 #[cfg(test)]
@@ -340,7 +383,8 @@ mod tests {
         assert!(matches!(
             loaded.server.daemon,
             DaemonTarget::ThisComputer {
-                network: Network::Testnet
+                network: Network::Testnet,
+                ..
             }
         ));
         assert!(loaded
@@ -357,8 +401,11 @@ mod tests {
     /// a bare word is not an option.
     #[test]
     fn the_retired_spellings_are_unknown_names() {
-        for old in ["--rpc-bind", "--rpc-login", "--daemon-address", "--proxy"] {
+        for old in ["--rpc-bind", "--rpc-login"] {
             assert_eq!(refused(&[old]), [Code::NameUnknown], "{old}");
+        }
+        for old in ["--daemon-address", "--proxy"] {
+            assert_eq!(refused(&[old]), [Code::NameRejected]);
         }
         assert_eq!(refused(&["--disable-rpc-login"]), [Code::NameUnknown]);
         assert_eq!(refused(&["serve"]), [Code::CliSyntax]);
@@ -395,13 +442,19 @@ mod tests {
         let loaded = served(&[
             "--daemon-endpoint",
             "192.0.2.1:12029",
+            "--daemon-bundle-file",
+            if cfg!(windows) {
+                r"C:\test\bundle"
+            } else {
+                "/test/bundle"
+            },
             "--daemon-socks",
             "127.0.0.1:9050",
         ]);
         match loaded.server.daemon {
-            DaemonTarget::Address { url, proxy } => {
-                assert_eq!(url, "http://192.0.2.1:12029");
-                assert_eq!(proxy.as_deref(), Some("socks5h://127.0.0.1:9050"));
+            DaemonTarget::Channel { node, .. } => {
+                assert_eq!(node.leg.to_string(), "192.0.2.1:12029");
+                assert_eq!(node.leg.proxy(), Some("127.0.0.1:9050".parse().unwrap()));
             }
             other => panic!("not an address: {other:?}"),
         }

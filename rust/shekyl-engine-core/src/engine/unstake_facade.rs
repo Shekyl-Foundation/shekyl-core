@@ -106,7 +106,7 @@ use super::fee_policy::FeeEstimatorError;
 use super::fee_snapshot::map_daemon_engine_fee_error;
 use super::pending::TxHash;
 use super::pending_post_gate::{ForegroundSession, UserPendingPost};
-use super::prpc::LocalNodeRpc;
+use super::prpc::WalletNodeRpc;
 use super::release_dispatch::ReleaseRequestError;
 use super::signer::EngineSignerKind;
 use super::stake_engine::StakeEngineError;
@@ -712,7 +712,7 @@ where
             };
 
         // ① local posture; refuses non-loopback by construction.
-        let release_rpc = LocalNodeRpc::new(daemon, EXIT_FETCH_TIMEOUT)
+        let release_rpc = WalletNodeRpc::new(daemon, EXIT_FETCH_TIMEOUT)
             .await
             .map_err(|e| UnstakeError::Transport {
                 detail: e.to_string(),

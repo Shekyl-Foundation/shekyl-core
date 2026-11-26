@@ -177,7 +177,7 @@ fn percentile(sorted: &[u64], numer: usize, denom: usize) -> u64 {
 /// Spawn a regtest daemon and mine `blocks` blocks; returns the daemon and
 /// the resulting tip. Coinbase pays the daemon's `--mine-address` (N2).
 async fn boot_and_mine(blocks: u64) -> (RegtestDaemon, u64) {
-    let daemon = RegtestDaemon::start().await;
+    let daemon = RegtestDaemon::start_for_http_measurement(None).await;
     daemon.generate_blocks(blocks).await;
     let tip = daemon.height().await;
     (daemon, tip)

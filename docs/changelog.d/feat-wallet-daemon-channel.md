@@ -1,0 +1,3 @@
+- Wallet RPC and the CLI use an enrolled channel for remote nodes and local service nodes. A wallet running as the node owner uses its private socket or pipe. For a named node, set `daemon-endpoint` and `daemon-bundle-file`. First use prints the account fingerprint and the node's enrollment command. The wallet RPC contract is 0.26.0.
+- The wallet RPC server refuses off-machine plaintext listeners even with a login. Bind loopback or a local socket and use your own encrypted forward for remote access.
+- The wallet grammar and the channel endpoints ship together in alpha.13. The wallet manages its staking persona's Tor service and peer circuits independently of daemon RPC.

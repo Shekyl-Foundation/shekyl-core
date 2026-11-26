@@ -11,7 +11,7 @@
 //! self-schedules). This module is the other half of that routing: one
 //! explicit claim intent in, one assembled claim dispatched through the
 //! audited posture→submitter choke point
-//! ([`BroadcastSubmitter::for_posture`] → [`submit_bound`]) out. Scheduling
+//! ([`BroadcastSubmitter::for_wallet`] → [`submit_bound`]) out. Scheduling
 //! policy — which epochs, when, batched how — lives in the cadence
 //! driver's epoch-claim leg (`ENGINE_CADENCE_DRIVER.md` §4: uniform
 //! schedule, value-conditional inclusion; the GF-4 grading-scheduler
@@ -74,7 +74,7 @@ use super::bond_assembly::SpentRecordsDurablyPruned;
 use super::claim_orchestrator::{
     orchestrate_emission_claim, ClaimAssemblyContext, ClaimOrchestrationError,
 };
-use super::prpc::PersonaIsolatedTransport;
+use super::prpc::WalletChainReader;
 use super::pscan::block_source::daemon_claimed_tip;
 use super::pscan::seal_basis::{load_seal_basis, SealBasisError};
 use super::pscan::start::pending_post_store_for_engine;
@@ -263,7 +263,7 @@ where
     /// The production caller is the cadence driver's epoch-claim leg
     /// (`ENGINE_CADENCE_DRIVER.md` §3 leg 3) — the `claim` RPC method
     /// stays REJECTED per `WALLET_RPC_METHODS.md`.
-    pub(crate) async fn submit_emission_claim<T: PersonaIsolatedTransport>(
+    pub(crate) async fn submit_emission_claim<T: WalletChainReader>(
         self_arc: Arc<RwLock<Self>>,
         claim_rpc: &T,
         p_slot: PSlot,
@@ -453,7 +453,7 @@ where
         // with its reservation (BD-Q3 Rule 2): the daemon holds valid bytes,
         // so only the record's end date ends it, and the cause names the
         // outcome there.
-        let submitter = BroadcastSubmitter::local(persona, Arc::new(daemon));
+        let submitter = BroadcastSubmitter::for_wallet(persona, Arc::new(daemon));
         let sent = submitter
             .submit_bound(super::transaction_submitter::BoundForSend::Fresh(
                 assembled.bound_tx.clone(),
@@ -488,7 +488,7 @@ mod tests {
     ///    `assemble_emission_claim` ask that would skip the designation-
     ///    event seal's mint;
     /// 2. dispatch rides ONLY the audited posture→submitter choke point
-    ///    (the pre-bound `BroadcastSubmitter::local` construction +
+    ///    (the pre-bound `BroadcastSubmitter::for_wallet` construction +
     ///    `submit_bound`) — never a bare submitter;
     /// 3. persist-before-dispatch: the pending-claim seal (`seal_claim`)
     ///    textually precedes the network send — the invariant is exercised
@@ -521,7 +521,7 @@ mod tests {
             "the seam must not ask the actor directly (the pipeline owns the mint)"
         );
 
-        let choke_construct = concat!("BroadcastSubmitter::", "local(");
+        let choke_construct = concat!("BroadcastSubmitter::", "for_wallet(");
         assert!(
             seam.contains(choke_construct),
             "submitter construction must stay on the audited choke point"

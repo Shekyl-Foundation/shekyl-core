@@ -86,7 +86,7 @@ async fn tx_slot(rpc: &impl Rpc, txid: TxHash) -> Slot<wire::tx::TxEntry> {
 }
 
 /// Whether `rpc`'s caller is shown `txid` in the pool's list.
-async fn pool_lists(rpc: &HttpRpc, txid: TxHash) -> bool {
+async fn pool_lists(rpc: &impl Rpc, txid: TxHash) -> bool {
     rpc.call::<wire::TxpoolList>(NoParams)
         .await
         .expect("txpool_list")
@@ -225,9 +225,7 @@ async fn restricted_listener_is_withheld_status_and_capped_by_native_handlers() 
     let restricted = HttpRpc::new(daemon.restricted_url().to_owned())
         .await
         .expect("restricted rpc client");
-    let unrestricted = HttpRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port()))
-        .await
-        .expect("unrestricted rpc client");
+    let unrestricted = daemon.wallet_rpc();
 
     // ── daemon_status: the listener decides the disclosure ──────────────
     let admin_info: DaemonStatus = unrestricted
@@ -365,9 +363,7 @@ async fn restricted_listener_hides_a_transaction_this_node_has_not_broadcast() {
     let restricted = HttpRpc::new(origin.restricted_url().to_owned())
         .await
         .expect("restricted rpc client");
-    let admin = HttpRpc::new(format!("http://127.0.0.1:{}", origin.rpc_port()))
-        .await
-        .expect("unrestricted rpc client");
+    let admin = origin.wallet_rpc();
 
     // RK-D14, on a live node. The origin holds a handshaken session to the
     // sink. Its restricted listener withholds Status, so it reports no

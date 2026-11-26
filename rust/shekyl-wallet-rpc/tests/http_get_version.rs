@@ -37,10 +37,7 @@ fn test_state(auth: AuthConfig) -> Arc<AppState> {
         tenants: tokio::sync::Mutex::new(TenantState::new(
             std::env::temp_dir(),
             Network::Stagenet,
-            DaemonTarget::Address {
-                url: "http://127.0.0.1:1".into(),
-                proxy: None,
-            },
+            DaemonTarget::fixture_with_proxy("http://127.0.0.1:1".into(), None),
             shekyl_wallet_rpc::server::TorFile::discover(),
         )),
         auth: Arc::new(auth),
@@ -55,10 +52,7 @@ fn lifecycle_state(dir: &TempDir) -> Arc<AppState> {
         tenants: tokio::sync::Mutex::new(TenantState::new(
             dir.path().to_path_buf(),
             Network::Stagenet,
-            DaemonTarget::Address {
-                url: "http://127.0.0.1:1".into(),
-                proxy: None,
-            },
+            DaemonTarget::fixture_with_proxy("http://127.0.0.1:1".into(), None),
             shekyl_wallet_rpc::server::TorFile::discover(),
         )),
         auth: Arc::new(AuthConfig::Disabled),
@@ -326,7 +320,7 @@ async fn spawn_in_process_serves_get_version_over_private_uds() {
     let handle = shekyl_wallet_rpc::spawn_in_process(
         std::env::temp_dir(),
         Network::Stagenet,
-        shekyl_wallet_rpc::tenant::DaemonTarget::address("http://127.0.0.1:1"),
+        shekyl_wallet_rpc::tenant::DaemonTarget::fixture_address("http://127.0.0.1:1"),
         shekyl_wallet_rpc::server::TorFile::discover(),
     )
     .await
@@ -396,7 +390,7 @@ async fn spawn_in_process_serves_get_version_over_the_verified_pipe() {
     let handle = shekyl_wallet_rpc::spawn_in_process(
         std::env::temp_dir(),
         Network::Stagenet,
-        shekyl_wallet_rpc::tenant::DaemonTarget::address("http://127.0.0.1:1"),
+        shekyl_wallet_rpc::tenant::DaemonTarget::fixture_address("http://127.0.0.1:1"),
         shekyl_wallet_rpc::server::TorFile::discover(),
     )
     .await
@@ -798,10 +792,7 @@ async fn create_wallet_into_a_missing_directory_says_so() {
         tenants: tokio::sync::Mutex::new(TenantState::new(
             missing,
             Network::Stagenet,
-            DaemonTarget::Address {
-                url: "http://127.0.0.1:1".into(),
-                proxy: None,
-            },
+            DaemonTarget::fixture_with_proxy("http://127.0.0.1:1".into(), None),
             shekyl_wallet_rpc::server::TorFile::discover(),
         )),
         auth: Arc::new(AuthConfig::Disabled),
@@ -886,10 +877,10 @@ async fn spawn_refuses_a_malformed_proxy_at_startup() {
         listen: ListenAddr::Tcp(SocketAddr::from(([127, 0, 0, 1], 0))),
         wallet_dir: dir.path().to_path_buf(),
         network: Network::Stagenet,
-        daemon: shekyl_wallet_rpc::tenant::DaemonTarget::Address {
-            url: "http://127.0.0.1:1".into(),
-            proxy: Some("socks5://127.0.0.1".into()),
-        },
+        daemon: shekyl_wallet_rpc::tenant::DaemonTarget::fixture_with_proxy(
+            "http://127.0.0.1:1".into(),
+            Some("socks5://127.0.0.1".into()),
+        ),
         auth: AuthConfig::Disabled,
         kdf: test_kdf(),
         tor_file: shekyl_wallet_rpc::server::TorFile::discover(),
@@ -914,10 +905,10 @@ async fn spawn_refuses_a_malformed_daemon_address_at_startup() {
         listen: ListenAddr::Tcp(SocketAddr::from(([127, 0, 0, 1], 0))),
         wallet_dir: dir.path().to_path_buf(),
         network: Network::Stagenet,
-        daemon: shekyl_wallet_rpc::tenant::DaemonTarget::Address {
-            url: "ftp://127.0.0.1:28581".into(),
-            proxy: None,
-        },
+        daemon: shekyl_wallet_rpc::tenant::DaemonTarget::fixture_with_proxy(
+            "ftp://127.0.0.1:28581".into(),
+            None,
+        ),
         auth: AuthConfig::Disabled,
         kdf: test_kdf(),
         tor_file: shekyl_wallet_rpc::server::TorFile::discover(),
@@ -943,10 +934,10 @@ async fn spawn_in_process_with_lifecycle() {
         listen: ListenAddr::Tcp(SocketAddr::from(([127, 0, 0, 1], 0))),
         wallet_dir: dir.path().to_path_buf(),
         network: Network::Stagenet,
-        daemon: shekyl_wallet_rpc::tenant::DaemonTarget::Address {
-            url: "http://127.0.0.1:1".into(),
-            proxy: None,
-        },
+        daemon: shekyl_wallet_rpc::tenant::DaemonTarget::fixture_with_proxy(
+            "http://127.0.0.1:1".into(),
+            None,
+        ),
         auth: AuthConfig::Disabled,
         kdf: test_kdf(),
         tor_file: shekyl_wallet_rpc::server::TorFile::discover(),

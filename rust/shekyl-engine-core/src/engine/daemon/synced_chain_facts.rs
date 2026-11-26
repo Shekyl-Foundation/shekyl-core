@@ -404,6 +404,8 @@ pub(crate) enum TimelineBreak {
     /// computer"'s rendezvous (`RPC_CHANNEL.md` RT-15): a security failure.
     /// Nothing was read; retrying cannot clear it.
     PeerCheckFailed,
+    /// A channel failure with its operator remedy.
+    Channel(shekyl_rpc_client::WalletChannelFault),
     /// "This computer"'s node is a service, which the wallet does not dial
     /// (RT-W10 step 5): `Some` is its view listener, the address to set.
     ServiceHere(Option<std::net::SocketAddr>),
@@ -447,6 +449,7 @@ impl TimelineBreak {
             | DaemonFault::FeeResponse
             | DaemonFault::Internal
             | DaemonFault::NotPermitted => Self::FactsUnreadable,
+            DaemonFault::Channel(fault) => Self::Channel(fault),
             DaemonFault::PeerCheck => Self::PeerCheckFailed,
             DaemonFault::Service(view) => Self::ServiceHere(view),
         }

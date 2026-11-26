@@ -602,19 +602,10 @@ pub(crate) async fn make_daemon(
     daemon: &DaemonTarget,
     network: Network,
 ) -> Result<DaemonClient, WalletRpcError> {
-    // "This computer" is the owner's leg (RT-W10 step 5). A named address
-    // goes through its SOCKS5h proxy when one is set: the daemon's block scan
-    // then resolves the node hostname *at the proxy*, never leaking it to
-    // the local resolver.
-    let rpc = daemon.connect(None).await.map_err(|e| {
-        // Startup already refused a malformed address/proxy
-        // (`validate_endpoint` in `server`), so what remains here is
-        // connectivity-shaped; the client-facing error stays stable, but
-        // the cause is never discarded (rule 82) — it lands in the
-        // server log.
-        tracing::warn!(error = %e, "daemon transport construction failed");
-        WalletRpcError::DaemonUnreachable
-    })?;
+    let rpc = daemon
+        .connect(None)
+        .await
+        .map_err(|error| crate::error::from_daemon_rpc_error(&error))?;
     // Identity-verifying (VC-4): the daemon must prove it is this network,
     // running this build's rules and RPC contract, before the first request.
     // The match is exact on every network, regtest included (VC-R3).
@@ -1283,8 +1274,8 @@ mod tests {
 
     use serde_json::json;
     use shekyl_crypto_pq::wallet_envelope::KdfParams;
-    use shekyl_engine_core::Network;
     use shekyl_engine_core::__test_helpers::make_staker_for_test;
+    use shekyl_engine_core::Network;
     use tokio::sync::Mutex;
 
     /// The fastest valid Argon2 profile (`m_log2` lower bound 8, `t`/`p` = 1) —
@@ -1306,10 +1297,7 @@ mod tests {
             // engine tolerates an unreachable daemon; the P-scan task's first
             // tip fetch fails-and-retries inside the spawned loop), so the
             // lifecycle wiring is exercised without a live node.
-            DaemonTarget::Address {
-                url: "http://127.0.0.1:1".to_string(),
-                proxy: None,
-            },
+            DaemonTarget::fixture_with_proxy("http://127.0.0.1:1".to_string(), None),
             crate::server::TorFile::discover(),
         ))
     }
@@ -1650,10 +1638,7 @@ mod tests {
         Mutex::new(TenantState::new(
             dir.to_path_buf(),
             Network::Stagenet,
-            DaemonTarget::Address {
-                url: "http://127.0.0.1:1".to_string(),
-                proxy: None,
-            },
+            DaemonTarget::fixture_with_proxy("http://127.0.0.1:1".to_string(), None),
             crate::server::TorFile::discover(),
         ))
     }

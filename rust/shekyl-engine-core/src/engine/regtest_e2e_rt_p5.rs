@@ -269,7 +269,7 @@ async fn run_cell(cell: &Cell) {
     let out = output_dir(cell);
     let funder_seed = [cell.funder_seed; shekyl_crypto_pq::account::SEED_BYTES];
     let wallet_seed = [cell.wallet_seed; shekyl_crypto_pq::account::SEED_BYTES];
-    let daemon = RegtestDaemon::start_for_seed(&funder_seed).await;
+    let daemon = RegtestDaemon::start_for_http_measurement(Some(&funder_seed)).await;
     let upstream = daemon.rpc_port();
 
     let funder_proxy = CountingProxy::start(upstream);

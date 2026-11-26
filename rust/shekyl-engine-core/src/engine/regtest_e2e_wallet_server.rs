@@ -43,7 +43,12 @@ pub(super) struct WalletServer {
 }
 
 impl WalletServer {
-    pub(super) fn spawn(wallet_dir: &Path, daemon_port: u16, log_dir: &Path, tag: &str) -> Self {
+    pub(super) fn spawn(
+        wallet_dir: &Path,
+        daemon: &super::RegtestDaemon,
+        log_dir: &Path,
+        tag: &str,
+    ) -> Self {
         let bin = std::env::var_os("SHEKYL_WALLET_RPC_BIN").unwrap_or_else(|| {
             panic!(
                 "SHEKYL_WALLET_RPC_BIN not set. Build the wallet server \
@@ -61,6 +66,11 @@ impl WalletServer {
         let config = config_dir.path().join("wallet-rpc.toml");
         shekyl_os_account::private_file::write_private(&config, b"").expect("the config file");
         let mut cmd = Command::new(bin);
+        daemon.configure_channel(
+            &mut cmd,
+            config_dir.path(),
+            shekyl_rpc_types::wire::rpc::CeilingWord::Wallet,
+        );
         cmd.arg("--config-file")
             .arg(&config)
             .arg("--wallet-dir")
@@ -69,8 +79,6 @@ impl WalletServer {
             .arg(format!("127.0.0.1:{port}"))
             .arg("--network")
             .arg("regtest")
-            .arg("--daemon-endpoint")
-            .arg(format!("127.0.0.1:{daemon_port}"))
             .arg("--log-file")
             .arg(&log)
             .args(["--log-level", "info"])

@@ -228,6 +228,20 @@ impl Pool {
         store_idle(&mut self.state(), session);
     }
 
+    /// A closed exchange can be the first evidence of revocation. Recheck admission
+    /// while holding this session's permit. The original call is never resent.
+    pub(super) async fn closed_exchange(&self, lent: Lent) -> ChannelFault {
+        let Lent { session, _slot } = lent;
+        drop(session);
+        if let Some(stopped) = self.stopped() {
+            return stopped;
+        }
+        match self.open_session().await {
+            Err(fault @ ChannelFault::Revoked { .. }) => fault,
+            _ => ChannelFault::Closed,
+        }
+    }
+
     async fn open_session(&self) -> Result<Session, ChannelFault> {
         let opened = self.target.open(self.request).await;
         let opened = match opened {
@@ -235,14 +249,16 @@ impl Pool {
             Err(ChannelFault::NotEnrolled { fingerprint }) => {
                 let mut state = self.state();
                 let fault = if state.held {
-                    ChannelFault::Revoked
+                    ChannelFault::Revoked { fingerprint }
                 } else {
                     ChannelFault::NotEnrolled { fingerprint }
                 };
                 state.stopped = Some(fault.clone());
                 return Err(fault);
             }
-            Err(fault @ ChannelFault::NotTheDaemon { .. }) => {
+            Err(
+                fault @ (ChannelFault::NotTheDaemon { .. } | ChannelFault::NotRecognised { .. }),
+            ) => {
                 self.state().stopped = Some(fault.clone());
                 return Err(fault);
             }

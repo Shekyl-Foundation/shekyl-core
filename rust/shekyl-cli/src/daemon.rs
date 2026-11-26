@@ -186,18 +186,12 @@ impl DaemonClient {
         network: Network,
     ) -> Result<Self, DaemonError> {
         let label = match &target {
-            DaemonTarget::Address { url, .. } if url.is_empty() => {
+            DaemonTarget::HttpFixture { url, .. } if url.is_empty() => {
                 return Err(DaemonError::NotConfigured)
             }
-            DaemonTarget::Address { url, .. } => daemon_url(url),
-            DaemonTarget::ThisComputer { .. } => THIS_COMPUTER.to_owned(),
-        };
-        let target = match target {
-            DaemonTarget::Address { proxy, .. } => DaemonTarget::Address {
-                url: label.clone(),
-                proxy,
-            },
-            this_computer @ DaemonTarget::ThisComputer { .. } => this_computer,
+            DaemonTarget::HttpFixture { url, .. } => daemon_url(url),
+            DaemonTarget::Channel { node, .. } => node.leg.to_string(),
+            DaemonTarget::Owner(_) | DaemonTarget::ThisComputer { .. } => THIS_COMPUTER.to_owned(),
         };
         Ok(Self {
             target,
@@ -233,15 +227,21 @@ impl DaemonClient {
     /// won, and a closed channel session is removed rather than reused.
     fn open(&self) -> Result<Connection, DaemonError> {
         match &self.target {
-            DaemonTarget::Address { url, proxy } => Ok(Connection::Address(
-                SyncDaemon::connect(url.clone(), proxy.clone(), DAEMON_TIMEOUT)
+            DaemonTarget::HttpFixture { url, proxy, .. } => Ok(Connection::Address(
+                SyncDaemon::connect(daemon_url(url), proxy.clone(), DAEMON_TIMEOUT)
                     .map_err(|error| self.error_of_post(error))?,
             )),
-            // Every grant: the node clamps the request to the leg's ceiling,
-            // and a word outside it is refused by the node.
-            DaemonTarget::ThisComputer { network, .. } => Ok(Connection::ThisComputer(
-                NodeLeg::this_computer(*network, GrantSet::ALL).map_err(DaemonError::Other)?,
-            )),
+            DaemonTarget::Channel { .. } => self
+                .channel_connection(GrantSet::EMPTY)?
+                .ok_or(DaemonError::NotConfigured),
+            DaemonTarget::Owner(target) => {
+                Ok(Connection::ThisComputer(NodeLeg::Owner(target.clone())))
+            }
+            DaemonTarget::ThisComputer { network, .. } => {
+                Ok(Connection::ThisComputer(NodeLeg::Owner(
+                    shekyl_rpc_transport::local::LocalTarget::this_computer(*network),
+                )))
+            }
         }
     }
 
@@ -278,7 +278,11 @@ impl DaemonClient {
 
     fn handshake(&self) -> Result<(), DaemonError> {
         let connection = self.connect()?;
-        let result = match self.read_version(&connection) {
+        self.check_identity_on(&connection)
+    }
+
+    fn check_identity_on(&self, connection: &Arc<Connection>) -> Result<(), DaemonError> {
+        let result = match self.read_version(connection) {
             Ok(result) => result,
             // A daemon of another RPC major has no `version` (RW-Q6): the
             // version difference itself, said as one.
@@ -319,15 +323,6 @@ impl DaemonClient {
         }
     }
 
-    /// The SOCKS proxy, when the client was built with one.
-    #[must_use]
-    pub fn proxy(&self) -> Option<&str> {
-        match &self.target {
-            DaemonTarget::Address { proxy, .. } => proxy.as_deref(),
-            DaemonTarget::ThisComputer { .. } => None,
-        }
-    }
-
     /// Attach this client's recovery hint to a refused connection. Applied
     /// at the one seam every request passes through, so each caller's error
     /// display carries the copy without knowing about it.
@@ -343,10 +338,50 @@ impl DaemonClient {
         }
     }
 
+    fn channel_error(fault: ChannelFault) -> DaemonError {
+        let advice = match fault {
+            ChannelFault::NotEnrolled { fingerprint } | ChannelFault::Revoked { fingerprint } => {
+                shekyl_rpc_client::WalletChannelFault::NotEnrolled(fingerprint).to_string()
+            }
+            ChannelFault::NotRecognised { .. } => {
+                shekyl_rpc_client::WalletChannelFault::NotRecognised.to_string()
+            }
+            ChannelFault::NotTheDaemon { .. } => {
+                shekyl_rpc_client::WalletChannelFault::NotTheDaemon.to_string()
+            }
+            other => other.to_string(),
+        };
+        DaemonError::Other(advice)
+    }
+
+    fn channel_connection(&self, request: GrantSet) -> Result<Option<Connection>, DaemonError> {
+        let target = self.target.channel_target().map_err(Self::channel_error)?;
+        target
+            .map(|target| {
+                shekyl_rpc_transport::channel::ChannelDaemon::connect(&target, request)
+                    .map(|daemon| Connection::ThisComputer(NodeLeg::Channel(daemon)))
+                    .map_err(Self::channel_error)
+            })
+            .transpose()
+    }
+
+    fn command_channel<M: RpcMethod>(&self) -> Result<Option<Arc<Connection>>, DaemonError> {
+        let request = match M::POLICY {
+            shekyl_rpc_types::method::Policy::Grant(grant) => GrantSet::of(&[grant]),
+            _ => GrantSet::EMPTY,
+        };
+        self.channel_connection(request)
+            .map(|connection| connection.map(Arc::new))
+    }
+
     /// Call method `M` after the handshake.
     pub(crate) fn call<M: RpcMethod>(&self, request: &M::Request) -> Result<M::Reply, DaemonError> {
+        if let Some(connection) = self.command_channel::<M>()? {
+            self.check_identity_on(&connection)?;
+            return self.call_on::<M>(request, &connection);
+        }
         self.ensure_identity()?;
-        self.call_unchecked::<M>(request)
+        self.call_on::<M>(request, &self.connect()?)
     }
 
     /// Call method `M` without the handshake. The `version` word reads
@@ -356,13 +391,24 @@ impl DaemonClient {
         &self,
         request: &M::Request,
     ) -> Result<M::Reply, DaemonError> {
-        let connection = self.connect()?;
-        match &*connection {
+        let connection = match self.command_channel::<M>()? {
+            Some(connection) => connection,
+            None => self.connect()?,
+        };
+        self.call_on::<M>(request, &connection)
+    }
+
+    fn call_on<M: RpcMethod>(
+        &self,
+        request: &M::Request,
+        connection: &Arc<Connection>,
+    ) -> Result<M::Reply, DaemonError> {
+        match &**connection {
             Connection::Address(rpc) => rpc
                 .call::<M>(request)
                 .map_err(|error| self.error_of_json_rpc(error)),
             Connection::ThisComputer(leg) => leg.call::<M>(request).map_err(|error| {
-                self.note_closed(&connection, &error);
+                self.note_closed(connection, &error);
                 self.error_of_leg(error)
             }),
         }
@@ -383,7 +429,10 @@ impl DaemonClient {
     /// handshake hands it to [`IdentityExpectation::read`], and the `version`
     /// word to [`shekyl_rpc_types::daemon_rpc_version`].
     pub fn get_version_result(&self) -> Result<Value, DaemonError> {
-        let connection = self.connect()?;
+        let connection = match self.command_channel::<wire::Version>()? {
+            Some(connection) => connection,
+            None => self.connect()?,
+        };
         self.read_version(&connection)
     }
 
@@ -418,8 +467,9 @@ impl DaemonClient {
     #[must_use]
     pub fn is_loopback(&self) -> bool {
         match &self.target {
-            DaemonTarget::ThisComputer { .. } => true,
-            DaemonTarget::Address { url, .. } => is_loopback_endpoint(url),
+            DaemonTarget::Owner(_) | DaemonTarget::ThisComputer { .. } => true,
+            DaemonTarget::Channel { node, .. } => is_loopback_endpoint(&node.leg.to_string()),
+            DaemonTarget::HttpFixture { url, .. } => is_loopback_endpoint(url),
         }
     }
 
@@ -522,9 +572,7 @@ impl DaemonClient {
     fn error_of_leg(&self, error: LegError) -> DaemonError {
         match error {
             LegError::Owner(error) => reply_error(error, |fault| self.owner_fault(fault)),
-            LegError::Channel(error) => {
-                reply_error(error, |fault| DaemonError::Other(fault.to_string()))
-            }
+            LegError::Channel(error) => reply_error(error, Self::channel_error),
         }
     }
 
@@ -670,6 +718,7 @@ mod tests {
         let client = super::DaemonClient::new(
             shekyl_rpc_transport::DaemonTarget::ThisComputer {
                 network: super::Network::Testnet,
+                account: Default::default(),
             },
             Some("Start the testnet daemon with: shekyld --network testnet".into()),
             super::Network::Testnet,

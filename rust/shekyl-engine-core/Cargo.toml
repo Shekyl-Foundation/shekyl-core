@@ -78,10 +78,6 @@ shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 shekyl-proofs = { path = "../shekyl-proofs" }
 shekyl-encoding = { path = "../shekyl-encoding" }
 shekyl-rpc-transport = { path = "../shekyl-rpc-transport" }
-# SP-T2: the per-P Tor transport primitive (PTorClient). engine-core wraps it in
-# `PRpc` (an `Rpc` impl); it does NOT depend on `ureq` — all agent construction
-# and use is confined to shekyl-p-transport (§2b invariant 1).
-shekyl-p-transport = { path = "../shekyl-p-transport" }
 # `WalletTorControl` (P's Tor instance) and `OnionIdentity` (expanded in the
 # wallet context, §7.2(iii) / SH-2b-1). The identity type is re-exported from
 # the wallet crate so this crate does not take the control-protocol client —

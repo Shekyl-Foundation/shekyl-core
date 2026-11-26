@@ -37,7 +37,7 @@ fn a_running_cli_is_hardened() {
     from_outside::assert_the_control_shows_the_subject(NAME);
 
     let dir = tempfile::tempdir().expect("tempdir");
-    let config = common::empty_config();
+    let config = common::offline_channel_config();
     let wallets = dir.path().join("wallets");
     let stderr_path = dir.path().join("stderr");
     let mut child = from_outside::Started::new(

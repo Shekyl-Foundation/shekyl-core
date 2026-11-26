@@ -56,3 +56,6 @@ pub use leg::{Leg, LegStream};
 pub use pool::{Lent, Pool, EXTRA_SESSION_IDLE};
 pub use session::{is_submission, Session};
 pub use sync::ChannelDaemon;
+
+mod wallet;
+pub use wallet::{account_target, default_key_file, RemoteNode, WalletChannel};
