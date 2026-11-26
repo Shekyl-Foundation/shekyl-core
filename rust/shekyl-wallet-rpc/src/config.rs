@@ -18,7 +18,7 @@ use shekyl_engine_core::{Network, TorFile};
 use shekyl_options::{read_cli, Code, Diagnostic, PeerEndpoint, Source, Value};
 
 use crate::auth::{AuthConfig, BasicCredential};
-use crate::server::{ListenAddr, ServerConfig, TOR_FILE_OPTION};
+use crate::server::{tcp_listen_posture, ListenAddr, ServerConfig, TOR_FILE_OPTION};
 use crate::table::TABLE;
 use crate::tenant::DaemonTarget;
 
@@ -105,7 +105,20 @@ fn build(
     let mut faults = Vec::new();
     let listen = listen_of(resolved, &mut faults);
     let auth = auth_of(resolved, &mut faults);
-    let daemon = daemon_of(resolved, network, false, &mut faults);
+    if let (Some(listen), Some(auth)) = (&listen, &auth) {
+        let source = resolved
+            .source("rpc-listen")
+            .cloned()
+            .unwrap_or(Source::Default);
+        // The warning is said at start. A refusal is a fault of this load.
+        if let Err(fault) = tcp_listen_posture(listen, auth, source) {
+            faults.push(fault);
+        }
+    }
+    if let Some(fault) = proxy_without_endpoint(resolved) {
+        faults.push(fault);
+    }
+    let daemon = daemon_of(resolved, network, &mut faults);
     let (wallet_dir, default_wallet_dir) = match path_of(resolved, "wallet-dir") {
         Some(dir) => (Some(dir), None),
         None => match paths::root(platform, RunMode::User, "wallet-dir") {
@@ -252,27 +265,34 @@ pub fn socks_of(resolved: &Resolved) -> Option<String> {
     }
 }
 
+/// `daemon-socks` set with no `daemon-endpoint`.
+///
+/// This computer's node is reached on its owner's socket, so the proxy is
+/// not a path to it. A caller whose proxy also reaches something else — the
+/// CLI's external wallet server — skips this and keeps the target.
+#[must_use]
+pub fn proxy_without_endpoint(resolved: &Resolved) -> Option<Diagnostic> {
+    match (socks_of(resolved), resolved.get("daemon-endpoint")) {
+        (Some(_), None) => Some(requires(
+            "daemon-socks",
+            "daemon-endpoint: this computer's node is reached on its owner's socket, never \
+             through a proxy",
+        )),
+        _ => None,
+    }
+}
+
 /// `daemon-endpoint` through `daemon-socks`, or "this computer" when unset
-/// (`RPC_CHANNEL.md` RT-15). This computer's node is reached on its owner's
-/// leg, never through a proxy, so a proxy without an endpoint is refused,
-/// unless `proxy_has_another_use`: a client of an external wallet server
-/// sends that connection through it. An onion needs the proxy.
+/// (`RPC_CHANNEL.md` RT-15). An onion needs the proxy. A proxy with no
+/// endpoint is not judged here; the caller applies [`proxy_without_endpoint`]
+/// when the proxy has no other job.
 pub fn daemon_of(
     resolved: &Resolved,
     network: Network,
-    proxy_has_another_use: bool,
     faults: &mut Vec<Diagnostic>,
 ) -> Option<DaemonTarget> {
     let proxy = socks_of(resolved);
     let url = match resolved.get("daemon-endpoint") {
-        None if proxy.is_some() && !proxy_has_another_use => {
-            faults.push(requires(
-                "daemon-socks",
-                "daemon-endpoint: this computer's node is reached on its owner's socket, never \
-                 through a proxy",
-            ));
-            return None;
-        }
         None => return Some(DaemonTarget::ThisComputer { network }),
         Some(Value::Peer(PeerEndpoint::Ip(addr))) => format!("http://{addr}"),
         Some(Value::Peer(PeerEndpoint::Onion { host, port })) => {
@@ -437,6 +457,34 @@ mod tests {
         for name in ["--rpc-username", "--rpc-password"] {
             assert_eq!(refused(&[name, "x"]), [Code::ValueSurface], "{name}");
         }
+    }
+
+    /// A wildcard listen address is refused at load, including the IPv4-mapped
+    /// spelling the classifier folds. An addressed listen with no credentials
+    /// is the same refusal family. Red edit: drop the posture call in `build`,
+    /// and both lines are accepted.
+    #[test]
+    fn the_listen_posture_is_refused_at_load() {
+        assert_eq!(
+            refused(&["--rpc-listen", "0.0.0.0:29500"]),
+            [Code::ValueRange]
+        );
+        assert_eq!(refused(&["--rpc-listen", "[::]:29500"]), [Code::ValueRange]);
+        assert_eq!(
+            refused(&["--rpc-listen", "[::ffff:0.0.0.0]:29500"]),
+            [Code::ValueRange],
+            "the mapped wildcard is the wildcard"
+        );
+        assert_eq!(
+            refused(&["--rpc-listen", "192.0.2.1:29500"]),
+            [Code::ValueRequires],
+            "an addressed listener needs the credential pair"
+        );
+        let loaded = served(&["--rpc-listen", "127.0.0.1:29500"]);
+        assert!(matches!(
+            loaded.server.listen,
+            ListenAddr::Tcp(addr) if addr.ip().is_loopback()
+        ));
     }
 
     /// `config-verify` is its own action, on the same load a start takes.

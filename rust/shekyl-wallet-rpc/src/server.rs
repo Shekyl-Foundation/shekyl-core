@@ -29,7 +29,9 @@ use axum::routing::post;
 use axum::{Json, Router};
 use shekyl_crypto_pq::wallet_envelope::KdfParams;
 use shekyl_engine_core::Network;
+use shekyl_options::{Code, Diagnostic, Source};
 use shekyl_process::stop::{FirstStop, Inherited, Stops};
+use shekyl_rpc_transport::listen::{classify_listen, ListenClass, WILDCARD_REASON};
 use shekyl_rpc_transport::network_posture::{DaemonDisclosures, ProxyResolution};
 use shekyl_rpc_types::endpoint::{unrouted_path, JSON_RPC_PATH};
 use tokio::net::TcpListener;
@@ -448,74 +450,84 @@ const LOCAL_ENDPOINT_HINT: &str = if cfg!(unix) {
     ""
 };
 
-/// Refuse a listen configuration that would expose the wallet RPC beyond what
-/// the operator can see or authenticate (`RPC_TRANSPORT_POSTURE.md`
-/// RT-1, RT-2). One function, called on every path that binds, so the two
-/// sites cannot disagree.
+/// The TCP listen posture (`RPC_TRANSPORT_POSTURE.md` RT-1, RT-2, RT-3).
 ///
-/// - **RT-1:** a wildcard address (`0.0.0.0`, `::`, and their IPv4-mapped
-///   forms, folded by `to_canonical`) is refused outright. A wildcard bind is
-///   a bind to interfaces that do not exist yet — the VPN that comes up
-///   tomorrow, the hotspot, the container bridge — so it is consent on behalf
-///   of the operator's future self, which no one-time confirmation can cover.
-/// - **RT-2:** `AuthConfig::Disabled` on a non-loopback address is refused.
-///   There is no defensible deployment of an unauthenticated wallet RPC that
-///   the network can reach; every request, spends included, would be honoured.
+/// `listen` is the address the configuration resolved. `auth` is the
+/// credential pair, or [`AuthConfig::Disabled`] when neither secret is set.
+/// `source` is where `rpc-listen` came from, so a refusal names the command
+/// line or the file line.
 ///
-/// The socket and the pipe carry their authorization in the transport and
-/// pass through; the arms are explicit so a new variant has to decide.
+/// A socket and the in-process pipe carry their authorization in the
+/// transport and return `Ok(None)`. A wildcard TCP address is refused
+/// ([`ListenClass::Wildcard`], IPv4-mapped spellings included). An addressed
+/// listener with no credentials is refused. An addressed listener with
+/// credentials is allowed, and the `Ok` string is the cleartext warning the
+/// start says (RT-3). Loopback is quiet.
 ///
-/// A bind that passes both rules on a non-loopback address is the one
-/// posture RT-3 tolerates only until RT-W4: Basic over cleartext, the
-/// credential in every request. That is logged as a warning at the same
-/// seam, so the operator who chose it is told what it costs.
-fn validate_listen(config: &ServerConfig) -> Result<(), BoxErr> {
-    let addr = match &config.listen {
+/// # Errors
+///
+/// A typed refusal (IG-11). The load reports it and exits 2; a bind path
+/// that built a [`ServerConfig`] without the load reports the same value.
+pub(crate) fn tcp_listen_posture(
+    listen: &ListenAddr,
+    auth: &AuthConfig,
+    source: Source,
+) -> Result<Option<String>, Diagnostic> {
+    let addr = match listen {
         ListenAddr::Tcp(addr) => addr,
         #[cfg(unix)]
-        ListenAddr::Uds(_) => return Ok(()),
+        ListenAddr::Uds(_) => return Ok(None),
         #[cfg(windows)]
-        ListenAddr::SelfHostedPipe(_) => return Ok(()),
+        ListenAddr::SelfHostedPipe(_) => return Ok(None),
     };
-    // One classifier for every Shekyl listener (`shekyl_rpc_transport::listen`),
-    // so the wallet and the daemon cannot disagree on what a spelling names.
-    use shekyl_rpc_transport::listen::{ListenClass, WILDCARD_REASON};
-    match shekyl_rpc_transport::listen::classify_listen(*addr) {
-        // The reason is the one copy every listener shares; the remedy is
-        // this listener's.
-        ListenClass::Wildcard => Err(format!(
-            "refusing to bind the wallet RPC to the wildcard address {addr}: {WILDCARD_REASON}. \
-             Bind a specific IP address instead: 127.0.0.1 or [::1] for this machine \
-             only{LOCAL_ENDPOINT_HINT}, or the address of the one interface your clients are \
-             on (which also requires rpc-username and rpc-password in the configuration file)."
-        )
-        .into()),
-        ListenClass::Loopback => Ok(()),
-        ListenClass::Addressed => {
-            // RT-2. `Basic` always carries a real credential: `BasicCredential` has no
-            // public fields and its constructor refuses a blank half, so the seam
-            // does not re-inspect it — the guarantee is the type's. The only way
-            // to reach this arm is to have asked for no authentication.
-            if matches!(config.auth, AuthConfig::Disabled) {
-                return Err(format!(
-                    "refusing to serve the wallet RPC on {addr} without authentication: the \
-                     address is reachable from the network and every request, spends included, \
-                     would be honoured. Bind 127.0.0.1 or [::1]{LOCAL_ENDPOINT_HINT}, or set \
-                     rpc-username and rpc-password in the configuration file."
-                )
-                .into());
-            }
-            // RT-3. Permitted, and said out loud: until the pinned-TLS leg (RT-W4)
-            // lands, a network-reachable bind carries the credential in the clear.
-            warn!(
-                %addr,
-                "serving the wallet RPC off loopback with HTTP Basic over cleartext: the \
-                 credential travels in every request and any network path between a client \
+    match classify_listen(*addr) {
+        ListenClass::Loopback => Ok(None),
+        ListenClass::Wildcard => Err(Diagnostic::new(Code::ValueRange, source)
+            .option("rpc-listen")
+            .param("value", addr.to_string())
+            .param(
+                "rule",
+                format!(
+                    "a wildcard address. {WILDCARD_REASON}. Bind 127.0.0.1 or \
+                     [::1]{LOCAL_ENDPOINT_HINT}, or the address of the one interface your \
+                     clients are on (which also requires rpc-username and rpc-password in the \
+                     configuration file)"
+                ),
+            )),
+        ListenClass::Addressed => match auth {
+            // `Basic` carries a real credential: the constructor refuses a
+            // blank half, so this arm does not re-inspect it.
+            AuthConfig::Basic(_) => Ok(Some(format!(
+                "serving the wallet RPC on {addr} off loopback with HTTP Basic over cleartext: \
+                 the credential travels in every request and any network path between a client \
                  and this host can read it (RPC_TRANSPORT_POSTURE.md RT-3). Keep that path one \
                  you control; the encrypted remote leg is RT-W4."
-            );
-            Ok(())
-        }
+            ))),
+            AuthConfig::Disabled => Err(Diagnostic::new(Code::ValueRequires, source)
+                .option("rpc-listen")
+                .param(
+                    "requires",
+                    format!(
+                        "rpc-username and rpc-password, because {addr} is reachable from the \
+                         network and without authentication every request, spends included, \
+                         would be honoured. Bind 127.0.0.1 or [::1]{LOCAL_ENDPOINT_HINT} to \
+                         serve with neither"
+                    ),
+                )),
+        },
+    }
+}
+
+/// The bind path's view of [`tcp_listen_posture`]: the same refusal, rendered
+/// for a caller that does not hold the configuration's [`Diagnostic`]s.
+fn validate_listen(config: &ServerConfig) -> Result<Option<String>, BoxErr> {
+    tcp_listen_posture(&config.listen, &config.auth, Source::Machine)
+        .map_err(|fault| -> BoxErr { Box::new(fault) })
+}
+
+fn warn_cleartext(warning: Option<String>) {
+    if let Some(line) = warning {
+        warn!("{line}");
     }
 }
 
@@ -535,9 +547,12 @@ pub struct ArmedServer {
 /// the daemon endpoint and the listen posture. `config-verify` runs exactly
 /// these (`INPUT_GRAMMAR.md` IG-Q63).
 ///
+/// The `Ok` string is the cleartext warning for an authenticated listener
+/// off loopback (RT-3). The caller says it; this function does not log.
+///
 /// # Errors
 /// The configuration is refused.
-pub fn check_server_config(config: &ServerConfig) -> Result<(), BoxErr> {
+pub fn check_server_config(config: &ServerConfig) -> Result<Option<String>, BoxErr> {
     validate_daemon_endpoint(config)?;
     validate_listen(config)
 }
@@ -557,13 +572,14 @@ pub fn check_server_config(config: &ServerConfig) -> Result<(), BoxErr> {
 /// The configuration is refused, or the stops could not be armed.
 pub fn arm_server(config: ServerConfig) -> Result<ArmedServer, BoxErr> {
     let inherited = Inherited::at_start();
-    check_server_config(&config)?;
+    let cleartext = check_server_config(&config)?;
     // The binary's own `daemon-endpoint`, said once at startup. The
     // in-process server (`spawn_in_process_with`) does not repeat it: its
     // host, shekyl-cli, discloses the same address on its own stderr first.
     for warning in daemon_disclosures(&config) {
         warn!("{warning}");
     }
+    warn_cleartext(cleartext);
     let notice = inherited.line(PROGRAM);
     let stops = Stops::arm(inherited)
         .map_err(|e| format!("the stop signals could not be registered: {e}"))?;
@@ -1058,7 +1074,7 @@ fn private_config(
 /// [`spawn_in_process`]).
 pub async fn spawn_in_process_with(config: ServerConfig) -> Result<InProcessHandle, BoxErr> {
     validate_daemon_endpoint(&config)?;
-    validate_listen(&config)?;
+    warn_cleartext(validate_listen(&config)?);
     let bound = BoundListener::bind(&config.listen).await?;
     let state = AppState::new(config);
     let app = build_router(state.clone());
