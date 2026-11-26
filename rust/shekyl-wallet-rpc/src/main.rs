@@ -7,171 +7,135 @@
 //! server, serving the contract in `docs/api/wallet_rpc.yaml`. It is the
 //! only binary of that name — the C++ `wallet_rpc_server` it replaced was
 //! deleted with `src/wallet/` (`a9dc5e4db`), and the transitional
-//! `shekyl-engine-rpc` wallet2-FFI bridge before it. The flag reference is
-//! `docs/EXECUTABLES.md` §3; the listen posture is
-//! `docs/design/RPC_TRANSPORT_POSTURE.md`.
+//! `shekyl-engine-rpc` wallet2-FFI bridge before it. Its options are
+//! `INPUT_GRAMMAR.md` §12.4 (`shekyl_wallet_rpc::table`); the listen posture
+//! is `docs/design/RPC_TRANSPORT_POSTURE.md`.
 #![deny(unsafe_code)]
 
-use std::path::PathBuf;
-use std::str::FromStr;
+use std::fmt::Display;
+use std::io::Write as _;
+use std::process::ExitCode;
 
-use clap::builder::TypedValueParser as _;
-use clap::Parser;
-use shekyl_crypto_pq::wallet_envelope::KdfParams;
-use shekyl_engine_core::Network;
-use shekyl_wallet_rpc::{arm_server, AuthConfig, ListenAddr, ServerConfig};
-use zeroize::Zeroizing;
+use shekyl_daemon_config::exit::{EXIT_FAILED, EXIT_REFUSED};
+use shekyl_options::Diagnostic;
+use shekyl_wallet_rpc::config::{self, Action, Loaded};
+use shekyl_wallet_rpc::table::TABLE;
+use shekyl_wallet_rpc::{arm_server, check_server_config};
 
-/// No `Debug`: `rpc_login` is a secret (rule 35), and a derived `Debug` on
-/// the struct that holds it is exactly the render path the credential
-/// types below refuse to offer.
-#[derive(Parser)]
-#[command(
-    name = "shekyl-wallet-rpc",
-    version = shekyl_wallet_rpc::VERSION,
-    about = "Shekyl wallet JSON-RPC server"
-)]
-struct Cli {
-    /// Directory for wallet files.
-    #[arg(long = "wallet-dir", default_value = ".")]
-    wallet_dir: PathBuf,
+const PROGRAM: &str = "shekyl-wallet-rpc";
 
-    /// Listen address: a numeric `IP:PORT` (TCP — `127.0.0.1:29500`,
-    /// `[::1]:29500`; hostnames are not resolved) or `uds:///path/to.sock`
-    /// (Unix only; refused on Windows, where the wallet is self-hosted by
-    /// shekyl-cli). Default is loopback TCP; UDS is the recommended local
-    /// deployment. Wildcard addresses (0.0.0.0, ::, [::]) are refused — bind
-    /// a specific IP address — and any non-loopback address requires
-    /// --rpc-login.
-    #[arg(long = "rpc-bind", default_value = "127.0.0.1:29500")]
-    rpc_bind: String,
+/// The note `--help` prints above the options.
+const HELP_NOTE: &str = "Shekyl wallet JSON-RPC server. Values come from the command line, then \
+                         the configuration file, then the defaults.";
 
-    /// HTTP basic auth as `NAME:PASSWORD`, both halves non-empty (anything
-    /// else given — an empty value included — is refused by name). Omitted
-    /// disables auth, which is accepted only on loopback or a UDS socket
-    /// (filesystem permissions carry the authorization there); a
-    /// non-loopback --rpc-bind refuses to start without it. Contradicts
-    /// --disable-rpc-login: pass one.
-    #[arg(
-        long = "rpc-login",
-        // No default: presence is the signal, so `--rpc-login=` is a given
-        // (and refused) value rather than an omission. Parsed straight into
-        // a wiping buffer (rule 35): the `String` clap produces is moved,
-        // not copied, into the `Zeroizing`. argv itself and clap's
-        // transient copies are the OS's and clap's — the residual.
-        value_parser = clap::builder::StringValueParser::new().map(Zeroizing::new),
-    )]
-    rpc_login: Option<Zeroizing<String>>,
+fn exit(status: i32) -> ExitCode {
+    ExitCode::from(u8::try_from(status).unwrap_or(1))
+}
 
-    /// Run without authentication. Accepted only on a loopback --rpc-bind
-    /// or a UDS socket; refused off loopback, and refused together with
-    /// --rpc-login (the pair is a contradiction, not a precedence).
-    #[arg(long = "disable-rpc-login", default_value_t = false)]
-    disable_rpc_login: bool,
+/// Text to standard output. A closed stream is not a panic.
+fn say(text: impl Display) {
+    drop(write!(std::io::stdout(), "{text}"));
+}
 
-    /// Daemon JSON-RPC base URL (used by refresh / send; lifecycle holds it).
-    /// Default: "this computer", the node this account runs for --network,
-    /// over its owner's socket or pipe; a node run as a service is named by
-    /// its view listener here. A daemon that is not loopback is disclosed in
-    /// the log at startup: its operator sees what this wallet asks for.
-    #[arg(long = "daemon-address")]
-    daemon_address: Option<String>,
+/// A line to standard error, named for this program. A closed stream is not
+/// a panic.
+fn complain(line: impl Display) {
+    drop(writeln!(std::io::stderr(), "{PROGRAM}: {line}"));
+}
 
-    /// SOCKS5h proxy for the daemon connection (e.g. socks5h://127.0.0.1:9050).
-    /// The proxy resolves the daemon hostname, so it never reaches the local
-    /// resolver. Omit for a direct connection. Needs --daemon-address.
-    #[arg(long = "proxy")]
-    proxy: Option<String>,
-
-    /// Network every create/open binds to: mainnet | testnet | stagenet.
-    #[arg(long = "network", default_value = "mainnet")]
-    network: String,
-
-    /// Optional file sink for `tracing` events.
-    #[arg(long = "log-file")]
-    log_file: Option<PathBuf>,
-
-    /// The Tor binary a serving wallet runs. Unset, the wallet finds the
-    /// bundled one. A relative path, or one naming no file on this machine,
-    /// refuses the start.
-    /// Either way the binary must match the pinned build.
-    #[arg(long = shekyl_wallet_rpc::server::TOR_FILE_OPTION)]
-    tor_file: Option<PathBuf>,
+/// Say every refusal on standard error (IG-11) and exit 2.
+fn refuse(faults: &[Diagnostic]) -> ExitCode {
+    for fault in faults {
+        complain(fault.render());
+    }
+    exit(EXIT_REFUSED)
 }
 
 /// The first statement is the process hardening (rule 35, DC-Q21), as in
 /// `shekyld`: no core and no same-account tracer, before an argument is
 /// read, the runtime started, or a wallet opened. A process that cannot
 /// apply it reports the step and exits 1 without starting.
-fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+fn main() -> ExitCode {
     if let Err(e) = shekyl_process::harden::harden_process() {
-        return Err(format!("process hardening {e}; not starting").into());
+        complain(format!("process hardening {e}; not starting"));
+        return exit(EXIT_FAILED);
     }
-    serve(Cli::parse())
+    let platform = shekyl_process::platform::current();
+    match config::load(std::env::args_os().skip(1), &platform) {
+        Err(faults) => refuse(&faults),
+        Ok(Action::Help) => {
+            say(shekyl_options::help(
+                &TABLE,
+                PROGRAM,
+                shekyl_version::RELEASE_NAME,
+                shekyl_wallet_rpc::VERSION,
+                HELP_NOTE,
+            ));
+            ExitCode::SUCCESS
+        }
+        Ok(Action::Version) => {
+            say(format_args!("{PROGRAM} {}\n", shekyl_wallet_rpc::VERSION));
+            ExitCode::SUCCESS
+        }
+        Ok(Action::Verify(loaded)) => verify(&loaded),
+        Ok(Action::Serve(loaded)) => match serve(*loaded) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                complain(e);
+                exit(EXIT_FAILED)
+            }
+        },
+    }
 }
 
-/// Everything after the hardening: the log, the listen and auth posture,
-/// and the server, on the runtime this function starts.
-#[tokio::main]
-async fn serve(cli: Cli) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let config = if let Some(ref path) = cli.log_file {
-        if path.exists() && path.is_dir() {
-            return Err(format!(
-                "--log-file {} points at an existing directory; \
-                 pass a file path (e.g. {}/wallet-rpc.log)",
-                path.display(),
-                path.display(),
-            )
-            .into());
+/// `config-verify` (IG-Q63): the checks a start makes, with nothing bound or
+/// created. The effective configuration is on standard output. A cleartext
+/// listener off loopback is said here, on standard error, because this path
+/// does not start the logger.
+fn verify(loaded: &Loaded) -> ExitCode {
+    let cleartext = match check_server_config(&loaded.server) {
+        Ok(cleartext) => cleartext,
+        Err(e) => {
+            complain(e);
+            return exit(EXIT_REFUSED);
         }
-        let directory = path
-            .parent()
-            .filter(|p| !p.as_os_str().is_empty())
-            .map_or_else(|| PathBuf::from("."), PathBuf::from);
-        let filename_prefix = path
-            .file_name()
-            .ok_or("--log-file must name a file, not a directory")?
-            .to_str()
-            .ok_or("--log-file filename must be valid UTF-8")?
-            .to_owned();
-        let sink = shekyl_logging::FileSink::unrotated(directory, filename_prefix);
-        shekyl_logging::Config::with_file_sink(tracing::Level::INFO, sink)
-    } else {
-        shekyl_logging::Config::stderr_only(tracing::Level::INFO)
     };
-    let _guard = shekyl_logging::init(config)?;
+    if let Some(line) = cleartext {
+        complain(line);
+    }
+    say(format_args!(
+        "{PROGRAM}: configuration verified\n{PROGRAM}: {}\n",
+        loaded.effective
+    ));
+    ExitCode::SUCCESS
+}
 
-    let listen = ListenAddr::parse(&cli.rpc_bind)?;
-    let auth = AuthConfig::from_cli(
-        cli.rpc_login.as_deref().map(String::as_str),
-        cli.disable_rpc_login,
-    )?;
-    // The credential now lives only in `auth`; wipe the flag's copy here
-    // rather than at process exit.
-    drop(cli.rpc_login);
-
-    let network = Network::from_str(&cli.network)
-        .map_err(|e| format!("invalid --network '{}': {e}", cli.network))?;
-    let daemon = shekyl_wallet_rpc::server::daemon_target(network, cli.daemon_address, cli.proxy)?;
-
-    let server = ServerConfig {
-        listen,
-        wallet_dir: cli.wallet_dir,
-        network,
-        daemon,
-        auth,
-        kdf: KdfParams::default(),
-        tor_file: shekyl_engine_core::TorFile::from_option(cli.tor_file)
-            .map_err(|e| e.to_string())?,
-    };
-
-    // Armed before the bind, then served until a stop (SIGTERM, SIGINT,
-    // SIGHUP; on Windows every console event), which closes the open
-    // wallet; a second stop exits at once. The line the start owes about
-    // an inherited ignore is said here, on standard error (IG-14).
+/// Everything after the load: the log, the listen and auth posture, and the
+/// server, on the runtime this function starts.
+#[tokio::main]
+async fn serve(loaded: Loaded) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let Loaded {
+        server,
+        logging,
+        effective,
+        default_wallet_dir,
+    } = loaded;
+    let _guard = shekyl_logging::init(logging)?;
+    // The listen posture and the daemon endpoint are refused before any
+    // directory is made. The load already refused them; this is the
+    // bind-time assertion, and it arms the stops.
     let armed = arm_server(server)?;
+    // A required announcement (IG-14): every server start, whatever the
+    // level, on standard error and in the log file when one is named.
+    shekyl_logging::announce(&format!("{PROGRAM}: {effective}"), &effective);
+    if let Some((root, dir)) = default_wallet_dir {
+        shekyl_os_account::ensure_per_account_root(&root)
+            .map_err(|e| format!("cannot create {}: {e}", root.display()))?;
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+    }
     if let Some(line) = armed.notice() {
-        eprintln!("shekyl-wallet-rpc: {line}");
+        complain(line);
     }
     armed.serve().await
 }

@@ -7,11 +7,11 @@
 //! (`INPUT_GRAMMAR.md` §5, `log-category`; ruled 2026-10-15: subsystem
 //! names, never implementation names).
 //!
-//! A subsystem is an operator-meaningful part of the daemon. Each maps to
-//! the `tracing` targets that implement it: the Rust crates by module path,
-//! and the few explicit targets the daemon's code names (`global`, `daemon`,
-//! `txpool`, `tor`, `notify`). A crate rename changes a list here, never a
-//! configuration file.
+//! A subsystem is an operator-meaningful part of a Shekyl binary. Each maps
+//! to the `tracing` targets that implement it: the Rust crates by module
+//! path, and the few explicit targets the daemon's code names (`global`,
+//! `daemon`, `txpool`, `tor`, `notify`). A crate rename changes a list here,
+//! never a configuration file.
 //! The list is the owner the grammar's `log-category` row validates its
 //! keys against, by reference.
 
@@ -48,11 +48,13 @@ pub enum Subsystem {
     Notify,
     /// Archival serving and fetching.
     Archival,
+    /// The wallet: its engine, files, scanner, transaction building and RPC.
+    Wallet,
 }
 
 impl Subsystem {
     /// Every subsystem, in the order `log-category` lists them.
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 13] = [
         Self::Daemon,
         Self::P2p,
         Self::Sync,
@@ -65,6 +67,7 @@ impl Subsystem {
         Self::Miner,
         Self::Notify,
         Self::Archival,
+        Self::Wallet,
     ];
 
     /// The key an operator writes.
@@ -83,6 +86,7 @@ impl Subsystem {
             Self::Miner => "miner",
             Self::Notify => "notify",
             Self::Archival => "archival",
+            Self::Wallet => "wallet",
         }
     }
 
@@ -155,6 +159,15 @@ impl Subsystem {
                 "shekyl_archival_fetch_sched",
                 "shekyl_archival_retention",
                 "shekyl_archival_bond_builder",
+            ],
+            Self::Wallet => &[
+                "shekyl_engine_core",
+                "shekyl_engine_file",
+                "shekyl_engine_state",
+                "shekyl_scanner",
+                "shekyl_tx_builder",
+                "shekyl_wallet_contract",
+                "shekyl_wallet_rpc",
             ],
         }
     }
@@ -355,6 +368,25 @@ mod tests {
                 .any(|part| part == "tor=debug"),
             "{directive}"
         );
+    }
+
+    /// `log-category wallet=debug` raises the wallet's crates and leaves
+    /// everything else, third-party libraries included, at the base level.
+    /// The key is live while the bare target `wallet`, the C++ category,
+    /// stays retired. Red edit: drop `shekyl_engine_core` from the list.
+    #[test]
+    fn the_wallet_category_reaches_the_wallets_crates_alone() {
+        let directive = directive_from_words("info", &[("wallet", "debug")]).expect("known words");
+        let parts: Vec<&str> = directive.as_str().split(',').collect();
+        assert_eq!(parts[0], "info");
+        for crate_target in ["shekyl_engine_core", "shekyl_scanner", "shekyl_wallet_rpc"] {
+            assert!(
+                parts.contains(&format!("{crate_target}=debug").as_str()),
+                "{directive}"
+            );
+        }
+        assert!(!parts.iter().any(|p| p.starts_with("hyper")), "{directive}");
+        assert!(is_retired_target("wallet"));
     }
 
     #[test]

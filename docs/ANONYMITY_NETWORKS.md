@@ -183,9 +183,9 @@ HiddenServicePort 11029 127.0.0.1:11029
 Then point the wallet at that onion through the Tor SOCKS port:
 
 ```
-./shekyl-cli --wallet mywallet \
-    --proxy socks5h://127.0.0.1:9050 \
-    --daemon-address <56 characters>.onion:11029
+./shekyl-cli --wallet-file ~/.shekyl/wallets/mainnet/mywallet.wallet \
+    --daemon-socks 127.0.0.1:9050 \
+    --daemon-endpoint <56 characters>.onion:11029
 ```
 
 An onion address authenticates the service and encrypts the connection end to

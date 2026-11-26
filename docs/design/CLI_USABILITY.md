@@ -58,7 +58,7 @@ does not run RandomX") is unchanged and this doc re-pins it:
   `chain_health` already does through the independent `DaemonClient`
   ([`../../rust/shekyl-cli/src/daemon.rs`](../../rust/shekyl-cli/src/daemon.rs)).
   The silent default is a loopback daemon. A named remote
-  `--daemon-address` is a valid configuration; `mine start` reminds
+  `daemon-endpoint` is a valid configuration; `mine start` reminds
   that mining will run on that machine's CPU, and does not refuse.
 - `wallet_rpc.yaml` gains **no** mining methods: control is daemon RPC,
   not a spend/scan concern, and the wallet-RPC server never proxies it.
@@ -82,17 +82,12 @@ flowchart LR
 
 ### CU-1 — Network selection
 
-- `--testnet` / `--stagenet` as flags on `shekyl-cli`, mutually
-  exclusive with each other and with `--network` (which remains). No
-  flag stays **mainnet** — there is deliberately no persistent
-  "last network" config; a silent remembered network is how a testnet
-  habit spends mainnet money.
-- Connection flags (`--network`, `--testnet`, `--stagenet`,
-  `--daemon-address`, `--engine-dir`/`--wallet-dir`,
-  `--engine-file`/`--wallet`, `--rpc-url`, `--proxy`,
-  `--debug`) become clap **global** arguments, so
-  `shekyl-cli create miner --testnet` works (previously flags after the
-  subcommand failed to parse).
+- `--network` selects the network. No option stays **mainnet** — there
+  is deliberately no persistent "last network" config; a silent
+  remembered network is how a testnet habit spends mainnet money.
+- The options are `INPUT_GRAMMAR.md` §12.1's table and end at the first
+  command word: `shekyl-cli --network testnet wallet create miner`. A
+  program option given after the words is told to go before them.
 - The wallet directory defaults to `~/.shekyl/wallets/<network>/`
   (created on demand) instead of `.`, so testnet files cannot collide
   with mainnet files (the Electrum isolation shape). An explicit
@@ -109,9 +104,8 @@ change.
 
 ### CU-2 — Human vocabulary
 
-- Public flag names `--wallet-dir` / `--wallet`; the engine-era names
-  `--engine-dir` / `--engine-file` stay as **hidden aliases** so
-  existing scripts do not break.
+- Public option names `wallet-dir` / `wallet-file`, with no aliases
+  (`INPUT_GRAMMAR.md` IG-5).
 - REPL `engine_info` → `wallet`; `engine_info` stays as a hidden alias.
 - `help <command>` prints a one-command usage block (the grin-wallet
   shape); bare `help` keeps the categorized listing.
@@ -153,7 +147,7 @@ Gates, all fail-closed before any daemon call:
 1. **Network match** — `get_version`'s identity against this CLI's
    network, read before `get_info`.
 2. **Loopback is the silent default, not a force.** The default
-   `--daemon-address` is this machine. A non-loopback endpoint is a
+   `daemon-endpoint` is this machine. A non-loopback endpoint is a
    valid configuration. `mine start` reminds the operator that mining
    will run on that machine's CPU, then continues. It does not refuse.
    Classification uses the canonical
@@ -182,7 +176,7 @@ unusable and encourages sloppy copy-paste. `address`:
 - `address --out <path>` writes the full address to a new `0600` file
   (refuses to overwrite), so the full string never has to transit
   scrollback or shell history. Not a secret — an address is public —
-  but the same O_EXCL/0600 shape as `--seed-out` keeps the file
+  but the same O_EXCL/0600 shape as `--mnemonic-file` keeps the file
   handling uniform.
 
 ### CU-5 — Failure-mode copy
@@ -199,13 +193,13 @@ Enumerated here before code (rule 82); each path says what to run next.
 | F6 | Already mining | `mine start` | Current thread count + `mine stop` first (daemon reports the state; the CLI relays it, no error tone) |
 | F7 | Daemon not synced | `mine start` | Refuse with height copy. The daemon will not mine until it is caught up (`CHECK_CORE_READY` / `BUSY`); there is no confirmation that can succeed. |
 | F8 | retired `start_mining` / `stop_mining` / `mining_status`, or a partial `mine` (CU-7, 2026-09-26: the retired line does not run) | parser | Diagnostic naming `mine start [threads]`, `mine stop`, or `mine status`; never bare "Unknown command" |
-| F9 | Password/seed TTY rules | existing `display.rs` / `--password-stdin` surfaces | Already correct; unchanged |
+| F9 | Password/seed TTY rules | existing `display.rs` / `wallet-password-file` surfaces | Already correct; unchanged |
 
 ### CU-6 — Docs (rule 91)
 
 - Rewrite the wallet-basics, mining, and network-selection sections of
   [`../USER_GUIDE.md`](../USER_GUIDE.md) against the actual binary
-  (`create <name>` in the REPL / `create` subcommand with `--seed-out`;
+  (`create <name>` in the REPL / `wallet create --mnemonic-file`;
   no `--generate-new-wallet`, no accounts/subaddresses/sweeps/address
   book, no `[wallet]: seed`), absorbing the FOLLOWUPS **USER_GUIDE
   realignment** row.
@@ -244,8 +238,8 @@ The command language, completion, status line, and script stdin are
 specified in the `feat/cli-shell` work and live in `rust/shekyl-cli/`
 (`catalog.rs`, `grammar.rs`, `status.rs`). Three forms: bare noun,
 subject plus verb, product verb. Retired spellings diagnose and do not
-run. CompleteTree is the hidden startup flag `--complete-tree-foundation`,
-not `stake foundation`. `shard list all` reads `get_archival_shard_coverage`.
+run. CompleteTree is the startup option `archival-complete-tree`, not
+`stake foundation`. `shard list all` reads `get_archival_shard_coverage`.
 `stake join` names shard ids and does not post until wallet-RPC `stake`
 accepts a shard set.
 
@@ -255,10 +249,11 @@ accepts a shard set.
 lines. A success is `{"ok":true,"command":"...","result":{...}}`. A
 failure is `{"ok":false,"command":"...","error":{"code":N,"message":"..."}}`
 and the process exits 1. `error.data` is present when the server sent
-it. Seeds and passwords are removed at every depth. `shekyl-cli create
---seed-out` is still the only way a script receives a seed, and the
-JSON result names that path. A failed `create` or `restore` uses that
-same command name and, when the server refused, the wallet-RPC code.
+it. Seeds and passwords are removed at every depth. `wallet create
+--mnemonic-file` is still the only way a script receives a seed, and the
+JSON result names that path. A failed `wallet create` or `wallet restore`
+uses that same command name and, when the server refused, the wallet-RPC
+code.
 A failure before any command (the session never started, the script
 file could not be read) is `command` `session` or `script`.
 
@@ -266,12 +261,12 @@ file could not be read) is `command` `session` or `script`.
 asked, the command still succeeds and `wallet_rpc_error` carries the
 reason. `status` and `balance` remain the checks that stop a script.
 
-`--script FILE` runs the file as one wallet session. A one-shot is the
-same words as the prompt, after the global flags: `shekyl-cli --json
+`--script-file FILE` runs the file as one wallet session. A one-shot is
+the same words as the prompt, after the options: `shekyl-cli --json
 balance`. The shell's quoting is the token boundary, so
 `address --out "/tmp/my address.txt"` keeps the space. A prompt line
-still splits on whitespace. `--script` does not combine with a
-subcommand. `help` is the prompt command; `--help` is the invocation
+still splits on whitespace. `script-file` does not combine with a
+command. `help` is the prompt command; `--help` is the invocation
 summary.
 
 Both are non-interactive: `--yes` is honored, and a money move without
@@ -280,17 +275,17 @@ was sent. An interactive terminal still ignores `--yes` and prompts.
 Narration (the summary before that prompt, the release warning, progress
 such as `Refreshing...`) is on stdout for a person and on stderr when
 that person asked for JSON. A script omits it, including a human
-`--script` that is not `--json`. A generated payment or reserve proof's
+`script-file` that is not `--json`. A generated payment or reserve proof's
 disclosure is not narration: it prints after the proof on stdout for a
 person, and on stderr whenever stdout is JSON, including for a script.
 Prompt `wallet create` / `wallet restore` refuse under
 `--json`, because the one-time seed is shown on stdout and stdout is
-the JSON transcript. `wallet open` and `wallet password` refuse in a
-script: the password prompt would read the script. Open with
-`--wallet` and `--password-file` instead.
+the JSON transcript. `wallet password` refuses in a script: the password
+prompt would read the script. `wallet open` in a script takes its
+password from `wallet-password-file`, and so does `wallet-file` at start.
 
-`--complete-tree-foundation` prints its terms on stderr when stdout is
-JSON, and its result is an envelope named `complete-tree-foundation`.
+`archival-complete-tree` prints its terms on stderr when stdout is
+JSON, and its result is an envelope named `archival-complete-tree`.
 
 The terminal bond exit is `stake release`. `stake exit` and `unstake`
 are retired spellings that name `stake release` and do not run. The

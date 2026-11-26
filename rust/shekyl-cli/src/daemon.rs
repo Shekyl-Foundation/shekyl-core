@@ -69,7 +69,7 @@ impl fmt::Display for DaemonError {
         match self {
             Self::NotConfigured => write!(
                 f,
-                "Daemon not configured. Use --daemon-address to set the daemon endpoint."
+                "Daemon not configured. Set daemon-endpoint to name the daemon endpoint."
             ),
             Self::ConnectionRefused { detail, hint } => {
                 write!(
@@ -83,7 +83,7 @@ impl fmt::Display for DaemonError {
             }
             Self::SocksFailure(detail) => write!(
                 f,
-                "SOCKS/Tor proxy connection failed (check --proxy and Tor status). Detail: {detail}"
+                "SOCKS/Tor proxy connection failed (check daemon-socks and Tor status). Detail: {detail}"
             ),
             Self::TlsFailure(detail) => write!(
                 f,
@@ -137,7 +137,7 @@ pub struct DaemonClient {
 
 /// Normalize a daemon address to the URL form the transports expect: a
 /// scheme-less `host:port` is `http://host:port`; a URL is itself. The one
-/// reading of `--daemon-address`, for the self-hosted server's scan
+/// reading of `daemon-endpoint`, for the self-hosted server's scan
 /// transport and the REPL's direct client alike.
 #[must_use]
 pub fn daemon_url(daemon_address: &str) -> String {
@@ -151,7 +151,7 @@ pub fn daemon_url(daemon_address: &str) -> String {
 /// the same classification the startup disclosure uses. A substring match
 /// on `127.0.0.1` would both miss `127.0.0.0/8` / mapped IPv6 and accept
 /// `127.0.0.1.evil.com`. Loopback is the silent default, not a force — a
-/// remote `--daemon-address` is a valid configuration
+/// remote `daemon-endpoint` is a valid configuration
 /// (CLI_USABILITY.md §CU-3 F4).
 #[must_use]
 pub fn is_loopback_endpoint(address: &str) -> bool {
@@ -645,7 +645,7 @@ mod tests {
     fn a_named_transport_fault_keeps_its_name() {
         use shekyl_rpc_transport::TransportFault;
         let proxy = from_transport(TransportFault::Proxy(
-            "invalid --proxy for the daemon transport: missing port".into(),
+            "invalid daemon-socks for the daemon transport: missing port".into(),
         ));
         assert!(matches!(proxy, DaemonError::SocksFailure(_)), "{proxy}");
         let socks = from_transport(TransportFault::Proxy("socks: refused".into()));

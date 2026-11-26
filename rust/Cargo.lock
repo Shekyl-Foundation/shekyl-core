@@ -3543,7 +3543,6 @@ name = "shekyl-cli"
 version = "3.1.0"
 dependencies = [
  "base64 0.22.1",
- "clap",
  "hex",
  "proptest",
  "rpassword",
@@ -4859,6 +4858,7 @@ dependencies = [
  "serde_json",
  "shekyl-address",
  "shekyl-network",
+ "shekyl-options",
  "shekyl-os-account",
  "shekyl-rpc-channel",
  "shekyl-rpc-client",
@@ -5318,7 +5318,6 @@ version = "3.1.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
- "clap",
  "curve25519-dalek",
  "hex",
  "http",
@@ -5330,10 +5329,12 @@ dependencies = [
  "shekyl-address",
  "shekyl-crypto-pq",
  "shekyl-curve-primitives",
+ "shekyl-daemon-config",
  "shekyl-engine-core",
  "shekyl-engine-file",
  "shekyl-engine-state",
  "shekyl-logging",
+ "shekyl-options",
  "shekyl-os-account",
  "shekyl-process",
  "shekyl-rpc-client",

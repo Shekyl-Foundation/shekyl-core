@@ -7,8 +7,9 @@ binaries.
 
 One `shekyl_logging::init` entry point that every Shekyl binary
 (`shekyld`, `shekyl-cli`, `shekyl-wallet-rpc`) calls instead of
-building its own `tracing_subscriber` stack. It fixes the canonical
-env var (`SHEKYL_LOG`), the file-sink discipline (`0600` on POSIX
+building its own `tracing_subscriber` stack. It reads no environment
+variable: each binary hands it the level from its own option table. It
+fixes the file-sink discipline (`0600` on POSIX
 for non-rotating and size-rolling sinks — see the rotation caveat
 below), the queued, never-blocking sinks, and the daemon's runtime
 filter changes (`subsystem::apply` for `log-level` /
@@ -41,11 +42,9 @@ shapes binaries actually need:
   on disk, and for `shekyl-wallet-rpc` when the operator opts in
   via `--log-file <PATH>`.
 
-`fallback_default` is a `tracing::Level`. It is consulted only when
-the `SHEKYL_LOG` env var is unset or empty at startup; setting it
-explicitly prevents the "empty directive, everything logs at
-subscriber baseline" landmine that plain
-`tracing_subscriber::EnvFilter::from_default_env()` leaves open.
+The filter is the `Directive` the binary built from its `log-level` and
+`log-category` rows; `Config::stderr_only(level)` and
+`Config::with_file_sink(level, sink)` are the plain-level forms.
 
 ### `FileSink`
 
@@ -122,16 +121,11 @@ outcomes through the installed subscriber. What the queues leave
 RAII guard for the sinks' writer threads, one per sink. Must outlive
 the process's interesting work. See "The `LoggerGuard` footgun" below.
 
-### Env vars
+### No environment input
 
-| Name | Role | When honored |
-|------|------|--------------|
-| `SHEKYL_LOG` | Canonical filter directive | Always |
-| `RUST_LOG` | Dev fallback | Only when the `dev-env-fallback` feature is on |
-
-Release builds never honor `RUST_LOG`. A long-lived shell export
-of `RUST_LOG=debug` from some other Rust project would otherwise
-be a privacy foot-cannon against Shekyl binaries.
+No variable sets a filter (`INPUT_GRAMMAR.md` IG-13). A long-lived shell
+export from some other Rust project would otherwise be a privacy
+foot-cannon against Shekyl binaries.
 
 ## The `LoggerGuard` footgun
 
@@ -179,7 +173,7 @@ before review approval.
 1. **Not a PII scrubber.** Whatever your call sites log,
    `shekyl-logging` will faithfully emit. PII discipline belongs
    at the `tracing::debug!` / `tracing::trace!` call site, not
-   here. If an operator sets `SHEKYL_LOG=debug` against a wallet
+   here. If an operator sets `--log-level debug` on a wallet
    binary, the logger will surface everything any module chose to
    log at that level. The `tracing::debug!` / `tracing::trace!`
    macros should never be called with secret scalars, seed words,

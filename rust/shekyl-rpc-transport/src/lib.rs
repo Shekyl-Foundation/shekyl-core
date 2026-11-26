@@ -39,7 +39,7 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 /// match the variant instead of searching the sentence.
 #[derive(Clone, Debug)]
 pub enum TransportFault {
-    /// `--proxy` does not parse, or the SOCKS tunnel refused the dial.
+    /// `daemon-socks` does not parse, or the SOCKS tunnel refused the dial.
     Proxy(String),
     /// The TLS connector could not be built.
     Tls(String),
@@ -178,7 +178,7 @@ impl Rpc for DaemonTransport {
 }
 
 /// What a wallet is configured to reach (`RPC_CHANNEL.md` RT-15): "this
-/// computer" when no `daemon-address` is given, otherwise the address named.
+/// computer" when no `daemon-endpoint` is given, otherwise the address named.
 /// Exactly one; [`Self::connect`] makes its one [`DaemonTransport`].
 #[derive(Clone)]
 pub enum DaemonTarget {
@@ -409,7 +409,7 @@ fn parse_endpoint(url: String) -> Result<ParsedEndpoint, RpcError> {
     })
 }
 
-/// A daemon address as an operator types it (`daemon-address`, including the
+/// A daemon address as an operator types it (`daemon-endpoint`, including the
 /// address a service refusal tells them to set). A scheme-less `host:port`
 /// — `127.0.0.1:11030`, `[::1]:11030` — is `http://` plus that text. A URL
 /// is itself. Startup validation then sees one shape.
@@ -427,7 +427,7 @@ pub fn daemon_address_url(address: &str) -> String {
 /// (http(s) scheme, authority, no query, base-path normalization), the proxy
 /// string, and — for an `https://` endpoint only — the TLS root store. Server
 /// startup calls this so a malformed
-/// `--daemon-address` / `--proxy` refuses loud at launch, instead of
+/// `daemon-endpoint` / `daemon-socks` refuses loud at launch, instead of
 /// surfacing on first use as a misdiagnosed "daemon unreachable" (rule 82:
 /// the failure must name its cause). An unreachable-but-well-formed daemon
 /// passes — reachability is not a startup requirement.
@@ -548,7 +548,7 @@ impl HttpRpc {
         } else {
             // Same mapping as the authenticated arm and `validate_endpoint`:
             // a client-construction failure is a config/environment fault
-            // (bad --proxy, missing TLS roots), never an internal bug, and
+            // (bad daemon-socks, missing TLS roots), never an internal bug, and
             // its classification must not depend on whether the daemon URL
             // happened to carry credentials.
             Authentication::Unauthenticated(HttpClient::new(proxy.as_deref(), tls)?)
@@ -1134,7 +1134,7 @@ mod tests {
         let err = validate_endpoint("http://127.0.0.1:1", Some("socks5://127.0.0.1"))
             .expect_err("port-less proxy");
         assert!(
-            format!("{err}").contains("--proxy"),
+            format!("{err}").contains("daemon-socks"),
             "names the flag: {err}"
         );
 

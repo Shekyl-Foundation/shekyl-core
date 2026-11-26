@@ -20,7 +20,10 @@ use crate::engine::error::{KeyError, OpenError};
 use crate::engine::stake_engine::PSlot;
 use crate::engine::{Capability, DaemonClient, Engine, SoloSigner};
 
-use super::support::{is_default_overrides, map_wallet_file_error, rederivation_failure_detail};
+use super::support::{
+    check_address_derivation, is_default_overrides, map_wallet_file_error,
+    rederivation_failure_detail,
+};
 use super::{CapabilityInput, Credentials, EngineCreateParams, FirstStakeIntent, OpenedEngine};
 
 impl Engine<SoloSigner> {
@@ -40,11 +43,15 @@ impl Engine<SoloSigner> {
     ///
     /// # Errors
     ///
+    /// - [`OpenError::DerivationSelfCheckFailed`] when this binary fails its
+    ///   address-derivation self-check. Nothing has been derived or written.
     /// - [`OpenError::Io`] for filesystem / envelope failures
     ///   (including the keys-file-already-exists case).
     /// - [`OpenError::Key`] for re-derivation failures (envelope's
     ///   own `expected_classical_address` cross-check).
     pub fn create(params: EngineCreateParams<'_>, daemon: DaemonClient) -> Result<Self, OpenError> {
+        check_address_derivation()?;
+
         let EngineCreateParams {
             base_path,
             credentials,
@@ -199,6 +206,8 @@ impl Engine<SoloSigner> {
         overrides: SafetyOverrides,
         first_stake_intent: Option<FirstStakeIntent>,
     ) -> Result<OpenedEngine<SoloSigner>, OpenError> {
+        check_address_derivation()?;
+
         let (file, outcome) =
             WalletFile::open(base_path, credentials.password(), network, overrides)
                 .map_err(|e| map_wallet_file_error(e, network))?;

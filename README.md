@@ -487,7 +487,7 @@ shekyld --tor operator --tor-socks 127.0.0.1:9050 \
 
 `--tor off` is clearnet only; `--clearnet off` is Tor only. The same rows
 go in the configuration file. The wallet reaches a daemon's RPC over an
-onion service you run in front of its loopback RPC, through `--proxy`
+onion service you run in front of its loopback RPC, through `daemon-socks`
 (see [docs/proxies.md](docs/proxies.md)).
 
 ### Using Tor on Tails
