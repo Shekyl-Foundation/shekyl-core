@@ -124,6 +124,12 @@ async fn wallet_enrollment_wrong_bundle_and_revocation() {
             .write_all(&vec![0; shekyl_rpc_channel::handshake::MESSAGE2_LEN])
             .await
             .unwrap();
+        // Close only after the client has: a close with the client's bytes
+        // still unread resets the connection on Windows, and the reset
+        // reaches the client before the message it was sent, so the client
+        // would report the reset and not this message.
+        let mut rest = Vec::new();
+        drop(stream.read_to_end(&mut rest).await);
     });
     let target = client::account_target(
         network,
