@@ -746,7 +746,7 @@ fn scoped_records(
 /// 4. **Assemble paths** — every membership path against ONE reference
 ///    snapshot ([`CurveTreeHandle::assemble_tx`]), zipped into
 ///    [`FundingInputContext`]s + a shared [`TreeContext`] (the exact
-///    `assemble_bond_post` shape).
+///    `sign_bond_at_due` shape).
 /// 5. **Hand off** — [`StakeEngineHandle::assemble_drain`]; derivation,
 ///    proving, and signing stay inside the actor, and the reply returns
 ///    unbroadcast.
@@ -873,7 +873,7 @@ pub(crate) async fn orchestrate_drain(
 
     // 4. Assemble every membership path against ONE reference snapshot, then
     //    zip records↔paths into the funding contexts (the exact
-    //    `assemble_bond_post` shape — one shared TreeContext, per-input
+    //    `sign_bond_at_due` shape — one shared TreeContext, per-input
     //    leaf chunk + layers).
     let assemble_inputs: Vec<AssembleInput> = selected
         .iter()

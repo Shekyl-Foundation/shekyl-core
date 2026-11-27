@@ -345,7 +345,7 @@ impl StakeEngineHandle {
     }
 
     /// Ask the actor to assemble the full, broadcast-ready JoinMarket bond
-    /// (`AssembleBond`). Engine-side caller is [`Engine::assemble_bond_post`](crate::engine::Engine::assemble_bond_post)
+    /// (`AssembleBond`). Engine-side caller is [`Engine::sign_bond_at_due`](crate::engine::Engine::sign_bond_at_due)
     /// (WI-2 §3.3), so this carries no suppression. Go-live still needs
     /// **both** SP-R0 / 2d-1 pruning **and** the RPC stake entry — neither
     /// alone (half (a) landed 2026-07-18 with SP-R0 arm #1; half (b) remains).

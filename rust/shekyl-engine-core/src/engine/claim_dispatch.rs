@@ -18,7 +18,7 @@
 //! premise was refuted, not rescheduled). This method still fires once
 //! per caller intent, never on a loop of its own — the leg is the caller.
 //!
-//! Mirrors [`Engine::assemble_bond_post`](super::bond_orchestrator)'s shape:
+//! Mirrors [`Engine::seal_bond_plan`](super::bond_orchestrator)'s shape:
 //! a self-arc method that clones its actor handles under one brief read
 //! lock, loads the sealed P-scan state and the live reservation set through
 //! the same independent stores the bond path uses, and hands everything to
@@ -237,7 +237,7 @@ impl EmissionClaimRequestError {
     }
 }
 
-#[allow(private_bounds)] // same Engine-trait privacy posture as assemble_bond_post
+#[allow(private_bounds)] // same Engine-trait privacy posture as seal_bond_plan
 impl<S, D, L, E, R, P> Engine<S, D, L, E, R, P, WalletFile>
 where
     S: EngineSignerKind + Send + Sync + 'static,
@@ -271,7 +271,7 @@ where
         pruning_landed: &SpentRecordsDurablyPruned,
     ) -> Result<EmissionClaimReceipt, EmissionClaimRequestError> {
         // Brief read: clone the actor handles + the ledger snapshot the
-        // pipeline needs (same discipline as assemble_bond_post).
+        // pipeline needs (same discipline as seal_bond_plan).
         let (daemon, stake, curve_tree, pending_gate, snapshot) = {
             let g = self_arc.read().await;
             let stake = g

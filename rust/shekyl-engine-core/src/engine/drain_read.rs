@@ -21,7 +21,7 @@
 //! The read anchors through [`anchored_reference_block`] — the canonical
 //! send-path derivation (`min(tip, ingested) − REF_ANCHOR_AGE`, reorg-safe,
 //! resync-loud) the bond path already uses (`bond_orchestrator`'s
-//! `assemble_bond_post` / `sweep_bond_funding`). So the "drainable" figure the
+//! `sweep_bond_funding`, which a stake request and signing at due share). So the "drainable" figure the
 //! UI shows is the balance measured at the very block a spend would be proven
 //! against, not a raw-tip figure that includes outputs no membership path can
 //! yet cover. Today that parity holds against the bond path; when DS-PR-2's
@@ -32,7 +32,7 @@
 //!
 //! The brief-read prelude (capture the public anchor operands under a short
 //! lock, then drive the async steps off the arc) and the self-arc receiver
-//! mirror the dev-present bond/refresh entries — `assemble_bond_post`
+//! mirror the dev-present bond/refresh entries — `seal_bond_plan`
 //! (`bond_orchestrator`) for the anchor + pscan-load prelude, and
 //! `start_refresh` (`refresh`) for the `Arc<RwLock<Self>>` handle shape.
 //! [`load_pscan_state_for_engine`] takes the arc (not `&self`) to run its own
@@ -129,7 +129,7 @@ fn anchor_err_to_read_err(err: BondAssemblyError) -> DrainBalanceReadError {
     }
 }
 
-#[allow(private_bounds)] // same Engine-trait privacy posture as start_refresh / assemble_bond_post
+#[allow(private_bounds)] // same Engine-trait privacy posture as start_refresh / seal_bond_plan
 impl<S, D, L, E, R, P> Engine<S, D, L, E, R, P, WalletFile>
 where
     S: EngineSignerKind + Send + Sync + 'static,
@@ -179,7 +179,7 @@ where
         self_arc: Arc<RwLock<Self>>,
     ) -> Result<AtomicUnits, DrainBalanceReadError> {
         // Brief read: capture the public anchor operands (curve tree, synced
-        // tip, block-hash resolver), exactly the `assemble_bond_post` prelude,
+        // tip, block-hash resolver), exactly the `seal_bond_plan` prelude,
         // plus the stake handle for the active-persona scope. Public material
         // only — the handle projects a public identity, no secret crosses.
         let (curve_tree, chain_tip, block_hash_at, stake) = {

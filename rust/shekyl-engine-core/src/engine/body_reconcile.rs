@@ -246,7 +246,7 @@ pub(crate) enum ReconcileError {
     Store(String),
 }
 
-#[allow(private_bounds)] // same Engine-trait privacy posture as assemble_bond_post
+#[allow(private_bounds)] // same Engine-trait privacy posture as seal_bond_plan
 impl<S, D, L, E, R, P> Engine<S, D, L, E, R, P, WalletFile>
 where
     S: EngineSignerKind + Send + Sync + 'static,

@@ -4645,8 +4645,8 @@ enum FixtureStake {
     /// market.
     FirstStake,
     /// The composed production steps — `mint_handle` →
-    /// `persist_bond_record` → [`Engine::assemble_bond_post`] (which seals
-    /// the pending post exactly as `first_stake` does) — with
+    /// `persist_bond_record` → [`Engine::seal_bond_plan`] (which seals
+    /// the plan exactly as `first_stake` does) — with
     /// caller-chosen holdings: the **market** bond shape
     /// (`ShardSetCompact`) the emission-claim e2e earns from. Named
     /// deviation (PR-4c finding): no wallet entry posts a market bond
@@ -4879,7 +4879,7 @@ async fn plan_persona_stake(
     eprintln!("pscan discovered {pre_post_discovered} persona funding output(s)");
 
     // The stake entry (both arms end at the same `.wallet.pending` seal —
-    // `assemble_bond_post`'s seal_post — so everything downstream is
+    // `seal_bond_plan`'s `seal_plan` — so everything downstream is
     // shared). The funding must be spendable at the anchored REFERENCE
     // block (tip − REF_ANCHOR_AGE), which lags tip maturity, so each arm
     // retries its typed not-ready refusals while mining.

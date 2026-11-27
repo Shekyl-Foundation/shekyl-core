@@ -209,8 +209,9 @@ pub(crate) mod body_reconcile;
 // funding-sweep policy over the sealed `PFundingOutputRecord` set (GF-4b
 // sweep semantics), and the assemble path's typed failure surface.
 pub(crate) mod bond_assembly;
-// WI-2 §3.3 Engine-side `assemble_bond_post` orchestrator (public halves +
-// persist-before-return via an independent `PendingPostStore`).
+// The Engine-side bond orchestrator (WI-2 §3.3): a stake request seals a plan
+// (`seal_bond_plan`), persisted before return through an independent
+// `PendingPostStore`; `bond_due` signs it at its due block.
 pub(crate) mod bond_orchestrator;
 // SA-R-6 bond watch: shared `Input::BondPost` lift + merge sighting adoption.
 pub(crate) mod bond_watch;

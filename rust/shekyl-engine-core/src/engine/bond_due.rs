@@ -146,7 +146,7 @@ where
     /// clock waits (a temporary reason) rather than sign at an older one.
     ///
     /// Assembly runs outside the pending lock; the seal is checked
-    /// ([`PendingPostBlock::sign_plan`]): a plan withdrawn while the post was
+    /// ([`shekyl_engine_state::PendingPostBlock::sign_plan`]): a plan withdrawn while the post was
     /// proved wins, and the signed bytes are dropped unsent.
     pub(crate) async fn sign_bond_at_due(
         self_arc: Arc<RwLock<Self>>,

@@ -10,7 +10,7 @@
 //! consensus checks no bond for possession at admission: challenges test it
 //! afterwards. So the wallet refuses to post a bond whose shards its body
 //! store does not hold. [`FilledHoldings`] is how that refusal is
-//! structural: [`Engine::assemble_bond_post`] and the stake engine's two
+//! structural: [`Engine::sign_bond_at_due`] and the stake engine's two
 //! vin-building messages take it instead of a bare holdings descriptor, and
 //! the only production mints are the two fills here, each of which returns
 //! it after every owed shard is held. The pattern is
@@ -273,7 +273,7 @@ fn failure_of(e: ShardFillError) -> FillFailure {
     }
 }
 
-#[allow(private_bounds)] // same Engine-trait privacy posture as assemble_bond_post
+#[allow(private_bounds)] // same Engine-trait privacy posture as seal_bond_plan
 impl<S, D, L, E, R, P> Engine<S, D, L, E, R, P, WalletFile>
 where
     S: EngineSignerKind + Send + Sync + 'static,
