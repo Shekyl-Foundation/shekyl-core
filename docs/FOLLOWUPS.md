@@ -1310,6 +1310,10 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: `BA-T10` — [`BENCHMARK_ALIGNMENT.md`](design/BENCHMARK_ALIGNMENT.md) (the floor verify surface); the interim's arithmetic is in `rust/shekyl-verify-cost/benches/block_connect_verify.rs`
   - Target: pre-genesis
 
+- **The claim reroute through the key owner has no production caller.** The merge path's handle population (`populate_engine_handle_fields`, `rust/shekyl-engine-core/src/engine/merge.rs`) was to move onto `KeyEngine::try_claim_output` at "M3c+", which never landed; only tests and the gated key-dispatch bench (BA-I8) reach it, and `LocalKeys` and `KeyEngine` carry `#[expect(dead_code)]` naming this row. The ownership round's prepared-scan-batches package wires it in, or deletes `try_claim_output`, its actor message and BA-I8 if that round routes claims another way.
+  - Owner: the ownership round (its prepared-scan-batches package) — [`BENCHMARK_ALIGNMENT.md`](design/BENCHMARK_ALIGNMENT.md) (BA-D8, BA-Q6)
+  - Target: pre-genesis
+
 ## Post-genesis
 
 Exceptional deferral with a named blocker. This list stays tiny.

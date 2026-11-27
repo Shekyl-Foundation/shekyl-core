@@ -765,6 +765,12 @@ keeps its cost from drifting before the caller lands, and the M3c+ re-route
 gets a carrier: a `docs/FOLLOWUPS.md` row owned by the engine-trait
 contract. The bench is retired only if the re-route is ruled out of the
 design.
+**RULED 2026-11-27** (closes BA-D8): the re-route's carrier is the
+`docs/FOLLOWUPS.md` row "The claim reroute through the key owner has no
+production caller", owned by the ownership round's prepared-scan-batches
+package, which wires `try_claim_output` in or deletes it. `LocalKeys` and
+`KeyEngine` carry `#[expect(dead_code)]` whose reason names that row, so the
+code goes red the day a caller lands. BA-I8 stays gated until then.
 
 **BA-Q7 — Retire what is superseded or dead.** Captures superseded by a
 later capture of the same subject: BA-I74, BA-I76, BA-I87. Benches whose
