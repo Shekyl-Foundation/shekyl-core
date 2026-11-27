@@ -183,12 +183,42 @@ impl LinkGate {
             .record_message(direction, conn);
     }
 
-    pub fn refund(&self, direction: LinkDirection, conn: u64, bytes: u64, whole_grant: bool) {
+    /// Tokens the socket did not take go back to the bucket.
+    pub fn refund(&self, direction: LinkDirection, bytes: u64) {
+        if bytes == 0 {
+            return;
+        }
         self.inner
             .budget
             .lock()
             .expect("link budget")
-            .refund(direction, conn, bytes, whole_grant);
+            .refund(direction, bytes);
+        self.inner.wake.notify_waiters();
+    }
+
+    /// `n` bytes reached or left the socket on `conn`: what the operator
+    /// reads back. A grant is not this.
+    pub fn moved(&self, direction: LinkDirection, conn: u64, n: u64) {
+        if n == 0 {
+            return;
+        }
+        let now = self.now();
+        self.inner
+            .budget
+            .lock()
+            .expect("link budget")
+            .moved(direction, conn, n, now);
+    }
+
+    /// Pay for `n` bytes already read: wait for the bucket to grant them
+    /// all, in turn with the other connections. A reader calls this after
+    /// its bytes land and before it reads again, so a connection waiting
+    /// for its peer holds no tokens.
+    pub async fn pay(&self, direction: LinkDirection, conn: u64, class: MessageClass, n: u64) {
+        let mut paid = 0u64;
+        while paid < n {
+            paid = paid.saturating_add(self.acquire(direction, conn, class, n - paid).await);
+        }
     }
 
     pub fn leave(&self, direction: LinkDirection, conn: u64) {

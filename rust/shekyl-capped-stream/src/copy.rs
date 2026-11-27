@@ -20,27 +20,32 @@ use crate::queue::{ByteQueue, Overfull};
 use crate::session::InboundEnd;
 use crate::stall::WriteStall;
 
-/// Write every byte of `bytes`.
+/// Write every byte of `bytes`, and tell `gate` what the socket took on
+/// `conn`.
 ///
 /// `Err(wrote)` is how many bytes the socket accepted before it failed
-/// or returned zero. A grant refund uses that count: the whole grant
-/// when nothing left, and only the unsent tail when a prefix did.
-pub async fn write_all_counted<W>(write: &mut W, bytes: &[u8]) -> Result<(), usize>
+/// or returned zero; [`refund_unsent`] gives back the rest of the grant.
+pub async fn write_all_counted<W>(
+    write: &mut W,
+    bytes: &[u8],
+    gate: &LinkGate,
+    conn: u64,
+) -> Result<(), usize>
 where
     W: AsyncWrite + Unpin,
 {
-    write_counted(write, bytes, || {}).await
+    write_counted(write, bytes, |n| gate.moved(LinkDirection::Up, conn, n)).await
 }
 
-/// Write every byte, and call `on_accept` after each slice the socket took.
+/// Write every byte, and call `on_accept` with each slice the socket took.
 ///
-/// The hook runs before the next attempt. A prefix is therefore visible
+/// The hook runs before the next attempt. A prefix is therefore counted
 /// when a later write in the same grant fails, at the instant that slice
 /// was accepted.
 async fn write_counted<W, F>(write: &mut W, bytes: &[u8], mut on_accept: F) -> Result<(), usize>
 where
     W: AsyncWrite + Unpin,
-    F: FnMut(),
+    F: FnMut(u64),
 {
     let mut wrote = 0usize;
     while wrote < bytes.len() {
@@ -48,30 +53,18 @@ where
             Ok(0) | Err(_) => return Err(wrote),
             Ok(n) => {
                 wrote += n;
-                on_accept();
+                on_accept(u64::try_from(n).unwrap_or(u64::MAX));
             }
         }
     }
     Ok(())
 }
 
-/// Give back the part of `grant` the socket did not accept.
-///
-/// Nothing written returns the packet as well as the bytes. A prefix
-/// keeps the packet and returns only the tail.
-pub fn refund_unsent(
-    gate: &LinkGate,
-    direction: LinkDirection,
-    conn: u64,
-    grant: u64,
-    wrote: usize,
-) {
+/// Give back the part of `grant` the socket did not accept. The tokens
+/// only: the counts hold what moved, and never held the grant.
+pub fn refund_unsent(gate: &LinkGate, direction: LinkDirection, grant: u64, wrote: usize) {
     let wrote = u64::try_from(wrote).unwrap_or(grant);
-    if wrote == 0 {
-        gate.refund(direction, conn, grant, true);
-    } else if wrote < grant {
-        gate.refund(direction, conn, grant - wrote, false);
-    }
+    gate.refund(direction, grant.saturating_sub(wrote));
 }
 
 /// Bytes read from the socket in one turn.
@@ -167,20 +160,27 @@ where
                         continue;
                     }
                     let end = off + grant;
+                    // What the socket took of this grant, for a write the
+                    // overflow cancels part-way.
+                    let accepted = std::sync::atomic::AtomicUsize::new(0);
                     stall.begin();
                     tokio::select! {
                         biased;
                         () = overfull.wait() => {
                             stall.cancel();
-                            gate.refund(LinkDirection::Up, conn, grant as u64, true);
+                            refund_unsent(gate, LinkDirection::Up, grant as u64, accepted.load(std::sync::atomic::Ordering::Relaxed));
                             outbound.release(n);
                             shutdown(write).await;
                             return CloseCause::new(CloseKind::SendQueueFull);
                         }
-                        result = write_counted(write, &wire[off..end], || stamp.store()) => {
+                        result = write_counted(write, &wire[off..end], |moved| {
+                            stamp.store();
+                            accepted.fetch_add(usize::try_from(moved).unwrap_or(0), std::sync::atomic::Ordering::Relaxed);
+                            gate.moved(LinkDirection::Up, conn, moved);
+                        }) => {
                             stall.complete();
                             if let Err(wrote) = result {
-                                refund_unsent(gate, LinkDirection::Up, conn, grant as u64, wrote);
+                                refund_unsent(gate, LinkDirection::Up, grant as u64, wrote);
                                 outbound.release(n);
                                 shutdown(write).await;
                                 return CloseCause::new(CloseKind::IoError);
@@ -239,41 +239,37 @@ where
         if overfull.tripped() {
             return CloseCause::new(CloseKind::SendQueueFull);
         }
-        let grant = tokio::select! {
-            biased;
-            () = overfull.wait() => return CloseCause::new(CloseKind::SendQueueFull),
-            grant = gate.acquire(LinkDirection::Down, conn, MessageClass::Session, buf.len() as u64) => grant,
-        };
-        let room = usize::try_from(grant).unwrap_or(buf.len()).min(buf.len());
-        if room == 0 {
+        // A rate of zero reads nothing until the rate changes: the grant
+        // of one byte waits for that, and goes straight back.
+        if gate.rate(LinkDirection::Down) == Some(0) {
+            let one = tokio::select! {
+                biased;
+                () = overfull.wait() => return CloseCause::new(CloseKind::SendQueueFull),
+                one = gate.acquire(LinkDirection::Down, conn, MessageClass::Session, 1) => one,
+            };
+            gate.refund(LinkDirection::Down, one);
             continue;
         }
+        // No grant is held across the read: a connection waiting for its
+        // peer holds no tokens and counts nothing. Under a rate, one read
+        // is at most one bucket.
+        let room = gate.rate(LinkDirection::Down).map_or(buf.len(), |rate| {
+            usize::try_from(rate).unwrap_or(buf.len()).min(buf.len())
+        });
         let n = tokio::select! {
             biased;
-            () = overfull.wait() => {
-                gate.refund(LinkDirection::Down, conn, grant, true);
-                return CloseCause::new(CloseKind::SendQueueFull);
-            }
+            () = overfull.wait() => return CloseCause::new(CloseKind::SendQueueFull),
             result = read.read(&mut buf[..room]) => match result {
-                Ok(0) => {
-                    gate.refund(LinkDirection::Down, conn, grant, true);
-                    return CloseCause::new(CloseKind::PeerClosed);
-                }
+                Ok(0) => return CloseCause::new(CloseKind::PeerClosed),
                 Ok(n) => {
-                    if n > 0 {
-                        stamp.store();
-                    }
+                    stamp.store();
                     n
                 }
-                Err(_) => {
-                    gate.refund(LinkDirection::Down, conn, grant, true);
-                    return CloseCause::new(CloseKind::IoError);
-                }
+                Err(_) => return CloseCause::new(CloseKind::IoError),
             },
         };
-        if (n as u64) < grant {
-            gate.refund(LinkDirection::Down, conn, grant - n as u64, false);
-        }
+        let moved = u64::try_from(n).unwrap_or(u64::MAX);
+        gate.moved(LinkDirection::Down, conn, moved);
         gate.record_message(LinkDirection::Down, conn);
         let pieces = match decode(&buf[..n]) {
             Ok(pieces) => pieces,
@@ -289,6 +285,13 @@ where
                     }
                 }
             }
+        }
+        // Paid before the next read: the bucket paces the reads, and the
+        // kernel's window paces the peer.
+        tokio::select! {
+            biased;
+            () = overfull.wait() => return CloseCause::new(CloseKind::SendQueueFull),
+            () = gate.pay(LinkDirection::Down, conn, MessageClass::Session, moved) => {}
         }
     }
 }
@@ -592,6 +595,57 @@ mod tests {
             .expect("reader finished")
             .expect("joined");
         assert_eq!(cause.kind(), CloseKind::SendQueueFull);
+    }
+
+    /// **A reader waiting for its peer holds no tokens and counts only what
+    /// landed.** The read is counted when its bytes arrive and paid before
+    /// the next read, so the quiet wait after them takes nothing from the
+    /// bucket and adds nothing to the counts. Red: the grant taken before
+    /// the read (the counts read a whole bucket, and a second connection
+    /// finds the bucket empty).
+    #[tokio::test]
+    async fn a_reader_waiting_for_its_peer_holds_no_tokens_and_counts_only_what_landed() {
+        use shekyl_transport_layer::{LinkDirection, MessageClass};
+        use tokio::io::AsyncWriteExt;
+        const RATE: u64 = 8 * 1024;
+        const SENT: u64 = 100;
+        let gate = LinkGate::new();
+        gate.set_down(Some(RATE));
+        let ends = crate::StreamEnds::open(64);
+        let (mut peer, mut local) = tokio::io::duplex(64 * 1024);
+        let overfull = Arc::new(Overfull::new());
+        let reader_gate = gate.clone();
+        let inbound = ends.inbound;
+        let task = tokio::spawn(async move {
+            read_capped(&mut local, inbound, &overfull, &reader_gate, 1, |chunk| {
+                Ok(vec![chunk.to_vec()])
+            })
+            .await
+        });
+        peer.write_all(&[7u8; 100]).await.expect("the peer writes");
+        let landed = tokio::time::timeout(Duration::from_secs(2), async {
+            while gate.connection(1).bytes_down < SENT {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await;
+        assert!(landed.is_ok(), "the reader never counted the peer's bytes");
+        // The reader is back in its read, waiting for a peer that is quiet.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(
+            gate.connection(1).bytes_down,
+            SENT,
+            "only what landed is counted"
+        );
+        let other = tokio::time::timeout(
+            Duration::from_millis(200),
+            gate.acquire(LinkDirection::Down, 2, MessageClass::Session, RATE - SENT),
+        )
+        .await
+        .expect("the bucket is not held by the waiting reader");
+        assert_eq!(other, RATE - SENT, "the waiting reader holds no tokens");
+        task.abort();
+        drop(ends.session);
     }
 
     #[tokio::test]

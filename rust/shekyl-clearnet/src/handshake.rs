@@ -294,10 +294,10 @@ pub(crate) async fn write_budgeted(write: &mut OwnedWriteHalf, conn: u64, bytes:
             continue;
         }
         let end = off + grant;
-        match write_all_counted(write, &bytes[off..end]).await {
+        match write_all_counted(write, &bytes[off..end], &gate, conn).await {
             Ok(()) => off = end,
             Err(wrote) => {
-                refund_unsent(&gate, LinkDirection::Up, conn, grant as u64, wrote);
+                refund_unsent(&gate, LinkDirection::Up, grant as u64, wrote);
                 return false;
             }
         }
@@ -475,7 +475,9 @@ async fn read_or_wake<C: Clock>(
 }
 
 /// Read `buf` under the down bucket. A short socket read is a failure
-/// here: the handshake asked for the whole buffer.
+/// here: the handshake asked for the whole buffer. Each read is counted
+/// when it lands and paid before the next, so a socket whose peer has
+/// not sent holds no tokens.
 async fn read_budgeted(
     read: &mut OwnedReadHalf,
     buf: &mut [u8],
@@ -484,29 +486,15 @@ async fn read_budgeted(
     let gate = node_gate();
     let mut filled = 0usize;
     while filled < buf.len() {
-        let room = buf.len() - filled;
-        let grant = gate
-            .acquire(
-                LinkDirection::Down,
-                conn,
-                MessageClass::Session,
-                room as u64,
-            )
+        let got = match read.read(&mut buf[filled..]).await {
+            Ok(0) | Err(_) => return Err(Observed::HandshakeBroken),
+            Ok(got) => got,
+        };
+        let moved = u64::try_from(got).unwrap_or(u64::MAX);
+        gate.moved(LinkDirection::Down, conn, moved);
+        filled += got;
+        gate.pay(LinkDirection::Down, conn, MessageClass::Session, moved)
             .await;
-        let grant = usize::try_from(grant).unwrap_or(room).min(room);
-        if grant == 0 {
-            continue;
-        }
-        let end = filled + grant.min(buf.len() - filled);
-        if read.read_exact(&mut buf[filled..end]).await.is_err() {
-            gate.refund(LinkDirection::Down, conn, grant as u64, true);
-            return Err(Observed::HandshakeBroken);
-        }
-        let got = end - filled;
-        if got < grant {
-            gate.refund(LinkDirection::Down, conn, (grant - got) as u64, false);
-        }
-        filled = end;
     }
     gate.record_message(LinkDirection::Down, conn);
     Ok(())
