@@ -20,7 +20,7 @@ use std::net::TcpStream;
 use std::time::{Duration, Instant};
 
 use live_daemon::sealed_stream::SealedStream;
-use live_daemon::{connect_from, regtest_network_id, Daemon, LoopbackHost};
+use live_daemon::{connect_from, regtest_network_id, rpc_body, Daemon, LoopbackHost};
 use shekyl_levin::{
     invoke, notify, BasicNodeData, BucketReader, Command, CoreSyncData, GetTxpoolComplement,
     HandshakeRequest, NewTransactions, PortableMap, Received, TimedSyncRequest, COMMAND_HANDSHAKE,
@@ -35,6 +35,15 @@ const SETTLE: Duration = Duration::from_secs(5);
 /// How many bytes of frames the flood seals into one record: under the
 /// record framer's 65,535-byte body.
 const FLOOD_RECORD_BYTES: usize = 60 * 1024;
+
+/// The download cap the link-budget test sets, as the option takes it and
+/// in bytes per second: low enough that the flood's pace is the cap's and
+/// not the daemon's.
+const CAPPED_DOWNLOAD: &str = "64KiB/s";
+const CAPPED_DOWNLOAD_BYTES_PER_SEC: u64 = 64 * 1024;
+
+/// The capped flood's wire bytes: about ten seconds at the cap.
+const CAPPED_FLOOD_WIRE_BYTES: u64 = 640 * 1024;
 
 /// What the wire did while the peer waited.
 #[derive(Debug)]
@@ -552,5 +561,145 @@ fn a_flood_of_notifications_is_read_one_at_a_time_without_growing_memory() {
     assert!(
         grew_kib < 16 * 1024,
         "the daemon's resident set grew {grew_kib} KiB under a {sent}-byte flood: the reads were buffered, not paced"
+    );
+}
+
+// ----------------------------------------------------------- link budget
+
+/// The `download` count of the daemon's one connection in
+/// `peer_connections`. Regtest has no seeds and Tor is off, so the one
+/// connection is the test's peer; `None` while the daemon does not answer
+/// or lists another number of connections. While the session is open this
+/// includes a read the daemon has been granted and not yet finished (at
+/// most one chunk), so it is a progress reading, not the count.
+fn connection_download(daemon: &Daemon) -> Option<u64> {
+    let body = rpc_body(daemon.rpc_port, "peer_connections")?;
+    if body.matches("\"download\":").count() != 1 {
+        return None;
+    }
+    number_after(&body, "\"download\":")
+}
+
+/// The node's `download` and `upload` totals in `p2p_stats`.
+fn node_totals(daemon: &Daemon) -> Option<(u64, u64)> {
+    let body = rpc_body(daemon.rpc_port, "p2p_stats")?;
+    Some((
+        number_after(&body, "\"download\":")?,
+        number_after(&body, "\"upload\":")?,
+    ))
+}
+
+fn number_after(text: &str, key: &str) -> Option<u64> {
+    let at = text.find(key)? + key.len();
+    let digits: String = text[at..]
+        .trim_start()
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect();
+    digits.parse().ok()
+}
+
+/// **The operator's link budget counts the bytes on the wire, the Noise
+/// channel's included** (the Noise flip's brief, proof 4). A daemon capped
+/// at `CAPPED_DOWNLOAD` is sent one empty 2002 per record, so each record
+/// carries the channel's length header and two tags beside a small frame,
+/// and the wire bytes exceed the plaintext by more than a third. The flood
+/// takes as long as its wire bytes take at the cap, which its plaintext
+/// alone would not; and once the session has closed, the node's totals are
+/// every byte the peer put on the socket and every byte it read, the
+/// handshake included (the readiness probes connect and send nothing).
+#[test]
+#[ignore = "p2p remnant cutover evidence: requires SHEKYLD_BIN; spawns a live daemon"]
+fn the_download_cap_paces_and_counts_the_bytes_on_the_wire() {
+    let daemon = Daemon::start_with_options(
+        "link-cap",
+        None,
+        "debug",
+        &["--p2p-download-max", CAPPED_DOWNLOAD],
+    );
+    let mut peer = Peer::established(&daemon, LoopbackHost::peer(0), genesis_claim());
+    let frame = new_transactions(Vec::new());
+    let rate = CAPPED_DOWNLOAD_BYTES_PER_SEC;
+    let first_byte = peer.stream.on_wire_sent();
+    let mut plain_sent = 0u64;
+    let started = Instant::now();
+    while peer.stream.on_wire_sent() - first_byte < CAPPED_FLOOD_WIRE_BYTES {
+        // One frame, one record.
+        match peer.stream.write(&frame) {
+            Ok(n) => plain_sent += n as u64,
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) => {}
+            Err(e) => panic!("the capped flood's write failed: {e}"),
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(120),
+            "the daemon stopped reading the capped flood"
+        );
+    }
+    loop {
+        match peer.stream.flush() {
+            Ok(()) => break,
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) => {}
+            Err(e) => panic!("the capped flood's flush failed: {e}"),
+        }
+    }
+    let wire_sent = peer.stream.on_wire_sent();
+    let flood_wire = wire_sent - first_byte;
+    let read_all = wait_until(Duration::from_secs(120), || {
+        connection_download(&daemon).is_some_and(|down| down >= wire_sent)
+    });
+    let elapsed = started.elapsed();
+    assert!(
+        read_all,
+        "the daemon's download count never reached the peer's {wire_sent} wire bytes: {:?}\n--- daemon log tail ---\n{}",
+        connection_download(&daemon),
+        log_tail(&daemon)
+    );
+    // The bucket starts full, one second of the rate; every later byte
+    // waits for the refill. A tenth off for the clocks' disagreement.
+    let wire_floor = Duration::from_millis((flood_wire - rate) * 900 / rate);
+    let plain_floor = Duration::from_millis(plain_sent.saturating_sub(rate) * 1000 / rate);
+    assert!(
+        plain_floor < wire_floor,
+        "the flood does not tell wire bytes from plaintext: {plain_sent} plaintext, {flood_wire} wire"
+    );
+    eprintln!(
+        "link cap: {flood_wire} wire bytes ({plain_sent} plaintext) read in {elapsed:?} at {CAPPED_DOWNLOAD}; \
+         the wire floor is {wire_floor:?}, the plaintext's {plain_floor:?}"
+    );
+    assert!(
+        elapsed >= wire_floor,
+        "the capped flood finished in {elapsed:?}, under the {wire_floor:?} its {flood_wire} wire bytes take at \
+         {CAPPED_DOWNLOAD}: the budget did not count the channel's bytes"
+    );
+    assert!(
+        peer.timed_sync_is_answered(genesis_claim()),
+        "the session must still answer after the capped flood"
+    );
+    // The peer ends its half; the daemon reads the end, closes, and every
+    // read it had been granted is given back.
+    while !matches!(peer.next(Duration::from_millis(500)), Wire::Quiet) {}
+    peer.stream.shutdown_write().expect("the peer's half-close");
+    assert!(
+        peer.is_closed_within(Duration::from_secs(30)),
+        "the daemon must close the session when the peer's half ends"
+    );
+    let sent = peer.stream.on_wire_sent();
+    let received = peer.stream.on_wire_received();
+    let settled = wait_until(Duration::from_secs(10), || {
+        node_totals(&daemon) == Some((sent, received))
+    });
+    let totals = node_totals(&daemon);
+    assert!(
+        settled,
+        "the node's download and upload totals must be every byte the peer put on the wire \
+         and every byte it read, ({sent}, {received}); they were {totals:?}"
     );
 }

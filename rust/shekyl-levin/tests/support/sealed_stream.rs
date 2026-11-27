@@ -36,6 +36,10 @@ pub struct SealedStream {
     /// An opened record, and how much of it has been read.
     plain: Vec<u8>,
     taken: usize,
+    /// Bytes the socket took and gave, the handshake included: what the
+    /// daemon's link budget counts for this connection.
+    on_wire_sent: u64,
+    on_wire_received: u64,
 }
 
 impl SealedStream {
@@ -53,6 +57,7 @@ impl SealedStream {
         let mut flight = prefix_for(network).to_vec();
         flight.extend_from_slice(&message1);
         stream.write_all(&flight)?;
+        let on_wire_sent = flight.len() as u64;
         let mut prefix = [0u8; PREFIX_LEN];
         stream.read_exact(&mut prefix)?;
         if prefix != prefix_for(network) {
@@ -73,7 +78,19 @@ impl SealedStream {
             wire: Vec::new(),
             plain: Vec::new(),
             taken: 0,
+            on_wire_sent,
+            on_wire_received: (PREFIX_LEN + MESSAGE2_LEN) as u64,
         })
+    }
+
+    /// Every byte the socket has taken from this peer.
+    pub fn on_wire_sent(&self) -> u64 {
+        self.on_wire_sent
+    }
+
+    /// Every byte this peer has read from the socket.
+    pub fn on_wire_received(&self) -> u64 {
+        self.on_wire_received
     }
 
     /// The socket's read timeout.
@@ -85,6 +102,17 @@ impl SealedStream {
         self.stream.set_read_timeout(within)
     }
 
+    /// Close this peer's sending half: the daemon reads the end of the
+    /// stream, and this peer can still read what the daemon sends.
+    ///
+    /// # Errors
+    ///
+    /// The socket's.
+    pub fn shutdown_write(&mut self) -> io::Result<()> {
+        self.send_unsent()?;
+        self.stream.shutdown(std::net::Shutdown::Write)
+    }
+
     fn send_unsent(&mut self) -> io::Result<()> {
         while !self.unsent.is_empty() {
             let n = self.stream.write(&self.unsent)?;
@@ -92,6 +120,7 @@ impl SealedStream {
                 return Err(ErrorKind::WriteZero.into());
             }
             self.unsent.drain(..n);
+            self.on_wire_sent += n as u64;
         }
         Ok(())
     }
@@ -145,6 +174,7 @@ impl Read for SealedStream {
                         return Ok(0);
                     }
                     self.wire.extend_from_slice(&chunk[..n]);
+                    self.on_wire_received += n as u64;
                 }
                 Err(error) => return Err(invalid(error)),
             }
