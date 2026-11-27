@@ -53,7 +53,7 @@ use windows_sys::Win32::System::SystemServices::{
     SYSTEM_MANDATORY_LABEL_ACE_TYPE, SYSTEM_MANDATORY_LABEL_NO_READ_UP,
 };
 
-use crate::dacl::{read_grantees, write_grantees, Grantee};
+use crate::dacl::Grantee;
 use crate::sddl::{OwnerOnlyDescriptor, SddlError};
 use crate::sid::{current_user_sid, last_error, sid_to_string, SidError};
 
@@ -210,10 +210,7 @@ fn create_new_file(path: &Path, descriptor: &OwnerOnlyDescriptor) -> Result<File
 /// [`RendezvousError::Refused`] naming the condition that failed, or the
 /// descriptor could not be read.
 pub fn check_owner_only_labelled(path: &Path) -> Result<(), RendezvousError> {
-    owner_only_labelled(&SecurityRead::of(path)?, || {
-        let reads = read_grantees(path)?;
-        Ok((reads, write_grantees(path)?))
-    })
+    owner_only_labelled(&SecurityRead::of(path)?)
 }
 
 /// [`check_owner_only_labelled`] of the open file `file`: its descriptor is
@@ -224,18 +221,11 @@ pub fn check_owner_only_labelled(path: &Path) -> Result<(), RendezvousError> {
 /// [`RendezvousError::Refused`] naming the condition that failed, or the
 /// descriptor could not be read.
 pub fn check_owner_only_labelled_file(file: &File) -> Result<(), RendezvousError> {
-    owner_only_labelled(&SecurityRead::of_file(file)?, || {
-        crate::dacl::file_grantees(file)
-    })
+    owner_only_labelled(&SecurityRead::of_file(file)?)
 }
 
-/// The owner-only labelled rule over one descriptor: `read` for the owner,
-/// the protection and the label, `grantees` for who may read and who may
-/// write, both read from the same object.
-fn owner_only_labelled(
-    read: &SecurityRead,
-    grantees: impl FnOnce() -> Result<(Vec<Grantee>, Vec<Grantee>), crate::dacl::DaclError>,
-) -> Result<(), RendezvousError> {
+/// The owner-only labelled rule over one descriptor snapshot.
+fn owner_only_labelled(read: &SecurityRead) -> Result<(), RendezvousError> {
     let me = current_user_sid()?;
     let owner = read.owner()?;
     if owner != me {
@@ -244,23 +234,40 @@ fn owner_only_labelled(
             owner.as_str()
         )));
     }
-    if !read.dacl_protected() {
-        return Err(RendezvousError::Refused(
-            "its access list inherits from its parent".to_owned(),
-        ));
-    }
-    let foreign = |grantees: Vec<Grantee>| {
-        grantees.into_iter().find_map(|g| match g {
-            Grantee::Other(sid) => Some(sid),
-            Grantee::Permitted => None,
-        })
-    };
-    let (reads, writes) = grantees().map_err(|e| RendezvousError::Refused(e.to_string()))?;
-    if let Some(sid) = foreign(reads).or_else(|| foreign(writes)) {
+    require_protected(read)?;
+    let (reads, writes) = read.grantees()?;
+    if let Some(sid) = other_account(reads).or_else(|| other_account(writes)) {
         return Err(RendezvousError::Refused(format!(
             "its access list admits {sid}"
         )));
     }
+    require_no_read_up(read)
+}
+
+/// A principal the access list names that is not this account and not one
+/// of the platform's own.
+fn other_account(grantees: Vec<Grantee>) -> Option<String> {
+    grantees.into_iter().find_map(|grantee| match grantee {
+        Grantee::Other(sid) => Some(sid),
+        Grantee::Permitted => None,
+    })
+}
+
+/// The access list does not inherit. Inheritance would admit a principal
+/// this object never named.
+fn require_protected(read: &SecurityRead) -> Result<(), RendezvousError> {
+    if read.dacl_protected() {
+        Ok(())
+    } else {
+        Err(RendezvousError::Refused(
+            "its access list inherits from its parent".to_owned(),
+        ))
+    }
+}
+
+/// The mandatory label's policy includes no-read-up, so a process below
+/// this object's integrity cannot read it.
+fn require_no_read_up(read: &SecurityRead) -> Result<(), RendezvousError> {
     match read.label_policy()? {
         Some(policy) if policy & SYSTEM_MANDATORY_LABEL_NO_READ_UP != 0 => Ok(()),
         Some(_) => Err(RendezvousError::Refused(
@@ -284,33 +291,18 @@ fn owner_only_labelled(
 pub fn check_console_labelled(path: &Path) -> Result<(), RendezvousError> {
     let read = SecurityRead::of(path)?;
     let owner = read.owner()?;
-    if !read.dacl_protected() {
-        return Err(RendezvousError::Refused(
-            "its access list inherits from its parent".to_owned(),
-        ));
-    }
-    let allowed = |grantee: &crate::dacl::Grantee| match grantee {
-        crate::dacl::Grantee::Permitted => true,
-        crate::dacl::Grantee::Other(sid) => sid == owner.as_str(),
+    require_protected(&read)?;
+    let allowed = |grantee: &Grantee| match grantee {
+        Grantee::Permitted => true,
+        Grantee::Other(sid) => sid == owner.as_str(),
     };
-    let reads =
-        crate::dacl::read_grantees(path).map_err(|e| RendezvousError::Refused(e.to_string()))?;
-    let writes =
-        crate::dacl::write_grantees(path).map_err(|e| RendezvousError::Refused(e.to_string()))?;
+    let (reads, writes) = read.grantees()?;
     if let Some(grantee) = reads.iter().chain(writes.iter()).find(|g| !allowed(g)) {
         return Err(RendezvousError::Refused(format!(
             "its access list admits {grantee:?}"
         )));
     }
-    match read.label_policy()? {
-        Some(policy) if policy & SYSTEM_MANDATORY_LABEL_NO_READ_UP != 0 => Ok(()),
-        Some(_) => Err(RendezvousError::Refused(
-            "its mandatory label does not refuse a reader below its integrity (no NR)".to_owned(),
-        )),
-        None => Err(RendezvousError::Refused(
-            "it carries no mandatory label".to_owned(),
-        )),
-    }
+    require_no_read_up(&read)
 }
 
 /// The policy bits of the mandatory label on `path`, or `None` when it
@@ -323,10 +315,14 @@ pub fn label_policy(path: &Path) -> Result<Option<u32>, RendezvousError> {
     SecurityRead::of(path)?.label_policy()
 }
 
-/// One read of a path's owner, DACL control and label, freed on drop.
+/// One read of an object's owner, DACL and mandatory label, freed on drop.
+///
+/// The DACL pointer is kept. The labelled rules classify grantees from this
+/// snapshot, so a second query cannot observe a different access list.
 struct SecurityRead {
     psd: PSECURITY_DESCRIPTOR,
     owner: *mut c_void,
+    dacl: *mut ACL,
     sacl: *mut ACL,
 }
 
@@ -334,7 +330,7 @@ impl Drop for SecurityRead {
     fn drop(&mut self) {
         // SAFETY: `GetNamedSecurityInfoW` or `GetSecurityInfo` allocated the
         // descriptor with `LocalAlloc`; it is freed exactly once, here.
-        // `owner` and `sacl` point into it and are not read after this.
+        // `owner`, `dacl` and `sacl` point into it and are not read after this.
         unsafe { LocalFree(self.psd.cast::<c_void>()) };
     }
 }
@@ -343,12 +339,14 @@ impl SecurityRead {
     fn of(path: &Path) -> Result<Self, RendezvousError> {
         let w = wide(path);
         let mut owner: *mut c_void = std::ptr::null_mut();
+        let mut dacl: *mut ACL = std::ptr::null_mut();
         let mut sacl: *mut ACL = std::ptr::null_mut();
         let mut psd: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
         // SAFETY: `w` is NUL-terminated and outlives the call; every
         // out-parameter is a local. The label is read through the SACL
         // pointer, which `LABEL_SECURITY_INFORMATION` fills with the
         // mandatory label alone and needs no privilege beyond READ_CONTROL.
+        // `owner`, `dacl` and `sacl` point into `psd`.
         let rc = unsafe {
             GetNamedSecurityInfoW(
                 w.as_ptr(),
@@ -356,26 +354,25 @@ impl SecurityRead {
                 OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION | LABEL_SECURITY_INFORMATION,
                 &raw mut owner,
                 std::ptr::null_mut(),
-                std::ptr::null_mut(),
+                &raw mut dacl,
                 &raw mut sacl,
                 &raw mut psd,
             )
         };
-        if rc != 0 {
-            return Err(RendezvousError::Read(rc));
-        }
-        Ok(Self { psd, owner, sacl })
+        Self::received(rc, psd, owner, dacl, sacl)
     }
 
     /// The same read as [`Self::of`], of the open file `file` through its
     /// handle.
     fn of_file(file: &File) -> Result<Self, RendezvousError> {
         let mut owner: *mut c_void = std::ptr::null_mut();
+        let mut dacl: *mut ACL = std::ptr::null_mut();
         let mut sacl: *mut ACL = std::ptr::null_mut();
         let mut psd: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
         // SAFETY: `file`'s handle is open for the call, with read access,
         // which carries `READ_CONTROL`; every out-parameter is a local. The
-        // label is read as in `of`.
+        // label is read as in `of`. `owner`, `dacl` and `sacl` point into
+        // `psd`.
         let rc = unsafe {
             GetSecurityInfo(
                 file.as_raw_handle(),
@@ -383,15 +380,40 @@ impl SecurityRead {
                 OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION | LABEL_SECURITY_INFORMATION,
                 &raw mut owner,
                 std::ptr::null_mut(),
-                std::ptr::null_mut(),
+                &raw mut dacl,
                 &raw mut sacl,
                 &raw mut psd,
             )
         };
+        Self::received(rc, psd, owner, dacl, sacl)
+    }
+
+    /// The snapshot `rc` returned. A failure leaves the descriptor unowned.
+    fn received(
+        rc: u32,
+        psd: PSECURITY_DESCRIPTOR,
+        owner: *mut c_void,
+        dacl: *mut ACL,
+        sacl: *mut ACL,
+    ) -> Result<Self, RendezvousError> {
         if rc != 0 {
             return Err(RendezvousError::Read(rc));
         }
-        Ok(Self { psd, owner, sacl })
+        Ok(Self {
+            psd,
+            owner,
+            dacl,
+            sacl,
+        })
+    }
+
+    /// Who may read and who may write, from the DACL this snapshot holds.
+    fn grantees(&self) -> Result<(Vec<Grantee>, Vec<Grantee>), RendezvousError> {
+        // SAFETY: `owner` and `dacl` point into `psd`, which `self` keeps
+        // alive for this call. `grantees_of` copies the SIDs out before it
+        // returns.
+        unsafe { crate::dacl::grantees_of(self.owner, self.dacl) }
+            .map_err(|error| RendezvousError::Read(error.code()))
     }
 
     fn owner(&self) -> Result<crate::SidString, RendezvousError> {
@@ -540,7 +562,9 @@ mod tests {
         ensure_rendezvous_dir(&dir).expect("an existing directory that passes is kept");
 
         let file = dir.join("shekyl-0123456789abcdef01234567");
-        drop(create_rendezvous_file(&file).unwrap());
+        let handle = create_rendezvous_file(&file).unwrap();
+        check_owner_only_labelled_file(&handle).unwrap();
+        drop(handle);
         check_owner_only_labelled(&file).unwrap();
         assert!(
             create_rendezvous_file(&file).is_err(),

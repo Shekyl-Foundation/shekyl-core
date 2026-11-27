@@ -24,12 +24,13 @@
 //! delete the file: a swap of the name between the judgment and the read
 //! cannot happen. A reader that shares reading, such as a backup agent or a
 //! scanner, does not stop it; a holder with write access does, and the open
-//! fails. The open does not follow a reparse point at the name, and a
-//! reparse point, such as a symbolic link, is refused. The rule is the
-//! owner-only labelled descriptor that [`crate::private_file::check_private`]
-//! applies to a path (owned by this account, a protected access list that
-//! admits no other principal, a no-read-up label), read here from the
-//! handle's own descriptor, so what is judged is what is read.
+//! fails. The open does not follow a reparse point at the name. A reparse
+//! point, such as a symbolic link, is refused, and so is a directory: backup
+//! semantics let a directory open so the judgment can see it. The rule is
+//! the one [`crate::private_file::check_private`] applies to a path, read
+//! from the handle by [`crate::private_file::check_private_file`] (owned by
+//! this account, a protected access list that admits no other principal, a
+//! no-read-up label). That read is one snapshot of the handle's descriptor.
 
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -148,6 +149,12 @@ fn judge_key_file(file: &File, path: &Path) -> Result<(), KeyFileError> {
     Ok(())
 }
 
+/// Open the name itself. A reparse point is not followed, and a directory
+/// opens so the judgment can refuse it.
+#[cfg(windows)]
+const OPEN_THE_NAME: u32 = windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT
+    | windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS;
+
 /// Open `path` for the judgment, sharing reading only and not following a
 /// reparse point at the name. `Ok(None)` when the name is absent.
 ///
@@ -156,15 +163,19 @@ fn judge_key_file(file: &File, path: &Path) -> Result<(), KeyFileError> {
 /// replaced or written between the judgment and the read. Denying readers
 /// too would add nothing (who may read is the access list's to say) and
 /// would refuse the start whenever a backup agent or a scanner held the file.
+///
+/// [`OPEN_THE_NAME`] includes backup semantics. Without them a directory
+/// fails in the open and is reported unreadable, and the judgment never
+/// sees that it is not a file.
 #[cfg(windows)]
 fn open_key_file(path: &Path) -> Result<Option<File>, KeyFileError> {
     use std::os::windows::fs::OpenOptionsExt;
-    use windows_sys::Win32::Storage::FileSystem::{FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ};
+    use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
 
     let mut opts = std::fs::OpenOptions::new();
     opts.read(true)
         .share_mode(FILE_SHARE_READ)
-        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+        .custom_flags(OPEN_THE_NAME);
     match opts.open(path) {
         Ok(file) => Ok(Some(file)),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -196,8 +207,20 @@ fn judge_key_file(file: &File, path: &Path) -> Result<(), KeyFileError> {
             "is not a regular file".to_owned(),
         ));
     }
-    shekyl_win_sec::rendezvous::check_owner_only_labelled_file(file)
-        .map_err(|error| KeyFileError::Exposed(path.to_path_buf(), error.to_string()))
+    crate::private_file::check_private_file(path, file).map_err(|error| key_error(path, error))
+}
+
+/// [`crate::private_file::check_private_file`]'s refusal, in this module's
+/// error. `Exposed` and `Io` keep the path they already name. Any other
+/// refusal names `opened`, the name this read opened.
+#[cfg(windows)]
+fn key_error(opened: &Path, error: crate::private_file::PrivateFileError) -> KeyFileError {
+    use crate::private_file::PrivateFileError;
+    match error {
+        PrivateFileError::Exposed(path, why) => KeyFileError::Exposed(path, why),
+        PrivateFileError::Io(path, error) => KeyFileError::Io(path, error),
+        other => KeyFileError::Io(opened.to_path_buf(), std::io::Error::other(other)),
+    }
 }
 
 /// Why a reparse point at the name is refused.
@@ -394,6 +417,21 @@ mod windows {
             other => panic!("a key file a writer holds was not refused: {other:?}"),
         }
         drop(writer);
+    }
+
+    /// **A directory at the name is refused as not a regular file.** The open
+    /// uses backup semantics, so the directory opens and the judgment sees
+    /// it. Red edit: drop `FILE_FLAG_BACKUP_SEMANTICS` from [`OPEN_THE_NAME`]
+    /// (the open fails, and the name is reported unreadable).
+    #[test]
+    fn a_directory_at_the_name_is_refused() {
+        let dir = tempfile::tempdir().expect("directory");
+        let nested = dir.path().join("not-a-key");
+        std::fs::create_dir(&nested).expect("directory");
+        match read_key_file(&nested, 96) {
+            Err(KeyFileError::Exposed(_, why)) => assert_eq!(why, "is not a regular file"),
+            other => panic!("a directory was not refused: {other:?}"),
+        }
     }
 
     /// **A symbolic link at the name is refused, not followed.** The link
