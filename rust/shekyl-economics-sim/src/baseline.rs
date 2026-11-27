@@ -454,6 +454,24 @@ pub fn instrument_reach(instrument: crate::eup4::Instrument) -> (&'static str, &
     (instrument.flag(), reads)
 }
 
+/// `--economies-slice`: the staker emission share's decay, the one field
+/// a ruling has asked the slice to hold (the staker emission share's first
+/// look, `ECONOMICS_SIM_PRODUCTION_REBASE.md` §5.38).
+///
+/// Every slice cell sets its own zone and `w_ref`, and the C3 and
+/// together arms set the escalation, so an override on one of those would
+/// be overwritten cell by cell. Only fields no cell sets can be listed,
+/// and only those a ruling names: a named EUP-4 arm adds its field here.
+/// Whether the field reaches the slice's figures is read where the cell
+/// runs, from the two narrations, as for the instruments (`main.rs`).
+pub const ECONOMIES_SLICE_READS: &[Reader] = &[read("economic.staker_emission_decay", 1_000_000)];
+
+/// `--economies-slice`'s name and readers.
+#[must_use]
+pub fn economies_slice_reach() -> (&'static str, &'static [Reader]) {
+    ("--economies-slice", ECONOMIES_SLICE_READS)
+}
+
 /// The refusal for a cell whose report is its baseline's: the overrides
 /// moved no figure `mode` prints, so printing the cell would read as "no
 /// effect". `None` when the two reports differ. An instrument's mode asks
@@ -862,7 +880,12 @@ mod tests {
             Ok(())
         );
         // Every declared value passes its validator.
-        for (mode, reads) in [stage2_reach(false), stage2_reach(true), esr10_reach()] {
+        for (mode, reads) in [
+            stage2_reach(false),
+            stage2_reach(true),
+            esr10_reach(),
+            economies_slice_reach(),
+        ] {
             for r in reads {
                 let mut cell =
                     vec![Override::parse(&format!("{}={}", r.path, r.moves_at))
