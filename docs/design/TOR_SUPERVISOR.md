@@ -2228,11 +2228,37 @@ included: p50 3.89 s, max 4.08 s. The cold seed for that run bootstrapped in
   renderer (`TSR-Q12`). The wallet's own Tor can adopt the sans-IO core,
   under the constraints below.
 
-### 11.1 The wallet's Tor on the shared core (Rick, 2026-10-24)
+### 11.1 The wallet's Tor on the shared driver (Rick, 2026-10-24; owner and order 2026-11-26)
 
-The wallet lane moves `shekyl-tor-control-wallet` onto this core in the week
-of 2026-10-26. Today that supervisor reports only `Connecting { progress }`
-and still kills a bootstrap at 300 s. The core will serve several Tor
+The managed Tor supervisor's owner moves the wallet's Tor onto the daemon's
+supervisor, and the wallet lane reviews (Rick, 2026-11-26). The move was
+planned for the week of 2026-10-26 and that week passed without it. The
+persona host still runs `shekyl-tor-control-wallet`'s own supervisor. It
+watches a running Tor only for its death, the stop and guard rotation; it
+never probes its own onion, watches uploads, republishes or asks the
+directories; it kills a bootstrap at 300 s; and it reports only
+`Connecting { progress }`, ready, degraded or restarting. A persona whose
+onion drops out of the directories while that Tor looks healthy misses
+challenges and says nothing. The manager is lifted into shared code; the
+missing checks are not added to the wallet's supervisor. Three work items,
+in this order, all done before any outside staker runs a persona:
+
+- **`TSR-W1`:** the guard manager (`vanguard_rotation.rs`) moves to shared
+  code and the daemon's persistent onion uses it (`TSR-Q15`). It is lifted,
+  not written a second time.
+- **`TSR-W2`:** the driver moves to a shared crate, after a Round 0 design
+  PR (rule 26) that settles the host interface, what stays out of the crate,
+  one instance per identity domain, and three additions to the constraints
+  below: each instance's log lines kept apart, each instance's own jitter,
+  and who hears a persona's "unreachable". The lifted driver splits a
+  managed Tor from an unmanaged setting by type, so a supervisor that runs
+  no Tor has no Tor actions at all (Rick, 2026-11-27). Until then the
+  daemon's driver ends with `SupervisorEnd::NoTorToRun` when the core asks
+  for one without a managed Tor.
+- **`TSR-W3`:** the persona host runs its Tor on the shared driver, and the
+  wallet's old supervisor is deleted in the same PR.
+
+The core will serve several Tor
 instances, the daemon's, the principal's and each persona's, so it is the
 place where identity domains could leak into each other. These constraints
 are fixed before the work starts:
