@@ -744,7 +744,7 @@ wallet-RPC slice's (`WALLET_RPC_STAKING_OUTCOMES.md` WR-Q4).
 **Where it landed** (paths under `rust/shekyl-engine-core/src/engine/`
 unless named):
 
-- **The records** (`shekyl-engine-state` `pending_post_block`, version 15):
+- **The records** (`shekyl-engine-state` `pending_post_block`, version 16):
   `PendingBondPlan` (posture, draw, request count, reservation, wait
   reason); `EndedPlan` (ended, drain owed); `PendingBondPost` without
   `bond_post_offset_blocks` and `anchor_t0`, with `posture` and the `due`

@@ -124,8 +124,11 @@ pub use plan::{
 /// due is the plan's, recomputed from the funding) and gains `posture` and
 /// `wait` (why a post never sent could not be signed again);
 /// [`OutcomeKind`] gains `Withdrawn`, `Unbondable` and `WaitedOut`.
+/// **v16** puts the same wait reason on a post never sent
+/// ([`PendingBondPost::wait`]), so a blocked re-sign shows it. A file
+/// sealed at v15 has no such field and is refused.
 /// Pre-genesis: refuse, don't migrate.
-pub const PENDING_POST_VERSION: u32 = 15;
+pub const PENDING_POST_VERSION: u32 = 16;
 
 /// Dispatch state of a pending bond post. The WI-2 assemble path writes only
 /// [`Self::Pending`]; WI-3's block-timed dispatch driver owns the
@@ -2563,9 +2566,9 @@ mod tests {
         );
     }
 
-    /// A v15 block round-trips with a plan, a post and an ended plan.
+    /// A v16 block round-trips with a plan, a post and an ended plan.
     #[test]
-    fn a_v15_block_round_trips_every_stake_stage() {
+    fn a_v16_block_round_trips_every_stake_stage() {
         let mut block = planned(&[plan(0xA1, &[1]), plan(0xA2, &[2]), plan(0xA3, &[3])]);
         let g = block.generation();
         assert_eq!(block.sign_plan(post(0xA2, &[2]), g), SignAdmission::Signed);
@@ -2576,6 +2579,6 @@ mod tests {
         let bytes = block.to_postcard_bytes().expect("encode");
         let back = PendingPostBlock::from_postcard_bytes(&bytes).expect("decode");
         assert_eq!(back, block);
-        assert_eq!(back.version(), 15);
+        assert_eq!(back.version(), 16);
     }
 }
