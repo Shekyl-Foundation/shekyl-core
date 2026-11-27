@@ -71,7 +71,9 @@ impl ChainOpen {
 
 /// Open the daemon a persona read uses.
 ///
-/// An enrolled channel and this computer pass through [`DaemonTarget::connect`].
+/// An enrolled channel and this computer pass. An enrolled channel is
+/// admitted here ([`shekyl_rpc_transport::ResolvedDaemon::admit`]), so its
+/// fault is this read's.
 /// A plaintext address must be this computer; the refusal does not name the
 /// address. A channel fault is [`ChainOpen::Channel`], not a loopback refusal.
 ///
@@ -92,7 +94,7 @@ pub(crate) async fn open_chain_reader(
             PlaintextGate::Unusable(error) => ChainOpen::Unusable(error),
         })?;
     resolved
-        .open(request_timeout)
+        .admit(request_timeout)
         .await
         .map_err(|error| match error {
             RpcError::Channel(fault, detail) => ChainOpen::Channel { fault, detail },

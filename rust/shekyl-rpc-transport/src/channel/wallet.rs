@@ -94,9 +94,10 @@ impl std::fmt::Debug for WalletChannel {
 }
 
 impl WalletChannel {
-    /// A pool that has not dialed. The first [`Self::post`] admits the key.
-    /// [`Self::open`] admits before it returns, which is what a chain read
-    /// uses so an unenrolled key fails as this call.
+    /// A pool that has not dialed: a wallet session's channel. The first
+    /// [`Self::post`] admits the key. [`Self::admit`] admits before it
+    /// returns, which is what a chain read uses so an unenrolled key fails
+    /// as that read.
     pub fn new(target: ChannelTarget, within: Duration) -> Self {
         Self {
             pool: Pool::new(target, GrantSet::ALL),
@@ -113,7 +114,7 @@ impl WalletChannel {
     ///
     /// [`ChannelFault`], from the admission: not enrolled, not this node,
     /// not recognised, or the leg did not answer.
-    pub async fn open(target: ChannelTarget, within: Duration) -> Result<Self, ChannelFault> {
+    pub async fn admit(target: ChannelTarget, within: Duration) -> Result<Self, ChannelFault> {
         let channel = Self::new(target, within);
         match tokio::time::timeout(within, channel.pool.open_kept()).await {
             Ok(Ok(_)) => Ok(channel),
