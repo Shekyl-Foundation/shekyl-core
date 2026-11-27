@@ -1613,22 +1613,23 @@ impl Core {
     }
 
     fn keeps_sampling(&self) -> bool {
-        matches!(
-            self.phase,
+        match self.phase {
             Phase::Bootstrapping { .. }
-                | Phase::Running {
-                    disk: Disk::Watching,
-                    ..
-                }
-                | Phase::Running {
-                    route: Duty::Owed,
-                    ..
-                }
-                | Phase::Running {
-                    onion: Duty::Owed,
-                    ..
-                }
-        )
+            | Phase::Running {
+                disk: Disk::Watching,
+                ..
+            }
+            | Phase::Running {
+                route: Duty::Owed, ..
+            } => true,
+            // An onion withheld for its guards waits on the pin, not the
+            // sample: the liveness sample's consensus clock is what asks an
+            // unfilled pin again (`guards`).
+            Phase::Running {
+                onion: Duty::Owed, ..
+            } => self.guards_allow_publish(),
+            _ => false,
+        }
     }
 
     fn say(&mut self, now: u64, cadence: Cadence) -> Vec<Action> {
