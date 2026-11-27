@@ -336,8 +336,8 @@ ARMED=(
 #     block older: the first send carried age 7.
 #   e2e_a_withdrawn_plan_is_drained_to_the_principal_and_retired — a
 #     withdrawn plan, a reopen between its ending's save and the drain,
-#     one drain to the principal, the persona retired. Red with
-#     `drain_ended_persona` returning before it sends: no drain.
+#     one drain to the principal, the persona retired: green 358 s. Red
+#     with `drain_ended_persona` returning before it sends: no drain.
 ARMED_SLOW=(
   engine::regtest_e2e::e2e_fcmp_spend_over_depth3_tree
   engine::regtest_e2e::e2e_cxx_template_fills_to_its_median

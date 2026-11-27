@@ -782,6 +782,16 @@ unless named):
 - **The reason** (`staking_outcomes.rs` `InFlightState::Planned`): a plan is
   `pending` on the wire, with its wait as the entry's `reason`.
 - **The BD-Q5 deletion** (`stake_timing.rs`, `mod.rs`).
+- **The live walks** (`regtest_e2e.rs`, the slow lane of
+  `scripts/ci/run_live_daemon_gates.sh`), each on the production driver
+  against the wallet's own node:
+  `e2e_a_plan_signed_at_its_due_block_lands_at_reference_age_six`, this
+  round's falsifier (signed at due, reference age 6 at the first send,
+  lands; a signed post refuses withdrawal), and
+  `e2e_a_withdrawn_plan_is_drained_to_the_principal_and_retired`
+  (withdrawn, a reopen between the ending's save and the drain, one drain,
+  retired, and staking again is a new persona). Green 2026-11-27 in
+  1 727 s and 358 s, local debug build; each red under its sabotage.
 
 **Its tests:**
 
