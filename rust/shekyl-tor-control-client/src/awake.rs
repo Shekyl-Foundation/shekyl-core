@@ -19,8 +19,10 @@
 //! caller outside it that has to wait the same way is when this module
 //! moves next to the clock.
 //!
-//! A guard's expiry is not this clock. It is a `SystemTime` on the vanguard
-//! state, and the arm that waits for it stays on tokio's timer.
+//! A guard's expiry is not this clock. It is wall time on the guard
+//! manager's state, judged against the wall a host passes in: after a wake,
+//! and at least every [`WALL_RECHECK`](crate::vanguard_rotation::WALL_RECHECK)
+//! by a host that sleeps on a timer (`vanguard_rotation`, "Time").
 
 use std::future::Future;
 use std::pin::pin;

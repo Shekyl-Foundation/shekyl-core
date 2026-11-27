@@ -48,7 +48,7 @@
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use kameo::actor::Spawn;
 use kameo::error::SendError;
@@ -748,7 +748,6 @@ struct IncarnationCtx<'a> {
 /// Map a vanguards abort onto the incarnation's outcome.
 fn vanguards_abort_to_end(abort: VanguardsAbort) -> IncarnationEnd {
     match abort {
-        VanguardsAbort::Shutdown => IncarnationEnd::Shutdown,
         VanguardsAbort::ActorGone => IncarnationEnd::Failed(ServiceFailure::Exited(None)),
         VanguardsAbort::Failed(e) => IncarnationEnd::Failed(ServiceFailure::Vanguards(e)),
     }
@@ -835,13 +834,17 @@ async fn drive_incarnation(
     // must never be reachable on lite-only protection even briefly. Restores
     // the supervisor-scoped state (repairing only relays that left the
     // consensus); it never re-selects, so this restart does not rotate.
-    let vanguards_witness = match ctx
-        .vanguards
-        .establish(ctx.actor, ctx.policy.vanguards_deadline, ctx.shutdown)
-        .await
-    {
-        Ok(witness) => witness,
-        Err(abort) => return vanguards_abort_to_end(abort),
+    let establish =
+        ctx.vanguards
+            .establish(ctx.actor, ctx.policy.vanguards_deadline, SystemTime::now());
+    let vanguards_witness = tokio::select! {
+        // The stop drops the pass; the manager keeps the state it held, since
+        // nothing is committed before the `SETCONF` is confirmed.
+        _ = &mut *ctx.shutdown => return IncarnationEnd::Shutdown,
+        established = establish => match established {
+            Ok(witness) => witness,
+            Err(abort) => return vanguards_abort_to_end(abort),
+        },
     };
 
     // Phase 2b: publish the persona's onion service, if configured — on
@@ -917,10 +920,12 @@ async fn drive_incarnation(
         // that never completes rather than a placeholder delay standing in as a
         // number a reader would mistake for rotation policy.
         let reconcile = async {
-            match ctx.vanguards.next_deadline() {
-                // Wall time, on purpose: `next_deadline` is how long until a
-                // guard's `SystemTime` expiry. This clock leaves an S3 sleep
-                // out, so it would keep an expired guard across one.
+            // Wall time, on purpose: a guard's expiry is a `SystemTime`. This
+            // timer leaves a sleep out on Linux and macOS, so it waits no
+            // longer than the manager's re-check bound, and the wall is asked
+            // again each time it ends: an expiry a sleep carried past is
+            // replaced within that bound of the wake.
+            match ctx.vanguards.wait(SystemTime::now()) {
                 Some(delay) => tokio::time::sleep(delay).await,
                 None => std::future::pending().await,
             }
@@ -952,13 +957,18 @@ async fn drive_incarnation(
             }
         }
 
-        if reconcile_due {
+        if reconcile_due && ctx.vanguards.due(SystemTime::now()) {
             let before = ctx.vanguards.warning();
-            if let Err(abort) = ctx
-                .vanguards
-                .reconcile(ctx.actor, ctx.policy.vanguards_deadline, ctx.shutdown)
-                .await
-            {
+            let reconcile = ctx.vanguards.reconcile(
+                ctx.actor,
+                ctx.policy.vanguards_deadline,
+                SystemTime::now(),
+            );
+            let reconciled = tokio::select! {
+                _ = &mut *ctx.shutdown => return IncarnationEnd::Shutdown,
+                reconciled = reconcile => reconciled,
+            };
+            if let Err(abort) = reconciled {
                 return vanguards_abort_to_end(abort);
             }
             // Republish only on an edge: a persist that started or stopped
@@ -1073,7 +1083,7 @@ mod tests {
         // A SETCONF refused by a wedged control port is an ordinary liveness
         // fault: back off and retry, do not alarm on the first one.
         assert_eq!(
-            classify(&ServiceFailure::Vanguards(VanguardsError::Rejected {
+            classify(&ServiceFailure::Vanguards(VanguardsError::PinsRefused {
                 status: 552
             })),
             FailureClass::Transient
