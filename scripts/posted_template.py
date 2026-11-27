@@ -8,7 +8,7 @@
 #
 # A daemon with no peers reads Synced at open, and posts a template once its
 # chain follower has looped. A `dev_block_generate` sent before that is
-# refused `mine.not_synced` with `sync: no_view`, honestly: the node has no
+# refused `mine.syncing` with `sync: no_view`, honestly: the node has no
 # template to fill. So a harness that mines waits for the first posted
 # template, not for the daemon to answer some other method, as the Rust
 # harness does (`regtest_e2e.rs`, `await_posted`).

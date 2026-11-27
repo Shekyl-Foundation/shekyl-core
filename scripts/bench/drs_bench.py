@@ -565,7 +565,7 @@ def _measure_with_probe(args, work, seed_dir, daemon, addr, subj_dir):
         seed_reused = have_h > 1
         # A Rust seed posts its first template once its follower has looped
         # after open (the owner's state at open, by the declaration); a
-        # dev_block_generate sent before that post is refused `mine.not_synced`
+        # dev_block_generate sent before that post is refused `mine.syncing`
         # by a daemon whose RPC is already up. The regtest harness waits the same way
         # (`await_posted`).
         _await_posted(srpc, args.startup_timeout)
