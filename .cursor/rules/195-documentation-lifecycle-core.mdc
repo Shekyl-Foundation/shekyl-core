@@ -1,5 +1,5 @@
 ---
-description: "shekyl-core's part of the documentation lifecycle (95): the front door, the archive checklist, protected spec names, the FOLLOWUPS Owner gate, changelog.d and the document gates."
+description: "shekyl-core's part of the documentation lifecycle (95): the front door, the archive checklist, protected spec names, changelog.d and the document gates."
 alwaysApply: true
 scope: core
 ---
@@ -9,8 +9,8 @@ scope: core
 Estate rule [`95-documentation-lifecycle`](95-documentation-lifecycle.mdc) holds in every Shekyl repository.
 This rule holds the part of it that only shekyl-core has: its front door
 and archive checklist, the spec names a class deletion never touches,
-the FOLLOWUPS `Owner:` gate, the `changelog.d` mechanism and the
-document gates.
+the `changelog.d` mechanism and the document gates. What a FOLLOWUPS
+`Owner:` resolves to is [`122-no-lazy-deferral-core`](122-no-lazy-deferral-core.mdc).
 
 ## Front door and archive checklist
 
@@ -32,14 +32,8 @@ never deleted as a side-effect of that class.
 
 ## The FOLLOWUPS `Owner:` cell
 
-`Owner:` names what the row **resolves to**, and it is gated
-(`scripts/ci/check_followups_owners.py`): a live `docs/design/` document,
-or a registered identifier family (`RD-Q4`, `SI-10`). A PR number may be
-cited beside it but is not an owner on its own — PRs merge and close, and
-a row whose only owner is a merged PR is a row nobody owns. Six rows once
-named "the E2 lane" as owner while no such lane existed in any form; that
-is the shape the cell makes visible (rule 22). Rows predating the cell are
-grandfathered by exact heading in a list that only burns down.
+What an `Owner:` resolves to, and the gate that holds it, live in
+[`122-no-lazy-deferral-core`](122-no-lazy-deferral-core.mdc).
 
 ## CHANGELOG mechanics and document gates
 
@@ -58,5 +52,6 @@ left in `docs/design/` with a DRAFT banner, or a new
 
 ## Related rules
 
+- **`122-no-lazy-deferral-core.mdc`** — what a FOLLOWUPS `Owner:` resolves to.
 - **`194-tracking-index.mdc`** — identifier registry; the index is a map,
   not a status-of-record.

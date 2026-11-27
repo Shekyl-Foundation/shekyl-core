@@ -70,7 +70,7 @@ Foundations & process
 - [`91-documentation-after-plans`](.cursor/rules/91-documentation-after-plans.mdc) — docs update is the final task of a plan
 - [`194-tracking-index`](.cursor/rules/194-tracking-index.mdc) — `docs/design/IMPLEMENTATION_INDEX.md` is load-bearing; identifier families register at birth; Phase 3+ / Stage 3+ items start with an index row
 - [`95-documentation-lifecycle`](.cursor/rules/95-documentation-lifecycle.mdc) — document classes, status banners, archive-or-contract, FOLLOWUPS one-liners, CHANGELOG scope, three work-item targets
-  - core part: [`195-documentation-lifecycle-core`](.cursor/rules/195-documentation-lifecycle-core.mdc) — front door, archive checklist, the FOLLOWUPS `Owner:` gate, `changelog.d`, document gates
+  - core part: [`195-documentation-lifecycle-core`](.cursor/rules/195-documentation-lifecycle-core.mdc) — front door, archive checklist, protected spec names, `changelog.d`, document gates
 - [`126-sub-pr-design-discipline`](.cursor/rules/126-sub-pr-design-discipline.mdc) — a new crate or consensus-boundary change is its own change (always); opt-in design-round process for multi-round/consensus/reference-port sub-PRs
 
 Architecture & scope

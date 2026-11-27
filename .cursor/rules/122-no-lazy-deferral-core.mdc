@@ -12,7 +12,14 @@ FOLLOWUPS `Owner:` may resolve to here, and the gate that holds it.
 
 ## The `Owner:` cell
 
-In shekyl-core a FOLLOWUPS row's **`Owner:`** resolves to a live
-`docs/design/` document or a registered identifier family
-([`194-tracking-index`](194-tracking-index.mdc)). Gated by
-`check_followups_owners.py`.
+In shekyl-core a FOLLOWUPS row's **`Owner:`** names what the row
+resolves to: a live `docs/design/` document or a registered identifier
+family ([`194-tracking-index`](194-tracking-index.mdc)). Gated by
+`scripts/ci/check_followups_owners.py`.
+
+A PR number may be cited beside an owner. It is not an owner on its own.
+PRs merge and close, and a row whose only owner is a merged PR is a
+row nobody owns. Six rows once named "the E2 lane" as owner while no
+such lane existed in any form; that is the shape the cell makes
+visible (rule 22). Rows predating the cell are grandfathered by exact
+heading in a list that only burns down.
