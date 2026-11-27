@@ -26,7 +26,8 @@ Run in each repository with its own name. It fails when:
     file here, or does not list it and matches one (it would attach where it
     says it does not apply);
   - an estate rule links relatively outside `.cursor/rules/`, or to a
-    repository's own rule, either of which dangles in a copy.
+    repository's own rule, either of which dangles in a copy. A fragment
+    or query on that link is stripped before the target is judged.
 
 Globs are matched as Cursor matches them: minimatch with `dot: true`, against
 the path relative to the repository root.
@@ -157,12 +158,13 @@ def check(root: str, repo: str) -> int:
                 fails.append(f"{where}: does not list {repo}, but its globs match {hits[0]} here")
         body = text[text.find("\n---\n", 4) + 5:]
         for lm in re.finditer(r"\]\((?!https?://|#)([^)\s]+)\)", body):
-            target = lm.group(1)
+            raw = lm.group(1)
+            target = raw.split("#", 1)[0].split("?", 1)[0]
             stem = os.path.splitext(os.path.basename(target))[0]
             if "/" in target.lstrip("./") or target.startswith(".."):
-                fails.append(f"{where}: relative link {target!r} leaves {RULES}/ and dangles in a copy")
+                fails.append(f"{where}: relative link {raw!r} leaves {RULES}/ and dangles in a copy")
             elif target.endswith((".mdc", ".md")) and stem not in estate_names:
-                fails.append(f"{where}: links {target!r}, which is not an estate rule, so a copy dangles")
+                fails.append(f"{where}: links {raw!r}, which is not an estate rule, so a copy dangles")
     if fails:
         print(f"FAIL: rule scope ({repo}):")
         for f in fails:
@@ -205,9 +207,11 @@ def selftest(repo: str) -> int:
         "glob matches here, repo not listed": {"30-x.mdc": estate_glob.format(r=other)},
         "relative link out of the rules": {"30-x.mdc": GOOD + "[d](../../docs/x.md)\n"},
         "link to a repository's own rule": {"30-x.mdc": GOOD + "[d](125-y.mdc)\n"},
+        "fragment link to a repository's own rule": {"30-x.mdc": GOOD + "[d](125-y.mdc#section)\n"},
+        "query link to a repository's own rule": {"30-x.mdc": GOOD + "[d](125-y.mdc?x=1)\n"},
     }
     ok = True
-    if run({"30-x.mdc": estate_glob.format(r=repo) + "[e](00-filler.mdc)\n"}) != 0:
+    if run({"30-x.mdc": estate_glob.format(r=repo) + "[e](00-filler.mdc#h)\n"}) != 0:
         print("SELFTEST FAIL: a clean tree was refused")
         ok = False
     else:

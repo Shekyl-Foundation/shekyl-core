@@ -388,6 +388,11 @@ jobs:
             python3 scripts/ci/check_vacated_rule_numbers.py
           run_one "Rules: vacated-number gate self-test" \
             python3 scripts/ci/check_vacated_rule_numbers.py --selftest
+          # The sweep is shekyl-core's rewriter and is not an estate file.
+          # Its selftest rewrites every citation the vacated-number gate
+          # plants, and a path that already names the successor stays put.
+          run_one "Rules: citation sweep self-test" \
+            python3 scripts/rules/sweep_rule_citations.py --selftest
           run_one "Rules: every rule loads and attaches where it says" \
             python3 scripts/ci/check_rule_scope.py --repo core
           run_one "Rules: scope gate self-test" \
