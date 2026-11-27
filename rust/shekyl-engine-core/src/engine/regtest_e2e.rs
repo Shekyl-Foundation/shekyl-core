@@ -5610,10 +5610,9 @@ async fn reopen_staker(
         .unwrap_or_else(|_| panic!("the harness holds the only engine handle"))
         .into_inner();
     engine.close(&creds).await.expect("close the staker wallet");
-    let rpc = HttpRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port))
-        .await
-        .expect("wallet rpc (reopen)");
-    let daemon_client = super::DaemonClient::verifying(rpc, regtest_expectation());
+    // The wallet reaches this daemon over its owner socket, as every wallet
+    // the harness opens does.
+    let daemon_client = super::DaemonClient::verifying(daemon.wallet_rpc(), regtest_expectation());
     let overrides = shekyl_engine_file::SafetyOverrides::none();
     let network = shekyl_address::Network::Regtest;
     let opened = match intent {
