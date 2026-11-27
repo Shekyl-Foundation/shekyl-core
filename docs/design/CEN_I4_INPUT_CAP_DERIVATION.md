@@ -823,9 +823,12 @@ interval is within 1.25 % of its estimate.
   a single modal embargo leaves uncovered across the legal shapes is now
   about 240 s, against the ~56 s `DAEMON_RELAY_PRIVACY.md` §80.2 read at a
   cap of 8 (`tests/spec_decision_matrix.rs`). Shipped timers still use the
-  modal shape; whether they should follow the shape is the relay lane's
-  question (`ICD-R4`; the FOLLOWUPS row "Relay: consume the
-  verification-cost table per shape").
+  modal shape, so on a slow stem a large spend's timer fires early more
+  often than the designed 1 in 10, and an early stem node broadcasts it,
+  shortening its stem: the cost falls on large consolidations. The table
+  assumes every hop is the floor device; real stems are mostly faster, so
+  the practical gap is smaller than 240 s. Whether timers follow the shape
+  is a named question of the relay lane's round (`ICD-R4`).
 - **The x86 diagnostic arm** (`F_X86_MS`, §84.2) is re-taken at the same
   head over the same 22 counts, on an x86-64 laptop with the laptop unused
   during the run (22.133 ms at one input, 214.06 ms at 22); it derives
@@ -937,6 +940,13 @@ these requirements from here:
 - **The privacy cost, stated,** when a stem transaction is dropped or delayed.
 - **Tor,** which has no daemon-side accept limiter.
 - **The budget in core-time,** read from `f(n_in, depth)`.
+- **Whether the embargo follows the transaction's shape** (added 2026-11-27,
+  Rick). Every embargo timer is priced at the 1-input genesis shape, and at
+  the derived cap the table prices the largest spend's embargo at about
+  twice that (§8.1). A shape-following timer adds no observable: the input
+  count and depth are on the transaction, so a node holding it already
+  knows its shape. Decided in this round because moving verification off
+  the transport runtime changes the hop time the embargo is built from.
 
 ### `ICD-R5` — one named floor device, and every embargo cell measured on it in one session (from `ICD-F12`) — RULED
 
