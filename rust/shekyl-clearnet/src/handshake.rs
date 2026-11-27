@@ -14,13 +14,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use shekyl_capped_stream::{node_gate, refund_unsent, write_all_counted};
+use shekyl_capped_stream::{node_gate, read_granted, write_granted, ReadStop};
 use shekyl_p2p_transport::{
     prefix_for, Established, Initiator, Responder, SendHalf, MESSAGE1_LEN, MESSAGE2_LEN, PREFIX_LEN,
 };
 use shekyl_timing_engine::{Clock, Handle, OwnerClass, Tick, WakeWait};
 use shekyl_transport_layer::{LinkDirection, MessageClass};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 
 use crate::seam::SeamRecv;
@@ -278,32 +278,12 @@ where
     Ok((write, send, recv))
 }
 
-/// Write `bytes` under the up bucket, one grant at a time.
+/// Write `bytes` under the up budget.
 ///
-/// A failed grant refunds only the bytes the socket did not accept.
+/// The grant is held across the socket write. Drop, including when the
+/// deadline select drops this call, returns what the socket did not take.
 pub(crate) async fn write_budgeted(write: &mut OwnedWriteHalf, conn: u64, bytes: &[u8]) -> bool {
-    let gate = node_gate();
-    let mut off = 0usize;
-    while off < bytes.len() {
-        let room = bytes.len() - off;
-        let grant = gate
-            .acquire(LinkDirection::Up, conn, MessageClass::Session, room as u64)
-            .await;
-        let grant = usize::try_from(grant).unwrap_or(room).min(room);
-        if grant == 0 {
-            continue;
-        }
-        let end = off + grant;
-        match write_all_counted(write, &bytes[off..end], &gate, conn).await {
-            Ok(()) => off = end,
-            Err(wrote) => {
-                refund_unsent(&gate, LinkDirection::Up, grant as u64, wrote);
-                return false;
-            }
-        }
-    }
-    gate.record_message(LinkDirection::Up, conn);
-    true
+    write_granted(write, bytes, &node_gate(), conn, MessageClass::Session).await
 }
 
 fn ignore<E>(result: Result<(), E>) {
@@ -452,6 +432,11 @@ async fn await_job<T, C: Clock>(
     }
 }
 
+/// Read `buf` under the down budget, unless `wake` fires first.
+///
+/// A short socket read is a failure here: the handshake asked for the
+/// whole buffer. The read is the shared one: nothing is held while the
+/// peer is quiet, and the grant is settled before this returns the bytes.
 async fn read_or_wake<C: Clock>(
     read: &mut OwnedReadHalf,
     buf: &mut [u8],
@@ -460,41 +445,26 @@ async fn read_or_wake<C: Clock>(
     conn: u64,
 ) -> Result<(), Observed> {
     let gate = node_gate();
-    tokio::select! {
-        biased;
-        result = wake.as_mut() => {
-            fired.store(true, Ordering::Release);
-            match result {
-                Ok(_) | Err(_) => {}
-            }
-            gate.leave(LinkDirection::Down, conn);
-            Err(Observed::HandshakeDeadline)
-        }
-        result = read_budgeted(read, buf, conn) => result,
-    }
-}
-
-/// Read `buf` under the down bucket. A short socket read is a failure
-/// here: the handshake asked for the whole buffer. Each read is counted
-/// when it lands and paid before the next, so a socket whose peer has
-/// not sent holds no tokens.
-async fn read_budgeted(
-    read: &mut OwnedReadHalf,
-    buf: &mut [u8],
-    conn: u64,
-) -> Result<(), Observed> {
-    let gate = node_gate();
     let mut filled = 0usize;
     while filled < buf.len() {
-        let got = match read.read(&mut buf[filled..]).await {
-            Ok(0) | Err(_) => return Err(Observed::HandshakeBroken),
-            Ok(got) => got,
-        };
-        let moved = u64::try_from(got).unwrap_or(u64::MAX);
-        gate.moved(LinkDirection::Down, conn, moved);
-        filled += got;
-        gate.pay(LinkDirection::Down, conn, MessageClass::Session, moved)
-            .await;
+        match read_granted(
+            read,
+            &mut buf[filled..],
+            &gate,
+            conn,
+            MessageClass::Session,
+            wake,
+        )
+        .await
+        {
+            Ok(n) => filled += n,
+            Err(ReadStop::Cancel(_)) => {
+                fired.store(true, Ordering::Release);
+                gate.leave(LinkDirection::Down, conn);
+                return Err(Observed::HandshakeDeadline);
+            }
+            Err(ReadStop::Eof | ReadStop::Failed) => return Err(Observed::HandshakeBroken),
+        }
     }
     gate.record_message(LinkDirection::Down, conn);
     Ok(())

@@ -18,10 +18,10 @@
 //!
 //! A grant is permission, and only tokens: what the operator reads back
 //! ([`Observed`], the recent speed) is what [`LinkBudget::moved`] was told
-//! reached or left the socket. A writer takes its grant before it
-//! writes, so the bucket paces what the kernel is given; a reader pays
-//! after its bytes land, so a connection waiting for its peer holds no
-//! tokens and counts nothing.
+//! reached or left the socket. The socket work holds the grant and reports
+//! what the kernel took; what it did not take comes back. A reader takes
+//! that grant only once the socket is readable, so a connection waiting
+//! for its peer holds no tokens and counts nothing.
 
 use std::collections::{HashMap, VecDeque};
 
@@ -725,7 +725,7 @@ mod tests {
         assert_eq!(
             budget.totals().packets_up,
             1,
-            "a refund returns bytes, not the message"
+            "a refund returns tokens, not the message"
         );
     }
 }

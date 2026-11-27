@@ -210,17 +210,6 @@ impl LinkGate {
             .moved(direction, conn, n, now);
     }
 
-    /// Pay for `n` bytes already read: wait for the bucket to grant them
-    /// all, in turn with the other connections. A reader calls this after
-    /// its bytes land and before it reads again, so a connection waiting
-    /// for its peer holds no tokens.
-    pub async fn pay(&self, direction: LinkDirection, conn: u64, class: MessageClass, n: u64) {
-        let mut paid = 0u64;
-        while paid < n {
-            paid = paid.saturating_add(self.acquire(direction, conn, class, n - paid).await);
-        }
-    }
-
     pub fn leave(&self, direction: LinkDirection, conn: u64) {
         self.inner
             .budget
@@ -318,6 +307,59 @@ impl LinkGate {
         let count =
             |direction: LinkDirection| self.stamp_map(direction).lock().expect("byte stamps").len();
         count(LinkDirection::Up) + count(LinkDirection::Down)
+    }
+}
+
+/// Tokens one turn took from the link budget.
+///
+/// [`Self::accept`] records bytes the socket took and shrinks what drop
+/// returns. Drop returns the rest, including when the future holding the
+/// grant is cancelled. A grant is not a count: the count is [`LinkGate::moved`].
+#[must_use = "dropping the grant returns the tokens the socket did not take"]
+pub(crate) struct HeldGrant {
+    gate: LinkGate,
+    direction: LinkDirection,
+    conn: u64,
+    /// Tokens not yet accepted by the socket.
+    left: u64,
+}
+
+impl HeldGrant {
+    /// Take a grant of up to `want` bytes. The wait is the connection's
+    /// turn at the bucket. A rate of zero waits here until the rate changes.
+    pub(crate) async fn acquire(
+        gate: &LinkGate,
+        direction: LinkDirection,
+        conn: u64,
+        class: MessageClass,
+        want: u64,
+    ) -> Self {
+        let left = gate.acquire(direction, conn, class, want).await;
+        Self {
+            gate: gate.clone(),
+            direction,
+            conn,
+            left,
+        }
+    }
+
+    /// How many bytes of a slice of `len` this grant still covers.
+    pub(crate) fn room(&self, len: usize) -> usize {
+        usize::try_from(self.left).unwrap_or(len).min(len)
+    }
+
+    /// The socket took `n` bytes of this grant.
+    pub(crate) fn accept(&mut self, n: u64) {
+        let n = n.min(self.left);
+        self.left -= n;
+        self.gate.moved(self.direction, self.conn, n);
+    }
+}
+
+impl Drop for HeldGrant {
+    fn drop(&mut self) {
+        let left = std::mem::take(&mut self.left);
+        self.gate.refund(self.direction, left);
     }
 }
 
