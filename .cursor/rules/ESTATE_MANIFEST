@@ -1,0 +1,38 @@
+# The estate files, canonical in shekyl-core, copied verbatim into
+# shekyl-gui-wallet and shekyl-prism. sha256 and path, one per line.
+# Generated: scripts/ci/check_estate_manifest.py --write. Never edit by hand.
+c662ff1e236697956c8cc13f0867b30da5286a0da014c73b771b19369acdf159  .cursor/rules/00-mission.mdc
+c9b4fa7ea4f2139d58e7fb032cb5b506e07e347a48754c7a9275049fab5dc659  .cursor/rules/05-system-thinking.mdc
+d0ff6962afc29e5f7068d7699ef3d2b8368b38ca399f6d7ed88e33d512fb9f90  .cursor/rules/06-branching.mdc
+2bad5e9bd6e530b49fe3de7dac1aa235f2608c67992411fe99ecc3effec71f2e  .cursor/rules/08-worktree-hygiene.mdc
+27859761ae0355de7ddef7de1a23b3357dad8c3676f53ff045c6378ecbef94be  .cursor/rules/15-deletion-and-debt.mdc
+1f63fe90246fa0026fdfc1c32fbb1e9485ba3011fa2943f79dec6246d383d98a  .cursor/rules/16-architectural-inheritance.mdc
+8f10bbe92834c91844f7d1dfe28e9aa930c8792b48f2b6886eb7aaf8f1153619  .cursor/rules/17-dependency-discipline.mdc
+cb752f06edc4608f2943dd63e5db45fbd7c01f29a02eb997f39f52de284e1050  .cursor/rules/21-reversion-clause-discipline.mdc
+c28fc2dc9ffe03751b68b0ca737fc0c75b69d15d3e9205b6d8035350a68877b8  .cursor/rules/22-no-lazy-deferral.mdc
+c21186c19f7330a64b8fde8abaf1a3a60747717cfb0e100a33a6a4f131b1016f  .cursor/rules/23-disposition-visibility.mdc
+88865527fc0000c5310887a113748b1d1d9f62dcb3a103f7f4de2c3d739a9af1  .cursor/rules/30-cryptography.mdc
+eaa103d90b1d4c0e1c32bf554eef63b50f8ad34edcf2352c8695220f4ffe63e9  .cursor/rules/35-secure-memory.mdc
+6222c2552d73c4c4de9d6977b7fb20ed09442929b420fd778aab506e536aadee  .cursor/rules/36-secret-locality.mdc
+08dbe97feb8b27e4fad650f550d21727d369b8117110a6c007c6231c7beb0786  .cursor/rules/37-internal-information-boundary.mdc
+cf98642828a12c116f247af4d06e2243cc81c8d5fe482bdd40f013860e6f51af  .cursor/rules/38-shared-estate-coordination.mdc
+f1f0783831cc6e2e5aa3c3a20ee99d065b9c9dec98ed3e969796010e101e39f5  .cursor/rules/43-absence-is-not-a-value.mdc
+dc71cbb563b9c6a98daa96edb752ab4a2a72d2b3a603fd1011c4ab24d1a3739e  .cursor/rules/45-rust-lint-checks.mdc
+c177c7b40aee223b339c1affcd47d0667dcc939810d78bc52b2d2e1599c96ac7  .cursor/rules/46-shell-gate-exits.mdc
+7c6e037f151b1603cb523867984b6088a5569f4e92bff06cb188c6c5babbfa37  .cursor/rules/47-gate-subject-assertion.mdc
+b7bf33248e59b9b9740b58e3bcbc855262e46ec5e711486dd50e418e9eacf105  .cursor/rules/50-testing.mdc
+5acbafb2c31d4cbf50ba302ee5de558078749939659f23fc65a3aedf340ee217  .cursor/rules/60-no-monero-legacy.mdc
+dad2c649b44b1b3f2740934c6f999c37cb52323b09561cc16a4fc518391c913a  .cursor/rules/65-address-format-discipline.mdc
+e66937b26e73927f2e0e168d99a5ab27868150d57ce9e1aaeaa32b87f21346ef  .cursor/rules/80-usability.mdc
+8e6a59944764af5418bc99c23341251b87f37574447107ff5cc8256978de755f  .cursor/rules/81-no-protocol-knowledge.mdc
+925b88e57e0402abf197da4990a3eb9f118731281e1c11016014ebf119386066  .cursor/rules/82-failure-mode-ux.mdc
+f17626cee7f6f6925668250a1df43633fc813bfbbd5998760e72dce52d9180ba  .cursor/rules/83-input-grammar.mdc
+4a1806fb74ed69b364d2e9133744372045e8190eb675cb6f394565fa4a08cb32  .cursor/rules/90-commits.mdc
+7cb10bab623c625643353e833372948bf8d9b3a8808b57b07629fdd4edb8a84f  .cursor/rules/91-documentation-after-plans.mdc
+ad31eab97c6ff4330513f1dcd9cb2f441261a776e2558ca8c16472b5656872a0  .cursor/rules/92-copyright-header.mdc
+7a9841e43a027cb2598fb6a87570554b4c1d08a440e56141be75e4452468c72e  .cursor/rules/93-legacy-symbol-migration.mdc
+ae70246e3a49f4cc224e0c46342cd15d69de957c6c7b032144fc166183dd89e6  .cursor/rules/95-documentation-lifecycle.mdc
+d577a1c4d5afae490332d3c31cf879f186b2a4a4e11433851540fd360ed423a3  .cursor/rules/vacated-numbers.tsv
+2bc98763c45abab2bf688deb127ea96ff50aaf0e986a72ff62385e5c4c7a9422  scripts/ci/check_estate_manifest.py
+57616a5d3b8cf816df9126b3668a5db8b32fddaaa515feb385b4556bab93ab8a  scripts/ci/check_rule_scope.py
+32653cdd0642d190059edd43a7b9523460cc39024e972dff7afa0d9e8da0b6f4  scripts/ci/check_vacated_rule_numbers.py

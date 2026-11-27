@@ -379,6 +379,23 @@ jobs:
             python3 scripts/ci/check_release_tag_grammar.py
           run_one "Release-tag grammar gate self-test" \
             python3 scripts/ci/check_release_tag_grammar.py --selftest
+          # The rules: estate 00-99 canonical here and copied verbatim into
+          # the GUI and prism, each repository's own series beside them, and
+          # vacated numbers never cited or reused (ruled 2026-11-19 and
+          # 2026-11-27). The consumers run the same three scripts over their
+          # copies, against this repository's manifest.
+          run_one "Rules: no vacated rule number cited or reused" \
+            python3 scripts/ci/check_vacated_rule_numbers.py
+          run_one "Rules: vacated-number gate self-test" \
+            python3 scripts/ci/check_vacated_rule_numbers.py --selftest
+          run_one "Rules: every rule loads and attaches where it says" \
+            python3 scripts/ci/check_rule_scope.py --repo core
+          run_one "Rules: scope gate self-test" \
+            python3 scripts/ci/check_rule_scope.py --repo core --selftest
+          run_one "Rules: the estate manifest matches the estate files" \
+            python3 scripts/ci/check_estate_manifest.py
+          run_one "Rules: estate manifest gate self-test" \
+            python3 scripts/ci/check_estate_manifest.py --selftest
           # The domain-binding ratchet must be empty at v3.1.0 (the signing
           # envelope §2.5, ruled 2026-11-05); the release-time gate refuses
           # a cut at or past it with rows left. Its rule and its read of

@@ -22,6 +22,7 @@ scripts/ci/change_scope.py	benchmarks:scope,build:changes,chain-forge:scope,code
 scripts/ci/check_archival_reward_gates.sh	grep-gates:grep-gates
 scripts/ci/check_armed_lever_launchers.py	grep-gates:grep-gates
 scripts/ci/check_crypto_closure.py	rust-audit-test:rust-audit-and-test,gui-drift:gui-pin,gui-drift:gui-pin-nightly
+scripts/ci/check_estate_manifest.py	grep-gates:grep-gates
 scripts/ci/check_fips204_branch_counts.py	nightly:fips204-branch-count,nightly:report-red
 scripts/ci/check_gui_lock_shared.py	gui-drift:gui-pin,gui-drift:gui-pin-nightly
 scripts/ci/check_owner_socket_launchers.py	grep-gates:grep-gates
@@ -96,6 +97,7 @@ scripts/ci/check_release_archive_docs.py	docs-gates:check-doc-links
 scripts/ci/check_release_tag_grammar.py	grep-gates:grep-gates
 scripts/ci/check_rpc_route_liveness.sh	rpc-route-liveness:rpc-route-liveness
 scripts/ci/check_rt_p4_standing.py	grep-gates:grep-gates
+scripts/ci/check_rule_scope.py	grep-gates:grep-gates
 scripts/ci/check_rustdoc.py	build:build-windows-msvc,rust-audit-test:rust-audit-and-test
 scripts/ci/check_seedable_rng.py	grep-gates:grep-gates
 scripts/ci/check_secret_byte_locality.py	docs-gates:check-doc-links
@@ -112,6 +114,7 @@ scripts/ci/check_tor_pin_targets.py	grep-gates:grep-gates
 scripts/ci/check_transit_marker.sh	grep-gates:grep-gates
 scripts/ci/check_tx_weight_literals.py	docs-gates:check-doc-links
 scripts/ci/check_unbounded_device_read.sh	grep-gates:grep-gates
+scripts/ci/check_vacated_rule_numbers.py	grep-gates:grep-gates
 scripts/ci/check_vendored_crypto_manifest.sh	vendored-crypto-content:crypto-content
 scripts/ci/check_wallet_rpc_liveness.sh	wallet-rpc-liveness:wallet-rpc-liveness
 scripts/ci/check_wire_raw_hash_surface.py	docs-gates:check-doc-links
