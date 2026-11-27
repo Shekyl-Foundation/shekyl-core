@@ -5349,7 +5349,7 @@ async fn e2e_a_withdrawn_plan_is_drained_to_the_principal_and_retired() {
     // A crash between the ending's save and the drain: the wallet closes
     // here and reopens. The ended plan keeps its slot through the open-time
     // reconcile, so the persona's keys are there to sign its drain.
-    let arc = reopen_staker(arc, &daemon).await;
+    let arc = reopen_staker(arc, &daemon, None).await;
     assert!(
         pending_block(&arc).await.has_ended_plan_for(&persona),
         "the drain owed survives the reopen"
@@ -5412,7 +5412,18 @@ async fn e2e_a_withdrawn_plan_is_drained_to_the_principal_and_retired() {
         Err(super::bond_orchestrator::FirstStakeError::Funding(_)) => {}
         other => panic!("a new stake in this session refuses only for funding, got {other:?}"),
     }
-    let arc = reopen_staker(arc, &daemon).await;
+    // Retiring the last bonded slot made the wallet a non-staker: a plain
+    // reopen spawns no stake engine, and the `stake` RPC takes its
+    // first-stake-intent reopen at the cursor slot, as for any new staker.
+    let arc = reopen_staker(arc, &daemon, None).await;
+    {
+        let g = arc.read().await;
+        assert!(
+            !g.ledger.read().ledger.staking.staking_enabled && !g.has_stake_engine(),
+            "the retired persona leaves a non-staker wallet"
+        );
+    }
+    let arc = reopen_staker(arc, &daemon, Some(next)).await;
     match super::Engine::first_stake(
         arc.clone(),
         &target,
@@ -5428,10 +5439,13 @@ async fn e2e_a_withdrawn_plan_is_drained_to_the_principal_and_retired() {
 
 /// Close a staker wallet the harness opened and open it again, as
 /// `staker_wallet` does: a staker's reopen spawns its stake engine and runs
-/// the open-time staking reconcile.
+/// the open-time staking reconcile. `intent` is the `stake` RPC's
+/// first-stake-intent reopen (`open_full_with_first_stake_intent`), the only
+/// way a non-staker gets a stake engine.
 async fn reopen_staker(
     arc: Arc<RwLock<super::Engine<super::SoloSigner>>>,
     daemon: &RegtestDaemon,
+    intent: Option<u32>,
 ) -> Arc<RwLock<super::Engine<super::SoloSigner>>> {
     let creds = super::lifecycle::Credentials::password_only(b"pr4-staker");
     let base_path = arc.read().await.persistence().base_path().to_path_buf();
@@ -5442,13 +5456,26 @@ async fn reopen_staker(
     let rpc = HttpRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port))
         .await
         .expect("wallet rpc (reopen)");
-    let opened = super::Engine::<super::SoloSigner>::open_full(
-        &base_path,
-        &creds,
-        shekyl_address::Network::Regtest,
-        super::DaemonClient::verifying(rpc, regtest_expectation()),
-        shekyl_engine_file::SafetyOverrides::none(),
-    )
+    let daemon_client = super::DaemonClient::verifying(rpc, regtest_expectation());
+    let overrides = shekyl_engine_file::SafetyOverrides::none();
+    let network = shekyl_address::Network::Regtest;
+    let opened = match intent {
+        None => super::Engine::<super::SoloSigner>::open_full(
+            &base_path,
+            &creds,
+            network,
+            daemon_client,
+            overrides,
+        ),
+        Some(slot) => super::Engine::<super::SoloSigner>::open_full_with_first_stake_intent(
+            &base_path,
+            &creds,
+            network,
+            daemon_client,
+            overrides,
+            slot,
+        ),
+    }
     .expect("reopen the staker wallet")
     .into_wallet();
     Arc::new(RwLock::new(opened))

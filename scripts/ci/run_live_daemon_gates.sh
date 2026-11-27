@@ -325,6 +325,19 @@ ARMED=(
 #     e2e_release_accepted_and_connected — 1 385 s (SEB 32, cap 8).
 #     e2e_unstake_collect_retire_composed_arc — 1 348 s (SEB 8, cap 2;
 #       the 248-block claim window included).
+# The two plan walks (BD-Q3, how a plan ends, ruled 2026-11-26) run the
+# production dispatch driver against the wallet's own node, local debug
+# build, 2026-11-27:
+#   e2e_a_plan_signed_at_its_due_block_lands_at_reference_age_six — the
+#     bond-post delay round's falsifier: the driver signs at the due block
+#     and the first send carries reference age 6. It mines out the plan's
+#     real draw (0–600 blocks at the box's block pace), so its time moves
+#     with the draw: green 1 727 s. Red with `select_reference_height` one
+#     block older: the first send carried age 7.
+#   e2e_a_withdrawn_plan_is_drained_to_the_principal_and_retired — a
+#     withdrawn plan, a reopen between its ending's save and the drain,
+#     one drain to the principal, the persona retired. Red with
+#     `drain_ended_persona` returning before it sends: no drain.
 ARMED_SLOW=(
   engine::regtest_e2e::e2e_fcmp_spend_over_depth3_tree
   engine::regtest_e2e::e2e_cxx_template_fills_to_its_median
@@ -333,6 +346,8 @@ ARMED_SLOW=(
   engine::regtest_e2e::e2e_drain_wire_shape_matches_a_real_transfer
   engine::regtest_e2e::e2e_release_accepted_and_connected
   engine::regtest_e2e::e2e_unstake_collect_retire_composed_arc
+  engine::regtest_e2e::e2e_a_plan_signed_at_its_due_block_lands_at_reference_age_six
+  engine::regtest_e2e::e2e_a_withdrawn_plan_is_drained_to_the_principal_and_retired
   # Observed red 2026-10-30 (the handed-over span removed from the queue
   # before the door connected it): the joiner stood at one height with the
   # door reporting no room, as the F-B subjects did at 724 of 762.
