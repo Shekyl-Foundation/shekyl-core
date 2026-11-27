@@ -122,6 +122,16 @@ pub enum ChunkLayout {
     Spread,
 }
 
+/// The leaf chunks a [`ChunkLayout::Spread`] fixture holds: input `i` in
+/// chunk `i % width`, with `width` the lesser of `n_in` and
+/// [`HELIOS_CHUNK_WIDTH`], the most children one layer-1 node takes.
+fn spread_chunks(n_in: usize) -> Vec<Vec<usize>> {
+    let width = n_in.min(HELIOS_CHUNK_WIDTH);
+    (0..width)
+        .map(|c| (c..n_in).step_by(width).collect())
+        .collect()
+}
+
 /// Build a verifiable `n_in`-input, `n_out`-output admission fixture.
 ///
 /// Under [`ChunkLayout::Shared`] all inputs sit in one leaf chunk, so the leaf
@@ -267,12 +277,7 @@ pub fn build_fixture<R: RngCore + CryptoRng>(
     } else {
         let chunks: Vec<Vec<usize>> = match layout {
             ChunkLayout::Shared => vec![all.clone()],
-            ChunkLayout::Spread => {
-                let width = n_in.min(HELIOS_CHUNK_WIDTH);
-                (0..width)
-                    .map(|c| all.iter().copied().skip(c).step_by(width).collect())
-                    .collect()
-            }
+            ChunkLayout::Spread => spread_chunks(n_in),
         };
         let owner: Vec<Vec<usize>> = match layout {
             ChunkLayout::Shared => vec![all.clone(); n_in],
@@ -429,4 +434,30 @@ pub fn membership_verify(f: &AdmissionFixture) -> Result<bool, VerifyError> {
         f.tree_depth,
         f.signable_tx_hash,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{spread_chunks, HELIOS_CHUNK_WIDTH};
+
+    /// Every input sits in exactly one chunk, no more chunks than one
+    /// layer-1 node takes, and every input has its own chunk until there
+    /// are more inputs than that. The cost benches prove every cell before
+    /// timing it; this keeps the dealing itself under `cargo test`.
+    #[test]
+    fn spread_chunks_fit_one_helios_node() {
+        for n_in in 1..=3 * HELIOS_CHUNK_WIDTH {
+            let chunks = spread_chunks(n_in);
+            assert_eq!(chunks.len(), n_in.min(HELIOS_CHUNK_WIDTH), "{n_in}");
+            let mut seen: Vec<usize> = chunks.iter().flatten().copied().collect();
+            seen.sort_unstable();
+            assert_eq!(seen, (0..n_in).collect::<Vec<_>>(), "{n_in}");
+            for (c, chunk) in chunks.iter().enumerate() {
+                assert!(chunk.iter().all(|&i| i % chunks.len() == c), "{n_in}");
+                if n_in <= HELIOS_CHUNK_WIDTH {
+                    assert_eq!(chunk.len(), 1, "{n_in}");
+                }
+            }
+        }
+    }
 }
