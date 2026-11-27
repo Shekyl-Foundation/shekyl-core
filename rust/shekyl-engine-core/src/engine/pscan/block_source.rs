@@ -174,10 +174,11 @@ pub(crate) trait BlockSource {
 /// the last pscan block.
 ///
 /// **Named daemon-claimed-tip clock (WI-2 F-2 / WI-3 R2-1).** This is the
-/// single function both (a) bond-assemble `anchor_t0` stamps and (b) the
-/// pscan dispatch due-check tip read through (`BlockSource::tip_height` →
-/// here). Explicitly **not** `synced_height` or `ingested_tip_height` —
-/// those clocks have different bases and must not feed `anchor_t0`.
+/// single function both (a) a stake request's `requested_at` and the
+/// signing-at-due tip check and (b) the pscan dispatch due-check tip read
+/// through (`BlockSource::tip_height` → here). Explicitly **not**
+/// `synced_height` or `ingested_tip_height` — those clocks have different
+/// bases and must not feed a plan's due.
 ///
 /// Generic over the transport so the local (`DaemonEngine: Rpc`) and remote
 /// ([`PRpc`]) sources share one body; the returned future is `Send` because
@@ -341,7 +342,7 @@ mod tests {
     // ── WSS-Q14 class-A refusal bite ────────────────────────────────────
     //
     // `daemon_claimed_tip` is the choke point six consumers read their clock
-    // through: `anchor_t0` (bond_orchestrator), the claim / drain / release
+    // through: a plan's `requested_at` (bond_orchestrator), the claim / drain / release
     // dispatch stamps, and both `BlockSource::tip_height` impls (whence the
     // pscan finality horizon). Every one of them stamps a transaction it then
     // posts, which is what `R-B` forbids on an unsynchronized view.

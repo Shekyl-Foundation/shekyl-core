@@ -102,7 +102,7 @@ fn foundation_posture_is_complete_tree_with_the_empty_encoding() {
     assert!(holdings.shard_ids.is_empty());
 }
 
-/// F-2 (i): assemble stamps `anchor_t0` via [`daemon_claimed_tip`]; the
+/// F-2 (i): a stake request stamps `requested_at` via [`daemon_claimed_tip`]; the
 /// pscan `BlockSource::tip_height` path also routes through that same
 /// named function (see `block_source.rs`). This KAT pins that both
 /// modules name the same item.
