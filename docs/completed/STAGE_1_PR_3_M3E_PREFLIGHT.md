@@ -64,7 +64,7 @@ begins.
   forward-looking framing where the architecture has landed.
 - **Folded-in FOLLOWUP.** The
   [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) entry "Rules realignment:
-  `42-serialization-policy.mdc` pre-rename paths" (added in M3d's
+  `142-serialization-policy.mdc` pre-rename paths" (added in M3d's
   commit 4 per Copilot review of PR #39) is folded into M3e per
   user disposition (2026-05-11). The rule realignment co-lands with
   M3e's documentation pass; the FOLLOWUP entry is closed by the same
@@ -293,7 +293,7 @@ convention."
    record (`15-deletion-and-debt.mdc` "FOLLOWUPS.md is not a
    graveyard" applied to closed entries).
 
-### D4 — `42-serialization-policy.mdc` rule realignment scope
+### D4 — `142-serialization-policy.mdc` rule realignment scope
 
 **Folded-in scope.** User disposition 2026-05-11 to fold the rule
 realignment (originally a separate FOLLOWUP added in M3d's commit 4)
@@ -321,10 +321,10 @@ paths are workspace-unique strings; sed-and-verify is safe.
 **Two candidate scopes.**
 
 - **(α) Rule file only.** Mechanical pass against
-  `.cursor/rules/42-serialization-policy.mdc`. Single file; close
+  `.cursor/rules/142-serialization-policy.mdc`. Single file; close
   the FOLLOWUP entry I added in M3d's commit 4.
 - **(β) Rule file + all citing documents.** (α) plus walk every
-  document that cites `42-serialization-policy.mdc` (10 files per
+  document that cites `142-serialization-policy.mdc` (10 files per
   the M3d Round-1 Copilot-finding grep) and verify each citation's
   context reads correctly against the realigned rule.
 
@@ -413,7 +413,7 @@ frontmatter is the highest-leverage rename because it controls
 the rule's auto-application reach.
 
 The M3d-added FOLLOWUP entry "Rules realignment:
-`42-serialization-policy.mdc` pre-rename paths" closes by M3e
+`142-serialization-policy.mdc` pre-rename paths" closes by M3e
 commit 2 (rule file rename + entry relocation to "Recently
 resolved"). No new FOLLOWUP entry is needed for the residue
 sweep — it lands inside M3e rather than deferring.
@@ -443,7 +443,7 @@ sweep — it lands inside M3e rather than deferring.
   consolidation guidance (per §11 below); plus the **V3.0 / V3.1
   queue split** (section-header re-org separating the two queues
   per §11.2 below).
-- **`.cursor/rules/42-serialization-policy.mdc` path realignment**
+- **`.cursor/rules/142-serialization-policy.mdc` path realignment**
   (D4 (α)): mechanical
   `s/shekyl-wallet-state/shekyl-engine-state/g`,
   `s/shekyl-wallet-file/shekyl-engine-file/g` against the rule
@@ -545,7 +545,7 @@ six-actual-commit reality is the audit-trail surface.
 |---|---|---|---|
 | 1 | `docs(stage-1-pr3-m3e): pre-flight investigation (doc realignment PR)` (landed at `82693bab7`) + the forward-templates capture at `4b931b1b5` (M3d round-2 review-response artifacts) + the **amendment commit** at `1f9a7ad59` landing this §11 / §3.1 / §4 / §8 revision | `docs/design/STAGE_1_PR_3_M3E_PREFLIGHT.md` (this file); `docs/FOLLOWUPS.md` (forward-templates capture) | Original preflight locks scope; forward-templates capture records the §19 comment-level extension and the non-`Clone` ban design pass FOLLOWUPS surfaced by M3d round-2 Copilot review; amendment commit records the user's Q1/Q2/Q3 dispositions and the §11 calibration framework shift. Three commits landing the "preflight + review-response + amendment" logical unit. |
 | 2 | `docs(stage-1-pr3-m3e): post-migration design-doc realignment (KEY_ENGINE + V3_ENGINE_TRAIT_BOUNDARIES + MIGRATION_AUDIT)` | `docs/design/STAGE_1_PR_3_KEY_ENGINE.md`, `docs/V3_ENGINE_TRAIT_BOUNDARIES.md`, `docs/design/STAGE_1_PR_3_MIGRATION_AUDIT.md` | D1 (α) + D2 + plan §3.5 bullet 2: status-banner preface + targeted past-tensing in KEY_ENGINE.md; trait-listing update at V3_ENGINE_TRAIT_BOUNDARIES.md ~L676; MIGRATION_AUDIT.md snapshot ref refresh. All three are the "post-migration design-doc state" logical unit — same review attention; doc-only commits without per-commit compile gates. |
-| 3 | `docs(stage-1-pr3-m3e): 42-serialization rule realignment + FOLLOWUPS closures + V3.0/V3.1 queue split` | `.cursor/rules/42-serialization-policy.mdc`, `docs/FOLLOWUPS.md` | D3 + D4 (α): rule path realignment; FOLLOWUPS surgical edits (L492 Stage 2 entry; L2599 close-record past-tense; L763 rule-realignment FOLLOWUP closure-relocation); plus §19 rules-queue entry extensions (rule-15 trinary reading + rules-queue consolidation guidance per §11 below); plus V3.0 / V3.1 queue section-header split per §11.2. |
+| 3 | `docs(stage-1-pr3-m3e): 42-serialization rule realignment + FOLLOWUPS closures + V3.0/V3.1 queue split` | `.cursor/rules/142-serialization-policy.mdc`, `docs/FOLLOWUPS.md` | D3 + D4 (α): rule path realignment; FOLLOWUPS surgical edits (L492 Stage 2 entry; L2599 close-record past-tense; L763 rule-realignment FOLLOWUP closure-relocation); plus §19 rules-queue entry extensions (rule-15 trinary reading + rules-queue consolidation guidance per §11 below); plus V3.0 / V3.1 queue section-header split per §11.2. |
 | 4 | `docs(stage-1-pr3-m3e): workspace-wide path-rename residue sweep + CHANGELOG M3e entry` | 19 files / 82 occurrences across `docs/FOLLOWUPS.md`, `docs/V3_WALLET_DECISION_LOG.md`, `docs/design/WALLET_REWRITE_PLAN.md`, benchmark artifacts, test fixture READMEs; plus `docs/CHANGELOG.md` | D5 (γ): per-category sweep (rename current-state refs; preserve historical / audit-trail / baseline-command refs). Plus the M3e CHANGELOG `### Changed` entry under `[Unreleased]` per plan §3.5 / `91-documentation-after-plans.mdc`, recording the doc realignment, the rule path-realignment, the FOLLOWUPS realignment, the path-rename sweep with per-category counts, and the rule-15 calibration framework shift. |
 
 **Why four commits, not fewer.** The three substantive commits
@@ -606,7 +606,7 @@ between sweep and changelog.
   `rust/shekyl-engine-core/src/engine/traits/key.rs:616`.
 - `MIGRATION_AUDIT.md`'s snapshot reference cites `e09c6fc1f`
   (M3d-landed) where it cites a current-substrate snapshot.
-- `42-serialization-policy.mdc` carries zero `shekyl-wallet-state`
+- `142-serialization-policy.mdc` carries zero `shekyl-wallet-state`
   / `shekyl-wallet-file` references; `globs` frontmatter targets
   the renamed crates so the rule auto-applies on edits to
   `rust/shekyl-engine-state/**` and `rust/shekyl-engine-file/**`.
@@ -896,7 +896,7 @@ The rules-queue is now ~5 distinct topics across the FOLLOWUP
 entries (the user characterized it as "~6 deep" — same order of
 magnitude):
 
-1. `18-type-placement.mdc` (existing FOLLOWUP entry; in-queue draft).
+1. `118-type-placement.mdc` (existing FOLLOWUP entry; in-queue draft).
 2. Stateless-actor preference (existing FOLLOWUP entry).
 3. `19-plan-vs-state-divergence.mdc` plus the comment-level
    extension (rationale-rot per Finding 5) and the enumeration-

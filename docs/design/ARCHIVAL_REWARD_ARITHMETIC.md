@@ -19,7 +19,7 @@ the epoch's snapshot of bond records, shards and the pairs settled Served,
 folds it through `epoch_close_compute`, and hands the returned `R_market`
 and `Σwork` to the store as the epoch's `EpochGather`. Fine-grained arithmetic FFI exports
 (`curve_milli`, `scarcity_milli`, `max_claim_age_w`, `settlement_epoch_blocks`)
-were deleted with their C++ callers; per `25-rust-architecture.mdc` coarse
+were deleted with their C++ callers; per `125-rust-architecture.mdc` coarse
 FFI discipline, no per-row arithmetic crosses the boundary.
 
 Constants are emitted from `config/consensus_constants.json` via `shekyl-archival-retention/build.rs`:

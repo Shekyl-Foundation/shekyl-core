@@ -17,7 +17,7 @@ document gates.
 `docs/README.md` is the front door.
 
 Cite from [`91-documentation-after-plans.mdc`](91-documentation-after-plans.mdc)
-and [`94-tracking-index.mdc`](94-tracking-index.mdc). Archive eligibility
+and [`194-tracking-index.mdc`](194-tracking-index.mdc). Archive eligibility
 and the `git mv` checklist live in
 [`docs/design/IMPLEMENTATION_INDEX.md`](../../docs/design/IMPLEMENTATION_INDEX.md)
 §8; this rule does not restate that checklist.
@@ -58,5 +58,5 @@ left in `docs/design/` with a DRAFT banner, or a new
 
 ## Related rules
 
-- **`94-tracking-index.mdc`** — identifier registry; the index is a map,
+- **`194-tracking-index.mdc`** — identifier registry; the index is a map,
   not a status-of-record.

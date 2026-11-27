@@ -679,7 +679,7 @@ impl BadInterval {
 /// (S-CHAIN-W SCW-2); the rule set **carries** it — the genesis constant on
 /// every issued set, the regtest lever's value on a levered set — so the
 /// validator derives epochs, closes and slash deadlines from the rules in
-/// force and never from a process's environment (rule 71: nettype selects
+/// force and never from a process's environment (rule 171: nettype selects
 /// data, never control flow); and `shekyl-archival-retention` **computes**
 /// with it (`SettlementSchedule`, the one home of the geometry). The store
 /// compares its pin to the in-force set's at every connect, which is what

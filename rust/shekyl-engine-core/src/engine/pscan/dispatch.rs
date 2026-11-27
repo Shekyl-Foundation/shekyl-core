@@ -86,7 +86,7 @@ pub(crate) trait BondBroadcast: Send + Sync + 'static {
 /// and the driver stops sending at it. The rationale below was written for
 /// the post and still sizes this horizon against the confirmation floor.
 ///
-/// **Default rationale (rule 75), resolving `ARCHIVAL_BOND_WI3_DISPATCH.md`
+/// **Default rationale (rule 175), resolving `ARCHIVAL_BOND_WI3_DISPATCH.md`
 /// §6(b).** §6(b) proposed reusing the submit-watchdog's escape horizon;
 /// verification at source rejects that: the watchdog's block ceiling
 /// (`WatchdogConfig::production`, the dispatched proof's life minus one block)

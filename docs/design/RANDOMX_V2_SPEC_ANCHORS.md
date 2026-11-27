@@ -14,7 +14,7 @@
 
 ## 0. Why this document exists
 
-Per `05-system-thinking` (specification first) and `26-sub-pr-design-discipline`
+Per `05-system-thinking` (specification first) and `126-sub-pr-design-discipline`
 (design round before multi-part consensus/crypto code), this doc is the
 spec-and-decomposition step before any F4 code. The change touches the
 genesis-critical PoW verifier's test substrate; the audit's whole thesis is
@@ -152,7 +152,7 @@ than manufacturing false independence:
   boundary: *this delta's oracle is specs.md §3.4 + the pinned fork, and that
   is the strongest available until an independent v2 implementation exists.*
 
-## 3. Decomposition by validation surface (`19-validation-surface-discipline`)
+## 3. Decomposition by validation surface (`119-validation-surface-discipline`)
 
 These tiers do not share a validation surface, so they should not be one
 undifferentiated commit. Recommended split:
@@ -169,7 +169,7 @@ undifferentiated commit. Recommended split:
 - **F4c — FP corner-case derivations (Tier 4).** Small; can ride F4a or F4b,
   or defer. Records the fork-anchored-delta boundary explicitly.
 
-Rule 19 says bundle by surface: F4a is one surface (*do our primitives +
+Rule 119 says bundle by surface: F4a is one surface (*do our primitives +
 constants match published standards*), F4b another (*does the RandomX-specific
 machinery match an independent implementation, where v2 didn't change it*).
 

@@ -16,7 +16,7 @@
 > recorded open per the §5 reconvergence gate until WI-4's threshold
 > artifact + live-emission re-run existed. Design record below is rounds 1–2, spec-first per rule
 > `05-system-thinking` (process shape per
-> `26-sub-pr-design-discipline` — this slice touches a broadcast-privacy
+> `126-sub-pr-design-discipline` — this slice touches a broadcast-privacy
 > surface and a persisted-schema bump, so it gets explicit rounds). Round 2
 > was an adversarial review pass; its findings and dispositions are §7, and
 > the affected dispositions (D-B1, D-B3, D-B6, §5) are amended **in place**
@@ -50,7 +50,7 @@ In scope:
    and what never re-draws (§3.6).
 6. **D1 entry-event coordination** — no shared-tick co-launch (§3.2).
 7. Live **`BondPostDispatched`** GF-7 emission (§3.7).
-8. `PENDING_POST_VERSION` 1 → 2 (rule 42) for the new state arms
+8. `PENDING_POST_VERSION` 1 → 2 (rule 142) for the new state arms
    (WI-3's 2026-07 bump; live constant is 11 after height-semantics Phase 2b).
 9. Failure modes (rule 82) and the acceptance gate, including the named
    WI-4 reconvergence gate (§5).
@@ -485,7 +485,7 @@ Open at round-1 close (none block the seams above):
   synthesis that sweeps the dispersal distribution, and any pre-live
   answer is provisional; see §5.)*
 - **(b)** The attempt-budget constant — proposed to reuse the
-  submit-watchdog's bound rather than a new tunable (rule 75: every
+  submit-watchdog's bound rather than a new tunable (rule 175: every
   tunable needs a rationale; reuse inherits the existing one). *(Stands
   open for the implementation PR.)*
 - **(c)** Whether the one-per-tick rule should also space *first*

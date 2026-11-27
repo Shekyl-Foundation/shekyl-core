@@ -19,7 +19,7 @@ V3.0 according to their attack-surface profile.
 **Related rules:**
 [30-cryptography.mdc](../../.cursor/rules/30-cryptography.mdc) ·
 [35-secure-memory.mdc](../../.cursor/rules/35-secure-memory.mdc) ·
-[40-ffi-discipline.mdc](RULE_40_FFI_DISCIPLINE.md) ·
+[RULE_40_FFI_DISCIPLINE.md](RULE_40_FFI_DISCIPLINE.md) ·
 [80-usability.mdc](../../.cursor/rules/80-usability.mdc) ·
 [82-failure-mode-ux.mdc](../../.cursor/rules/82-failure-mode-ux.mdc).
 
@@ -69,7 +69,7 @@ the funds-first decision order below the table:
 | **Sealed wallet state**    | `.wallet` (file-layout region 2): `shekyl_engine_state` blocks inside `WalletLedger` | Engine only (chain-reconciled) | AEAD (XChaCha20-Poly1305) under the region-2 wrap key | Strict per-block version; **refuse-to-load** on drift/tamper — never reset-to-default. |
 
 The categorization is per-field and not negotiable. Rule
-[`42-serialization-policy.mdc`](../../.cursor/rules/42-serialization-policy.mdc) pins
+[`142-serialization-policy.mdc`](../../.cursor/rules/142-serialization-policy.mdc) pins
 this at the workspace level: **adding a new wallet-tunable field requires
 explicitly choosing a layer and, for TOML or CLI-override, writing the rationale
 in this document.**
@@ -176,7 +176,7 @@ would lose or endanger funds.
   `file_kek`. Owned and read/written by the Rust engine; C++ never parses it.
 - **Integrity & evolution:** strict per-block version constants, snapshot-pinned
   and CI-enforced by
-  [`42-serialization-policy.mdc`](../../.cursor/rules/42-serialization-policy.mdc); a
+  [`142-serialization-policy.mdc`](../../.cursor/rules/142-serialization-policy.mdc); a
   version mismatch refuses rather than migrates — its "no silent migration" stance.
 - **Why not TOML:** filing funds-load-bearing state into advisory TOML means a
   tamper event quarantines it and loads a default — e.g. `staking_enabled = false`,

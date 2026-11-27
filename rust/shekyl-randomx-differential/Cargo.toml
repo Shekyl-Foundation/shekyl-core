@@ -41,7 +41,7 @@ license.workspace = true
 #     `randomx-v2-sys = { path = "..." }` below. The plan-doc row
 #     for §5.1.15 was substrate-corrected at C4 close per the same
 #     substrate-reading discipline that closed Copilot PR #75's R4-D1
-#     finding (rule-17 + rule-26 forward-action queue).
+#     finding (rule-17 + rule-126 forward-action queue).
 #   - `randomx-v2-sys = { path = "../randomx-v2-sys" }` is the C
 #     reference's Rust binding; the path-dep form is required because
 #     §5.6 forbids any other workspace member from depending on this

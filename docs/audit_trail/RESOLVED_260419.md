@@ -406,7 +406,7 @@ target. `validate_filename` narrowed to `validate_wallet_path` (empty
 check only); path-component safety is the caller's job now that the
 caller owns directory resolution. The legacy C++ `wallet_rpc_server`
 keeps its own `wallet_dir` state because it does not route through the
-FFI. Per `20-rust-vs-cpp-policy.mdc`: path construction parses
+FFI. Per `RULE_20_RUST_VS_CPP.md`: path construction parses
 untrusted input and defines a contract other code consumes — the Rust
 side is the right owner.
 

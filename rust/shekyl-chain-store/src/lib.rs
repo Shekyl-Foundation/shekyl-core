@@ -11,7 +11,7 @@
 //! - **DRS-P0d** — [`digest_v0`]: the layout-independent logical-state
 //!   digest that DRS-0 / DRS-C use as a regression oracle
 //!   ([`docs/design/DAEMON_REDB_STORE.md`](../../docs/design/DAEMON_REDB_STORE.md)
-//!   §7.1, DRS-D11, Tier-A **A2**). Transform-shaped (rule 18): defined
+//!   §7.1, DRS-D11, Tier-A **A2**). Transform-shaped (rule 118): defined
 //!   by the function over the three v0 families, not by a stored value.
 //! - **DRS-0 slice A** — [`accumulator`]: the incremental replacements
 //!   for that full-domain scan, the five-token class vocabulary, and
@@ -30,7 +30,7 @@
 //! - **DRS-E1 increment 2** — [`codec`], [`family_set`], [`provenance`],
 //!   and the store header. [`codec::Canonical`] is the one encoding a
 //!   value is stored under *and* the digest folds (§11.1(b)), with a
-//!   committed fixture snapshot per codec gating it under rule 42. The
+//!   committed fixture snapshot per codec gating it under rule 142. The
 //!   store seals [`codec::SCHEMA_VERSION`] into a fresh file's first
 //!   transaction and refuses any other version on reopen (§11.1(a)). The
 //!   file's [`provenance::Provenance`] — which archival applies some

@@ -34,7 +34,7 @@ keeps and already forces to move:
     until it is re-pinned when one of them changes.
   * the captured replay chains under
     `rust/shekyl-chain-ingest/tests/vectors/`. A rule change that makes
-    earlier blocks invalid forces a re-capture (rule 07), so the directory's
+    earlier blocks invalid forces a re-capture (rule 107), so the directory's
     tree id moves.
 
 Neither record alone is enough. The 2026-10 rule that reserved the header's

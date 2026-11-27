@@ -16,7 +16,7 @@ tests the merges into `dev`.
 The 5-working-day / 10-commit splitting guidance in rule 2 and the
 "land on dev within 5 working days" guidance above have a single
 ratified exception: PRs that meet all four criteria of
-[`07-consensus-atomic-cutovers.mdc`](./07-consensus-atomic-cutovers.mdc)
+[`107-consensus-atomic-cutovers.mdc`](./107-consensus-atomic-cutovers.mdc)
 — consensus-rule boundary, indivisible under flag decomposition,
 surface enumerated in advance with grep evidence, and disposition
 documented in the PR description with reviewer-map and rollback
@@ -27,7 +27,7 @@ deletion without confirmation, etc.) is unmodified.
 
 If a PR appears to need the exception, the test is *not* "is this
 analogous to LWMA-1 Phase 4" — it is "does this PR meet the four
-named criteria in `07-consensus-atomic-cutovers.mdc`?" The exception
+named criteria in `107-consensus-atomic-cutovers.mdc`?" The exception
 is auditable mechanically against the criteria, not by precedent.
 
 ## The runs on `dev` test the merge result

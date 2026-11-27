@@ -400,7 +400,7 @@ row):
 **Measured — including on the Pi 4 provisioning floor (prerequisite
 DISCHARGED 2026-08-08).** Same binary both hosts (release, hedged
 signing; averages over 3 sign / 3 keygen / 20 verify iterations; Pi =
-Raspberry Pi 4 Model B Rev 1.4, aarch64, the rule-76 floor):
+Raspberry Pi 4 Model B Rev 1.4, aarch64, the rule-176 floor):
 
 | | keygen | sign | verify | sig bytes |
 |---|---|---|---|---|
@@ -421,7 +421,7 @@ What the floor numbers say, without deciding for the round:
   6.5 ms keygen is imperceptible even on the floor — at the cost of a
   **35.7 KB** signature (2.2× the s-variant, ~6.7× construction (A)).
   The x86→Pi scaling factor measured ~7.4×, not the 10–20× a
-  projection would have guessed — which is why rule 76 forbids
+  projection would have guessed — which is why rule 176 forbids
   guessing.
 - Verification is trivial everywhere (≤ 9.4 ms worst case), so the
   verifier side constrains nothing.
@@ -557,7 +557,7 @@ and a measurement:
 - Measured on the dev box (i9, release): SLH-192s sign ≈ 519 ms /
   verify ≈ 0.45 ms vs ML-DSA-65 sign ≈ 0.27 ms / verify ≈ 0.11 ms.
   **Pi 4 floor measurement is the named prerequisite** before SM-DQ-8
-  rules (rule 76: no deciding on scaled projections).
+  rules (rule 176: no deciding on scaled projections).
 - Dependency audit opened early: `fips205`'s deterministic keygen uses
   the same `DummyRng` pattern that forced the `fips203` exact-pin
   (verified in `fips205-0.4.1/src/traits.rs`); adoption terms recorded
@@ -573,7 +573,7 @@ folded.** Cross-compiled the scratch bench (aarch64, same binary both
 hosts) and ran it on the floor hardware (Pi 4 Model B Rev 1.4):
 SLH-192s sign **3.83 s** / keygen 415 ms; SLH-192f sign **171 ms** /
 sig 35,664 B; ML-DSA-65 sign 1.77 ms. Measured x86→Pi scaling ≈ 7.4×
-(a projection would have guessed 10–20× — rule 76 vindicated in both
+(a projection would have guessed 10–20× — rule 176 vindicated in both
 directions). The named prerequisite is DISCHARGED; SM-DQ-8's decision
 inputs are complete and the genesis-lane item is draftable.
 

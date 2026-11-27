@@ -23,7 +23,7 @@ const fn hash(fill: u8) -> BlockHash {
 }
 
 /// Every network pins its genesis and nothing else, and each network's
-/// genesis is its own. Rule 71 rides along: the four tables have the same
+/// genesis is its own. Rule 171 rides along: the four tables have the same
 /// shape and differ only in the datum a network is.
 #[test]
 fn every_network_pins_its_own_genesis_and_nothing_above_it() {

@@ -58,7 +58,7 @@
 #            place.
 #
 # A row the CI runner can re-capture is a count, and a count is not a
-# device time (rule 76): no stale or unmeasured row was a `ci` row when the
+# device time (rule 176): no stale or unmeasured row was a `ci` row when the
 # sweep ran.
 #
 # `[[retired_estimate]]` keeps a prediction beside the measurement that

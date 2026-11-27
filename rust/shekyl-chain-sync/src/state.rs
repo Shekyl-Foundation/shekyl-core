@@ -56,7 +56,7 @@ impl SyncState {
 
 /// The operator's declaration of the node's network (CS-Q2 step 8, Rick
 /// 2026-11-01), read from the resolved configuration once at open. It is
-/// local configuration, never the network type (rule 71): the same
+/// local configuration, never the network type (rule 171): the same
 /// declaration derives the same state on every network.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Declaration {

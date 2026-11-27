@@ -90,7 +90,7 @@ proceed.
 
 **Rationale.**
 
-- Per `18-type-placement.mdc`, the bare cryptographic transform
+- Per `118-type-placement.mdc`, the bare cryptographic transform
   (re-decap → 64-byte `SharedSecret`) is transform-shaped — it is
   defined by what it computes, not by who owns the result. Its home
   is `shekyl-crypto-pq` alongside `combine_shared_secrets` and
@@ -831,7 +831,7 @@ inheritance prevention" framing.
 **The two-layer split for D1 was a framework production, not a
 plan deliverable.** The migration plan (§3.2) named what to ship
 (re-decap derivation primitive); it did not specify the shape.
-Applying `18-type-placement.mdc`'s "transform-shaped lives with its
+Applying `118-type-placement.mdc`'s "transform-shaped lives with its
 function; state-shaped lives with its owner" rule to the
 `(view_secret, source_ciphertext) → SourceSecretsBundle` flow
 yielded the Layer 1 (transform-shaped, in `shekyl-crypto-pq`) /

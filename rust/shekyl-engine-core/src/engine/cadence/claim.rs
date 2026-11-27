@@ -26,7 +26,7 @@ use super::super::Engine;
 use super::{CadenceLeg, WeakEngine};
 
 /// Consecutive claim-leg faults before [`AlarmCondition::EpochClaim`]
-/// raises (rule 75: rationale + bounds).
+/// raises (rule 175: rationale + bounds).
 ///
 /// **Rationale.** One fault is routine (a daemon restart, a transient
 /// transport refusal); the leg retries on the next chain advance for free.

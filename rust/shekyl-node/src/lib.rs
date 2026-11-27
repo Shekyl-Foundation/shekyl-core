@@ -136,7 +136,7 @@ fn blocking_threads(permits: NonZeroUsize, window: NonZeroUsize) -> NonZeroUsize
 /// The operator's declaration of the node's network (CS-Q2 step 8), from
 /// the resolved configuration: `Offline` when both connectors are off,
 /// `Closed` when the peer list is closed, `Open` otherwise. Configuration,
-/// never the network type (rule 71). Public so the daemon's start can say,
+/// never the network type (rule 171). Public so the daemon's start can say,
 /// before the node opens, that an `Open` node's miner waits for a view
 /// (`shekyl-daemon`'s mining notice, DC-F41).
 #[must_use]

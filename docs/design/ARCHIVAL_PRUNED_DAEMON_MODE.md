@@ -34,10 +34,10 @@ Line-number citations carry their sha; re-verify before relying on one.
 
 **Family:** `PDM-Q` — tokens `PDM-Q1`…`PDM-Q12` (questions), `PDM-Q-F1`…`F33`
 (findings), `PDM-Q-S0` (sequencing constraint). Registered in
-[`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2 (rule 94). Distinct
+[`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2 (rule 194). Distinct
 from `**PD-A…PD-F**`.
 
-**Process:** [`26-sub-pr-design-discipline`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
+**Process:** [`126-sub-pr-design-discipline`](../../.cursor/rules/126-sub-pr-design-discipline.mdc)
 governed the round; rule 21 shapes every ruling (rejection, reopening
 criteria, re-evaluation shape); rule 23 governs what each disposition left
 visible.
@@ -56,7 +56,7 @@ as of this pin, banner line 11).
 
 **Why, under current substrate.** Steering, 2026-09-12: this design will
 not be implemented until after the C++→Rust daemon cutover. Independently,
-rule 20 already sends new daemon logic to Rust — a C++ `prune_worker`
+`RULE_20_RUST_VS_CPP` already sends new daemon logic to Rust — a C++ `prune_worker`
 extension would be debt the rewrite re-creates. DRS-D5's
 decompose-in-C++-first rationale is already retired (2026-09-01
 countermand).
@@ -257,7 +257,7 @@ said the constant was unbuilt, the override admitted `2..=SEB`, and a
 const-asserted at `D_max`'s home, on the production constants**
 (`shekyl_chain_rules::reorg`, `D_MAX` derived from
 `archival_reorg_depth_blocks`) **and is an invariant of every valid
-configuration on every nettype** (rule 71: nettype selects data; the data
+configuration on every nettype** (rule 171: nettype selects data; the data
 satisfies the same invariant). The cap is **rule-set data** —
 `RuleSet::reorg_cap`, `GENESIS` carrying `D_MAX`, a levered set naming
 its own through `RuleSet::with_levers(fixed, schedule)` (SPR-8; since DRS-E4
@@ -1165,7 +1165,7 @@ fetching.
 
 **Grounded at** `dev@20ebdf1e5` and PR #775 (`docs/two-store-daemon-uniformity`,
 head `e2b6b87f6`, **OPEN at ruling**, read in full — `PDM-Q-F33`).
-**Decision anchor (rule 94, clarified 2026-09-18 on review):** the closing
+**Decision anchor (rule 194, clarified 2026-09-18 on review):** the closing
 edit is **this contract's, on #774** — the maintainer read #775 and ruled
 here. #775 is the *criterion's source*, not the anchor. **#775 landed
 `e685ef1cd` and #774 landed `eee838d4d` fifteen minutes after it, so F33's
@@ -1573,7 +1573,7 @@ through `shekyl-p-serve` (`SF-D8`'s content half, sub-PR 2); carry its
 own lapse tail (#775's retention row); receive recovery shards the
 daemon hands across and retain them; hold the Foundation `CompleteTree`
 behind a persona (Q9's floor). The round registers its family at birth
-(rule 94) and cites this contract for its inputs; FOLLOWUPS row with the
+(rule 194) and cites this contract for its inputs; FOLLOWUPS row with the
 falsifier. **Collision, recorded 2026-09-18:** the wallet lane's active
 store round — `CTS-` ([`CURVE_TREE_STORE_SHAPES.md`](CURVE_TREE_STORE_SHAPES.md),
 PR #776, Round 1 ruled the same day) — is a typed-shape rewrite of the

@@ -139,7 +139,7 @@ pub enum PaymentRequestState {
 /// `created_at` / `expiry` are wall-clock [`Timestamp`]s (RTN-6). The
 /// postcard encoding is the same `u64` it was as a height, so
 /// [`crate::bookkeeping_block::BOOKKEEPING_BLOCK_VERSION`] does not bump
-/// (rule 42 type-only). Pre-genesis wallets that wrote a height here are
+/// (rule 142 type-only). Pre-genesis wallets that wrote a height here are
 /// wiped by the operator (`rm -rf ~/.shekyl`; rule 15) — there is no
 /// in-file format detector.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -167,7 +167,7 @@ struct PaymentRequestSchema {
     // `#[serde(transparent)]`/`#[repr(transparent)]` over `u64`, so the
     // postcard wire bytes are identical and the schema snapshot stays stable
     // (no `BOOKKEEPING_BLOCK_VERSION` bump). Keeping the mirror on the wire
-    // type is the documented pattern in `42-serialization-policy.mdc`.
+    // type is the documented pattern in `142-serialization-policy.mdc`.
     amount_atomic: u64,
     created_at: u64,
     expiry: Option<u64>,

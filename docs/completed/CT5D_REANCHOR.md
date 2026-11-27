@@ -37,8 +37,8 @@ that lock₂'s authoritative reads are sync `with_ledger_block` reads while the
 ingested-tip gate stays in the async pre-phase). Decisions locked below. This is
 the frozen contract the CT-5d reanchor slice cuts against, per
 [`05-system-thinking`](../../.cursor/rules/05-system-thinking.mdc) and
-[`26-sub-pr-design-discipline`](../../.cursor/rules/26-sub-pr-design-discipline.mdc).
-Scope split per [`19-validation-surface-discipline`](../../.cursor/rules/19-validation-surface-discipline.mdc):
+[`126-sub-pr-design-discipline`](../../.cursor/rules/126-sub-pr-design-discipline.mdc).
+Scope split per [`119-validation-surface-discipline`](../../.cursor/rules/119-validation-surface-discipline.mdc):
 this slice is the **engine reorg/horizon validation surface**; the Tier-B
 reconstruct-root fixture (`ct2_tier_b.json` + un-ignoring `recon_tier_b.rs`) is a
 **separate curve-tree slice** (partly daemon-blocked on the `0x07` adversarial
@@ -444,7 +444,7 @@ without fingerprinting (X1, §1).
 `ConsumerHeldEntry` are a runtime `Mutex<PendingTxState>`, **not** persisted (no
 serde derive; `shekyl-engine-file` does not serialize them) — pending txs are
 already ephemeral across restart. Adding `reference` / `content_gen` is
-runtime-only: no `WALLET_STATE_MIGRATION` row, no rule-42 schema bump. (If the
+runtime-only: no `WALLET_STATE_MIGRATION` row, no rule-142 schema bump. (If the
 Stage-4 `PendingTxActor` ever persists `consumer_held`, *that* PR owns the
 force-expire-vs-rebuild decision; recorded here so it is not forgotten.)
 

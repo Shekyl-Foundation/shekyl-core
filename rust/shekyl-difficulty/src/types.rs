@@ -5,7 +5,7 @@
 
 //! Transform-shaped difficulty newtypes. They live **here**, not in
 //! `shekyl-types`: a difficulty is the output of LWMA-1, not a chain
-//! identity (`18-type-placement.mdc`).
+//! identity (`118-type-placement.mdc`).
 
 use core::fmt;
 use core::num::NonZeroU128;

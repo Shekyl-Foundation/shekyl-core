@@ -192,7 +192,7 @@ the regtest e2e composes it with consensus.
 ## 3. Design questions (round 1) — CB-1…CB-5
 
 Identifier family `CB-N`, registered in `IMPLEMENTATION_INDEX.md` §2 in
-this PR (rule 94 prefix-uniqueness check run against
+this PR (rule 194 prefix-uniqueness check run against
 Phase/Stage/M/Bond-PR/SP/SP-T/PR-A/PR-B/PR-E/CT/GF/S/R/F/DQ/SCE/WI/M1: passes).
 
 ### CB-1 — recompute sourcing: where does the wallet read archival state?
@@ -794,13 +794,13 @@ can lie per-epoch can lie per-window identically).
 ## 8. Implementation plan — the PR chain
 
 Four PRs, each within the 5-day/10-commit ceiling (`06-branching.mdc`),
-split by validation surface (rule 19), ordered by dependency. Branch
+split by validation surface (rule 119), ordered by dependency. Branch
 `feat/emission-claim-builder-impl` (this doc's round-2 commit is its
 first).
 
 | PR | Scope | Validation surface | Gates / pins carried |
 | --- | --- | --- | --- |
-| **1 — daemon RPC** | The §7 endpoint: C++ handler as a marshaling shim over `gather_archival_emission_epoch_snapshot` (rule 20: transport C++, no new logic) + bond-record context read; Rust client decode to `EmissionEpochSource`/`ClaimantBondRecord`; wire tests (round-trip, sentinel decode, window bounds) | RPC wire + operand fidelity (RPC-sourced operands byte-equal the verify shim's in-process gather on the same DB state) | §7.1 single-gather pin; §7.3 exclusion table; close-processing-height lookalike pin |
+| **1 — daemon RPC** | The §7 endpoint: C++ handler as a marshaling shim over `gather_archival_emission_epoch_snapshot` (`RULE_20_RUST_VS_CPP`: transport C++, no new logic) + bond-record context read; Rust client decode to `EmissionEpochSource`/`ClaimantBondRecord`; wire tests (round-trip, sentinel decode, window bounds) | RPC wire + operand fidelity (RPC-sourced operands byte-equal the verify shim's in-process gather on the same DB state) | §7.1 single-gather pin; §7.3 exclusion table; close-processing-height lookalike pin |
 | **2 — pure assembly module** | `engine/emission_claim.rs`: step 1 claimable-epoch derivation (verifier-exact via `reward_share_floor` over RPC-sourced frozen operands), step 2 work-claim rows, step 5 vouts + fee sizing (GF-4b item-5 bound-or-split), step 7 self-check, CB-5 refusal taxonomy. KAT-able with a fixture `EmissionEpochSource` — no live daemon, no actor harness | Builder-vs-verifier differential (assemble ⇒ the three landed verify functions accept; mutate any operand ⇒ reject) + refusal taxonomy (zero-share, window-floor, already-claimed, 15-cap batching) | CB-5 `SelfCheckFailed`-blind; wire positivity as the claimability predicate; no `K_COVER` read anywhere in the module *(pin now trivially met — gate retired PR #346; the live form of this pin is CB-5 cause-blindness across the surviving zero-causes, per §7.3)* |
 | **3 — StakeEngine handler** | The `SignBond`-sibling message (CB-2): backing selection via `BackingSet::from_spendable` (first live consumer — un-deadens GF-4b §5 item 1), membership proof (`prove_membership_only`), dual auth via a **derived bundle**, tx assembly + fee inputs through the existing spend machinery; the `EmissionReward` scan arm's first constructor site (§4 companion — without it claim change strands in rung-3) | Custody boundary (the checkable CB-2 pin: no master-seed re-borrow on the claim path) + scan classification (GF-4b item-3 integration test: first-emission backing = `BondPostChange`) | CB-2 sign-within-`assemble()`; GF-4b §5 items 1/2/3/6; reference-height same-tip rule |
 | **4 — regtest e2e + blob-boundary arm** | Part 2 of the E4 gate, **after #281 lands** (reuses `economics_chain_helpers.h`): mine to an epoch close with served work, build via PRs 1–3's production path, submit over real RPC, assert accepted-and-applied (claimed-set row + vout shape), pop/reorg leg; plus the CB-4 blob-boundary KAT arm (drive full dispatch, assert CT-balance verdict invariant under `canonical_bytes` variation) — landing where its harness is born | End-to-end consensus acceptance (the E4 merge gate, `REWARD_EMISSION_VIN_PLAN.md` §3.0) + CB-4 leg-i/leg-ii tripwire completeness | Q11-KAT FOLLOWUPS item closes here; e2e also carries the conservation KAT's fee-leg residue disclosed in #281 |
@@ -1046,7 +1046,7 @@ reopening criterion — the §13 wire reshape — has fired), and Phase A
 rejects `Input::ArchivalRewardEmission` outright (the emission submit
 leg — kind classification, fee/vout statics, verifier rows — never
 landed). Implementing both batteries is daemon-submit-engine work — a
-different validation surface (rule 19) and its own crate — and would
+different validation surface (rule 119) and its own crate — and would
 push this PR past the 10-commit ceiling. Split per `06-branching.mdc`:
 
 - **PR-4a (implemented 2026-07-12, `feat/emission-regtest-e2e`, ten

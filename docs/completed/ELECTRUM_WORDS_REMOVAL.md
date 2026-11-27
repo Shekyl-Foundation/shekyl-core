@@ -22,7 +22,7 @@ longer a phased migration.
 Companion:
 [`ELECTRUM_WORDS_REMOVAL_PLAN.md`](./ELECTRUM_WORDS_REMOVAL_PLAN.md).
 The Phase 0 review cycle (target 4–6 rounds per
-`20-rust-vs-cpp-policy.mdc`) closed before deletion code landed.
+`RULE_20_RUST_VS_CPP.md`) closed before deletion code landed.
 
 **Scope.** Shekyl genesis ships BIP39-only for wallet seed
 material. The inherited CryptoNote 25-word "Electrum-style"
@@ -584,9 +584,9 @@ state initialization; address-book bootstrap), but offloads
 seed-production to the Rust BIP39 entry via
 `shekyl_account_generate_from_bip39`. Rationale:
 
-1. **Rule 20 rule 1: "Rust if touches a secret."** The BIP39
+1. **`RULE_20_RUST_VS_CPP` rule 1: "Rust if touches a secret."** The BIP39
    mnemonic is the master secret. Per
-   [`20-rust-vs-cpp-policy.mdc`](RULE_20_RUST_VS_CPP.md)
+   [`RULE_20_RUST_VS_CPP.md`](RULE_20_RUST_VS_CPP.md)
    rule 1, secret-generation logic belongs in Rust.
 2. **Rejected: (c) wholesale wallet2::generate() deletion.** That
    shape is the B-3 architectural workstream (Rust owns the
@@ -2057,7 +2057,7 @@ per `15-deletion-and-debt.mdc`).
 - [`16-architectural-inheritance.mdc`](../../.cursor/rules/16-architectural-inheritance.mdc) —
   inheriting code vs. inheriting architecture; the
   cost-benefit-defer-to-later anti-pattern.
-- [`20-rust-vs-cpp-policy.mdc`](RULE_20_RUST_VS_CPP.md) —
+- [`RULE_20_RUST_VS_CPP.md`](RULE_20_RUST_VS_CPP.md) —
   Rust if touches a secret. Phase 0 design rounds discipline.
 - [`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc) —
   reversion criteria per disposition (§6.5).

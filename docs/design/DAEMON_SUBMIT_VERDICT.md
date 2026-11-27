@@ -13,7 +13,7 @@ dropped through the round-2→round-3 index seam (F14, awaiting-confirmation
 durability) and hardened the freeze gate (Phase-D policy re-check, archival
 matrix rows, noise-zone threat entry, schema-evolution rule) without reopening
 structure. Further rounds, if any, accrete in this document.
-**Process rule:** [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
+**Process rule:** [`126-sub-pr-design-discipline.mdc`](../../.cursor/rules/126-sub-pr-design-discipline.mdc)
 (FFI-boundary-moving, consensus-adjacent: the submit path shares admission
 logic with block validation, and getting the attestation seam wrong is a
 consensus-integrity break, not a refactor).
@@ -833,13 +833,13 @@ attestation is a consensus-integrity hazard, not a perf bug. Discipline:
 ## 4. The C++ shims (FFI spec)
 
 Three exported functions, POD-struct interfaces, zero verdict logic. Per
-[`20-rust-vs-cpp-policy.mdc`](../completed/RULE_20_RUST_VS_CPP.md)
+[`RULE_20_RUST_VS_CPP.md`](../completed/RULE_20_RUST_VS_CPP.md)
 this is the C++-as-minimal-transport-shim shape.
 
 **FFI boundary (implementation-round pin).** These shims deliberately do
 **not** route through the single `shekyl-ffi` surface that
-[`40-ffi-discipline.mdc`](../completed/RULE_40_FFI_DISCIPLINE.md) /
-[`25-rust-architecture.mdc`](../../.cursor/rules/25-rust-architecture.mdc)
+[`RULE_40_FFI_DISCIPLINE.md`](../completed/RULE_40_FFI_DISCIPLINE.md) /
+[`125-rust-architecture.mdc`](../../.cursor/rules/125-rust-architecture.mdc)
 otherwise mandate. They resolve pool/blockchain/protocol from a live
 `core_rpc_server` (`core_rpc_ffi_*`), which is a daemon-only object;
 `libshekyl_ffi.a` links into the wallet and every other consumer, so pulling
@@ -849,7 +849,7 @@ crate. The submit shims therefore own their boundary — the C++ header
 `rust/shekyl-daemon-rpc/src/ffi.rs`, and the marshalling in
 `src/submit/ffi_shim.rs` — colocated with the daemon-RPC crate that is their
 only caller, exactly as `core_rpc_ffi_*` already does. An FFI-surface audit
-(rule 40's enumeration, rule 35/36 secret-locality sweeps) must include this
+(`RULE_40_FFI_DISCIPLINE`'s enumeration, rule 35/36 secret-locality sweeps) must include this
 boundary, not only `shekyl-ffi`.
 
 ### 4.1 `shekyl_submit_snapshot_facts`
@@ -1357,7 +1357,7 @@ against the C++ behavior); the matrix is the gate, per round-5 minor (b).
 | M2 | Input types supported | `:853-859` | `invalid_input` | **A** — dense-tag parse rejects unknown arms |
 | M3 | Outputs valid (`check_outs_valid`) | `:861-867` | `invalid_output` | **A** ⚠ — confirm `shekyl-wire` covers every `check_outs_valid` leg |
 | M4 | `outPk` count == vout count (v2+) | `:868-877` | `invalid_output` | **A** — arity check |
-| M5 | Money overflow | `:879-885` | `overspend` | **A** — checked arithmetic (rule 20 §4) |
+| M5 | Money overflow | `:879-885` | `overspend` | **A** — checked arithmetic (`RULE_20_RUST_VS_CPP` §4) |
 | M6 | KI uniqueness within tx | `:890-896` | `invalid_input` | **A** — with sortedness (row K2) this is one pass |
 | M7 | Ring-members-diff | `:898-904` | `invalid_input` | **DEL** — vestigial: FCMP++ requires empty `key_offsets` (row K1); nothing to compare. Rule-60 deletion recorded here |
 | M8 | KI domain (`check_tx_inputs_keyimages_domain`) | `:906-912` | `invalid_input` | **A** ⚠ — thin-port: curve subgroup/domain check against the same rule the C++ applies; pinned vectors |
@@ -1860,7 +1860,7 @@ deletes clean. PR-5's re-grep remains the backstop.
 | `src/rpc/core_rpc_ffi.cpp` | `DJSON` legacy-route dispatch entries | delete |
 | `rust/shekyl-daemon-rpc/src/server.rs:98-103`, `handlers/json.rs:70` | axum proxy routes for the legacy endpoint | replaced by the native typed route (PR-3); deleted PR-5 |
 | `rust/shekyl-rpc-client/src/lib.rs:191-`, `:488-522` | `TxRelayResponse` + string-keyed `publish_transaction` | replaced by typed verdict (PR-4) |
-| `src/wallet/wallet2.cpp:196`, `:7681-7690` | legacy C++ wallet caller (`get_text_reason`, `commit_tx`) | ports to the new endpoint as a minimal epee marshaling shim (transport-only per rule 20); its richer error text comes from the verdict cause |
+| `src/wallet/wallet2.cpp:196`, `:7681-7690` | legacy C++ wallet caller (`get_text_reason`, `commit_tx`) | ports to the new endpoint as a minimal epee marshaling shim (transport-only per `RULE_20_RUST_VS_CPP`); its richer error text comes from the verdict cause |
 | `tests/trezor/daemon.{h,cpp}:59-66`, `:36-38` | mock RPC daemon for trezor tests | follows wallet2's port |
 | `utils/python-rpc/framework/daemon.py:92-100` | functional-test framework | gains `submit_transaction`; legacy helper deleted with the route |
 | Docs: `docs/DAEMON_RPC_RUST.md:46`, `docs/SHEKYLD_PREREQUISITES.md` §5, `docs/FOLLOWUPS.md:6128,:6261-6301`, `docs/design/PHASE_2A_SEND_PATH.md`, `rust/shekyl-engine-core/.../traits/daemon.rs:125-141`, `transaction_submitter.rs:36-43` | stale contract descriptions | PR-6 sweep (rule 91) |
@@ -2054,7 +2054,7 @@ seam (rides the 2c-2b request path per decision 5 of the driver plan).
 ## 13. Mission-hierarchy note (rule 00)
 
 - **Priority 1 (security/PQC) — advanced and binding for:** untrusted-input
-  parsing and amount/fee arithmetic move to Rust (rule 20 categories 3 and
+  parsing and amount/fee arithmetic move to Rust (`RULE_20_RUST_VS_CPP` categories 3 and
   4); consensus-critical locks are held strictly shorter (verification
   outside all locks); the F22 leg-2 fix removes a live
   mine-an-invalid-block defect; the attestation choke point (§3.5) closes an

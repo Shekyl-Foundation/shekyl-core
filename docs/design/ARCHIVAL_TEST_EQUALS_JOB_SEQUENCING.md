@@ -50,7 +50,7 @@ outage-absorption and attestation-forgiveness are the same parameter
 **ATTESTATION-RESISTANCE**, priced against the zero-service reward take. **The one
 open gate this round does not own:** whether `q ≥ 0.10` is forceable on a
 3.33 MB Tor-borne fetch — PD-F-2's dispersion measurement (§8.3).
-**Family:** `TJ-*` (registered in `IMPLEMENTATION_INDEX.md` at birth, rule 94).
+**Family:** `TJ-*` (registered in `IMPLEMENTATION_INDEX.md` at birth, rule 194).
 **Supersedes in part:** the reopen-(d) fork as dispositioned
 (`ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md` §12.6) and the reopen-(d)
 feasibility probe's charter (`ARCHIVAL_REOPEN_D_FEASIBILITY_PROBE.md`, now
@@ -163,7 +163,7 @@ The two rulings split cleanly across the consensus boundary:
   can verify what it no longer stores.
 - **Pruning itself is node-local storage behavior** — not consensus. Once
   verification stops reading arbitrary local leaves, any daemon can prune (or
-  not) **without coordination**, on its own schedule, per rule 75. The mode's
+  not) **without coordination**, on its own schedule, per rule 175. The mode's
   design home is the DRS round (storage) + the segment-freeze reconciliation
   (its own reversion clause).
 
@@ -269,7 +269,7 @@ change post-genesis.
   terms.
 - **TJ-F — verification must fail against a poisoned leaf store.** *(Referred to
   as **RED-2** in review; that label has no registered family and no prior home
-  in `docs/`, so it is registered here in `TJ-*` — rule 94 — with the alias kept
+  in `docs/`, so it is registered here in `TJ-*` — rule 194 — with the alias kept
   for traceability.)* The property: a responder supplying leaf-and-path material
   must not be able to make verification **succeed** against leaves that are not
   the committed ones. Post-pruning this *is* the scheme's soundness — the
@@ -324,7 +324,7 @@ change post-genesis.
   local leaf reads (fact §2.5 in code form); tomorrow it fills them from the
   response bytes. Same function, different source — enforced by signature.
 - **TJ-G — the challenge's scope is the whole segment.** *(Alias **RED-1**;
-  registered here per rule 94, same motion as TJ-F.)* Phrased at the
+  registered here per rule 194, same motion as TJ-F.)* Phrased at the
   **challenge-construction** level, not the response level: a challenge for
   `(P, s, E)` names **all `SEGMENT_LEAF_COUNT` = 25,992 leaves**, not a
   subset. That phrasing survives both TJ-A branches — under receipt-attested
@@ -347,7 +347,7 @@ change post-genesis.
   once, not a later patch. Tempered (research accuracies, open-world degradation,
   post-2015 padding) and analysed in full at
   [`SP_T3_SKELETON_MEASUREMENT.md`](SP_T3_SKELETON_MEASUREMENT.md) §20
-  (SPIKE-F-19). Registered here per rule 94.
+  (SPIKE-F-19). Registered here per rule 194.
 
 ## 5. The ROI ledger — why R1 closes it, and what the closure rests on
 
@@ -682,7 +682,7 @@ underlines that rather than softening it.
 
 1. ~~This record, registered (index row, FOLLOWUPS annotations, probe pause).~~
    **DONE 2026-07-29** — `IMPLEMENTATION_INDEX.md` `TJ-A…TJ-E` row (registered
-   at birth, rule 94); `ARCHIVAL_REOPEN_D_FEASIBILITY_PROBE.md` status
+   at birth, rule 194); `ARCHIVAL_REOPEN_D_FEASIBILITY_PROBE.md` status
    `⏸ PAUSED`; `FOLLOWUPS.md` grace + `m`/`n` entry annotated
    `⏸ SUPERSEDED IN PART`; `ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md` status
    `⚠️ REVERSED IN PART`, citing this record rather than restating it.
@@ -740,7 +740,7 @@ verification; the `serve_credit_decisions.rs` mirror this list once named was
 deleted 2026-10-02, DRS-E4 commit 10d — the Rust decision logic is CEN-J8–J10's
 to build from `PDM-Q6` item 4), the **FFI**
 surface those cross, and **C++** (`blockchain.cpp` `txin_archival_serve_credit_response`
-verification, ~:3190) — plus KAT regeneration and whatever rule-42
+verification, ~:3190) — plus KAT regeneration and whatever rule-142
 version-constant surface the wire change touches. dev's code currently does
 the thing dev's docs call the defect, and nothing fails; TJ-G's red test,
 TJ-F's soundness test, and TJ-F's entry-point signature obligation (the

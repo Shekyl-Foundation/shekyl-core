@@ -80,7 +80,7 @@ impl TxRule for I1 {
 ///
 /// **Unconditional.** The C++ sits this check, with H15's, inside
 /// `if (m_nettype != FAKECHAIN)` — the one 4.I cell §3.4's sweep found
-/// varying by nettype. Rule 71: nettype selects data, never control flow
+/// varying by nettype. Rule 171: nettype selects data, never control flow
 /// on the consensus surface; the exemption served the proof-less C++ test
 /// builder TXE-Q1 deletes, and a Rust rule that read the nettype here
 /// would be the first in this crate to do so. The divergence is on the

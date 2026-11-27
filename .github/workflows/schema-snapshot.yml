@@ -42,7 +42,7 @@
 # Consumers depend on the version constant to recognize incompatible
 # bundles — letting a schema drift land without a version bump is a
 # silent data corruption risk (see `docs/MID_REWIRE_HARDENING.md` §3.4
-# and `.cursor/rules/42-serialization-policy.mdc`). For the chain store
+# and `.cursor/rules/142-serialization-policy.mdc`). For the chain store
 # the codec is also the digest's fold input, so a silent codec move is a
 # consensus-oracle move; and a table added, removed or re-keyed is a
 # layout change an old binary trips over at `open_table`, which is why
@@ -67,7 +67,7 @@ on:
       # `shekyl-oxide` crates. That closure is twelve first-party crates
       # plus vendored ones today and moves whenever a manifest does. Every
       # first-party and vendored crate is a path dependency under `rust/`
-      # (rule 25), so `rust/**` is the closure by construction -- there is no
+      # (rule 125), so `rust/**` is the closure by construction -- there is no
       # list here to drift. `workflow_gates_this_crate` derives the closure
       # from the manifests and asserts this trigger covers each member, so
       # narrowing this pattern goes red. An external encoder changing (a
@@ -444,7 +444,7 @@ jobs:
           One or more persisted-block schema changes landed without a
           matching version-constant bump. See
           `docs/MID_REWIRE_HARDENING.md` §3.4 for the required pairing,
-          and `.cursor/rules/42-serialization-policy.mdc` for the policy
+          and `.cursor/rules/142-serialization-policy.mdc` for the policy
           rationale. To fix:
 
             1. Decide whether the schema change is intentional.

@@ -320,7 +320,7 @@ where
     /// The state with `local` as the local tip, in the ruled order: with no
     /// session, the declaration; verified headers heavier than `local`,
     /// `Behind`; an unresolved opening, `NoView`; otherwise `Following` or
-    /// `Synced`. No network type enters (rule 71).
+    /// `Synced`. No network type enters (rule 171).
     fn state_at(&self, local: Local) -> SyncState {
         if self.peers.is_empty() {
             return self.declaration.state_without_sessions(self.following());

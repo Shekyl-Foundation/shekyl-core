@@ -19,10 +19,10 @@ re-verify before relying on one. PR [#1212](https://github.com/Shekyl-Foundation
 (the DRS-X flip) read at `eeef5f6cbf`; "at the flip" means that PR's merge.
 
 **Families:** `SB-Q` (questions) and `SB-F` (findings), registered in
-[`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2 (rule 94). Not to
+[`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2 (rule 194). Not to
 be confused with `PDM-Q-S0`, a `PDM-Q` token.
 
-**Process:** [`26-sub-pr-design-discipline`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
+**Process:** [`126-sub-pr-design-discipline`](../../.cursor/rules/126-sub-pr-design-discipline.mdc)
 Round 0, zero code. Rule 21 shapes every ruling; rule 23 governs what each
 leaves in the tree. **Edit rule for the re-tenses this round orders
 (`SB-Q4`, `SB-Q5`):** each live sentence is edited in place to what is true

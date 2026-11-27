@@ -1246,7 +1246,7 @@ point and prefix reads **silently miss** every old row (a 56-byte probe never
 equals a 48-byte key), while the full-scan `mv_size` guards throw FATAL — a
 node would first misjudge dedup and emission quietly and only crash on the
 next scan. Delete and resync. This bump is the LMDB-schema guard, **not**
-rule 42's persisted-block version, which correctly does not fire (no block
+rule 142's persisted-block version, which correctly does not fire (no block
 blob byte moves). **Within v10 (no bump):** the additive
 `archival_settlement` table rides the boundary as the witness tables rode
 v9.

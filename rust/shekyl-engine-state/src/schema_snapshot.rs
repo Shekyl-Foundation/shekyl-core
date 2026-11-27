@@ -192,7 +192,7 @@ mod tests {
                  \n\
                  1. Bump the matching version constant in the same commit\n\
                     (see `docs/MID_REWIRE_HARDENING.md` §3.4 for the pairing\n\
-                    and `.cursor/rules/42-serialization-policy.mdc` for the policy).\n\
+                    and `.cursor/rules/142-serialization-policy.mdc` for the policy).\n\
                  2. Regenerate the snapshot with:\n\
                     UPDATE_SNAPSHOTS=1 cargo test -p shekyl-engine-state schema_snapshot\n\
                  3. Review the diff above — a rename, reorder, field add/remove,\n\

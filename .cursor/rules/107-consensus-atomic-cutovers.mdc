@@ -118,7 +118,7 @@ All four criteria must be met. Each is independently testable;
    reviewers verify.
 
    4.1. **Rule citation.** The PR cites this rule by name
-   (`07-consensus-atomic-cutovers.mdc`) in the description.
+   (`107-consensus-atomic-cutovers.mdc`) in the description.
    Retroactive citation does not satisfy 4.1 (see "What this
    exception is not" below).
 

@@ -116,7 +116,7 @@
 //! ## Persistence: recomputed, never stored
 //!
 //! There is no miss-tally in persisted consensus state, and therefore no
-//! `42-serialization-policy` version bump. Each gather is a pure function of
+//! `142-serialization-policy` version bump. Each gather is a pure function of
 //! the table it reads and the bond record. The C++ gather reads the
 //! serve-credit ledger. The Rust gather reads settlement rows. Both tables
 //! are already persisted, and both are reverted by `pop_block` (gate-2 §8,

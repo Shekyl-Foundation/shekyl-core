@@ -25,7 +25,7 @@
 //! not the money's, and an output spendable by the rule stays spendable
 //! while the tree catches up.
 //!
-//! **Placement (rule 18).** An output's state is transform-shaped: a function
+//! **Placement (rule 118).** An output's state is transform-shaped: a function
 //! of its row ([`TransferDetails`], defined here), the journal's locks
 //! ([`InFlightSpendLocks`], derived here) and the reference rule (defined in
 //! `shekyl-curve-tree`, which this crate depends on; the tree depends on

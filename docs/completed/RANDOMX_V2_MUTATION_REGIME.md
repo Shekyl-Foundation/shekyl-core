@@ -15,7 +15,7 @@
 | Tooling pin | `cargo-mutants 27.1.0` (the version measured in §2). **UPDATE 2026-09-16:** `verdict-ratchet` installs `cargo install cargo-mutants --version 27.1.0 --locked` (`randomx-v2-differential.yml`:597–604) — MR-F7 is closed. *RECORDS-WAS 2026-08-18:* CI installed via `cargo install cargo-mutants --locked` with no version pin. |
 | Working branch | `design/randomx-mutation-regime` (off `dev`; design docs land on `dev` per [`06-branching`](../../.cursor/rules/06-branching.mdc) and the design-branch policy). |
 | Scope | The **execution shape** of T18 only: invocation, cadence, scoping, parallelism, branch coverage, and the skip-list mechanism. See §1. |
-| Out of scope | (a) The `dev` → `main` sync carrying `50cf03545` (T8 ceiling) + `477a448b1` (severed-header restore) — a separate validation surface per [`19-validation-surface-discipline`](../../.cursor/rules/19-validation-surface-discipline.mdc); this round neither blocks nor depends on it. (b) What T18 asserts (survival bounded by the skip-list) — unchanged. (c) The T5/T7/T8 runtime modes. (d) Any change to the verifier or harness under test. |
+| Out of scope | (a) The `dev` → `main` sync carrying `50cf03545` (T8 ceiling) + `477a448b1` (severed-header restore) — a separate validation surface per [`119-validation-surface-discipline`](../../.cursor/rules/119-validation-surface-discipline.mdc); this round neither blocks nor depends on it. (b) What T18 asserts (survival bounded by the skip-list) — unchanged. (c) The T5/T7/T8 runtime modes. (d) Any change to the verifier or harness under test. |
 | Predecessor record | [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) T18 entry (added 2026-08-10, dispatch run `31346130482`). This round **extends** that entry rather than contradicting it: the entry's diagnosis (suite outgrew the budget) is confirmed and its four candidate options are carried into §6 with measurements attached. The entry did not have MR-F1, MR-F2′, or MR-F5. |
 
 ---
@@ -57,7 +57,7 @@ Note the ordering that matters for triage: even a T18 that fit its
 budget perfectly would still not be doing the job §4.6 M2 describes.
 
 Per [`05-system-thinking`](../../.cursor/rules/05-system-thinking.mdc)
-"specification first, code second" and rule 26's halt condition, no
+"specification first, code second" and rule 126's halt condition, no
 implementation commit lands before §5 closes.
 
 ---
@@ -656,7 +656,7 @@ a refactor.
 a pure `fn verdict(seedhash, rust_sha, c_sha) -> Result<(), PreconditionMismatch>`
 with the session-taking wrapper calling it. The negative test is then
 three lines and no cache derive. That is
-[`19-validation-surface-discipline`](../../.cursor/rules/19-validation-surface-discipline.mdc)
+[`119-validation-surface-discipline`](../../.cursor/rules/119-validation-surface-discipline.mdc)
 and "make bad states unrepresentable" pointing the same way, and
 [`50-testing`](../../.cursor/rules/50-testing.mdc)'s
 test-the-production-code rule is satisfied because the wrapper still
@@ -1246,7 +1246,7 @@ them cost minutes rather than 12.6 h — but "mutation testing here
 produces only artifacts" would be too strong a reading of MR-F10, and
 the record should not overstate it.
 
-Filed as its own item per rule 19 (different validation surface); not
+Filed as its own item per rule 119 (different validation surface); not
 fixed in item 1.
 
 ---
@@ -1669,7 +1669,7 @@ is how the suite outgrew its budget unobserved in the first place.
 
 ## 8. Commit plan
 
-*(Pinned after §5 ratification; ≤10 commits per rule-26 / rule-06
+*(Pinned after §5 ratification; ≤10 commits per rule-126 / rule-06
 rule-2 ceiling.)*
 
 ---
@@ -1687,7 +1687,7 @@ rather than by timeout; and the §5.5.6 invocation-text parity check.)*
 Landing this round updates, in the same PR as the implementation:
 
 - `docs/design/IMPLEMENTATION_INDEX.md` — the `MR-` registry row
-  (rule 94 §1, minted at birth) and an inventory row for the regime.
+  (rule 194 §1, minted at birth) and an inventory row for the regime.
 - `docs/FOLLOWUPS.md` — the T18 entry, **including its heading**,
   which currently reads *"no longer fits its 360-minute budget"* and
   must read as redesigned-and-carried once this lands (rule 91's
@@ -1787,7 +1787,7 @@ not applied to T18.
 
 The pattern is not RandomX-specific — it is a property of gates. It has
 precedent for promotion:
-[`26-sub-pr-design-discipline`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
+[`126-sub-pr-design-discipline`](../../.cursor/rules/126-sub-pr-design-discipline.mdc)
 was itself "promoted from RandomX v2 Phase 2c" for the same reason. A
 `docs/FOLLOWUPS.md` entry proposes promoting this to a rule; the
 promotion is **not** made here, because minting a rule from inside the

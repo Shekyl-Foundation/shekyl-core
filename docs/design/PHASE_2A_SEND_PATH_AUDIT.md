@@ -3,11 +3,11 @@
 
 **Status:** see [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) for landing status (docs-flow repair 2026-08-26).
 Sibling audit trail for `docs/design/PHASE_2A_SEND_PATH.md`, per
-`26-sub-pr-design-discipline.mdc` §"Pre-flight pass (Round 0 disposition
+`126-sub-pr-design-discipline.mdc` §"Pre-flight pass (Round 0 disposition
 naming)". Records, per sub-PR, the **substrate re-check** and **artifact
 execution** that run between design closure and the first production commit.
 Findings use stable IDs (`<sub-pr> PF#`) that must not be renamed; each maps to
-the rule-26 discipline it instantiates.
+the rule-126 discipline it instantiates.
 
 The pre-flight pass is **not a redesign**. It catches design-time dispositions
 falsified by impl-time substrate or by running produced artifacts. A
@@ -43,7 +43,7 @@ Re-read every source file the 2a-2 dispositions cite, at the audit pin.
 **Findings.**
 
 - **2a-2 PF1 — `FeeEstimationContext` delta under-specifies the fee snapshot
-  (rule-26 B6 / under-specification; §3.10.3 vs §5 re-split note).**
+  (rule-126 B6 / under-specification; §3.10.3 vs §5 re-split note).**
   §3.10.3's enumerated `FeeEstimationContext` surface delta lists **only**
   `output_count: usize`. But the §5 re-split note (and §3.3's atomic-snapshot
   decision) require the §3.3 `FeeEstimates` snapshot to **feed**
@@ -97,13 +97,13 @@ extends:
 
 Baseline green; no budget/threshold reconciliation applies at 2a-2 (no
 plan-doc numeric **budget** is gated on 2a-2; the measured grid is 2a-3, per
-rule-26 B9 the threshold gate lands with the bench that measures it).
+rule-126 B9 the threshold gate lands with the bench that measures it).
 
 ### Verdict
 
 **2a-2 is clear to implement.** Substrate re-check confirmatory; baseline
 green. Two in-scope pins (PF1, PF2) fold into §3.10.3 / §3.2 — neither is a
-frozen-signature reopen (rule-26 A1), so **no design round is required**. The
+frozen-signature reopen (rule-126 A1), so **no design round is required**. The
 `FeeEstimator::estimate_fee` trait surface is preserved; PF1/PF2 reshape the
 `FeeEstimationContext` struct and add a sibling capability, both already named
 in the §5 2a-2 row.

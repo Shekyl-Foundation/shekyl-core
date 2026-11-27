@@ -58,7 +58,7 @@ pub const SPENDABLE_AGE: shekyl_types::BlockCount =
 /// is block-height-only ([`Timelock::Block`] wraps a [`BlockHeight`]; the
 /// CryptoNote timestamp form is not representable).
 ///
-/// Typed in and out ([`BlockHeight`] → [`BlockHeight`], rule 18): the pscan
+/// Typed in and out ([`BlockHeight`] → [`BlockHeight`], rule 118): the pscan
 /// funding path and [`TransferDetails::eligible_height`] both store the
 /// result directly.
 #[must_use]
@@ -404,7 +404,7 @@ impl TransferDetails {
     /// The amount held in this output.
     ///
     /// The stored `commitment.amount` is the vendored fork's raw `u64`
-    /// (`10-shekyl-first.mdc`); this accessor is the edge that lifts it into
+    /// (`110-shekyl-first.mdc`); this accessor is the edge that lifts it into
     /// the typed [`AtomicUnits`] domain (`ATOMIC_UNITS_NEWTYPE.md` §4.1).
     pub fn amount(&self) -> AtomicUnits {
         AtomicUnits::from_raw(self.commitment.amount)

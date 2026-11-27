@@ -39,7 +39,7 @@ one relay and one daemon on a quiet testnet, kernel counters read every
 
 RULED 2026-09-04, recorded 2026-09-12. UPDATE 2026-10-08: own transactions
 ride a stem slot (§1). Identifier family `TRC-1…TRC-n` (index row registered
-at birth per rule 94 §1). Decision authority: Rick. This document records a
+at birth per rule 194 §1). Decision authority: Rick. This document records a
 decision that was reached in design conversation and never written; the
 ruling is not new, its record is.
 
@@ -367,7 +367,7 @@ selection stays Tor's.
 Discharged in the 2026-09-12 recording change that landed this document.
 
 - Register `TRC-1…TRC-n` in [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md)
-  at birth (rule 94 §1), after the prefix uniqueness gate.
+  at birth (rule 194 §1), after the prefix uniqueness gate.
 - [`COVER_TRAFFIC_RESTORATION.md`](COVER_TRAFFIC_RESTORATION.md): restate the
   carrier's scope as encrypted zones other than Tor. §1.6 is **not** triggered;
   the do-not-delete argument stands with narrowed scope. Correct any text

@@ -497,7 +497,7 @@ impl EmissionClaimSource {
             )));
         }
         Ok(Self {
-            // The typed-domain edge (rule 18): the count becomes a
+            // The typed-domain edge (rule 118): the count becomes a
             // ChainCount here, so no consumer can launder it into a
             // BlockHeight without naming which chain fact it means.
             chain_height: ChainCount::from_raw(chain_height),

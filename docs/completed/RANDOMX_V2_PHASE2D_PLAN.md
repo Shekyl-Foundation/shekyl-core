@@ -1057,7 +1057,7 @@ RandomX v2 spec at pin `aaafe71`.
 Landed in §3.4 as the IMUL_RCP unreachability footnote (post-table).
 Cites RandomX v2 spec §5.2.10 and C reference `bytecode_machine.cpp:246-258`
 (`isZeroOrPowerOf2(divisor)` gate at compile time). Aligns the R1-D4
-"U" disposition with the rules-26 A2 discipline that audit-table
+"U" disposition with the rules-126 A2 discipline that audit-table
 cells cite pinned line ranges; the load-bearing step is reading source
 at those lines.
 
@@ -1162,7 +1162,7 @@ PR #66 implementation merge at `e9917097f`). Implementation of Phase
 3. This `chore/randomx-v2-phase2d-plan` branch expanding the skeleton
    into a Round 1 design doc — **Done** (Rounds 1–6 closed 2026-05-22).
 4. Rounds 1–6 design rounds closed (target 4–6 rounds per
-   `20-rust-vs-cpp-policy.mdc`; Round 6 added one Round-6-blocking
+   `RULE_20_RUST_VS_CPP.md`; Round 6 added one Round-6-blocking
    amendment plus three plan-doc edits — see §3.7). **Done 2026-05-22**
    (§3.6 + §3.7). `feat/randomx-v2-phase2d` implementation cut
    authorized.

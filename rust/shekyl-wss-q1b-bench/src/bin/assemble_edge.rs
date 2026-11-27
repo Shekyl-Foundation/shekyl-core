@@ -77,7 +77,7 @@ struct Args {
     leaves_per_block: Option<u64>,
 
     /// Directory the scratch client store is created in. On the pinned rig
-    /// this must be the attested storage (rule 76).
+    /// this must be the attested storage (rule 176).
     #[arg(long)]
     store_dir: Option<String>,
 

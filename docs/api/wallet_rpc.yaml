@@ -44,7 +44,7 @@
 #               sub-PR that implements the method, gated on the named
 #               engine-layer prerequisite (rule 21 reversion shape: the
 #               reopening criterion for each reserved method is the landing
-#               of its named prerequisite on dev, verified per rule 94).
+#               of its named prerequisite on dev, verified per rule 194).
 #   REJECTED  — name refused, never to be implemented as shaped; the entry
 #               stays so the namespace cannot be silently re-minted. Each
 #               carries a rule-21 reopening clause in its rationale.

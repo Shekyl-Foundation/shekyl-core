@@ -576,7 +576,7 @@ fn one_archival_lever_opens_and_a_cap_outside_the_epoch_does_not() {
 }
 
 /// **The state at open reads the declaration, never the network** (rule
-/// 71; CS-Q2 step 8, Rick 2026-11-01). Both connectors off is `Offline`
+/// 171; CS-Q2 step 8, Rick 2026-11-01). Both connectors off is `Offline`
 /// and synced from open; clearnet on with no closed list is `Open` and
 /// has no view. The same declaration gives the same state on every
 /// network. Red edit: select the opening state by network, as

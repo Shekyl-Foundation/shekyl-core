@@ -203,7 +203,7 @@ Expected outcome: deltas near 0% on `KeyEngine`/`LedgerEngine`/`EconomicsEngine`
 
 ### Watchpoints
 
-- **`Rpc` supertrait method ownership.** `shekyl_rpc::Rpc` lives in `rust/shekyl-oxide/shekyl-oxide/rpc/` (the upstream-vendored crate, per `10-shekyl-first.mdc`). Do *not* modify `Rpc` to make `DaemonEngine` work; if a method is missing on `Rpc`, that's a §8.2 amendment situation (two-commit form: amendment commit + consumer commit + PR-description bullet naming the amendment).
+- **`Rpc` supertrait method ownership.** `shekyl_rpc::Rpc` lives in `rust/shekyl-oxide/shekyl-oxide/rpc/` (the upstream-vendored crate, per `110-shekyl-first.mdc`). Do *not* modify `Rpc` to make `DaemonEngine` work; if a method is missing on `Rpc`, that's a §8.2 amendment situation (two-commit form: amendment commit + consumer commit + PR-description bullet naming the amendment).
 
 - **Default type parameter compatibility.** Verify by `cargo check --workspace` after step 3 that no downstream crate (`shekyl-engine-rpc`, `shekyl-cli`, `shekyl-mobile-wallet`'s engine consumers if any in this repo) breaks. Default type params are usually backward-compatible, but generic-bound additions can surface in subtle ways.
 

@@ -9,7 +9,7 @@ scope: core
 Cite this rule explicitly when scoping or reviewing a multi-round
 per-trait PR: consensus behavior or an inherited reference port. Single-commit additions, doc-only changes, and refactors
 outside that scope do not invoke it. The injection model is the same as
-`07-consensus-atomic-cutovers.mdc`.
+`107-consensus-atomic-cutovers.mdc`.
 
 Each discipline below is a rejection with reopening criteria and a
 re-evaluation shape (`21-reversion-clause-discipline.mdc`). Stable IDs
@@ -98,7 +98,7 @@ citations is a claim that no audit happened.
 The discipline does not relax on a consensus-critical port. An uncited
 table is tolerable only for a non-consensus internal refactor whose
 reviewer-map documents zero consensus-affecting consumers
-(`07-consensus-atomic-cutovers.mdc` criterion 4).
+(`107-consensus-atomic-cutovers.mdc` criterion 4).
 
 A reviewer spot-checks the cited file at the pinned commit. The row
 fails when the cited lines do not support the disposition. Every row
@@ -236,7 +236,7 @@ full hash is this failure.
 A review round records what it examined and did not find, separately
 from where it did not look. A findings list is a numerator. Without
 the denominator, a clean surface and an unexamined one read the same
-(`47-gate-subject-assertion.mdc`, `19-validation-surface-discipline.mdc`).
+(`47-gate-subject-assertion.mdc`, `119-validation-surface-discipline.mdc`).
 
 Close every round with a short paragraph naming the surfaces examined
 that yielded nothing. Name surfaces, not reassurances. A surface nobody
@@ -266,5 +266,5 @@ fold an unrelated implementation fix into that PR
 `05-system-thinking.mdc` (spec first), `15-deletion-and-debt.mdc`
 (no "while we're here"), `16-architectural-inheritance.mdc`
 (audits-are-clean-so-compress), `21-reversion-clause-discipline.mdc`
-(the three-part shape), `07-consensus-atomic-cutovers.mdc` (the same
+(the three-part shape), `107-consensus-atomic-cutovers.mdc` (the same
 opt-in injection; the reviewer-map used when relaxing A2).

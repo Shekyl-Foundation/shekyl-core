@@ -11,7 +11,7 @@ is dated and says what changed.
 ## The question
 
 `RPC_CHANNEL.md` §9, RT-P6: what does the channel's `hybridXK` handshake
-cost on the floor device (rule 76: the Pi 4), on each side? Three
+cost on the floor device (rule 176: the Pi 4), on each side? Three
 decisions are made from the answer, not before it:
 
 - **The handshake deadline**, a constant derived from this measurement and

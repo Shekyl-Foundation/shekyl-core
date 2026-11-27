@@ -1,7 +1,7 @@
 # Archival work-precision fix + shard-indexed staker escalation
 
 Status: **design, Stage-0 round open** (spec-first per `05-system-thinking`,
-`26-sub-pr-design-discipline`; the M1 precedent — consensus-rule changes get
+`126-sub-pr-design-discipline`; the M1 precedent — consensus-rule changes get
 their own design doc and review round). Grounded at `dev@3883c7947`
 (2026-07-24); every source claim below is verified at that commit.
 Scope owner: economics + archival-retention (consensus arithmetic).
@@ -262,7 +262,7 @@ measures the wrong thing — this is evidence validity.
   compares), `shekyl-ffi/archival_ffi.rs` epoch-close, C++ callers if the FFI
   signature moves; auth-msg binding. Fixture regen (expected to dominate the
   diff): `emission_verify_kat`, `emission_connect_kat`, `consensus_state_kat`,
-  `kat_emission_auth_msg`, `EMISSION_KAT_SHAPE`; rule-42 snapshot check.
+  `kat_emission_auth_msg`, `EMISSION_KAT_SHAPE`; rule-142 snapshot check.
   Acceptance gate: the §7 red test un-ignores and passes. **Review check
   (§11.5):** the diff must *demonstrate* every rounding in the new micro path
   floors **against the claimant** (error favours the protocol) — the ERC-4626
@@ -320,7 +320,7 @@ measures the wrong thing — this is evidence validity.
 ### 6.0 Governing principle: a wide band with guardrails, anti-swing over anti-drift
 
 This is **not** the usual monetary-control problem of pinning a variable to a
-narrow band for efficiency. Shekyl's stance (rule 75, self-regulating design) is
+narrow band for efficiency. Shekyl's stance (rule 175, self-regulating design) is
 a **wide band that lets the economy organically regulate itself between
 guardrails** — the floor and the asymptote are the guardrails, and the *level*
 inside them is allowed to move. What the design actively resists is **rapid
@@ -622,7 +622,7 @@ callers if the contribution crosses in micro; `economics/burn.rs` +
 the `calc_burn_pct` signature change ripples into the sim at compile time, which
 is *good*: it makes sim/production formula parity self-enforcing, and Stage 2's
 evidence validity depends on that parity; D2 escalation at Stage 3); the KAT
-fixtures listed in §5; a rule-42 persisted-schema snapshot check. Pre-genesis:
+fixtures listed in §5; a rule-142 persisted-schema snapshot check. Pre-genesis:
 **no fork surface**; genesis-freeze-class throughout.
 
 ---
@@ -786,7 +786,7 @@ survivors under the §11.4 ceremony and implements it in `compute_burn_split`.
 > the PoRep contingency on the *numeric* re-pin (§8).
 > **Lane structure:** the **D3 implementing round** (plateau deletion + admission
 > predicate — the *reward path*) and the **(c) design round** (the fee floor — the
-> *weight/fee model*) are **different consensus surfaces**, both under rule 26,
+> *weight/fee model*) are **different consensus surfaces**, both under rule 126,
 > **neither blocking the other**; Stage 3 waits on **both**.
 >
 > **⚠️ SUPERSEDED (2026-07-27, §12.11) — the (c) half of this entry condition is
@@ -1067,7 +1067,7 @@ clear, it names the disposition its own §11 caution already fixed (rule-21
 per-output fee-floor for W9; gate-4/PoRep for W10), never a D2 redesign.
 
 Registration: the Stage-2 sim build gets an `IMPLEMENTATION_INDEX.md` row at
-birth (rule 94); this design round does not (it lives in this doc).
+birth (rule 194); this design round does not (it lives in this doc).
 
 #### 12.4.1 Arm status — **FINAL synthesis, Stage 2 closed**
 
@@ -1596,7 +1596,7 @@ name, now quantified.
 - **Build-generated, not hand-pinned:** `build.rs` reads
   `archival_reward_plateau_{value,work}_milli` from `config/` — so deletion is a
   **generated-params** change and joins that digest surface
-  ([`42-serialization-policy`](../../.cursor/rules/42-serialization-policy.mdc)).
+  ([`142-serialization-policy`](../../.cursor/rules/142-serialization-policy.mdc)).
 - **FFI:** `archival_ffi.rs` constructs `BandedCurveParams` **internally** from the
   generated constants — the plateau **does not cross the FFI signature**
   (`shekyl_archival_epoch_close_compute` (deleted, `DEL-008`) takes bonds/shards/credit-pairs only).
@@ -1750,7 +1750,7 @@ inflated ≈ 2.2×. Clamped. §12.7's cliff findings are **qualitatively unchang
 
 **A2 and A6 unblock**: the probe showed distribution is deletion-invariant *at the
 optimum*, so both can now build on a settled surface. The implementing PR inherits
-the §12.9 census — rule-42 digest membership, the **"C++ source-unchanged yet
+the §12.9 census — rule-142 digest membership, the **"C++ source-unchanged yet
 behaviourally live"** callout (mandatory PR language), the KAT/fixture regeneration
 list, and the **`curve_milli`-survives** carve-out for §6.1.
 
@@ -1764,7 +1764,7 @@ the census undercounted twice before grounding caught the third), retired
 Production now names the per-`P` term honestly as `credited_work_milli` (linear
 membership gate; C ABI `out_credited_work_milli`). The banded-PL
 `curve_milli` / `BandedCurveParams` remain **sim/counterfactual only**. The
-rule-42 digest claim was **retracted on verification** — the C++ generator
+rule-142 digest claim was **retracted on verification** — the C++ generator
 requires 13 keys, none of them plateau, so no bump was owed.
 
 R3 shipped as `shekyl-archival-retention::admission` with a dedicated FFI module
@@ -2116,7 +2116,7 @@ two consensus consumers, `shekyl-archival-retention` re-exports);
 constraints as tests; `EscalationParams` + load-time validation
 (`params.rs` — an `asymptote < floor` parameterization is refused at load, the
 first of the two fail-closed layers); persisted-params digest `0x01`→`0x02`
-(rule 42). The sim **deps** the consensus share rather than computing its own
+(rule 142). The sim **deps** the consensus share rather than computing its own
 (dep-don't-mirror, both in the sweep and in `SimParams::default()`).
 
 **Stage 3b — the wiring (live consensus C++).** The escalated split is the

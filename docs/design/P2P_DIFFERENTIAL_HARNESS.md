@@ -39,7 +39,7 @@ The goldens were recorded from the epee side, C++ in
 `boosted_tcp_server`. That server and `epee-host` are deleted. CI
 is `check-goldens`. The seam side is Rust. The harness does not
 link epee into a Rust test. C++ was the recording reference, not
-the behaviour to copy (rule 20).
+the behaviour to copy (`RULE_20_RUST_VS_CPP`).
 
 The typed plan lives in Rust. `NamedSeed` plus `PROPERTY_SEEDS`
 (100–115) is the seed table. `AfterHandshake` (`none`, `follow`,

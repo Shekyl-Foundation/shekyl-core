@@ -228,7 +228,7 @@ impl<F: fmt::Debug + fmt::Display> std::error::Error for SectionCheckFailed<F> {
 /// that does not parse — wrong length for the count it states, or a set
 /// padding bit — is §9.1 step 1's refusal, a verdict on the block under
 /// CEN-J29, and this is where it is given its type. How a block lays its
-/// references out is the block format's (`SO-D12`'s rule-42 bump); a
+/// references out is the block format's (`SO-D12`'s rule-142 bump); a
 /// reference is self-delimiting, so whatever that layout is, each is cut
 /// by its own stated count and handed here with its position.
 ///

@@ -41,7 +41,7 @@ shekyl-daemon-config = { path = "../shekyl-daemon-config" }
 shekyl-options = { path = "../shekyl-options" }
 # The two peerlist capacities `print_pl_stats` reports a fraction of.
 shekyl-peerlist = { path = "../shekyl-peerlist" }
-# Typed identities (TxHash / BlockHash / BlockHeight) per rule 18.
+# Typed identities (TxHash / BlockHash / BlockHeight) per rule 118.
 shekyl-types = { path = "../shekyl-types" }
 # Phase-A parse + structural validation + canonical txid (§3.1, §3.4).
 shekyl-wire = { path = "../shekyl-wire" }

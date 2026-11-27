@@ -218,7 +218,7 @@ that Round 3 surfaced. Resolutions:
 
 The closures land as a single commit on `dev` (parent of M3a's
 feat branch). Per
-[`.cursor/rules/20-rust-vs-cpp-policy.mdc`](RULE_20_RUST_VS_CPP.md)'s
+[`docs/completed/RULE_20_RUST_VS_CPP.md`](RULE_20_RUST_VS_CPP.md)'s
 4–6-rounds-before-implementation rule for crypto-critical trait
 migrations, the pre-flight investigation discharges the
 round-budget work the migration plan deliberately separates from
@@ -399,7 +399,7 @@ is recorded against the discipline that drove it.
 new `rust/shekyl-engine-core/src/engine/handle.rs` (~80 lines).
 Actual: `OutputHandle` and `derive_output_handle` live in
 `rust/shekyl-crypto-pq/src/handle.rs`. The placement decision was
-driven by `.cursor/rules/18-type-placement.mdc`'s
+driven by `.cursor/rules/118-type-placement.mdc`'s
 transform-vs-state classification: `OutputHandle` is
 **transform-shaped** (defined by `derive_output_handle`'s
 function), and the rule places transform-shaped types with their
@@ -571,7 +571,7 @@ for reviewers reading commit messages and the M3b PR description.
 
 **Refinement 1 — Two-layer derivation-primitive split (D1).** §3.2
 named the re-decap derivation primitive without specifying its
-shape. Applying `18-type-placement.mdc` during pre-flight produced
+shape. Applying `118-type-placement.mdc` during pre-flight produced
 a two-layer split:
 
 - **Layer 1 (transform-shaped):**

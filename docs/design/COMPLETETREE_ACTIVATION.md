@@ -552,7 +552,7 @@ The §9.1 amendment at its definition site; the `ARCHIVAL_CONSENSUS_STATE.md`
 F-2 correction; the FOLLOWUPS sweep (the `first_stake` hardcode item closed as
 discharged-by-deletion, with its live remainder carried forward); the
 shard-assignment, F5-inheritance, and rule-35 follow-on entries; the
-`IMPLEMENTATION_INDEX.md` row (rule 94) and `CHANGELOG.md`; and this document.
+`IMPLEMENTATION_INDEX.md` row (rule 194) and `CHANGELOG.md`; and this document.
 
 ---
 
@@ -628,7 +628,7 @@ Rule 15 (hardcode deleted before genesis), Rule 21 (reopen criteria: flag
 clear path; alarm thresholds), Rule 22 (Market refusal is typed with a named
 remedy, not a silent deferral), Rule 35 (the password-copy gap, found and
 shelved with instruments rather than half-fixed), Rule 36 (no secret handling
-introduced), Rule 76 (the disk threshold is provisioned against the stated
+introduced), Rule 176 (the disk threshold is provisioned against the stated
 device floor), Rule 80/82 (warning UX; typed refusals name remedies; a
 disarmed check never renders as healthy), Rule 81 (deferred with the
-assignment round), Rule 91 (docs last), Rule 94 (index entry).
+assignment round), Rule 91 (docs last), Rule 194 (index entry).

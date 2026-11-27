@@ -1,17 +1,17 @@
-# Rule 20, Rust vs. C++ — the retired rule
+# `RULE_20_RUST_VS_CPP`, Rust vs. C++ — the retired rule
 
 **Status:** CLOSED-as-record, retired 2026-11-08 (ruled by Rick). It chose
 between Rust and C++, and the C++ is deleted: the tree holds no first-party
 C or C++ (PR #1299), so one option is left. What still binds moved:
 "no first-party C, no C ABI" and the gate that holds it are
-[`25-rust-architecture`](../../.cursor/rules/25-rust-architecture.mdc)'s
+[`125-rust-architecture`](../../.cursor/rules/125-rust-architecture.mdc)'s
 opening; §"A new subsystem is its own change" is
-[`26-sub-pr-design-discipline`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)'s.
+[`126-sub-pr-design-discipline`](../../.cursor/rules/126-sub-pr-design-discipline.mdc)'s.
 Do not implement from this record; the body below is the policy as it
-stood, and the design records that cite "rule 20" read against it.
+stood, and the design records that cite "`RULE_20_RUST_VS_CPP`" read against it.
 
 The tree holds no first-party C or C++. New logic is Rust. The companion
-file `25-rust-architecture.mdc` covers how a crate is added; this file
+file `125-rust-architecture.mdc` covers how a crate is added; this file
 covers why the logic is Rust. The only C is vendored under `external/`
 (the RandomX references), and `scripts/ci/check_no_first_party_c.py`
 holds the end state. Do not extend that tree with Shekyl logic, and do

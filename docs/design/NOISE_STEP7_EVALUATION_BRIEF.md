@@ -12,7 +12,7 @@
 | A | Evidence, with `dev-clearnet-encrypt` still in place | This brief is A1 |
 | B | The framing PR | Implements A1's ruled decisions |
 | C | The rehearsal on the final wire | `docs/design/NOISE_FLIP_REHEARSAL_BRIEF.md` |
-| D | The flip | A rule 07 flag day |
+| D | The flip | A rule 107 flag day |
 
 The rest of phase A belongs to other briefs:
 
@@ -37,7 +37,7 @@ A1's output is a set of recommendations. Each is marked "for Rick's ruling", and
 
 ## What to measure and decide
 
-Use the floor device (rule 76) and roles, not hosts (rule 37). Claim every host in the usage ledger first (rule 38).
+Use the floor device (rule 176) and roles, not hosts (rule 37). Claim every host in the usage ledger first (rule 38).
 
 1. **The message-size distribution** (the input to item 2).
    - On the fleet, with the switch on, record each Levin message's size, direction and send time. Record nothing else: no content, no peer address, and no command name beyond its class.
@@ -78,7 +78,7 @@ Use the floor device (rule 76) and roles, not hosts (rule 37). Claim every host 
    - **Ruled (Rick, 2026-10-30):** the bound is built as its own PR before phase C. It is not part of the framing PR.
      - **The mechanism** can be built now: a bound at accept, before any cryptographic work, per connector and per host, with an IPv6 host being its /64.
      - **The values** come only from A1's ruled table, and the PR merges only after that ruling (D10.3: no rate is written before the budget).
-     - **The rates are protocol data,** held with the connector's data beside its declaration, the same on every node (rule 71).
+     - **The rates are protocol data,** held with the connector's data beside its declaration, the same on every node (rule 171).
 7. **Failures before the channel exists** (D10.2). For every pre-channel failure path, capture from the far side what each sends:
    - zero bytes written;
    - FIN, never RST;

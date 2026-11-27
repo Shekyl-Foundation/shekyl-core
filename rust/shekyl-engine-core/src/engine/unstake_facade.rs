@@ -443,7 +443,7 @@ struct ExitEvidence {
     pscan: Option<PScanState>,
     pending: Option<PendingPostBlock>,
     /// Slot↔id addressing, keyed by [`PSlot`]. The persisted cache keeps raw
-    /// `u32` keys (postcard state, rule 18); [`read_exit_evidence`] converts
+    /// `u32` keys (postcard state, rule 118); [`read_exit_evidence`] converts
     /// at the boundary so everything transform-shaped speaks the typed slot.
     id_by_slot: BTreeMap<PSlot, PCanonicalId>,
 }
