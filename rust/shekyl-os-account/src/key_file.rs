@@ -28,9 +28,9 @@
 //! point, such as a symbolic link, is refused, and so is a directory: backup
 //! semantics let a directory open so the judgment can see it. The rule is
 //! the one [`crate::private_file::check_private`] applies to a path, read
-//! from the handle by [`crate::private_file::check_private_file`] (owned by
-//! this account, a protected access list that admits no other principal, a
-//! no-read-up label). That read is one snapshot of the handle's descriptor.
+//! from the handle by `check_private_file` (owned by this account, a
+//! protected access list that admits no other principal, a no-read-up
+//! label). That read is one snapshot of the handle's descriptor.
 
 use std::fs::File;
 use std::path::{Path, PathBuf};
