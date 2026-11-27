@@ -425,6 +425,22 @@ pub fn check_private(path: &Path) -> Result<(), PrivateFileError> {
         .map_err(|e| PrivateFileError::Exposed(path.to_path_buf(), e.to_string()))
 }
 
+/// Whether the open file `file` is one only this account can read. The same
+/// rule as [`check_private`], read from the handle, so the judgment is of
+/// the object the handle holds.
+///
+/// `path` is the name the caller opened. It is named in a refusal and is
+/// not read again.
+///
+/// # Errors
+///
+/// [`PrivateFileError::Exposed`] when it is not.
+#[cfg(windows)]
+pub fn check_private_file(path: &Path, file: &File) -> Result<(), PrivateFileError> {
+    shekyl_win_sec::rendezvous::check_owner_only_labelled_file(file)
+        .map_err(|error| PrivateFileError::Exposed(path.to_path_buf(), error.to_string()))
+}
+
 /// Whether `path` is a service's console file: protected, no-read-up, and
 /// readable by its owner and by administrators of this machine.
 ///
