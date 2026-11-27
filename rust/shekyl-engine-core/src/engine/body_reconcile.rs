@@ -411,9 +411,15 @@ where
 fn refill_outcome(e: &FillFailure) -> ShardRefill {
     let (refill, kind) = match e {
         FillFailure::Discarded { .. } => (ShardRefill::Discarded, "the node discarded it"),
-        FillFailure::LocalNodeRequired { .. } => (ShardRefill::Failed, "the node is not local"),
+        FillFailure::LocalNodeRequired => (
+            ShardRefill::Failed,
+            "the plaintext daemon is not on this computer",
+        ),
+        FillFailure::Daemon { fault, .. } if fault.has_own_remedy() => {
+            (ShardRefill::Failed, "the channel to the node failed")
+        }
         FillFailure::DaemonSyncing => (ShardRefill::Failed, "the node is synchronizing"),
-        FillFailure::DaemonUnreachable { .. } => (ShardRefill::Failed, "the node is unreachable"),
+        FillFailure::Daemon { .. } => (ShardRefill::Failed, "the node is unreachable"),
         FillFailure::ScanStateUnreadable { .. } => {
             (ShardRefill::Failed, "the scan state is unreadable")
         }
@@ -587,8 +593,9 @@ mod tests {
             ShardRefill::Discarded
         );
         assert_eq!(
-            refill_outcome(&FillFailure::DaemonUnreachable {
-                detail: String::new()
+            refill_outcome(&FillFailure::Daemon {
+                fault: shekyl_rpc_client::DaemonFault::Unreachable,
+                detail: String::new(),
             }),
             ShardRefill::Failed
         );

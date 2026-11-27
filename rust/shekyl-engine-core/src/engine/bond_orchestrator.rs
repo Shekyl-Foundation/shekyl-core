@@ -210,6 +210,7 @@ fn engine_failure_detail(e: &StakeEngineError) -> String {
 /// renders through the amount-free sanitizer.
 pub(super) fn post_assembly_failure(e: StakeEngineError) -> FirstStakeError {
     match e {
+        StakeEngineError::Daemon(fault) => FirstStakeError::Daemon(fault),
         StakeEngineError::Assembly(BondAssemblyError::SealNotSaved(error)) => {
             FirstStakeError::SealNotSaved(error)
         }
@@ -374,6 +375,10 @@ pub enum FirstStakeError {
     /// `-29500` "fund and retry" remedy (rule 82's misdiagnosis guard).
     #[error("staking state unavailable: {0}")]
     State(String),
+    /// The node named its own remedy while the bond was being read.
+    /// Nothing durable was written. The fault is the sentence.
+    #[error("{0}")]
+    Daemon(shekyl_rpc_client::DaemonFault),
     /// The daemon fee-estimate query failed — check the daemon connection
     /// and retry; nothing durable was written (W1-clean).
     #[error("bond fee estimate failed: {0}")]
@@ -589,10 +594,17 @@ where
         }
 
         // The request's count on the daemon-claimed clock: the due is never
-        // before it (BD-Q2, elapsed time counts).
-        let requested_at = daemon_claimed_tip(&daemon)
-            .await
-            .map_err(|e| BondAssemblyError::build("daemon claimed tip", e))?;
+        // before it (BD-Q2, elapsed time counts). A node that names its own
+        // remedy is answered with that remedy.
+        let requested_at = match daemon_claimed_tip(&daemon).await {
+            Ok(tip) => tip,
+            Err(error) => {
+                return Err(match error.own_remedy() {
+                    Some(fault) => StakeEngineError::Daemon(fault),
+                    None => BondAssemblyError::build("daemon claimed tip", error).into(),
+                });
+            }
+        };
 
         // The authoritative funding sweep — the SAME body the W1 preflight
         // ran — selects what the plan reserves. Its reference is only the

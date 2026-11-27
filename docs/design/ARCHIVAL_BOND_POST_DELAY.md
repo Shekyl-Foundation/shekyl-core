@@ -455,7 +455,7 @@ to confirm or change):
   **limited**, so a plan that can never be assembled ends at its maximum.
 - **`unstake` is the owner's withdrawal verb**: it withdraws a plan and
   answers "confirming" (`-29515`) for a signed post; the wallet RPC's
-  `UnstakeResult` gains `WITHDRAWN` (contract 0.26.0).
+  `UnstakeResult` gains `WITHDRAWN` (contract 0.27.0).
 - **`start_pscan` takes the wallet's node** (a paired GUI change), because
   the fill at due reads the wallet's own node and the scan task had none.
 - **A post signed but never sent** (a crash between its seal and its send)
@@ -772,7 +772,7 @@ unless named):
   no post; the retirement through `RetirementWitness::from_ended_plan`.
 - **The owner's withdrawal** (`unstake_facade.rs`): `unstake` withdraws a
   plan and refuses a signed post; the wallet RPC's `UnstakeResult` gains
-  `WITHDRAWN` (contract 0.26.0).
+  `WITHDRAWN` (contract 0.27.0).
 - **The reason** (`staking_outcomes.rs` `InFlightState::Planned`): a plan is
   `pending` on the wire, with its wait as the entry's `reason`.
 - **The BD-Q5 deletion** (`stake_timing.rs`, `mod.rs`).

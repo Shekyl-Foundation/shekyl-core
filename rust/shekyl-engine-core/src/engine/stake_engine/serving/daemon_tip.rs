@@ -14,12 +14,8 @@
 //!
 //! # The transport is pinned by type
 //!
-//! The parameter is [`PersonaIsolatedTransport`], so the read goes over `P`'s
-//! own circuit: [`LocalNodeRpc`](super::super::super::prpc::LocalNodeRpc) on
-//! the loopback default, `PRpc` on the remote posture. The marker is what
-//! forbids reaching for the principal's `DaemonClient` — which in the local
-//! posture happens to dial the same host, and would still be the wrong type to
-//! ask, because the pin binds the type that made the posture argument.
+//! The wallet reads the tip from its configured daemon over the owner socket
+//! or an enrolled channel.
 //!
 //! **Never a peer draw.** The tip that centres the gate is a claim this
 //! persona will be slashed against; sourcing it from a drawn peer would let
@@ -31,7 +27,7 @@
 //! once, as `shekyl_rpc_types::wire::daemon::DaemonStatus`.
 //!
 //! Daemon elements still in flux stay behind a seam the wallet owns
-//! (standing ruling, 2026-09-19). That is what [`PersonaIsolatedTransport`]
+//! (standing ruling, 2026-09-19). That is what [`WalletChainReader`]
 //! and [`TipReading`] are here — the wallet's own transport type and its
 //! own typed reading. The reply is read in two places by design: the
 //! members the submit watchdog and the sync witness also read are projected
@@ -60,7 +56,7 @@ use shekyl_types::{BlockHeight, ChainCount};
 
 use crate::engine::daemon::synced_chain_facts::health_from_daemon_status;
 
-use crate::engine::prpc::PersonaIsolatedTransport;
+use crate::engine::prpc::WalletChainReader;
 
 /// How often the tip is re-read, as a divisor of [`tip_max_age`].
 ///
@@ -281,7 +277,7 @@ pub(crate) fn tip_reading_from_status(status: &DaemonStatus) -> TipReading {
 /// tick.
 pub(crate) async fn refresh_tip_once<R>(rpc: &R, tip: &DaemonTipCache) -> TipReading
 where
-    R: PersonaIsolatedTransport,
+    R: WalletChainReader,
 {
     let reading = match rpc.call::<wire::DaemonStatus>(NoParams).await {
         Ok(status) => tip_reading_from_status(&status),
@@ -322,7 +318,7 @@ pub(crate) async fn run_daemon_tip_refresher<R>(
     tip: Weak<DaemonTipCache>,
     interval: Duration,
 ) where
-    R: PersonaIsolatedTransport,
+    R: WalletChainReader,
 {
     let mut ticker = tokio::time::interval(interval);
     // A refresh that overruns its slot must not then fire a burst of catch-up
@@ -345,7 +341,7 @@ mod tests {
 
     /// A transport that answers every call with one canned document.
     ///
-    /// `PersonaIsolatedTransport`'s doc permits test implementations
+    /// `WalletChainReader`'s doc permits test implementations
     /// explicitly ("the pin is against production misuse, not test
     /// plumbing"), and without one the dispatch below — which reading stamps
     /// what — has no oracle at all: every other test in this module calls
@@ -393,7 +389,7 @@ mod tests {
         }
     }
 
-    impl PersonaIsolatedTransport for CannedRpc {}
+    impl WalletChainReader for CannedRpc {}
 
     /// A complete `daemon_status` reply with `over`'s members laid over it.
     ///

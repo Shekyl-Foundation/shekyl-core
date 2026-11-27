@@ -33,20 +33,9 @@
 //!
 //! # Transport
 //!
-//! `R` is bound to [`PersonaIsolatedTransport`], not to bare `Rpc`: the §7.4
-//! transport pin is the bound itself, not a note asking the wiring to be
-//! careful. A persona's claim-source query must ride its own `PRpc` and never
-//! the principal's daemon session, and SH-2b wires this pinner from the
-//! lifecycle code that is *holding* the principal's handle — the one place the
-//! wrong transport is closest to hand, and the reason prose was not enough.
-//!
-//! [`orchestrate_emission_claim`](crate::engine::claim_orchestrator::orchestrate_emission_claim)
-//! carries the same bound for the same reason. It reads the epoch set where
-//! this reads `bond.holdings`, so a transport audit has to see both — and both
-//! now refuse the wrong transport at compile time rather than documenting it.
-//!
-//! This type still does not create transports; it takes one. The bound decides
-//! *which kind*, the construction site decides *whose*.
+//! Both this pinner and the claim orchestrator read on-chain obligations through
+//! the wallet's operator-owned daemon. The wallet Tor manager handles the
+//! persona's shard exchanges separately.
 
 use shekyl_archival_retention::HoldingsKind;
 use shekyl_curve_tree::BlockHeight;
@@ -60,7 +49,7 @@ use super::departure_ledger::{Continuity, DepartureLedger, Obligation, EPOCHS_BE
 
 use crate::engine::daemon::synced_chain_facts::{AnchoredView, TimelineBreak};
 use crate::engine::emission_source::fetch_vouched_claim_source;
-use crate::engine::prpc::PersonaIsolatedTransport;
+use crate::engine::prpc::WalletChainReader;
 
 /// Derives a persona's serve-set from its connected bond record and pins it.
 // Wired by `Engine::start_serving_if_staker` (SH-2b-2). Landed with the seam
@@ -82,7 +71,7 @@ use crate::engine::prpc::PersonaIsolatedTransport;
 // `StakeEngine` identity + this pinner. A `serve_set_source` at the engine
 // root would have been a module the composition root declares and nothing
 // else near it uses.
-pub(crate) struct EngineServeSetPinner<R: PersonaIsolatedTransport> {
+pub(crate) struct EngineServeSetPinner<R: WalletChainReader> {
     curve_tree: CurveTreeHandle,
     rpc: R,
     p_id: [u8; 32],
@@ -101,7 +90,7 @@ pub(crate) struct EngineServeSetPinner<R: PersonaIsolatedTransport> {
     bodies: BodyStoreHandle,
 }
 
-impl<R: PersonaIsolatedTransport> EngineServeSetPinner<R> {
+impl<R: WalletChainReader> EngineServeSetPinner<R> {
     /// Bind a pinner to one persona's canonical id, its transport, and the
     /// body store's owner.
     pub(crate) fn new(
@@ -263,7 +252,7 @@ impl<R: PersonaIsolatedTransport> EngineServeSetPinner<R> {
     }
 }
 
-impl<R: PersonaIsolatedTransport + Sync> ServeSetPinner for EngineServeSetPinner<R> {
+impl<R: WalletChainReader + Sync> ServeSetPinner for EngineServeSetPinner<R> {
     async fn pin_serve_set(&self) -> Result<PinReport, String> {
         // **Sync reading first, record second, then the witness block
         // re-read** (`WSS-Q14`). Of the two orderings of the first pair only
@@ -298,7 +287,7 @@ impl<R: PersonaIsolatedTransport + Sync> ServeSetPinner for EngineServeSetPinner
                 // ledger forgets under the fault the fetch returned.
                 let why = match &e {
                     crate::engine::emission_source::EmissionSourceError::Rpc(error)
-                        if error.fault().is_target_refusal() =>
+                        if error.fault().has_own_remedy() =>
                     {
                         TimelineBreak::from_facts_error(error)
                     }
@@ -348,6 +337,9 @@ impl<R: PersonaIsolatedTransport + Sync> ServeSetPinner for EngineServeSetPinner
                          disagrees on its identity. No pin is released and holdings are \
                          retained. Connect to a daemon on this wallet's network and build"
                     ),
+                    TimelineBreak::Channel(fault) => {
+                        tracing::warn!(%fault, "serve-set refresh could not read the node; holdings retained")
+                    }
                     TimelineBreak::PeerCheckFailed => tracing::error!(
                         "serve-set refresh: something other than this account's node answers \
                          at this computer's rendezvous, so the wallet did not connect. No pin is \
@@ -494,7 +486,7 @@ impl<R: PersonaIsolatedTransport + Sync> ServeSetPinner for EngineServeSetPinner
     }
 }
 
-impl<R: PersonaIsolatedTransport> EngineServeSetPinner<R> {
+impl<R: WalletChainReader> EngineServeSetPinner<R> {
     /// The store every report and reading of this pinner is about: its
     /// curve-tree actor's.
     fn store(&self) -> StoreIdentity {

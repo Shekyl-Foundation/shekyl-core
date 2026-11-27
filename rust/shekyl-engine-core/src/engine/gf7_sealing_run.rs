@@ -405,7 +405,7 @@ async fn one_run(
     for wallet in 0..WALLETS {
         let seed = wallet_seed(arm_tag, run, wallet);
         let (arc, tmp, _principal) =
-            staker_wallet(daemon.rpc_port(), &seed, PSlot::from_raw(0)).await;
+            staker_wallet(daemon.wallet_rpc(), &seed, PSlot::from_raw(0)).await;
         let write_lock = arc.read().await.pending_gate.clone();
         let store = pending_post_store_for_engine(arc.clone(), write_lock);
         for slot in 0..PERSONAS_PER_WALLET {
@@ -562,10 +562,7 @@ async fn gf7_sealing_run_writes_receipts_artifact() {
     // panics the task, which the run loop's `is_finished` health check
     // converts into a loud session failure — a silently frozen chain must
     // never grade.
-    let miner_rpc =
-        shekyl_rpc_transport::HttpRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port()))
-            .await
-            .expect("miner rpc");
+    let miner_rpc = daemon.wallet_rpc();
     let miner = tokio::spawn(async move {
         let mut consecutive_failures = 0u32;
         loop {

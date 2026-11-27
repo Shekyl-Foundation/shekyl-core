@@ -28,7 +28,15 @@ fn write_password(dir: &Path) -> std::path::PathBuf {
 }
 
 fn run(args: &[&str]) -> (i32, String, String) {
-    let config = common::empty_config();
+    let config = if args.contains(&"--daemon-endpoint") {
+        common::offline_channel_config()
+    } else {
+        common::empty_config()
+    };
+    run_config(args, &config)
+}
+
+fn run_config(args: &[&str], config: &common::EmptyConfig) -> (i32, String, String) {
     let output = Command::new(bin())
         .arg("--config-file")
         .arg(config.path())
@@ -319,6 +327,10 @@ impl SpawnedDaemon {
                 "--tor",
                 "off",
                 "--rpc-admin-listen",
+                "none",
+                "--rpc-socket-dir",
+                data_dir.to_str().expect("utf8"),
+                "--rpc-listen",
                 &format!("127.0.0.1:{port}"),
                 "--data-dir",
                 data_dir.to_str().expect("utf8"),
@@ -380,44 +392,92 @@ fn daemon_script_drives_balance_refresh_and_a_refused_send() {
     }
     assert!(up, "daemon did not accept RPC on {address}");
 
+    let config = common::empty_config();
+    let root = config.path().parent().unwrap();
+    let owner = shekyl_rpc_transport::local::LocalTarget::test_override(
+        shekyl_wallet_rpc::Network::Testnet,
+        &shekyl_rpc_rendezvous::Instance::Default,
+        Some(&daemon.data_dir),
+        None,
+    );
+    let public = owner
+        .call::<shekyl_rpc_client::wire::RpcBundleShow>(
+            &shekyl_rpc_types::kinds::NoParams,
+            shekyl_rpc_transport::local::CALL_WITHIN,
+        )
+        .unwrap();
+    let bundle = root.join("daemon.bundle");
+    std::fs::write(
+        &bundle,
+        shekyl_rpc_transport::channel::bundle_text(&public.bundle.0),
+    )
+    .unwrap();
+    let key_file = root.join("client.key");
+    let key = shekyl_rpc_transport::channel::create_client_key(&key_file).unwrap();
+    owner
+        .call::<shekyl_rpc_client::wire::RpcClientAdd>(
+            &shekyl_rpc_types::wire::rpc::ClientCeiling {
+                fingerprint: shekyl_rpc_types::hash::HashHex::from_bytes(
+                    *key.public().fingerprint().as_bytes(),
+                ),
+                ceiling: vec![shekyl_rpc_types::wire::rpc::CeilingWord::Wallet],
+            },
+            shekyl_rpc_transport::local::CALL_WITHIN,
+        )
+        .unwrap();
+    std::fs::write(
+        config.path(),
+        format!(
+            "daemon-bundle-file = {}\nrpc-key-file = {}\n",
+            serde_json::json!(bundle),
+            serde_json::json!(key_file)
+        ),
+    )
+    .unwrap();
     let dir = tempfile::tempdir().expect("tempdir");
     let password = write_password(dir.path());
     let seed = dir.path().join("seed");
     let wallets = dir.path().join("wallets");
-    let (code, stdout, stderr) = run(&[
-        "--json",
-        "--network",
-        "testnet",
-        "--daemon-endpoint",
-        &address,
-        "--wallet-dir",
-        wallets.to_str().unwrap(),
-        "--wallet-password-file",
-        password.to_str().unwrap(),
-        "wallet",
-        "create",
-        "wallet",
-        "--mnemonic-file",
-        seed.to_str().unwrap(),
-    ]);
+    let (code, stdout, stderr) = run_config(
+        &[
+            "--json",
+            "--network",
+            "testnet",
+            "--daemon-endpoint",
+            &address,
+            "--wallet-dir",
+            wallets.to_str().unwrap(),
+            "--wallet-password-file",
+            password.to_str().unwrap(),
+            "wallet",
+            "create",
+            "wallet",
+            "--mnemonic-file",
+            seed.to_str().unwrap(),
+        ],
+        &config,
+    );
     assert_eq!(code, 0, "{stderr}\n{stdout}");
 
     let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/scripts/daemon_session.txt");
-    let (code, stdout, stderr) = run(&[
-        "--json",
-        "--script-file",
-        script.to_str().unwrap(),
-        "--network",
-        "testnet",
-        "--daemon-endpoint",
-        &address,
-        "--wallet-dir",
-        wallets.to_str().unwrap(),
-        "--wallet-file",
-        wallets.join("wallet.wallet").to_str().unwrap(),
-        "--wallet-password-file",
-        password.to_str().unwrap(),
-    ]);
+    let (code, stdout, stderr) = run_config(
+        &[
+            "--json",
+            "--script-file",
+            script.to_str().unwrap(),
+            "--network",
+            "testnet",
+            "--daemon-endpoint",
+            &address,
+            "--wallet-dir",
+            wallets.to_str().unwrap(),
+            "--wallet-file",
+            wallets.join("wallet.wallet").to_str().unwrap(),
+            "--wallet-password-file",
+            password.to_str().unwrap(),
+        ],
+        &config,
+    );
     drop(daemon);
 
     let rows = lines(&stdout);
@@ -436,21 +496,15 @@ fn daemon_script_drives_balance_refresh_and_a_refused_send() {
             .any(|row| row["command"] == "chain" && row["ok"] == true),
         "chain against the daemon\n{stderr}\n{stdout}"
     );
-    // The script's last line is a refused send, and it is why the process
-    // exits 1. The daemon holds only genesis, so the wallet has no synced
-    // block to build against, and the build says so before it reads the
-    // recipient: the pattern's `<recipient>` placeholder is never decoded
-    // here. The code is the assertion. `ok == false` alone would also pass
-    // on a refusal that never reached the wallet's state. This test does
-    // not reach the balance: that needs a mined block, and a daemon the
-    // wallet accepts mines at the network's real difficulty.
+    // The script intentionally leaves its recipient placeholder unexpanded.
+    // A transport or enrollment fault must not pass as the wallet's refusal.
     assert_eq!(code, 1, "{stderr}\n{stdout}");
     let send = rows.last().expect("send");
     assert_eq!(send["command"], "send");
     assert_eq!(send["ok"], false, "{send}");
     assert_eq!(
         send["error"]["code"],
-        i64::from(shekyl_wallet_rpc::WalletRpcErrorCode::WalletNotSynced.as_i32()),
+        i64::from(shekyl_wallet_rpc::WalletRpcErrorCode::InvalidRecipient.as_i32()),
         "{send}"
     );
 }

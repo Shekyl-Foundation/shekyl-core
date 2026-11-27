@@ -281,13 +281,7 @@ pub(crate) mod drain_read;
 pub(crate) mod drain_select;
 pub mod held_sends;
 pub(crate) mod holdings_fill;
-// SP-T2 (DQ-T2.3): daemon-posture selection — the no-silent-③ invariant (a
-// posture is named, never defaulted; no-choice + local-unreachable *refuses*,
-// never falls back to a remote/third-party node). §2b build invariant 3.
-pub(crate) mod posture;
-// SP-T2 (DQ-T2.2): the per-`P` RPC-over-Tor transport (`PRpc`) — an `Rpc` impl
-// over `shekyl-p-transport`'s `PTorClient`. Confines the async/sync bridge; all
-// `ureq`/agent construction stays in `shekyl-p-transport` (§2b invariant 1).
+// Chain reads on the configured wallet daemon.
 pub(crate) mod prpc;
 // C4 engine-vs-sim `EconomicsEngine` differential (§5.4 / §7.1); replays
 // the sim-recorded `RecordedChainFixture` through the real

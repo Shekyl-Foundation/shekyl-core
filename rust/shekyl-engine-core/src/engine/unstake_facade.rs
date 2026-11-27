@@ -106,7 +106,7 @@ use super::fee_policy::FeeEstimatorError;
 use super::fee_snapshot::map_daemon_engine_fee_error;
 use super::pending::TxHash;
 use super::pending_post_gate::{ForegroundSession, UserPendingPost};
-use super::prpc::LocalNodeRpc;
+use super::prpc::{open_chain_reader, ChainOpen};
 use super::release_dispatch::ReleaseRequestError;
 use super::signer::EngineSignerKind;
 use super::stake_engine::StakeEngineError;
@@ -197,8 +197,8 @@ pub enum UnstakeError {
          chain disagree; resync and retry"
     )]
     NoBondRecord,
-    /// The exit-transport constructor refused the daemon address (the ①
-    /// local posture accepts loopback only).
+    /// The exit's record fetch was given a plaintext daemon address that
+    /// is not this computer. An enrolled channel is not this refusal.
     #[error("exit transport: {detail}")]
     Transport {
         /// The constructor's own reason.
@@ -391,6 +391,10 @@ pub enum CollectUnstakedError {
         /// The anchoring helper's own (scalar-free) reason.
         detail: String,
     },
+    /// The node named its own remedy while preparing the sweep. The fault
+    /// is the sentence; this is not the retry-as-unreachable arm.
+    #[error("{0}")]
+    Daemon(shekyl_rpc_client::DaemonFault),
     /// A daemon query needed to prepare the sweep failed transiently — the
     /// dispatch-tip clock read. Pre-seal, so nothing propagated: check the
     /// daemon and retry. Distinct from `Unanchorable` (the wallet's reference
@@ -688,10 +692,9 @@ where
     /// and the exit pays `P`'s own base address (never the principal — the
     /// P↔principal edge is drawn only by the later, separate
     /// [`Self::collect_unstaked`] sweep). `daemon_address` is the
-    /// embedder-held endpoint (the [`Self::start_serving_if_staker`] shape);
-    /// the record fetch rides the ① local-posture transport built from it,
-    /// which refuses a non-loopback URL by construction (posture *selection*
-    /// remains the DQ-T2.3 slice).
+    /// embedder-held endpoint (the [`Self::start_serving_if_staker`] shape).
+    /// The record fetch uses that daemon: this computer, or an enrolled
+    /// channel. A plaintext address on another computer is refused.
     pub async fn unstake(
         engine: Arc<RwLock<Engine<S, D, LocalLedger, E, R, P, WalletFile>>>,
         daemon: &shekyl_rpc_transport::DaemonTarget,
@@ -736,11 +739,19 @@ where
                 UnstakeTarget::NothingStaked => return Err(UnstakeError::NothingStaked),
             };
 
-        // ① local posture; refuses non-loopback by construction.
-        let release_rpc = LocalNodeRpc::new(daemon, EXIT_FETCH_TIMEOUT)
+        let release_rpc = open_chain_reader(daemon, EXIT_FETCH_TIMEOUT)
             .await
-            .map_err(|e| UnstakeError::Transport {
-                detail: e.to_string(),
+            .map_err(|error| match error {
+                ChainOpen::PlaintextNotLocal => UnstakeError::Transport {
+                    detail: shekyl_rpc_transport::PLAINTEXT_NOT_THIS_COMPUTER.to_owned(),
+                },
+                ChainOpen::Channel { fault, detail } => {
+                    tracing::warn!(%detail, "the exit could not open the channel");
+                    UnstakeError::DaemonTarget(shekyl_rpc_client::DaemonFault::Channel(fault))
+                }
+                ChainOpen::Unusable(error) => UnstakeError::DaemonUnreachable {
+                    detail: error.to_string(),
+                },
             })?;
 
         let witness = SpentRecordsDurablyPruned::arm1_watch_pruning_live();
@@ -1037,7 +1048,7 @@ fn flatten_unstake_error(e: ReleaseRequestError) -> UnstakeError {
         }
         // A target refusal on the fee query is not a fee problem and not a
         // retry. The fee arm is reached before the record fetch.
-        ReleaseRequestError::Fee(FeeEstimatorError::Daemon(fault)) if fault.is_target_refusal() => {
+        ReleaseRequestError::Fee(FeeEstimatorError::Daemon(fault)) if fault.has_own_remedy() => {
             UnstakeError::DaemonTarget(fault)
         }
         ReleaseRequestError::Fee(e) => UnstakeError::FeeEstimate(e),
@@ -1046,7 +1057,7 @@ fn flatten_unstake_error(e: ReleaseRequestError) -> UnstakeError {
         // malformed response is an untrusted-input rejection (internal).
         // A target refusal is neither: it is the fault, and it is not retried.
         ReleaseRequestError::Fetch(e) => match e {
-            EmissionSourceError::Rpc(error) if error.fault().is_target_refusal() => {
+            EmissionSourceError::Rpc(error) if error.fault().has_own_remedy() => {
                 UnstakeError::DaemonTarget(error.fault())
             }
             EmissionSourceError::Rpc(error) => UnstakeError::DaemonUnreachable {
@@ -1059,6 +1070,7 @@ fn flatten_unstake_error(e: ReleaseRequestError) -> UnstakeError {
         },
         // Pre-seal daemon-tip failure: retryable, never the opaque internal
         // -32603 a sealed-store read gets.
+        ReleaseRequestError::Target(fault) => UnstakeError::DaemonTarget(fault),
         ReleaseRequestError::DaemonUnreachable { context, detail } => {
             UnstakeError::DaemonUnreachable {
                 detail: format!("{context}: {detail}"),
@@ -1124,6 +1136,7 @@ fn flatten_collect_error(e: DrainRequestError) -> CollectUnstakedError {
         },
         // Pre-seal daemon-tip failure: retryable, never the opaque internal
         // -32603 a sealed-store read gets.
+        DrainRequestError::Target(fault) => CollectUnstakedError::Daemon(fault),
         DrainRequestError::DaemonUnreachable { context, detail } => {
             CollectUnstakedError::DaemonUnreachable {
                 detail: format!("{context}: {detail}"),

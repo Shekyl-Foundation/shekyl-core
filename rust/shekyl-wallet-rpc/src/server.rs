@@ -399,7 +399,11 @@ impl Drop for UdsCleanup {
 /// (rule 82 — the failure must name the flag, at the moment it can be
 /// fixed).
 fn validate_daemon_endpoint(config: &ServerConfig) -> Result<(), BoxErr> {
-    let DaemonTarget::Address { url, proxy } = &config.daemon else {
+    if let DaemonTarget::Channel { node, .. } = &config.daemon {
+        node.bundle()?;
+        return Ok(());
+    }
+    let DaemonTarget::Address { url, proxy, .. } = &config.daemon else {
         // "This computer" has no address to check: its rendezvous is read at
         // each call.
         return Ok(());
@@ -429,8 +433,9 @@ fn validate_daemon_endpoint(config: &ServerConfig) -> Result<(), BoxErr> {
 /// it. Empty for "this computer", which is no network path.
 fn daemon_disclosures(config: &ServerConfig) -> DaemonDisclosures {
     match &config.daemon {
-        DaemonTarget::ThisComputer { .. } => DaemonDisclosures::default(),
-        DaemonTarget::Address { url, proxy } => {
+        DaemonTarget::Channel { node, .. } => node.leg.disclosures("daemon-endpoint"),
+        DaemonTarget::Owner(_) | DaemonTarget::ThisComputer { .. } => DaemonDisclosures::default(),
+        DaemonTarget::Address { url, proxy, .. } => {
             shekyl_rpc_transport::network_posture::daemon_disclosures(
                 "daemon-endpoint",
                 url,
@@ -450,85 +455,28 @@ const LOCAL_ENDPOINT_HINT: &str = if cfg!(unix) {
     ""
 };
 
-/// The TCP listen posture (`RPC_TRANSPORT_POSTURE.md` RT-1, RT-2, RT-3).
-///
-/// `listen` is the address the configuration resolved. `auth` is the
-/// credential pair, or [`AuthConfig::Disabled`] when neither secret is set.
-/// `source` is where `rpc-listen` came from, so a refusal names the command
-/// line or the file line.
-///
-/// A socket and the in-process pipe carry their authorization in the
-/// transport and return `Ok(None)`. A wildcard TCP address is refused
-/// ([`ListenClass::Wildcard`], IPv4-mapped spellings included). An addressed
-/// listener with no credentials is refused. An addressed listener with
-/// credentials is allowed, and the `Ok` string is the cleartext warning the
-/// start says (RT-3). Loopback is quiet.
-///
-/// # Errors
-///
-/// A typed refusal (IG-11). The load reports it and exits 2; a bind path
-/// that built a [`ServerConfig`] without the load reports the same value.
-pub(crate) fn tcp_listen_posture(
-    listen: &ListenAddr,
-    auth: &AuthConfig,
-    source: Source,
-) -> Result<Option<String>, Diagnostic> {
+/// Enforce the local-only wallet listener policy during configuration load and at bind.
+pub(crate) fn tcp_listen_posture(listen: &ListenAddr, source: Source) -> Result<(), Diagnostic> {
     let addr = match listen {
         ListenAddr::Tcp(addr) => addr,
         #[cfg(unix)]
-        ListenAddr::Uds(_) => return Ok(None),
+        ListenAddr::Uds(_) => return Ok(()),
         #[cfg(windows)]
-        ListenAddr::SelfHostedPipe(_) => return Ok(None),
+        ListenAddr::SelfHostedPipe(_) => return Ok(()),
     };
-    match classify_listen(*addr) {
-        ListenClass::Loopback => Ok(None),
-        ListenClass::Wildcard => Err(Diagnostic::new(Code::ValueRange, source)
-            .option("rpc-listen")
-            .param("value", addr.to_string())
-            .param(
-                "rule",
-                format!(
-                    "a wildcard address. {WILDCARD_REASON}. Bind 127.0.0.1 or \
-                     [::1]{LOCAL_ENDPOINT_HINT}, or the address of the one interface your \
-                     clients are on (which also requires rpc-username and rpc-password in the \
-                     configuration file)"
-                ),
-            )),
-        ListenClass::Addressed => match auth {
-            // `Basic` carries a real credential: the constructor refuses a
-            // blank half, so this arm does not re-inspect it.
-            AuthConfig::Basic(_) => Ok(Some(format!(
-                "serving the wallet RPC on {addr} off loopback with HTTP Basic over cleartext: \
-                 the credential travels in every request and any network path between a client \
-                 and this host can read it (RPC_TRANSPORT_POSTURE.md RT-3). Keep that path one \
-                 you control; the encrypted remote leg is RT-W4."
-            ))),
-            AuthConfig::Disabled => Err(Diagnostic::new(Code::ValueRequires, source)
-                .option("rpc-listen")
-                .param(
-                    "requires",
-                    format!(
-                        "rpc-username and rpc-password, because {addr} is reachable from the \
-                         network and without authentication every request, spends included, \
-                         would be honoured. Bind 127.0.0.1 or [::1]{LOCAL_ENDPOINT_HINT} to \
-                         serve with neither"
-                    ),
-                )),
-        },
-    }
+    let rule = match classify_listen(*addr) {
+        ListenClass::Loopback => return Ok(()),
+        ListenClass::Wildcard => format!("a wildcard address. {WILDCARD_REASON}. Bind 127.0.0.1 or [::1]{LOCAL_ENDPOINT_HINT}."),
+        ListenClass::Addressed => format!("wallet requests and credentials would cross the network in plaintext. Bind 127.0.0.1 or [::1]{LOCAL_ENDPOINT_HINT}. For remote access, forward the local listener over your own encrypted transport, such as SSH or WireGuard."),
+    };
+    Err(Diagnostic::new(Code::ValueRange, source)
+        .option("rpc-listen")
+        .param("value", addr.to_string())
+        .param("rule", rule))
 }
 
-/// The bind path's view of [`tcp_listen_posture`]: the same refusal, rendered
-/// for a caller that does not hold the configuration's [`Diagnostic`]s.
-fn validate_listen(config: &ServerConfig) -> Result<Option<String>, BoxErr> {
-    tcp_listen_posture(&config.listen, &config.auth, Source::Machine)
-        .map_err(|fault| -> BoxErr { Box::new(fault) })
-}
-
-fn warn_cleartext(warning: Option<String>) {
-    if let Some(line) = warning {
-        warn!("{line}");
-    }
+fn validate_listen(config: &ServerConfig) -> Result<(), BoxErr> {
+    Ok(tcp_listen_posture(&config.listen, Source::Machine)?)
 }
 
 /// The program's name in the line its start says about its stops.
@@ -547,12 +495,9 @@ pub struct ArmedServer {
 /// the daemon endpoint and the listen posture. `config-verify` runs exactly
 /// these (`INPUT_GRAMMAR.md` IG-Q63).
 ///
-/// The `Ok` string is the cleartext warning for an authenticated listener
-/// off loopback (RT-3). The caller says it; this function does not log.
-///
 /// # Errors
 /// The configuration is refused.
-pub fn check_server_config(config: &ServerConfig) -> Result<Option<String>, BoxErr> {
+pub fn check_server_config(config: &ServerConfig) -> Result<(), BoxErr> {
     validate_daemon_endpoint(config)?;
     validate_listen(config)
 }
@@ -572,14 +517,13 @@ pub fn check_server_config(config: &ServerConfig) -> Result<Option<String>, BoxE
 /// The configuration is refused, or the stops could not be armed.
 pub fn arm_server(config: ServerConfig) -> Result<ArmedServer, BoxErr> {
     let inherited = Inherited::at_start();
-    let cleartext = check_server_config(&config)?;
+    check_server_config(&config)?;
     // The binary's own `daemon-endpoint`, said once at startup. The
     // in-process server (`spawn_in_process_with`) does not repeat it: its
     // host, shekyl-cli, discloses the same address on its own stderr first.
     for warning in daemon_disclosures(&config) {
         warn!("{warning}");
     }
-    warn_cleartext(cleartext);
     let notice = inherited.line(PROGRAM);
     let stops = Stops::arm(inherited)
         .map_err(|e| format!("the stop signals could not be registered: {e}"))?;
@@ -1074,7 +1018,7 @@ fn private_config(
 /// [`spawn_in_process`]).
 pub async fn spawn_in_process_with(config: ServerConfig) -> Result<InProcessHandle, BoxErr> {
     validate_daemon_endpoint(&config)?;
-    warn_cleartext(validate_listen(&config)?);
+    validate_listen(&config)?;
     let bound = BoundListener::bind(&config.listen).await?;
     let state = AppState::new(config);
     let app = build_router(state.clone());
@@ -1155,10 +1099,10 @@ mod tests {
     /// `rpc-password` value (rules 30/35).
     #[test]
     fn debug_of_server_state_never_renders_credentials() {
-        let endpoint = DaemonTarget::Address {
-            url: "http://user:hunter2@127.0.0.1:28581/prefix".into(),
-            proxy: Some("socks5h://puser:swordfish@127.0.0.1:9050".into()),
-        };
+        let endpoint = DaemonTarget::fixture_with_proxy(
+            "http://user:hunter2@127.0.0.1:28581/prefix".into(),
+            Some("socks5h://puser:swordfish@127.0.0.1:9050".into()),
+        );
         let config = ServerConfig {
             listen: ListenAddr::Tcp(std::net::SocketAddr::from(([127, 0, 0, 1], 0))),
             wallet_dir: std::path::PathBuf::from("."),
@@ -1197,7 +1141,7 @@ mod tests {
             listen: ListenAddr::Tcp(listen.parse().expect("listen parses")),
             wallet_dir: std::path::PathBuf::from("."),
             network: Network::Stagenet,
-            daemon: DaemonTarget::address("http://127.0.0.1:1"),
+            daemon: DaemonTarget::fixture_address("http://127.0.0.1:1"),
             auth,
             kdf: KdfParams::default(),
             tor_file: TorFile::discover(),
@@ -1224,39 +1168,32 @@ mod tests {
         }
     }
 
-    /// RT-2: an unauthenticated, network-reachable bind is refused — the
-    /// IPv6 and IPv4-mapped spellings included, so the rule cannot be
-    /// sidestepped by notation.
+    /// Check both authentication settings and all three address spellings.
     #[test]
-    fn unauthenticated_non_loopback_bind_is_refused() {
+    fn addressed_binds_are_refused_with_or_without_credentials() {
         for addr in [
             "192.0.2.1:29500",
             "[2001:db8::1]:29500",
             "[::ffff:192.0.2.1]:29500",
         ] {
-            let err = validate_listen(&listen_config(addr, AuthConfig::Disabled))
-                .expect_err("auth-less non-loopback bind must be refused")
-                .to_string();
-            assert!(err.contains("without authentication"), "{addr}: {err}");
-            assert!(
-                err.contains("rpc-username"),
-                "{addr}: must say what to do: {err}"
-            );
+            for auth in [AuthConfig::Disabled, basic()] {
+                let err = validate_listen(&listen_config(addr, auth))
+                    .expect_err("network-reachable wallet RPC must refuse before binding")
+                    .to_string();
+                for advice in [addr, "plaintext", "127.0.0.1", "SSH", "WireGuard"] {
+                    assert!(err.contains(advice), "{addr}: {err}");
+                }
+            }
         }
     }
 
-    /// The complements, so the refusals are seen to be narrow: loopback with
-    /// auth disabled passes (the in-process default's posture), and an
-    /// addressed bind with auth passes validation (binding is not attempted
-    /// here — the address is TEST-NET).
     #[test]
-    fn loopback_and_authenticated_binds_pass_validation() {
+    fn local_binds_pass_validation() {
         for addr in ["127.0.0.1:0", "[::1]:0", "[::ffff:127.0.0.1]:0"] {
-            validate_listen(&listen_config(addr, AuthConfig::Disabled))
-                .unwrap_or_else(|e| panic!("{addr} with auth disabled must pass: {e}"));
+            for auth in [AuthConfig::Disabled, basic()] {
+                validate_listen(&listen_config(addr, auth)).expect("loopback is local");
+            }
         }
-        validate_listen(&listen_config("192.0.2.1:29500", basic()))
-            .expect("an addressed bind with auth passes validation");
         #[cfg(unix)]
         {
             let mut socket = listen_config("127.0.0.1:0", AuthConfig::Disabled);
@@ -1301,22 +1238,23 @@ mod tests {
         );
         config.daemon = DaemonTarget::ThisComputer {
             network: Network::Stagenet,
+            key_file: None,
         };
         assert!(
             daemon_disclosures(&config).is_empty(),
             "this computer is no network path"
         );
 
-        config.daemon = DaemonTarget::address("http://node.example.com:11029");
+        config.daemon = DaemonTarget::fixture_address("http://node.example.com:11029");
         let direct = daemon_disclosures(&config);
         let path = direct.path.as_deref().expect("path warning");
         assert!(path.contains("daemon-endpoint"), "{path}");
         assert!(direct.operator.is_some(), "{direct:?}");
 
-        config.daemon = DaemonTarget::Address {
-            url: "http://node.example.com:11029".into(),
-            proxy: Some("socks5://127.0.0.1:9050".into()),
-        };
+        config.daemon = DaemonTarget::fixture_with_proxy(
+            "http://node.example.com:11029".into(),
+            Some("socks5://127.0.0.1:9050".into()),
+        );
         let proxied = daemon_disclosures(&config);
         assert!(
             proxied.path.is_none(),
@@ -1362,7 +1300,7 @@ mod tests {
         let held = std::net::TcpListener::bind("127.0.0.1:0").expect("hold a port");
         let port = held.local_addr().expect("local addr").port();
         let mut config = listen_config(&format!("127.0.0.1:{port}"), AuthConfig::Disabled);
-        config.daemon = DaemonTarget::address("http://203.0.113.7:11029");
+        config.daemon = DaemonTarget::fixture_address("http://203.0.113.7:11029");
         let err = async { arm_server(config)?.serve().await }
             .with_subscriber(subscriber)
             .await

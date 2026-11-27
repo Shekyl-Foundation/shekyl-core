@@ -41,7 +41,7 @@ fn every_fill_failure_maps_to_its_class() {
             PlanAttempt::Unbondable,
         ),
         (
-            FillFailure::LocalNodeRequired { detail: detail() }.into(),
+            FillFailure::LocalNodeRequired.into(),
             PlanAttempt::Wait(PlanWait::NodeNotLocal),
         ),
         (
@@ -49,7 +49,11 @@ fn every_fill_failure_maps_to_its_class() {
             PlanAttempt::Wait(PlanWait::NodeSyncing),
         ),
         (
-            FillFailure::DaemonUnreachable { detail: detail() }.into(),
+            FillFailure::Daemon {
+                fault: shekyl_rpc_client::DaemonFault::Unreachable,
+                detail: detail(),
+            }
+            .into(),
             PlanAttempt::Wait(PlanWait::NodeUnreachable),
         ),
         (

@@ -78,9 +78,9 @@ impl DueBlock {
             CompleteTreeFillError::ScanBehind { .. } => Self::Wait(PlanWait::WalletBehind),
             CompleteTreeFillError::Fill(f) => match f {
                 FillFailure::Discarded { .. } => Self::Unbondable,
-                FillFailure::LocalNodeRequired { .. } => Self::Wait(PlanWait::NodeNotLocal),
+                FillFailure::LocalNodeRequired => Self::Wait(PlanWait::NodeNotLocal),
                 FillFailure::DaemonSyncing => Self::Wait(PlanWait::NodeSyncing),
-                FillFailure::DaemonUnreachable { .. } => Self::Wait(PlanWait::NodeUnreachable),
+                FillFailure::Daemon { .. } => Self::Wait(PlanWait::NodeUnreachable),
                 FillFailure::ScanStateUnreadable { .. } => Self::Wait(PlanWait::WalletBehind),
                 FillFailure::DaemonMismatch { .. } => Self::Wait(PlanWait::NodeMismatch),
                 FillFailure::StoreFailed { .. } => Self::Wait(PlanWait::StoreFailed),

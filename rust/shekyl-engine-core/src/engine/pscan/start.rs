@@ -608,19 +608,7 @@ where
     }
 }
 
-/// The production [`BondBroadcast`]: routes every dispatch through the
-/// [`BroadcastSubmitter::local`] pre-bound ① construction (which is itself
-/// the `for_posture` posture→submitter choke point) and its
-/// [`submit_bound`](BroadcastSubmitter::submit_bound) pairing check.
-///
-/// **Posture is hardwired ① `Local`** — the privacy default (the loopback
-/// broadcast originates on the operator's own box; exactly what
-/// [`select_broadcast`](crate::engine::posture::select_broadcast) resolves for
-/// no-choice + reachable-local). The operator's *explicit* posture choice (an
-/// ② `OwnRemote` over `P`'s own circuit, with its per-persona circuit-bound
-/// submitter) plugs in here when the 2c config-source slice lands; the seam —
-/// per-dispatch construction from `(posture, persona)` — is already the ②
-/// shape, so that slice swaps the hardwired value, not this type.
+/// Dispatch a persisted bond transaction through this wallet's operator-owned daemon.
 struct LocalBondBroadcast<D> {
     daemon: Arc<D>,
 }
@@ -633,7 +621,7 @@ impl<D: DaemonEngine> BondBroadcast for LocalBondBroadcast<D> {
         let daemon = self.daemon.clone();
         async move {
             let persona = *handoff.persona();
-            BroadcastSubmitter::local(persona, daemon)
+            BroadcastSubmitter::for_wallet(persona, daemon)
                 .submit_bound(handoff)
                 .await
         }

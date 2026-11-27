@@ -18,7 +18,7 @@
 //!
 //! 1. **Fetch** ([`fetch_vouched_claim_source`]) — the single-field `p_id`
 //!    query (§7.2: the request shape is identical for every claimant),
-//!    over a [`PersonaIsolatedTransport`] **only** (the §7.4 transport pin,
+//!    over a [`WalletChainReader`] **only** (the §7.4 transport pin,
 //!    structural: the principal's daemon session does not implement the
 //!    marker, so a claim fetch on the principal's network identity is a
 //!    compile error).
@@ -88,7 +88,7 @@ use super::bond_assembly::SpentRecordsDurablyPruned;
 use super::curve_tree_actor::{CurveTreeHandle, CurveTreeHandleError};
 use super::daemon::synced_chain_facts::TimelineBreak;
 use super::emission_source::{fetch_vouched_claim_source, EmissionSourceError};
-use super::prpc::PersonaIsolatedTransport;
+use super::prpc::WalletChainReader;
 use super::signing_assembly::{leaf_entry_from_chunk, tree_context_from};
 use super::stake_engine::{
     AssembleEmissionClaim, AssembledEmissionClaim, PersonaHandle, StakeEngineError,
@@ -251,14 +251,14 @@ fn provable_records(
 /// ledger (the orchestrator has no ledger access of its own; the engine owns
 /// the header window). `handle` is the operation-scoped slot capability; its
 /// slot also names the sweep's record filter.
-pub(crate) async fn orchestrate_emission_claim<R: PersonaIsolatedTransport>(
+pub(crate) async fn orchestrate_emission_claim<R: WalletChainReader>(
     rpc: &R,
     handle: PersonaHandle,
     ctx: ClaimAssemblyContext<'_>,
     block_hash_at: impl Fn(BlockHeight) -> Option<BlockHash>,
 ) -> Result<OrchestratedClaim, ClaimOrchestrationError> {
     // 1+2a. Fetch the claim source (single-field query over the persona's
-    //    OWN transport — the `PersonaIsolatedTransport` bound is the §7.4
+    //    OWN transport — the `WalletChainReader` bound is the §7.4
     //    structural pin; decode enforces the settled/height invariant at
     //    the untrusted boundary) and read the tree's ingested tip — two
     //    independent awaits, joined.
@@ -625,7 +625,7 @@ mod tests {
         // Test transport (see the marker's doc): the §7.4 pin is against
         // production misuse; a canned test daemon carries no network
         // identity at all.
-        impl PersonaIsolatedTransport for ClaimSourceDaemon {}
+        impl WalletChainReader for ClaimSourceDaemon {}
 
         /// The pipeline end-to-end over the REAL substrate — no synthetic
         /// paths, no pre-prepared operands:

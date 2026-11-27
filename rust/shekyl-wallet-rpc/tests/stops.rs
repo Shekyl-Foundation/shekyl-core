@@ -83,10 +83,10 @@ fn run_child_if_asked() -> bool {
         listen: ListenAddr::Uds(socket_in(&dir)),
         wallet_dir: wallets,
         network: Network::Stagenet,
-        daemon: shekyl_wallet_rpc::tenant::DaemonTarget::Address {
-            url: "http://127.0.0.1:1".into(),
-            proxy: None,
-        },
+        daemon: shekyl_wallet_rpc::tenant::DaemonTarget::fixture_with_proxy(
+            "http://127.0.0.1:1".into(),
+            None,
+        ),
         auth: AuthConfig::Disabled,
         kdf: shekyl_crypto_pq::wallet_envelope::KdfParams::default(),
         tor_file: shekyl_wallet_rpc::server::TorFile::discover(),

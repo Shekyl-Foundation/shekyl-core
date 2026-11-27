@@ -450,12 +450,9 @@ async fn run_blocking_io_runs_on_a_multi_thread_runtime() {
 /// mislocated gate is paid by whoever debugs it.
 ///
 /// This bites against the bond broadcast dropping the
-/// `BroadcastSubmitter::local` construction, bypassing `submit_bound`'s
+/// `BroadcastSubmitter::for_wallet` construction, bypassing `submit_bound`'s
 /// persona-pairing check, or reaching for a raw daemon client (T-DS-2). It
-/// does NOT cover the inverse direction — that no production site *selects*
-/// the ② `OwnRemote` arm — which is crate-wide and lives in
-/// `tests/broadcast_own_remote_production_census.rs`; and like its siblings
-/// it is a source-text pin, not a reachability proof.
+/// checks the bond dispatch site. The crate-wide census covers the other callers.
 #[test]
 fn the_bond_broadcast_seam_stays_on_the_local_choke_point() {
     // Since this suite moved to a `#[path]` sibling, `start.rs` is
@@ -476,7 +473,7 @@ fn the_bond_broadcast_seam_stays_on_the_local_choke_point() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    let choke_construct = "BroadcastSubmitter::local(";
+    let choke_construct = "BroadcastSubmitter::for_wallet(";
     assert!(
         code.contains(choke_construct),
         "the bond broadcast must construct on the audited ① choke point"

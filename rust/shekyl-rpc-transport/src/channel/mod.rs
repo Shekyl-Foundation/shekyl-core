@@ -60,3 +60,6 @@ pub use pool::{Lent, Pool, EXTRA_SESSION_IDLE};
 pub use reach::{socks5h_url, PeerRoute, PeerRouteError};
 pub use session::{is_submission, Session};
 pub use sync::ChannelDaemon;
+
+mod wallet;
+pub use wallet::{account_target, default_key_file, RemoteNode, WalletChannel};
