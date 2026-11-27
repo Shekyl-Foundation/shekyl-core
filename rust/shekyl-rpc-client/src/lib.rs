@@ -80,6 +80,12 @@ pub enum WalletChannelFault {
     /// The node closed the connection during the call. Check its status before repeating a submission.
     #[error("The node closed the connection during the call. Check its status before repeating a submission.")]
     Closed,
+    /// The node revoked this client's enrollment. Enroll it again with the command.
+    #[error(
+        "The node revoked this client's enrollment. Enroll it again with: {}",
+        enrollment_command(.0)
+    )]
+    Revoked([u8; 32]),
     /// The call exceeded the bound it was opened under. The request was not sent again.
     #[error("{CALL_BUDGET_EXCEEDED}")]
     Budget,
@@ -94,7 +100,11 @@ impl WalletChannelFault {
     pub const fn terminal(self) -> bool {
         matches!(
             self,
-            Self::NotEnrolled(_) | Self::NotTheDaemon | Self::NotRecognised | Self::Local
+            Self::NotEnrolled(_)
+                | Self::Revoked(_)
+                | Self::NotTheDaemon
+                | Self::NotRecognised
+                | Self::Local
         )
     }
 }
@@ -102,8 +112,10 @@ impl WalletChannelFault {
 /// An error from the RPC.
 #[derive(Clone, PartialEq, Eq, Debug, thiserror::Error)]
 pub enum RpcError {
-    /// The authenticated channel failed. Local detail is retained for the server log.
-    #[error("{0} ({1})")]
+    /// The authenticated channel failed. The sentence is the fault. The string
+    /// is the leg or the local cause, for a log, and is empty when the
+    /// sentence already says everything.
+    #[error("{0}")]
     Channel(WalletChannelFault, String),
     /// An internal error.
     #[error("internal error ({0})")]
@@ -158,11 +170,9 @@ pub enum RpcError {
          connecting ({0})"
     )]
     PeerCheck(String),
-    /// "This computer"'s node runs as a service (RT-16), which a wallet
-    /// reaches only over the channel from RT-W12. Until then the wallet names
-    /// the service's view listener as its `daemon-address`: `Some` is that
-    /// listener, as the service's rendezvous record names it, `None` a
-    /// service with no view listener. Nothing was dialled.
+    /// "This computer"'s node runs as a service (RT-16). A wallet reaches it
+    /// on the enrolled channel. `Some` is the view listener the record names,
+    /// `None` a service that published no view listener. Nothing was dialled.
     #[error("{}", service_refusal(*.0))]
     Service(Option<core::net::SocketAddr>),
 }
@@ -274,6 +284,16 @@ impl DaemonFault {
 }
 
 impl RpcError {
+    /// The leg or local cause carried beside a channel sentence. Empty for
+    /// every other failure, whose sentence already includes what a log needs.
+    #[must_use]
+    pub fn detail(&self) -> &str {
+        match self {
+            Self::Channel(_, detail) => detail,
+            _ => "",
+        }
+    }
+
     /// What this failure means for the remedy. Exhaustive: a new variant
     /// does not compile until its remedy is named.
     #[must_use]

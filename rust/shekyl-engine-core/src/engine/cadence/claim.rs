@@ -306,6 +306,7 @@ where
                     Err(error) => {
                         tracing::warn!(
                             error = %error,
+                            detail = error.detail(),
                             "epoch-claim leg: the claim source could not be opened"
                         );
                         return claim_fault(&state, &alarms, settled, &error);

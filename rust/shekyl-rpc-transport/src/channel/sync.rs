@@ -5,39 +5,53 @@
 
 //! A channel target a synchronous caller can hold.
 
-use std::sync::{Mutex, PoisonError};
+use std::sync::Arc;
+use std::time::Duration;
 
 use shekyl_rpc_grants::GrantSet;
 
 use super::handshake::ChannelTarget;
-use super::session::Session;
+use super::pool::Pool;
 use super::ChannelFault;
 
-/// A channel target a synchronous caller can hold: one session on a
-/// current-thread runtime of its own, as [`crate::SyncDaemon`] holds one
-/// for HTTP. `shekyl-cli` reaches a daemon on another host, or a service's
-/// console leg, through it.
+/// A channel target a synchronous caller can hold.
+///
+/// This is the same [`Pool`] the async wallet holds, on a current-thread
+/// runtime, as [`crate::SyncDaemon`] holds one for HTTP. `within` bounds
+/// every post. A deadline is [`ChannelFault::Budget`]. A connection that
+/// ends is rechecked by the pool, and the body is not sent again.
 pub struct ChannelDaemon {
     runtime: tokio::runtime::Runtime,
-    session: Mutex<Session>,
+    pool: Arc<Pool>,
+    within: Duration,
+    granted: GrantSet,
 }
 
 impl ChannelDaemon {
-    /// Open a session with the permissions enrolled on the daemon.
+    /// Open a pool with the permissions enrolled on the daemon. `within`
+    /// bounds every later post.
     ///
     /// # Errors
     ///
     /// As for [`Self::connect`].
-    pub fn connect_enrolled(target: &ChannelTarget) -> Result<Self, ChannelFault> {
-        Self::connect(target, GrantSet::ALL)
+    pub fn connect_enrolled(
+        target: &ChannelTarget,
+        within: Duration,
+    ) -> Result<Self, ChannelFault> {
+        Self::connect(target, GrantSet::ALL, within)
     }
 
-    /// Open a session to `target` asking for `request`.
+    /// Open a pool to `target` asking for `request`. The kept session is
+    /// opened now, so a refusal is this call's. `within` bounds every later post.
     ///
     /// # Errors
     ///
     /// [`ChannelFault`]: the runtime, or why the channel did not open.
-    pub fn connect(target: &ChannelTarget, request: GrantSet) -> Result<Self, ChannelFault> {
+    pub fn connect(
+        target: &ChannelTarget,
+        request: GrantSet,
+        within: Duration,
+    ) -> Result<Self, ChannelFault> {
         if tokio::runtime::Handle::try_current().is_ok() {
             return Err(ChannelFault::Local(
                 "the channel's client was made inside an async runtime".to_owned(),
@@ -47,33 +61,33 @@ impl ChannelDaemon {
             .enable_all()
             .build()
             .map_err(|e| ChannelFault::Local(format!("runtime: {e}")))?;
-        let session = runtime.block_on(async {
-            let opened = target.open(request).await?;
-            Session::start(opened, None).await
-        })?;
+        let pool = Pool::new(target.clone(), request);
+        let (_ceiling, granted) = runtime.block_on(pool.open_kept())?;
         Ok(Self {
             runtime,
-            session: Mutex::new(session),
+            pool,
+            within,
+            granted,
         })
     }
 
-    /// What the session holds.
+    /// What the kept session holds.
     #[must_use]
     pub fn granted(&self) -> GrantSet {
-        self.session
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .granted()
+        self.granted
     }
 
     /// POST `body` to `route` and return the response's body.
     ///
     /// # Errors
     ///
-    /// [`ChannelFault::Closed`] when the session ends under the request.
+    /// [`ChannelFault`], from the pool. [`ChannelFault::Budget`] when
+    /// [`Self::connect`]'s bound elapses. [`ChannelFault::Closed`] when the
+    /// session ends and the recheck does not name a stronger fault. The body
+    /// is not sent again.
     pub fn post(&self, route: &str, body: Vec<u8>) -> Result<Vec<u8>, ChannelFault> {
-        let mut session = self.session.lock().unwrap_or_else(PoisonError::into_inner);
-        self.runtime.block_on(session.post(route, body))
+        self.runtime
+            .block_on(self.pool.post(route, body, self.within))
     }
 
     /// One call of method `M`: the envelope and checks every target makes.

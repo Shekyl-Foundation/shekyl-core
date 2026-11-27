@@ -1536,17 +1536,20 @@ impl RegtestDaemon {
         let port = self.channel_port.expect("current daemon channel");
         let bundle = self
             .owner
-            .call::<RpcBundleShow>(&NoParams)
+            .call::<RpcBundleShow>(&NoParams, shekyl_rpc_transport::local::CALL_WITHIN)
             .expect("owner exports the bundle");
         let bundle_file = dir.join("daemon.bundle");
         std::fs::write(&bundle_file, bundle_text(&bundle.bundle.0)).unwrap();
         let key_file = dir.join("client.key");
         let key = create_client_key(&key_file).unwrap();
         self.owner
-            .call::<RpcClientAdd>(&ClientCeiling {
-                fingerprint: HashHex::from_bytes(*key.public().fingerprint().as_bytes()),
-                ceiling: vec![ceiling],
-            })
+            .call::<RpcClientAdd>(
+                &ClientCeiling {
+                    fingerprint: HashHex::from_bytes(*key.public().fingerprint().as_bytes()),
+                    ceiling: vec![ceiling],
+                },
+                shekyl_rpc_transport::local::CALL_WITHIN,
+            )
             .expect("owner enrolls the subprocess");
         (
             std::net::SocketAddr::from(([127, 0, 0, 1], port)),

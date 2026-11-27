@@ -301,15 +301,10 @@ where
                 .await
                 .map_err(|error| match error {
                     ChainOpen::PlaintextNotLocal => FillFailure::LocalNodeRequired,
-                    ChainOpen::Fault { fault, detail } => match fault {
-                        shekyl_rpc_client::DaemonFault::Channel(channel) => {
-                            tracing::warn!(%detail, "the fill could not open the channel");
-                            FillFailure::Channel(channel)
-                        }
-                        other => FillFailure::DaemonUnreachable {
-                            detail: format!("{other} ({detail})"),
-                        },
-                    },
+                    ChainOpen::Channel { fault, detail } => {
+                        tracing::warn!(%detail, "the fill could not open the channel");
+                        FillFailure::Channel(fault)
+                    }
                     ChainOpen::Unusable(error) => FillFailure::DaemonUnreachable {
                         detail: error.to_string(),
                     },

@@ -160,7 +160,9 @@ fn wait_for_owner(daemon: &mut Running, dir: &Path) -> (LocalTarget, String) {
         if let Some(status) = daemon.child.try_wait().expect("the child") {
             panic!("the {} ended: {status}\n{}", daemon.what, daemon.stderr());
         }
-        if let Ok(bundle) = owner.call::<wire::RpcBundleShow>(&NoParams) {
+        if let Ok(bundle) =
+            owner.call::<wire::RpcBundleShow>(&NoParams, shekyl_rpc_transport::local::CALL_WITHIN)
+        {
             let text = shekyl_rpc_transport::channel::bundle_text(&bundle.bundle.0);
             return (owner, text);
         }
@@ -300,10 +302,13 @@ fn enroll_dial_call_revoke_and_a_refused_call_after() {
     };
     let admin = enroll::run(&cli, &Enroll::KeyCreate).expect("rpc key create");
     owner
-        .call::<wire::RpcClientAdd>(&ClientCeiling {
-            fingerprint: HashHex::from_hex(&admin).expect("a fingerprint"),
-            ceiling: vec![CeilingWord::Enroll, CeilingWord::View],
-        })
+        .call::<wire::RpcClientAdd>(
+            &ClientCeiling {
+                fingerprint: HashHex::from_hex(&admin).expect("a fingerprint"),
+                ceiling: vec![CeilingWord::Enroll, CeilingWord::View],
+            },
+            shekyl_rpc_transport::local::CALL_WITHIN,
+        )
         .expect("the owner enrolls the administrator");
 
     // The tunnel's key.

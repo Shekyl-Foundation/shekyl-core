@@ -5,8 +5,6 @@
 
 //! Why a channel call did not complete, in the words its reader can act on.
 
-use shekyl_rpc_channel::SESSIONS_PER_CLIENT;
-
 /// Why the channel did not carry a call. Each variant is one thing the
 /// person reading it can act on (§4.5).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -64,73 +62,80 @@ pub enum ChannelFault {
     Local(String),
 }
 
+impl ChannelFault {
+    /// The operator sentence. The leg and the operating-system cause stay in
+    /// [`Self::place`]: one catalog, shared with the wallet wire.
+    #[must_use]
+    pub fn wallet_fault(&self) -> shekyl_rpc_client::WalletChannelFault {
+        use shekyl_rpc_client::WalletChannelFault as Wallet;
+        match self {
+            Self::NotEnrolled { fingerprint } => Wallet::NotEnrolled(*fingerprint),
+            Self::Revoked { fingerprint } => Wallet::Revoked(*fingerprint),
+            Self::NotTheDaemon { .. } => Wallet::NotTheDaemon,
+            Self::NotRecognised { .. } => Wallet::NotRecognised,
+            Self::Unreachable { .. } => Wallet::Unreachable,
+            Self::TimedOut => Wallet::TimedOut,
+            Self::Budget => Wallet::Budget,
+            Self::Busy => Wallet::Busy,
+            Self::PoolFull => Wallet::PoolFull,
+            Self::SessionCap => Wallet::SessionCap,
+            Self::Closed => Wallet::Closed,
+            Self::Local(_) => Wallet::Local,
+        }
+    }
+
+    /// Where this failure happened, when the sentence does not already say.
+    /// A log records this beside [`Self::wallet_fault`].
+    #[must_use]
+    pub fn place(&self) -> Option<String> {
+        match self {
+            Self::Unreachable { at, cause } => Some(format!("{at}: {cause}")),
+            Self::NotRecognised { at } | Self::NotTheDaemon { at } => Some(at.clone()),
+            Self::Local(why) => Some(why.clone()),
+            Self::NotEnrolled { .. }
+            | Self::Revoked { .. }
+            | Self::TimedOut
+            | Self::Budget
+            | Self::Busy
+            | Self::PoolFull
+            | Self::SessionCap
+            | Self::Closed => None,
+        }
+    }
+
+    /// The exchange built nothing and wrote nothing, so the session can be lent again.
+    pub(super) fn keeps_session(&self) -> bool {
+        matches!(self, Self::Local(_))
+    }
+
+    /// The daemon has named this key's admission. The pool stops, and the
+    /// caller hears this fault rather than a close.
+    pub(super) fn admission_stop(&self) -> bool {
+        matches!(
+            self,
+            Self::Revoked { .. }
+                | Self::NotEnrolled { .. }
+                | Self::NotTheDaemon { .. }
+                | Self::NotRecognised { .. }
+        )
+    }
+}
+
 impl std::fmt::Display for ChannelFault {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Unreachable { at, cause } => {
-                write!(f, "No Shekyl node answered at {at}: {cause}.")
-            }
-            Self::NotRecognised { at } => write!(
-                f,
-                "The node at {at} closed the connection before sending its proof. Check \
-                 daemon-bundle-file, the network, and the channel version against that node. \
-                 The node's log records which."
-            ),
-            Self::NotTheDaemon { at } => write!(
-                f,
-                "Something answered at {at} that is not the node in daemon-bundle-file. Do not \
-                 connect; check the address and obtain the bundle from your node."
-            ),
-            Self::NotEnrolled { fingerprint } => write!(
-                f,
-                "The node answered but has not enrolled this client. Enroll it on the node \
-                 with: {}",
-                shekyl_rpc_client::enrollment_command(fingerprint)
-            ),
-            Self::Revoked { fingerprint } => write!(
-                f,
-                "The node revoked this client's enrollment. Enroll it again on the node with: {}",
-                shekyl_rpc_client::enrollment_command(fingerprint)
-            ),
-            Self::TimedOut => f.write_str("The node did not complete the handshake in time."),
-            Self::Budget => f.write_str(shekyl_rpc_client::CALL_BUDGET_EXCEEDED),
-            Self::Busy => f.write_str(
-                "The node is busy and did not accept the connection in time. Try again shortly.",
-            ),
-            Self::PoolFull => f.write_str(
-                "Every connection this client may hold to the node is busy; none came free in \
-                 time.",
-            ),
-            Self::SessionCap => write!(
-                f,
-                "This client already holds {SESSIONS_PER_CLIENT} connections to the node, the \
-                 most one client may hold."
-            ),
-            Self::Closed => f.write_str("The node closed the connection."),
-            Self::Local(why) => write!(f, "This client could not use the channel: {why}."),
+        let sentence = self.wallet_fault();
+        match self.place() {
+            Some(place) => write!(f, "{sentence} ({place})"),
+            None => write!(f, "{sentence}"),
         }
     }
 }
 
 impl From<ChannelFault> for shekyl_rpc_client::RpcError {
     fn from(fault: ChannelFault) -> Self {
-        use shekyl_rpc_client::WalletChannelFault as Wallet;
-        let kind = match &fault {
-            ChannelFault::NotEnrolled { fingerprint } | ChannelFault::Revoked { fingerprint } => {
-                Wallet::NotEnrolled(*fingerprint)
-            }
-            ChannelFault::NotTheDaemon { .. } => Wallet::NotTheDaemon,
-            ChannelFault::NotRecognised { .. } => Wallet::NotRecognised,
-            ChannelFault::Unreachable { .. } => Wallet::Unreachable,
-            ChannelFault::TimedOut => Wallet::TimedOut,
-            ChannelFault::Budget => Wallet::Budget,
-            ChannelFault::Busy => Wallet::Busy,
-            ChannelFault::PoolFull => Wallet::PoolFull,
-            ChannelFault::SessionCap => Wallet::SessionCap,
-            ChannelFault::Closed => Wallet::Closed,
-            ChannelFault::Local(_) => Wallet::Local,
-        };
-        Self::Channel(kind, fault.to_string())
+        let detail = fault.place().unwrap_or_default();
+        let kind = fault.wallet_fault();
+        Self::Channel(kind, detail)
     }
 }
 

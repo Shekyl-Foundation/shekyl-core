@@ -401,7 +401,10 @@ fn daemon_script_drives_balance_refresh_and_a_refused_send() {
         None,
     );
     let public = owner
-        .call::<shekyl_rpc_client::wire::RpcBundleShow>(&shekyl_rpc_types::kinds::NoParams)
+        .call::<shekyl_rpc_client::wire::RpcBundleShow>(
+            &shekyl_rpc_types::kinds::NoParams,
+            shekyl_rpc_transport::local::CALL_WITHIN,
+        )
         .unwrap();
     let bundle = root.join("daemon.bundle");
     std::fs::write(
@@ -419,6 +422,7 @@ fn daemon_script_drives_balance_refresh_and_a_refused_send() {
                 ),
                 ceiling: vec![shekyl_rpc_types::wire::rpc::CeilingWord::Wallet],
             },
+            shekyl_rpc_transport::local::CALL_WITHIN,
         )
         .unwrap();
     std::fs::write(

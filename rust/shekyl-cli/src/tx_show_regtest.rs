@@ -403,10 +403,13 @@ fn decode_body_ok(line: &str) -> bool {
 
 fn daemon_body_bytes(rpc: &LocalTarget, id: &str) -> Vec<u8> {
     let reply = rpc
-        .call::<wire::TxList>(&wire::tx::TxListQuery {
-            id: vec![shekyl_rpc_types::hash::HashHex::from_hex(id).expect("an id")],
-            prune: false,
-        })
+        .call::<wire::TxList>(
+            &wire::tx::TxListQuery {
+                id: vec![shekyl_rpc_types::hash::HashHex::from_hex(id).expect("an id")],
+                prune: false,
+            },
+            shekyl_rpc_transport::local::CALL_WITHIN,
+        )
         .expect("tx_list");
     match reply.into_iter().next() {
         Some(Slot::Item(entry)) => entry.body.0,

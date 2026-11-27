@@ -41,6 +41,19 @@ fn exchange_end(finished: Option<Result<Vec<u8>, ChannelFault>>) -> ExchangeEnd 
     }
 }
 
+/// What a revocation recheck does with the session it opened.
+///
+/// `Ok` parks that session: the original body is not sent on it. An
+/// admission fault is reported as itself. Any other failure leaves the
+/// call a close, because the recheck could not name a stronger fact.
+fn recheck_end<T>(opened: Result<T, ChannelFault>) -> Result<T, ChannelFault> {
+    match opened {
+        Ok(opened) => Ok(opened),
+        Err(fault) if fault.admission_stop() => Err(fault),
+        Err(_) => Err(ChannelFault::Closed),
+    }
+}
+
 /// How long a pool's extra session may sit idle before the pool closes it.
 ///
 /// **Assumption** (Rick, 2026-11-15). Basis: a session costs each side
@@ -273,7 +286,12 @@ impl Pool {
             }
             ExchangeEnd::HungUp => Err(self.closed_exchange(lent).await),
             ExchangeEnd::Budget => Err(ChannelFault::Budget),
-            ExchangeEnd::Failed(fault) => Err(fault),
+            ExchangeEnd::Failed(fault) => {
+                if fault.keeps_session() {
+                    self.give_back(lent);
+                }
+                Err(fault)
+            }
         }
     }
 
@@ -283,17 +301,21 @@ impl Pool {
         store_idle(&mut self.state(), session);
     }
 
-    /// A closed exchange can be the first evidence of revocation. Recheck admission
-    /// while holding this session's permit. The original call is never resent.
+    /// A closed exchange can be the first evidence of revocation. Recheck
+    /// admission while holding this session's permit. The original call is
+    /// never resent. A session the recheck opens is parked for the next call.
     pub(super) async fn closed_exchange(&self, lent: Lent) -> ChannelFault {
         let Lent { session, _slot } = lent;
         drop(session);
         if let Some(stopped) = self.stopped() {
             return stopped;
         }
-        match self.open_session().await {
-            Err(fault @ ChannelFault::Revoked { .. }) => fault,
-            _ => ChannelFault::Closed,
+        match recheck_end(self.open_session().await) {
+            Ok(session) => {
+                self.give_back(Lent { session, _slot });
+                ChannelFault::Closed
+            }
+            Err(fault) => fault,
         }
     }
 
@@ -409,6 +431,45 @@ mod tests {
             exchange_end(Some(Ok(b"ok".to_vec()))),
             ExchangeEnd::Answer(body) if body == b"ok"
         ));
+    }
+
+    /// A recheck that opens a session parks it. A terminal admission fault
+    /// is the call's fault. A blip stays a close. Red edit: map `Ok` to
+    /// `ChannelFault::Closed`, and the parked value disappears.
+    #[test]
+    fn a_recheck_parks_its_session_and_keeps_an_admission_fault() {
+        assert_eq!(recheck_end(Ok(7_u8)).expect("parked"), 7);
+        let revoked = ChannelFault::Revoked {
+            fingerprint: [1; 32],
+        };
+        assert_eq!(
+            recheck_end::<u8>(Err(revoked.clone())).unwrap_err(),
+            revoked
+        );
+        let not_daemon = ChannelFault::NotTheDaemon {
+            at: "127.0.0.1:1".into(),
+        };
+        assert_eq!(
+            recheck_end::<u8>(Err(not_daemon.clone())).unwrap_err(),
+            not_daemon
+        );
+        let unrecognised = ChannelFault::NotRecognised {
+            at: "127.0.0.1:1".into(),
+        };
+        assert_eq!(
+            recheck_end::<u8>(Err(unrecognised.clone())).unwrap_err(),
+            unrecognised
+        );
+        assert_eq!(
+            recheck_end::<u8>(Err(ChannelFault::Unreachable {
+                at: "127.0.0.1:1".into(),
+                cause: "connection refused".into(),
+            }))
+            .unwrap_err(),
+            ChannelFault::Closed
+        );
+        assert!(ChannelFault::Local("could not build the request".into()).keeps_session());
+        assert!(!ChannelFault::SessionCap.keeps_session());
     }
 
     /// The kept session stays however long it idles. An extra past

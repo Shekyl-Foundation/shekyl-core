@@ -107,15 +107,14 @@ impl fmt::Display for DaemonError {
 
 impl std::error::Error for DaemonError {}
 
-/// How long one daemon request waits. The views, mining, `tx show`, the
-/// shard reads and the startup check share it.
-const DAEMON_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long one daemon request waits. The owner socket, the enrolled
+/// channel, and plaintext share this one bound.
+const DAEMON_TIMEOUT: Duration = shekyl_rpc_transport::local::CALL_WITHIN;
 
 /// The shell's one daemon client. The connection is opened on the first
-/// request, so a run that never asks the daemon does not dial it. A channel
-/// session the node has closed is dropped: the next command opens another
-/// and checks identity again. The command that met the close is not sent
-/// again — its outcome is unknown.
+/// request, so a run that never asks the daemon does not dial it. The
+/// channel pool replaces a session the node closed and does not resend the
+/// body that was on it. A deadline is the channel's budget fault.
 pub struct DaemonClient {
     /// Where the words go: this computer, or a named address and its SOCKS
     /// proxy, so every request uses the same circuit.
@@ -225,10 +224,10 @@ impl DaemonClient {
     }
 
     /// Dial the target. Not stored: [`Self::connect`] stores the one that
-    /// won, and a closed channel session is removed rather than reused.
+    /// won. Every door opens under [`DAEMON_TIMEOUT`].
     ///
     /// A channel opens with the grants enrolled on the daemon. Later calls
-    /// reuse it, including the status reads that disclose data by grant.
+    /// reuse the pool, including the status reads that disclose data by grant.
     fn open(&self) -> Result<Connection, DaemonError> {
         match self.target.resolve().map_err(Self::channel_error)? {
             ResolvedDaemon::Address { url, proxy } => {
@@ -241,19 +240,11 @@ impl DaemonClient {
                 ))
             }
             ResolvedDaemon::Channel(target) => Ok(Connection::Channel(
-                ChannelDaemon::connect_enrolled(&target).map_err(Self::channel_error)?,
+                ChannelDaemon::connect_enrolled(&target, DAEMON_TIMEOUT)
+                    .map_err(Self::channel_error)?,
             )),
             ResolvedDaemon::Owner(target) => Ok(Connection::Owner(target)),
         }
-    }
-
-    /// The node closed `dead`. Forget it, and the handshake taken on it, so
-    /// the next command opens a new session and checks identity again.
-    /// Another connection stored since is left alone.
-    fn forget_closed(&self, dead: &Arc<Connection>) {
-        let mut slot = lock(&self.connection);
-        let mut identity = lock(&self.identity);
-        forget_if_same(&mut slot, &mut identity, dead);
     }
 
     /// The handshake, once. A later request reuses the verdict.
@@ -319,12 +310,11 @@ impl DaemonClient {
                 .json_rpc(name, &NoParams)
                 .map_err(|error| self.error_of_json_rpc(error)),
             Connection::Owner(target) => target
-                .json_rpc(name, &NoParams)
+                .json_rpc(name, &NoParams, DAEMON_TIMEOUT)
                 .map_err(|error| reply_error(error, |fault| self.owner_fault(fault))),
-            Connection::Channel(channel) => channel.json_rpc(name, &NoParams).map_err(|error| {
-                self.note_closed(connection, &error);
-                reply_error(error, Self::channel_error)
-            }),
+            Connection::Channel(channel) => channel
+                .json_rpc(name, &NoParams)
+                .map_err(|error| reply_error(error, Self::channel_error)),
         }
     }
 
@@ -376,12 +366,11 @@ impl DaemonClient {
                 .call::<M>(request)
                 .map_err(|error| self.error_of_json_rpc(error)),
             Connection::Owner(target) => target
-                .call::<M>(request)
+                .call::<M>(request, DAEMON_TIMEOUT)
                 .map_err(|error| reply_error(error, |fault| self.owner_fault(fault))),
-            Connection::Channel(channel) => channel.call::<M>(request).map_err(|error| {
-                self.note_closed(connection, &error);
-                reply_error(error, Self::channel_error)
-            }),
+            Connection::Channel(channel) => channel
+                .call::<M>(request)
+                .map_err(|error| reply_error(error, Self::channel_error)),
         }
     }
 
@@ -521,14 +510,6 @@ impl DaemonClient {
         reply_error(error, |fault| self.error_of_post(fault))
     }
 
-    /// A closed channel session is this connection's end. The call that
-    /// met it is returned as that error and is not sent again.
-    fn note_closed(&self, connection: &Arc<Connection>, error: &JsonRpcError<ChannelFault>) {
-        if matches!(error, JsonRpcError::Transport(ChannelFault::Closed)) {
-            self.forget_closed(connection);
-        }
-    }
-
     /// The owner's leg's fault, in the shell's errors. A service is not a
     /// refused connection: the start-the-daemon hint would name the wrong
     /// remedy.
@@ -564,19 +545,6 @@ fn reply_error<F>(error: JsonRpcError<F>, transport: impl FnOnce(F) -> DaemonErr
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
-/// Forget `dead` when it is the stored connection, and the handshake taken
-/// on it. A different stored connection is left.
-fn forget_if_same(
-    slot: &mut Option<Arc<Connection>>,
-    identity: &mut Option<Result<(), DaemonError>>,
-    dead: &Arc<Connection>,
-) {
-    if slot.as_ref().is_some_and(|live| Arc::ptr_eq(live, dead)) {
-        *slot = None;
-        *identity = None;
-    }
 }
 
 fn from_transport(fault: TransportFault) -> DaemonError {
@@ -694,33 +662,5 @@ mod tests {
             matches!(down, DaemonError::ConnectionRefused { hint: Some(_), .. }),
             "{down:?}"
         );
-    }
-
-    /// Forgetting a closed session forgets that session and its handshake,
-    /// and not a session stored since. Red edit: clear the slot on any
-    /// connection, and a newer session is dropped with the dead one.
-    #[test]
-    fn a_closed_session_is_forgotten_and_a_later_one_is_not() {
-        use std::path::Path;
-
-        use shekyl_rpc_rendezvous::Instance;
-        use shekyl_rpc_transport::local::LocalTarget;
-
-        let leg = || {
-            std::sync::Arc::new(super::Connection::Owner(LocalTarget::test_override(
-                super::Network::Regtest,
-                &Instance::Default,
-                Some(Path::new("dir")),
-                None,
-            )))
-        };
-        let dead = leg();
-        let later = leg();
-        let mut slot = Some(std::sync::Arc::clone(&dead));
-        let mut identity = Some(Ok(()));
-        super::forget_if_same(&mut slot, &mut identity, &later);
-        assert!(slot.is_some() && identity.is_some());
-        super::forget_if_same(&mut slot, &mut identity, &dead);
-        assert!(slot.is_none() && identity.is_none());
     }
 }

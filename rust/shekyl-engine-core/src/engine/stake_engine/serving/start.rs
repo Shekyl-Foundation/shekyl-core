@@ -206,9 +206,9 @@ where
                 crate::engine::prpc::ChainOpen::PlaintextNotLocal => {
                     ServingStartError::PlaintextNotLocal
                 }
-                crate::engine::prpc::ChainOpen::Fault { fault, detail } => {
+                crate::engine::prpc::ChainOpen::Channel { fault, detail } => {
                     tracing::warn!(%detail, "serving could not open the claim source");
-                    ServingStartError::Daemon(fault)
+                    ServingStartError::Daemon(shekyl_rpc_client::DaemonFault::Channel(fault))
                 }
                 crate::engine::prpc::ChainOpen::Unusable(error) => {
                     ServingStartError::Daemon(error.fault())

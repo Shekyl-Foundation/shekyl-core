@@ -10,7 +10,7 @@
 //! enrolled channel. A plaintext address is that node only when it is this
 //! computer. A channel failure stays a channel failure.
 
-use shekyl_rpc_client::{DaemonFault, Rpc, RpcError};
+use shekyl_rpc_client::{Rpc, RpcError, WalletChannelFault};
 use shekyl_rpc_transport::{DaemonTarget, DaemonTransport, PlaintextGate};
 use std::time::Duration;
 
@@ -24,10 +24,15 @@ impl WalletChainReader for DaemonTransport {}
 pub(crate) enum ChainOpen {
     /// A plaintext address is not this computer. The address is not carried.
     PlaintextNotLocal,
-    /// A classified daemon fault. `detail` is the transport's own sentence,
-    /// including a local path, and is what a log records beside the operator
-    /// sentence.
-    Fault { fault: DaemonFault, detail: String },
+    /// The enrolled channel refused. `fault` is the operator sentence.
+    /// `detail` is the leg or the local cause, for a log, and is empty when
+    /// the sentence already says everything.
+    Channel {
+        /// The operator sentence.
+        fault: WalletChannelFault,
+        /// The leg or the local cause.
+        detail: String,
+    },
     /// The plaintext URL is not a base this transport can dial. The sentence
     /// is the transport's, which does not echo credentials.
     Unusable(RpcError),
@@ -39,25 +44,27 @@ impl std::fmt::Display for ChainOpen {
             Self::PlaintextNotLocal => {
                 f.write_str(shekyl_rpc_transport::PLAINTEXT_NOT_THIS_COMPUTER)
             }
-            Self::Fault { fault, detail } => {
-                let operator = fault.to_string();
-                if detail.is_empty() || *detail == operator {
-                    f.write_str(&operator)
-                } else {
-                    write!(f, "{operator} ({detail})")
-                }
-            }
+            Self::Channel { fault, .. } => fault.fmt(f),
             Self::Unusable(error) => error.fmt(f),
         }
     }
 }
 
 impl ChainOpen {
-    fn from_channel(fault: shekyl_rpc_transport::channel::ChannelFault) -> Self {
-        let detail = fault.to_string();
-        Self::Fault {
-            fault: RpcError::from(fault).fault(),
-            detail,
+    /// The leg or local cause, for a log beside [`Self`]'s sentence.
+    #[must_use]
+    pub(crate) fn detail(&self) -> &str {
+        match self {
+            Self::Channel { detail, .. } => detail,
+            Self::Unusable(error) => error.detail(),
+            Self::PlaintextNotLocal => "",
+        }
+    }
+
+    fn from_channel(fault: &shekyl_rpc_transport::channel::ChannelFault) -> Self {
+        Self::Channel {
+            fault: fault.wallet_fault(),
+            detail: fault.place().unwrap_or_default(),
         }
     }
 }
@@ -75,21 +82,22 @@ pub(crate) async fn open_chain_reader(
     daemon: &DaemonTarget,
     request_timeout: Duration,
 ) -> Result<DaemonTransport, ChainOpen> {
-    let resolved = daemon.resolve().map_err(ChainOpen::from_channel)?;
+    let resolved = daemon
+        .resolve()
+        .map_err(|fault| ChainOpen::from_channel(&fault))?;
     resolved
         .refuse_foreign_plaintext()
         .map_err(|gate| match gate {
             PlaintextGate::NotThisComputer => ChainOpen::PlaintextNotLocal,
             PlaintextGate::Unusable(error) => ChainOpen::Unusable(error),
         })?;
-    resolved.open(request_timeout).await.map_err(|error| {
-        let fault = error.fault();
-        let detail = error.to_string();
-        match fault {
-            DaemonFault::Channel(_) => ChainOpen::Fault { fault, detail },
-            _ => ChainOpen::Unusable(error),
-        }
-    })
+    resolved
+        .open(request_timeout)
+        .await
+        .map_err(|error| match error {
+            RpcError::Channel(fault, detail) => ChainOpen::Channel { fault, detail },
+            other => ChainOpen::Unusable(other),
+        })
 }
 
 #[cfg(test)]

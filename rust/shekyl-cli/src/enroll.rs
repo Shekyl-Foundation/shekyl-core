@@ -158,7 +158,7 @@ fn resolve_leg(options: &EnrollOptions) -> Result<NodeLeg, String> {
         options.key_file.as_deref(),
     )
     .map_err(|e| e.to_string())?;
-    ChannelDaemon::connect(&target, request)
+    ChannelDaemon::connect(&target, request, shekyl_rpc_transport::local::CALL_WITHIN)
         .map(NodeLeg::Channel)
         .map_err(|fault| fault.to_string())
 }

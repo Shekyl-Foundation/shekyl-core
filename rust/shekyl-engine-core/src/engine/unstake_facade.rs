@@ -716,15 +716,10 @@ where
                 ChainOpen::PlaintextNotLocal => UnstakeError::Transport {
                     detail: shekyl_rpc_transport::PLAINTEXT_NOT_THIS_COMPUTER.to_owned(),
                 },
-                ChainOpen::Fault { fault, detail } => match fault {
-                    shekyl_rpc_client::DaemonFault::Channel(channel) => {
-                        tracing::warn!(%detail, "the exit could not open the channel");
-                        UnstakeError::DaemonTarget(shekyl_rpc_client::DaemonFault::Channel(channel))
-                    }
-                    other => UnstakeError::DaemonUnreachable {
-                        detail: format!("{other} ({detail})"),
-                    },
-                },
+                ChainOpen::Channel { fault, detail } => {
+                    tracing::warn!(%detail, "the exit could not open the channel");
+                    UnstakeError::DaemonTarget(shekyl_rpc_client::DaemonFault::Channel(fault))
+                }
                 ChainOpen::Unusable(error) => UnstakeError::DaemonUnreachable {
                     detail: error.to_string(),
                 },

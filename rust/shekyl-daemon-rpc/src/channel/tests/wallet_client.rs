@@ -166,7 +166,7 @@ async fn wallet_and_console_receive_the_grants_enrolled_on_the_daemon() {
     let connect_console = || {
         let target = target.clone();
         std::thread::spawn(move || {
-            client::ChannelDaemon::connect_enrolled(&target)
+            client::ChannelDaemon::connect_enrolled(&target, Duration::from_secs(5))
                 .unwrap()
                 .granted()
         })

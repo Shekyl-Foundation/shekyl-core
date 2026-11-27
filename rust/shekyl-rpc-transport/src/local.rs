@@ -398,7 +398,8 @@ impl LocalTarget {
     }
 
     /// One call of method `M`, the same envelope and checks
-    /// [`crate::SyncDaemon::call`] makes, bounded by [`CALL_WITHIN`].
+    /// [`crate::SyncDaemon::call`] makes. `within` bounds the whole call,
+    /// the same bound a channel post and a plaintext post take.
     ///
     /// # Errors
     ///
@@ -407,14 +408,15 @@ impl LocalTarget {
     pub fn call<M: shekyl_rpc_client::RpcMethod>(
         &self,
         request: &M::Request,
+        within: Duration,
     ) -> Result<M::Reply, JsonRpcError<LocalFault>> {
         crate::call_via::<M, _>(request, |route, body| {
-            self.post(route, &body, CALL_WITHIN)
-                .map(|reply| reply.to_vec())
+            self.post(route, &body, within).map(|reply| reply.to_vec())
         })
     }
 
-    /// One JSON-RPC call by name, its result decoded as `Reply`.
+    /// One JSON-RPC call by name, its result decoded as `Reply`. `within`
+    /// bounds the whole call.
     ///
     /// # Errors
     ///
@@ -423,14 +425,14 @@ impl LocalTarget {
         &self,
         method: &str,
         request: &Req,
+        within: Duration,
     ) -> Result<Reply, JsonRpcError<LocalFault>>
     where
         Req: serde::Serialize,
         Reply: serde::de::DeserializeOwned,
     {
         crate::json_rpc_via(method, request, |route, body| {
-            self.post(route, &body, CALL_WITHIN)
-                .map(|reply| reply.to_vec())
+            self.post(route, &body, within).map(|reply| reply.to_vec())
         })
     }
 }

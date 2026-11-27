@@ -330,8 +330,7 @@ wallet_rpc_error_codes! {
     /// The wallet did not connect, and does not retry or try another leg.
     DaemonPeerCheckFailed = -29213 => "DAEMON_PEER_CHECK_FAILED",
     /// "This computer"'s node runs as a service, which a wallet reaches
-    /// only over the channel (RT-W12); until then it names the service's
-    /// view listener as `daemon-address`. Nothing was dialled.
+    /// over the enrolled channel. Nothing was dialled.
     DaemonIsAService = -29214 => "DAEMON_IS_A_SERVICE",
     /// Enroll this wallet on your node with: shekyl-cli rpc client add the client fingerprint wallet
     ChannelNotEnrolled = -29215 => "CHANNEL_NOT_ENROLLED",
@@ -355,6 +354,8 @@ wallet_rpc_error_codes! {
     ChannelLocal = -29224 => "CHANNEL_LOCAL",
     /// The call exceeded its time limit. The node may still be working. Check its status before repeating a submission.
     ChannelBudget = -29225 => "CHANNEL_BUDGET",
+    /// The node revoked this client's enrollment. Enroll it again with: shekyl-cli rpc client add the client fingerprint wallet
+    ChannelRevoked = -29226 => "CHANNEL_REVOKED",
     /// `check_*`: proof string failed decode / framing / size caps.
     ProofMalformed = -29300 => "PROOF_MALFORMED",
     /// `get_tx_proof` OUTBOUND: no retained per-tx secret for the txid.
@@ -1838,9 +1839,10 @@ impl WalletRpcError {
                 "ref_anchor_age": ref_anchor_age,
             })),
             Self::SubmitLoopBreakerTripped { cause } => Some(json!({ "cause": cause })),
-            Self::Channel(shekyl_rpc_client::WalletChannelFault::NotEnrolled(fingerprint)) => {
-                Some(serde_json::json!({"fingerprint": HashHex::from_bytes(*fingerprint)}))
-            }
+            Self::Channel(
+                shekyl_rpc_client::WalletChannelFault::NotEnrolled(fingerprint)
+                | shekyl_rpc_client::WalletChannelFault::Revoked(fingerprint),
+            ) => Some(serde_json::json!({"fingerprint": HashHex::from_bytes(*fingerprint)})),
             Self::DaemonIsAService { view } => {
                 Some(json!({ "view": view.map(|view| view.to_string()) }))
             }
@@ -2180,6 +2182,7 @@ const fn channel_rpc_code(fault: shekyl_rpc_client::WalletChannelFault) -> Walle
         Fault::SessionCap => WalletRpcErrorCode::ChannelSessionCap,
         Fault::Closed => WalletRpcErrorCode::ChannelClosed,
         Fault::Budget => WalletRpcErrorCode::ChannelBudget,
+        Fault::Revoked(_) => WalletRpcErrorCode::ChannelRevoked,
         Fault::Local => WalletRpcErrorCode::ChannelLocal,
     }
 }
@@ -4777,6 +4780,11 @@ mod tests {
                 DaemonFault::Channel(Channel::Budget),
                 C::ChannelBudget,
                 None,
+            ),
+            (
+                DaemonFault::Channel(Channel::Revoked([9; 32])),
+                C::ChannelRevoked,
+                Some(json!({"fingerprint": digest(9)})),
             ),
             (DaemonFault::Channel(Channel::Local), C::ChannelLocal, None),
             (DaemonFault::Unreachable, C::DaemonUnreachable, None),
