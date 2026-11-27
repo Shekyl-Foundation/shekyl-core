@@ -10,18 +10,17 @@
 //! says. `scripts/ci/check_daemon_option_docs.py` holds the guides equal to
 //! the committed fragments.
 
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::Ipv4Addr;
 
 use shekyl_network::Network;
-use shekyl_options::{
-    Default, Dimension, EndpointRule, Kind, PeerRule, Surface, Table, Visibility,
-};
+use shekyl_options::{Default, Dimension, Kind, PeerRule, Surface, Table, Visibility};
 
 use crate::sections::listen_default;
 
-/// The address a peer example names: TEST-NET-3, reserved for
-/// documentation (RFC 5737), so no reader dials a real host by copying it.
-const DOCUMENTATION_ADDRESS: Ipv4Addr = Ipv4Addr::new(203, 0, 113, 10);
+/// The example for an endpoint no row has given a port. The operator
+/// chooses the address and the port (a SOCKS proxy, the forward from the
+/// operator's Tor); the example does not invent either.
+const CHOSEN_ENDPOINT: &str = "\"<address>:<port>\"";
 
 /// The Markdown table of every public row: name, kind, default, surface,
 /// whether `option set` accepts it, and the help text.
@@ -66,9 +65,10 @@ pub fn options_markdown(table: &Table) -> String {
 /// The annotated TOML example: every public row the file accepts, each
 /// line commented out so the example parses as the defaults, with the
 /// row's help above it and its default or an example value beside it.
-/// A port in an example is `network`'s: a derived listen row shows the
-/// default a start on `network` writes, and a peer or advertised endpoint
-/// shows `network`'s P2P port.
+/// A port in an example is `network`'s and comes from the row: a derived
+/// listen shows the address a start on `network` writes, and a row that
+/// illustrates a port family shows that port. An endpoint no row has given
+/// a port is a placeholder.
 #[must_use]
 pub fn example_toml(table: &Table, network: Network) -> String {
     let mut out = String::from(
@@ -222,11 +222,31 @@ fn surface_text(surface: Surface) -> &'static str {
     }
 }
 
-/// The value the example shows: the default where the row has one, the
-/// default a start on `network` derives for a listen row, and an example of
-/// the kind otherwise. An endpoint the operator alone chooses (a SOCKS proxy,
-/// the forward from the operator's Tor) has no default port, so its example
-/// is a placeholder rather than an invented one.
+/// The endpoint an example shows for `name` on `network`, without quotes.
+///
+/// A derived listen is the address a start writes when that default
+/// applies. The other arms are the rows that illustrate one field of
+/// [`shekyl_network::Ports`] on a host only the operator has. Any other
+/// row has no port to show, so its example is [`CHOSEN_ENDPOINT`].
+fn example_endpoint(name: &str, network: Network) -> Option<String> {
+    if let Some(addr) = listen_default(name, network) {
+        return Some(addr.to_string());
+    }
+    // The port is the row's. `p2p` is the port peers dial; a row about
+    // another field of `Ports` names that field here.
+    let ports = network.ports();
+    let (host, port) = match name {
+        "clearnet-advertise" => ("<public-address>", ports.p2p),
+        "tor-onion" => ("<56 characters>.onion", ports.p2p),
+        _ => return None,
+    };
+    Some(format!("{host}:{port}"))
+}
+
+/// The value the example shows. A literal default is that default. A row
+/// [`example_endpoint`] names shows that endpoint, as a list when the row
+/// is one. Anything else is an example of the kind, and an endpoint among
+/// those is [`CHOSEN_ENDPOINT`]: the kind does not say which port.
 fn example_value(name: &str, kind: &Kind, default: &Default, network: Network) -> String {
     if let Default::Value(v) = default {
         return match kind {
@@ -237,13 +257,12 @@ fn example_value(name: &str, kind: &Kind, default: &Default, network: Network) -
             _ => format!("\"{v}\""),
         };
     }
-    if let Some(endpoint) = listen_default(name, network) {
+    if let Some(endpoint) = example_endpoint(name, network) {
         return match kind {
             Kind::List(_) => format!("[\"{endpoint}\"]"),
             _ => format!("\"{endpoint}\""),
         };
     }
-    let ports = network.ports();
     match kind {
         Kind::Switch => "true".to_owned(),
         Kind::OneOf(words) => format!("\"{}\"", words.first().copied().unwrap_or("")),
@@ -254,23 +273,12 @@ fn example_value(name: &str, kind: &Kind, default: &Default, network: Network) -
             Dimension::Duration => "\"30s\"",
         }
         .to_owned(),
-        Kind::Endpoint(EndpointRule::GlobalUnicast) => {
-            format!("\"<public-address>:{}\"", ports.p2p)
-        }
-        Kind::Endpoint(EndpointRule::Loopback) => {
-            format!("\"{}\"", SocketAddr::from((Ipv4Addr::LOCALHOST, ports.rpc)))
-        }
-        Kind::Endpoint(EndpointRule::Any) => "\"<address>:<port>\"".to_owned(),
+        // The kind is a syntax. Which port a row names, if any, was decided
+        // above; an endpoint that reached here has none.
+        Kind::Endpoint(_) | Kind::PeerEndpoint(_) => CHOSEN_ENDPOINT.to_owned(),
+        // An address, with no port. The view listener takes the network's
+        // view port when the operator omits one.
         Kind::Listen(_) => format!("\"{}\"", Ipv4Addr::LOCALHOST),
-        Kind::PeerEndpoint(PeerRule::Any) => {
-            format!(
-                "\"{}\"",
-                SocketAddr::from((DOCUMENTATION_ADDRESS, ports.p2p))
-            )
-        }
-        Kind::PeerEndpoint(PeerRule::OnionOnly) => {
-            format!("\"<56 characters>.onion:{}\"", ports.p2p)
-        }
         Kind::Address => "\"<address>\"".to_owned(),
         Kind::Path { .. } => "\"/path\"".to_owned(),
         Kind::Secret => "\"<secret>\"".to_owned(),
@@ -457,31 +465,62 @@ mod tests {
         );
     }
 
-    /// Every port an example names is the network's own. A settings file
-    /// for one network that shows another's port tells its operator to bind
-    /// or dial the wrong one (the alpha.12 testnet file showed mainnet's).
+    /// The value the example assigns to `name` (`# name = …`).
+    fn assignment<'a>(text: &'a str, name: &str) -> &'a str {
+        let prefix = format!("# {name} = ");
+        text.lines()
+            .find_map(|line| line.strip_prefix(&prefix))
+            .unwrap_or_else(|| panic!("{name} is in the example"))
+    }
+
+    /// Each row that names a port names its own, and a row with no port
+    /// does not borrow one from its kind. A settings file for one network
+    /// that shows another's port tells its operator to bind or dial the
+    /// wrong one (the alpha.12 testnet file showed mainnet's). Swapping two
+    /// rows' ports on the same network fails the assignment, and stamping
+    /// the RPC port onto `tor-socks` fails the placeholder.
     #[test]
     fn each_networks_example_names_its_own_ports() {
         for network in Network::ALL {
             let text = example_toml(&TABLE, network);
-            let own = network.ports();
-            for port in [own.p2p, own.rpc] {
-                assert!(
-                    text.contains(&format!(":{port}\"")),
-                    "the {} example names its port {port}",
-                    network.name()
+            let ports = network.ports();
+            let name = network.name();
+            assert_eq!(
+                assignment(&text, "clearnet-listen"),
+                format!("[\"0.0.0.0:{}\"]", ports.p2p),
+                "{name} clearnet-listen"
+            );
+            assert_eq!(
+                assignment(&text, "rpc-admin-listen"),
+                format!("[\"127.0.0.1:{}\"]", ports.rpc),
+                "{name} rpc-admin-listen"
+            );
+            assert_eq!(
+                assignment(&text, "clearnet-advertise"),
+                format!("[\"<public-address>:{}\"]", ports.p2p),
+                "{name} clearnet-advertise"
+            );
+            assert_eq!(
+                assignment(&text, "tor-onion"),
+                format!("\"<56 characters>.onion:{}\"", ports.p2p),
+                "{name} tor-onion"
+            );
+            for row in ["tor-socks", "clearnet-socks", "tor-onion-listen"] {
+                assert_eq!(
+                    assignment(&text, row),
+                    CHOSEN_ENDPOINT,
+                    "{name} {row} has no default port"
                 );
             }
             for other in Network::ALL {
                 let theirs = other.ports();
                 for port in [theirs.p2p, theirs.rpc, theirs.view] {
-                    if [own.p2p, own.rpc, own.view].contains(&port) {
+                    if [ports.p2p, ports.rpc, ports.view].contains(&port) {
                         continue;
                     }
                     assert!(
                         !text.contains(&format!(":{port}")),
-                        "the {} example names {}'s port {port}",
-                        network.name(),
+                        "the {name} example names {}'s port {port}",
                         other.name()
                     );
                 }
