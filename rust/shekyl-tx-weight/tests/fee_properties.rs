@@ -13,7 +13,7 @@
 use shekyl_economics::{quantized_fee, relay_floor_admits, FEE_QUANTIZATION_MASK};
 use shekyl_tx_weight::{
     converge_fee_by, converge_weight_fee, converge_weight_fee_by, predict_weight, weight_at_fee,
-    InputCount, OutputCount, ProofLayers, MAX_OUTPUTS, MAX_TREE_DEPTH,
+    InputCount, OutputCount, ProofLayers, MAX_OUTPUTS, MAX_TREE_DEPTH, MIN_SPEND_LAYERS,
 };
 use shekyl_wire::transaction::MAX_FCMP_INPUTS as MAX_INPUTS;
 
@@ -103,7 +103,7 @@ fn the_unrounded_fee_is_the_product() {
     // Red: `saturating_mul`, which can return a fee no product equals.
     // Over-payment is 0: the fixed point is `rate × weight(fee)`.
     let (n_in, n_out) = shape(1, 2);
-    for depth in [0u8, 1, MAX_TREE_DEPTH] {
+    for depth in [1u8, MIN_SPEND_LAYERS, MAX_TREE_DEPTH] {
         let weight = predict_weight(n_in, n_out, ProofLayers::known(depth), 0) as u64;
         for rate in rates_for(weight) {
             let Some(fee) = converge_weight_fee(rate, n_in, n_out, ProofLayers::known(depth))
@@ -174,7 +174,7 @@ fn over_payment_stays_inside_one_lattice_step() {
     let mut worst = 0u64;
     for n_in in 1..=MAX_INPUTS {
         for n_out in 1..=MAX_OUTPUTS {
-            for depth in [0u8, 1, MAX_TREE_DEPTH] {
+            for depth in [1u8, MIN_SPEND_LAYERS, MAX_TREE_DEPTH] {
                 let (n_in, n_out) = shape(n_in, n_out);
                 let weight = predict_weight(n_in, n_out, ProofLayers::known(depth), 0) as u64;
                 for rate in rates_for(weight) {
@@ -200,7 +200,7 @@ fn over_payment_stays_inside_one_lattice_step() {
 fn the_loop_returns_only_when_two_passes_agree() {
     // Red: return the last pass when the bound runs out.
     let (n_in, n_out) = shape(2, 2);
-    for depth in [0u8, 1, MAX_TREE_DEPTH] {
+    for depth in [1u8, MIN_SPEND_LAYERS, MAX_TREE_DEPTH] {
         let weight = predict_weight(n_in, n_out, ProofLayers::known(depth), 0) as u64;
         for rate in rates_for(weight) {
             let Some(fee) = loop_lattice(n_in, n_out, depth, rate, 0) else {
