@@ -356,6 +356,38 @@ impl SpawnedDaemon {
     }
 }
 
+impl SpawnedDaemon {
+    /// Until the channel listener at `address` accepts. A daemon that exits
+    /// first fails at once, with its log; one still starting after
+    /// [`DAEMON_READY`] fails then. A loaded host takes tens of seconds to
+    /// make the channel key and open the store before it listens.
+    fn wait_accepting(&mut self, address: &str) {
+        let deadline = std::time::Instant::now() + DAEMON_READY;
+        let log = || std::fs::read_to_string(self.data_dir.join("shekyld.log")).unwrap_or_default();
+        loop {
+            if std::net::TcpStream::connect(address).is_ok() {
+                return;
+            }
+            if let Some(status) = self.child.try_wait().expect("the daemon's status") {
+                panic!(
+                    "the daemon ended before it listened on {address}: {status}\n{}",
+                    log()
+                );
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the daemon did not listen on {address} within {DAEMON_READY:?}\n{}",
+                log()
+            );
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+    }
+}
+
+/// How long a spawned daemon may take to listen: the bound the tunnel's
+/// end_to_end gives its daemon (`READY`).
+const DAEMON_READY: std::time::Duration = std::time::Duration::from_secs(120);
+
 impl Drop for SpawnedDaemon {
     fn drop(&mut self) {
         drop(self.child.kill());
@@ -384,17 +416,9 @@ fn daemon_script_drives_balance_refresh_and_a_refused_send() {
     // Owned from the moment the process exists. A panic in the readiness
     // or wallet assertions still kills and reaps it and removes its data
     // directory; dropping a bare `Child` does neither.
-    let daemon = SpawnedDaemon::spawn(&bin, rpc_port);
+    let mut daemon = SpawnedDaemon::spawn(&bin, rpc_port);
     let address = format!("127.0.0.1:{rpc_port}");
-    let mut up = false;
-    for _ in 0..50 {
-        if std::net::TcpStream::connect(&address).is_ok() {
-            up = true;
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(200));
-    }
-    assert!(up, "daemon did not accept RPC on {address}");
+    daemon.wait_accepting(&address);
 
     let config = common::empty_config();
     let root = config.path().parent().unwrap();
