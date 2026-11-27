@@ -227,6 +227,37 @@ jobs:
           echo "${CHANGED}" | sed 's/^/  /'
           echo
 
+          # A snapshot's `#` lines are its generated header, not its
+          # format: a change confined to them (a reworded header, a
+          # renumbered rule citation) moves no byte of any encoding and
+          # needs no version bump. Every family keeps `#` to its header
+          # (the chain store's, the pool's and the peer list's three
+          # lines; the wallet's snapshots are JSON and have none), so a
+          # snapshot whose body, the file without its `#` lines, is the
+          # same at the merge base and the head leaves the list below.
+          # A snapshot added or deleted always stays.
+          MERGE_BASE=$(git merge-base "${BASE_SHA}" "${HEAD_SHA}")
+          snap_body() { git show "$1:$2" | grep -v '^#' || true; }
+          KEEP=""
+          HEADER_ONLY=""
+          while IFS= read -r f; do
+            [ -n "$f" ] || continue
+            if [[ "$f" == *.snap ]] \
+               && git cat-file -e "${MERGE_BASE}:$f" 2>/dev/null \
+               && git cat-file -e "${HEAD_SHA}:$f" 2>/dev/null \
+               && [ "$(snap_body "${MERGE_BASE}" "$f")" = "$(snap_body "${HEAD_SHA}" "$f")" ]; then
+              HEADER_ONLY="${HEADER_ONLY}  ${f}"$'\n'
+              continue
+            fi
+            KEEP="${KEEP}${f}"$'\n'
+          done <<< "${CHANGED}"
+          CHANGED="${KEEP%$'\n'}"
+          if [ -n "${HEADER_ONLY}" ]; then
+            echo "Snapshots whose only change is their # header (no format change, no bump owed):"
+            printf '%s' "${HEADER_ONLY}"
+            echo
+          fi
+
           FAIL=0
           for entry in "${PAIRS[@]}"; do
             IFS='|' read -r stem src const <<< "${entry}"
