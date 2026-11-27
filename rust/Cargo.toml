@@ -887,9 +887,6 @@ overflow-checks = true
 overflow-checks = true
 
 [workspace.lints.clippy]
-incompatible_msrv = "allow"
-unwrap_or_default = "allow"
-map_unwrap_or = "allow"
 # Belt-and-braces for the `shekyl-logging::init(...)` footgun. The primary
 # defense is `#[must_use]` on `LoggerGuard`, which fires on the common
 # unbound shape `init(cfg)?;`. This lint catches only the narrower

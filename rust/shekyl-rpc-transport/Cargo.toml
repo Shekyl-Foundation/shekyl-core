@@ -11,7 +11,7 @@ license = "BSD-3-Clause"
 repository = "https://github.com/Shekyl-Foundation/shekyl-core"
 authors = ["Luke Parker <lukeparker5132@gmail.com>", "Shekyl Foundation <dev@shekyl.org>"]
 edition = "2021"
-rust-version = "1.75"
+rust-version.workspace = true
 
 [package.metadata.docs.rs]
 all-features = true
