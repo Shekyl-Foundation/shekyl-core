@@ -563,8 +563,8 @@ mod tests {
     fn stuffer_shape_is_max_inputs_min_outputs() {
         // Inputs carry the archival bytes (PQC auth + FCMP share, both
         // prunable); outputs carry unprunable prefix the fee pays for and the
-        // operand does not count. So the argmax is MAX_INPUTS-in / the minimum out at
-        // every depth — and the J-segment era's 1-in/16-out leaf stuffer is
+        // operand does not count. So the argmax is the most inputs a minimum-output
+        // spend can carry at that depth — and the J-segment era's 1-in/16-out leaf stuffer is
         // now among the DEAREST shapes per archival byte.
         //
         // TRIPWIRE, not a regression check: `stuffer_shape` SEARCHES, so a
@@ -577,9 +577,16 @@ mod tests {
         // The shape is a ratio of bytes, so it must not depend on the rate:
         // checked at the tail-era floor, the control arm's figure and the
         // genesis floor, which span the range the chain serves.
-        let max_in = InputCount::clamped(usize::MAX).get();
         for rate in rates() {
             for depth in 2..=MAX_TREE_DEPTH {
+                // The most inputs consensus mines at the minimum output count
+                // at this depth: the cap until the proof grows past the weight
+                // limit (21 at depth 5, 18 at depth 14).
+                let max_in = all_shapes(spend_layers(depth))
+                    .filter(|shape| shape.n_out.get() == MIN_NON_COINBASE_OUTPUTS)
+                    .map(|shape| shape.n_in.get())
+                    .max()
+                    .expect("a minimum-output spend is legal at every depth");
                 let s = priced(stuffer_shape(depth, rate));
                 assert_eq!(
                     (s.n_in.get(), s.n_out.get()),
