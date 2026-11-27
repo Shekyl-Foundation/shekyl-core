@@ -81,6 +81,22 @@ const DERIVED: &[Derived] = &[
     },
 ];
 
+/// The endpoint a derived listen row takes on `network` when the operator
+/// leaves it unset: what [`fill`] writes. `None` for any other row. The
+/// documentation's example reads it, so the example and the start name the
+/// same default.
+pub(crate) fn listen_default(name: &str, network: Network) -> Option<SocketAddr> {
+    DERIVED.iter().find_map(|row| match *row {
+        Derived::Listen {
+            name: listen,
+            addr,
+            port,
+            ..
+        } if listen == name => Some(SocketAddr::new(IpAddr::V4(addr), port(network))),
+        Derived::Listen { .. } | Derived::Path { .. } => None,
+    })
+}
+
 /// Writes each derived default the operator left unset.
 ///
 /// An explicit value, including an empty list (`none`), is left as the

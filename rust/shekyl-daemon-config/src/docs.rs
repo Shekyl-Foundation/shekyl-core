@@ -10,10 +10,18 @@
 //! says. `scripts/ci/check_daemon_option_docs.py` holds the guides equal to
 //! the committed fragments.
 
+use std::net::{Ipv4Addr, SocketAddr};
+
 use shekyl_network::Network;
 use shekyl_options::{
     Default, Dimension, EndpointRule, Kind, PeerRule, Surface, Table, Visibility,
 };
+
+use crate::sections::listen_default;
+
+/// The address a peer example names: TEST-NET-3, reserved for
+/// documentation (RFC 5737), so no reader dials a real host by copying it.
+const DOCUMENTATION_ADDRESS: Ipv4Addr = Ipv4Addr::new(203, 0, 113, 10);
 
 /// The Markdown table of every public row: name, kind, default, surface,
 /// whether `option set` accepts it, and the help text.
@@ -58,8 +66,11 @@ pub fn options_markdown(table: &Table) -> String {
 /// The annotated TOML example: every public row the file accepts, each
 /// line commented out so the example parses as the defaults, with the
 /// row's help above it and its default or an example value beside it.
+/// A port in an example is `network`'s: a derived listen row shows the
+/// default a start on `network` writes, and a peer or advertised endpoint
+/// shows `network`'s P2P port.
 #[must_use]
-pub fn example_toml(table: &Table) -> String {
+pub fn example_toml(table: &Table, network: Network) -> String {
     let mut out = String::from(
         "# shekyld configuration file. Every key is an option's name, spelled\n\
          # as on the command line without the leading dashes. The network is\n\
@@ -78,7 +89,7 @@ pub fn example_toml(table: &Table) -> String {
         out.push_str(&format!(
             "# {name} = {value}\n",
             name = row.name,
-            value = example_value(&row.kind, &row.default)
+            value = example_value(row.name, &row.kind, &row.default, network)
         ));
     }
     out
@@ -90,7 +101,7 @@ pub const PACKAGED_NETWORKS: [Network; 3] = [Network::Mainnet, Network::Testnet,
 
 /// The settings file a Linux package ships for `network` (INPUT_GRAMMAR.md
 /// IG-Q64): a header that says how the packaged unit uses the file, then
-/// [`example_toml`] unchanged, every option line commented out. The
+/// [`example_toml`] for `network`, every option line commented out. The
 /// package installs it as `/usr/share/shekyl/shekyld-<network>.toml` and
 /// copies it to `/etc/shekyl/` when no file is there.
 #[must_use]
@@ -116,7 +127,7 @@ pub fn packaged_toml(table: &Table, network: Network) -> String {
          # so the daemon's account stays the only member of its group.\n\
          #\n"
     );
-    out.push_str(&example_toml(table));
+    out.push_str(&example_toml(table, network));
     out
 }
 
@@ -211,9 +222,12 @@ fn surface_text(surface: Surface) -> &'static str {
     }
 }
 
-/// The value the example shows: the default where the row has one, an
-/// example of the kind otherwise.
-fn example_value(kind: &Kind, default: &Default) -> String {
+/// The value the example shows: the default where the row has one, the
+/// default a start on `network` derives for a listen row, and an example of
+/// the kind otherwise. An endpoint the operator alone chooses (a SOCKS proxy,
+/// the forward from the operator's Tor) has no default port, so its example
+/// is a placeholder rather than an invented one.
+fn example_value(name: &str, kind: &Kind, default: &Default, network: Network) -> String {
     if let Default::Value(v) = default {
         return match kind {
             Kind::Switch => v.to_string(),
@@ -223,6 +237,13 @@ fn example_value(kind: &Kind, default: &Default) -> String {
             _ => format!("\"{v}\""),
         };
     }
+    if let Some(endpoint) = listen_default(name, network) {
+        return match kind {
+            Kind::List(_) => format!("[\"{endpoint}\"]"),
+            _ => format!("\"{endpoint}\""),
+        };
+    }
+    let ports = network.ports();
     match kind {
         Kind::Switch => "true".to_owned(),
         Kind::OneOf(words) => format!("\"{}\"", words.first().copied().unwrap_or("")),
@@ -233,11 +254,23 @@ fn example_value(kind: &Kind, default: &Default) -> String {
             Dimension::Duration => "\"30s\"",
         }
         .to_owned(),
-        Kind::Endpoint(EndpointRule::GlobalUnicast) => "\"<public-address>:11021\"".to_owned(),
-        Kind::Endpoint(_) => "\"127.0.0.1:11029\"".to_owned(),
-        Kind::Listen(_) => "\"127.0.0.1\"".to_owned(),
-        Kind::PeerEndpoint(PeerRule::Any) => "\"203.0.113.10:11021\"".to_owned(),
-        Kind::PeerEndpoint(PeerRule::OnionOnly) => "\"<56 characters>.onion:11021\"".to_owned(),
+        Kind::Endpoint(EndpointRule::GlobalUnicast) => {
+            format!("\"<public-address>:{}\"", ports.p2p)
+        }
+        Kind::Endpoint(EndpointRule::Loopback) => {
+            format!("\"{}\"", SocketAddr::from((Ipv4Addr::LOCALHOST, ports.rpc)))
+        }
+        Kind::Endpoint(EndpointRule::Any) => "\"<address>:<port>\"".to_owned(),
+        Kind::Listen(_) => format!("\"{}\"", Ipv4Addr::LOCALHOST),
+        Kind::PeerEndpoint(PeerRule::Any) => {
+            format!(
+                "\"{}\"",
+                SocketAddr::from((DOCUMENTATION_ADDRESS, ports.p2p))
+            )
+        }
+        Kind::PeerEndpoint(PeerRule::OnionOnly) => {
+            format!("\"<56 characters>.onion:{}\"", ports.p2p)
+        }
         Kind::Address => "\"<address>\"".to_owned(),
         Kind::Path { .. } => "\"/path\"".to_owned(),
         Kind::Secret => "\"<secret>\"".to_owned(),
@@ -251,7 +284,7 @@ fn example_value(kind: &Kind, default: &Default) -> String {
         Kind::Origin => "\"https://example.org\"".to_owned(),
         Kind::Hash => "\"<64 hex characters>\"".to_owned(),
         Kind::Name(_) => "\"<name>\"".to_owned(),
-        Kind::List(item) => format!("[{}]", example_value(item, &Default::Unset)),
+        Kind::List(item) => format!("[{}]", example_value(name, item, &Default::Unset, network)),
         Kind::Map { .. } => "{ }".to_owned(),
     }
 }
@@ -318,6 +351,9 @@ mod tests {
 
     const TABLE_FILE: &str = "shekyld_options.md";
     const EXAMPLE_FILE: &str = "shekyld.example.toml";
+    /// The network the generic example's ports are: the one a run with no
+    /// `--network` uses.
+    const EXAMPLE_NETWORK: Network = Network::Mainnet;
 
     /// The settings file a package ships for `network`, in
     /// `contrib/packaging/linux/`.
@@ -332,7 +368,7 @@ mod tests {
     #[test]
     fn the_rendering_names_every_public_row_and_no_hidden_one() {
         let table = options_markdown(&TABLE);
-        let example = example_toml(&TABLE);
+        let example = example_toml(&TABLE, EXAMPLE_NETWORK);
         let public_rows = TABLE
             .rows
             .iter()
@@ -372,7 +408,7 @@ mod tests {
     /// table's rows: each key a live file row, each value its kind's.
     #[test]
     fn the_example_is_a_configuration_file_when_uncommented() {
-        let example = example_toml(&TABLE);
+        let example = example_toml(&TABLE, EXAMPLE_NETWORK);
         let commented: toml::Table = example.parse().expect("commented example parses");
         assert!(commented.is_empty());
         let active: String = example
@@ -406,13 +442,60 @@ mod tests {
         }
     }
 
+    /// The generic example's network is the `network` row's default, so the
+    /// example shows the ports a run with no `--network` uses.
+    #[test]
+    fn the_generic_example_is_the_default_networks() {
+        let row = TABLE
+            .rows
+            .iter()
+            .find(|r| r.name == "network")
+            .expect("the network row");
+        assert!(
+            matches!(row.default, Default::Value(name) if name == EXAMPLE_NETWORK.name()),
+            "the generic example's network is the network row's default"
+        );
+    }
+
+    /// Every port an example names is the network's own. A settings file
+    /// for one network that shows another's port tells its operator to bind
+    /// or dial the wrong one (the alpha.12 testnet file showed mainnet's).
+    #[test]
+    fn each_networks_example_names_its_own_ports() {
+        for network in Network::ALL {
+            let text = example_toml(&TABLE, network);
+            let own = network.ports();
+            for port in [own.p2p, own.rpc] {
+                assert!(
+                    text.contains(&format!(":{port}\"")),
+                    "the {} example names its port {port}",
+                    network.name()
+                );
+            }
+            for other in Network::ALL {
+                let theirs = other.ports();
+                for port in [theirs.p2p, theirs.rpc, theirs.view] {
+                    if [own.p2p, own.rpc, own.view].contains(&port) {
+                        continue;
+                    }
+                    assert!(
+                        !text.contains(&format!(":{port}")),
+                        "the {} example names {}'s port {port}",
+                        network.name(),
+                        other.name()
+                    );
+                }
+            }
+        }
+    }
+
     /// The committed fragments are this rendering. Regenerate with
     /// `cargo test -p shekyl-daemon-config regenerate_generated_docs -- --ignored`.
     #[test]
     fn the_committed_fragments_are_the_rendering() {
         for (name, text) in [
             (TABLE_FILE, options_markdown(&TABLE)),
-            (EXAMPLE_FILE, example_toml(&TABLE)),
+            (EXAMPLE_FILE, example_toml(&TABLE, EXAMPLE_NETWORK)),
         ] {
             let path = generated(name);
             // A checkout with `core.autocrlf` hands the fragment back with
@@ -436,8 +519,8 @@ mod tests {
     /// `cargo test -p shekyl-daemon-config regenerate_generated_docs -- --ignored`.
     #[test]
     fn the_packaged_files_are_the_rendering() {
-        let example = example_toml(&TABLE);
         for network in PACKAGED_NETWORKS {
+            let example = example_toml(&TABLE, network);
             let text = packaged_toml(&TABLE, network);
             assert!(
                 text.ends_with(&example),
@@ -499,7 +582,11 @@ mod tests {
     #[ignore = "writes docs/generated/ and contrib/packaging/linux/; run on purpose after a table change"]
     fn regenerate_generated_docs() {
         std::fs::write(generated(TABLE_FILE), options_markdown(&TABLE)).expect("write table");
-        std::fs::write(generated(EXAMPLE_FILE), example_toml(&TABLE)).expect("write example");
+        std::fs::write(
+            generated(EXAMPLE_FILE),
+            example_toml(&TABLE, EXAMPLE_NETWORK),
+        )
+        .expect("write example");
         for network in PACKAGED_NETWORKS {
             std::fs::write(packaged(network), packaged_toml(&TABLE, network))
                 .expect("write packaged file");
