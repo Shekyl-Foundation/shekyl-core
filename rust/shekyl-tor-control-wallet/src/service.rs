@@ -55,20 +55,22 @@ use kameo::error::SendError;
 use tokio::sync::{oneshot, watch};
 
 use crate::onion_service::{publish_onion, OnionPublishAbort};
-use crate::vanguard_rotation::{VanguardManager, VanguardsAbort};
 use shekyl_tor_control_client::awake;
 use shekyl_tor_control_client::binary::{self, VerifiedTorBinary};
 use shekyl_tor_control_client::control::{
     parse_socks_listeners, BootstrapReadiness, BootstrapState, Command, DiskWrites, ManagedTor,
     SocksPort, SocksTimeout, TorControlClient, TorControlClientConfig, TorLaunch,
 };
+use shekyl_tor_control_client::vanguard_rotation::{VanguardManager, VanguardsAbort};
 
 // Config/error types live next to their owners; re-exported here so a
 // `WalletTorControlConfig` consumer names them beside the supervisor types.
 #[doc(inline)]
 pub use crate::onion_service::{OnionPublishError, OnionServiceSpec};
 #[doc(inline)]
-pub use crate::vanguard_rotation::{VanguardsError, VanguardsMode, VanguardsWarning};
+pub use shekyl_tor_control_client::vanguard_rotation::{
+    VanguardsError, VanguardsMode, VanguardsWarning,
+};
 // Types that appear in this crate's public signatures. Re-exported so a wallet
 // consumer does not take `shekyl-tor-control-client` — that crate is the launch
 // path for a second Tor instance (Principal's). The launch types themselves
@@ -423,7 +425,7 @@ pub struct WalletTorControlConfig {
 /// network bootstrap, on every retry, forever. Here there is nothing to detect:
 /// the variant does not exist. (Unrepresentable over validated — the same call
 /// the `SETCONF` argument type and the
-/// [`VanguardsActive`](crate::vanguard_rotation::VanguardsActive) witness make.)
+/// [`VanguardsActive`](shekyl_tor_control_client::vanguard_rotation::VanguardsActive) witness make.)
 ///
 /// The asymmetry is real and is why this is not simply "vanguards follow the
 /// onion": `HardenedClient` is legitimate. The witness leg is an onion *client*

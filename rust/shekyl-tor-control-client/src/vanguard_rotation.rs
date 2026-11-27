@@ -73,13 +73,13 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use kameo::error::SendError;
 use tokio::sync::oneshot;
 
-use shekyl_os_account::private_file::{self, Access, CommitError, Journal, StagedWrite};
-use shekyl_tor_control_client::awake;
-use shekyl_tor_control_client::control::consensus::{parse_ns_all, ConsensusRelay, ConsensusView};
-use shekyl_tor_control_client::control::vanguards::{
+use crate::awake;
+use crate::control::consensus::{parse_ns_all, ConsensusRelay, ConsensusView};
+use crate::control::vanguards::{
     HsLayerPins, RelayFingerprint, NUM_LAYER2_GUARDS, NUM_LAYER3_GUARDS,
 };
-use shekyl_tor_control_client::control::{Command, ControlError, TorControlClient};
+use crate::control::{Command, ControlError, TorControlClient};
+use shekyl_os_account::private_file::{self, Access, CommitError, Journal, StagedWrite};
 
 /// L2 lifetime bounds (spec): uniform over [30, 60] days.
 const L2_LIFETIME_MIN: Duration = Duration::from_secs(30 * 86_400);
@@ -97,8 +97,8 @@ const L3_LIFETIME_MAX: Duration = Duration::from_secs(48 * 3_600);
 /// tor's built-in lite adds one, which the spec is explicit costs longer
 /// paths and higher latency — a non-serving instance should not pay that.
 ///
-/// This is the *derived* knob, not the configured one: callers choose a
-/// [`ServingPosture`](crate::service::ServingPosture), which implies the mode.
+/// This is the *derived* knob, not the configured one: the wallet's callers
+/// choose a serving posture, which implies the mode.
 /// That is what keeps the one forbidden pairing — a serving persona on
 /// lite-only guard protection, silently weaker with no feedback channel, against
 /// an adversary whose success is invisible to the operator — from existing to be
@@ -119,7 +119,7 @@ pub enum VanguardsMode {
 ///
 /// Mintable only by the confirmed-`SETCONF` path inside [`VanguardManager`].
 /// This is the crate's established sealed-witness pattern
-/// ([`VerifiedTorBinary`](shekyl_tor_control_client::binary::VerifiedTorBinary)): the guarantee
+/// ([`VerifiedTorBinary`](crate::binary::VerifiedTorBinary)): the guarantee
 /// is structural rather than a convention the serving daemon must remember.
 ///
 /// **It carries the actor it was confirmed on, and publication consumes it.**
@@ -134,8 +134,8 @@ pub enum VanguardsMode {
 ///
 /// **No test bypass exists yet, on purpose.** The obvious sibling would be a
 /// loud `unchecked_for_test` mirroring
-/// [`VerifiedTorBinary`](shekyl_tor_control_client::binary::VerifiedTorBinary)'s, and one should
-/// land the day a test drives `crate::onion_service::publish_onion`
+/// [`VerifiedTorBinary`](crate::binary::VerifiedTorBinary)'s, and one should
+/// land the day a test drives the wallet's `publish_onion`
 /// directly. Today no test does — the supervisor path mints the witness for
 /// real — so adding the escape hatch now would put an unused hole in a
 /// security gate, which is the kind of debt this codebase deletes rather than
@@ -153,7 +153,7 @@ impl VanguardsActive {
     }
 
     /// The actor this witness authorizes publication on.
-    pub(crate) fn actor(&self) -> &kameo::actor::ActorRef<TorControlClient> {
+    pub fn actor(&self) -> &kameo::actor::ActorRef<TorControlClient> {
         &self.actor
     }
 }
@@ -893,7 +893,7 @@ fn uniform_between(
 // ── Manager (supervisor-facing orchestration) ──────────────────────────────
 
 /// Supervisor-scoped owner of vanguard mode, in-memory rotation state, and
-/// the on-disk path. Constructed once per [`crate::service::WalletTorControl`] and
+/// the on-disk path. Constructed once per supervisor and
 /// passed into every incarnation — never re-created on restart.
 pub struct VanguardManager {
     mode: VanguardsMode,
