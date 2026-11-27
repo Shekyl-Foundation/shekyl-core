@@ -132,7 +132,7 @@ fn load_with(
     let config_file = choice.fate(opened.is_some());
     let AfterFile {
         resolved, config, ..
-    } = after_file(cli, platform, opened)?;
+    } = after_file(cli, platform, opened.as_ref())?;
     Ok(Loaded {
         config_file,
         resolved,
@@ -191,18 +191,41 @@ fn open_chosen(
     }
 }
 
-/// Everything [`load`] does after its file step: read `opened`'s rows,
-/// check that a file holding a secret is readable only by the permitted
-/// principals, resolve, and build.
+/// Read `opened`'s rows, refuse a secret row anyone outside the permitted
+/// set can read, and resolve. The daemon's [`after_file`] and another
+/// binary's [`load_table`] both take this step, so the secret rule has one
+/// implementation.
+///
+/// # Errors
+///
+/// The refusals, typed (IG-11); the caller renders them.
+fn resolve_opened(
+    table: &Table,
+    network: Network,
+    cli: Cli,
+    opened: Option<&ConfigFile>,
+) -> Result<Resolved, Vec<Diagnostic>> {
+    let mut given = Vec::new();
+    if let Some(config_file) = opened {
+        given = read_file(table, &config_file.path, &config_file.text)?;
+        for g in given.iter().filter(|g| matches!(g.row.kind, Kind::Secret)) {
+            config_file
+                .secret_readable_only_by_permitted(g.row.name)
+                .map_err(|d| vec![d])?;
+        }
+    }
+    resolve(table, network, cli, given)
+}
+
+/// Everything [`load`] does after its file step: [`resolve_opened`], then
+/// the daemon's sections.
 ///
 /// `opened` is `None` when no file was read, which is production's own
 /// value on a host whose default file is absent. A test that is not about
 /// reading a file calls this with `None`: it then takes every step `load`
 /// takes, and reads nothing from the host it runs on. `choosers` and
 /// [`crate::sections::build`](crate::sections) stay in this crate, so a
-/// daemon configuration is not built by a second composition. Precedence
-/// ([`crate::resolve::resolve`]) is public for a binary that resolves its
-/// own table.
+/// daemon configuration is not built by a second composition.
 ///
 /// # Errors
 ///
@@ -210,20 +233,11 @@ fn open_chosen(
 pub fn after_file(
     cli: Cli,
     platform: &Platform,
-    opened: Option<ConfigFile>,
+    opened: Option<&ConfigFile>,
 ) -> Result<AfterFile, Vec<Diagnostic>> {
     let (network, mode) = choosers(&cli);
-    let mut given = Vec::new();
-    if let Some(config_file) = &opened {
-        given = read_file(&TABLE, &config_file.path, &config_file.text)?;
-        for g in given.iter().filter(|g| matches!(g.row.kind, Kind::Secret)) {
-            config_file
-                .secret_readable_only_by_permitted(g.row.name)
-                .map_err(|d| vec![d])?;
-        }
-    }
-    let mut resolved = resolve(&TABLE, network, cli, given)?;
-    let file_read = opened.map(|f| f.path);
+    let file_read = opened.map(|file| file.path.clone());
+    let mut resolved = resolve_opened(&TABLE, network, cli, opened)?;
     let config = build(&mut resolved, network, mode, platform, file_read.as_deref())?;
     Ok(AfterFile {
         file_read,
@@ -271,17 +285,8 @@ pub fn load_table(
         ),
     };
     let opened = open_chosen(&choice, DefaultFile::Read, file::open).map_err(|d| vec![d])?;
-    let mut given = Vec::new();
-    if let Some(config_file) = &opened {
-        given = read_file(table, &config_file.path, &config_file.text)?;
-        for g in given.iter().filter(|g| matches!(g.row.kind, Kind::Secret)) {
-            config_file
-                .secret_readable_only_by_permitted(g.row.name)
-                .map_err(|d| vec![d])?;
-        }
-    }
     let config_file = choice.fate(opened.is_some());
-    let resolved = resolve(table, network, cli, given)?;
+    let resolved = resolve_opened(table, network, cli, opened.as_ref())?;
     Ok(TableLoaded {
         network,
         config_file,

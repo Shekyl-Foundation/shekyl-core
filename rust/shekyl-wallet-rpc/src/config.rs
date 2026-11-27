@@ -15,7 +15,8 @@ use shekyl_crypto_pq::wallet_envelope::KdfParams;
 use shekyl_daemon_config::announce::effective_configuration;
 use shekyl_daemon_config::{load_table, logging_to_named_file, paths, Platform, Resolved, RunMode};
 use shekyl_engine_core::{Network, TorFile};
-use shekyl_options::{read_cli, Code, Diagnostic, PeerEndpoint, Source, Value};
+use shekyl_options::{read_cli, Code, Diagnostic, Source, Value};
+use shekyl_rpc_transport::channel::{socks5h_url, PeerRoute, RemoteNode};
 
 use crate::auth::{AuthConfig, BasicCredential};
 use crate::server::{tcp_listen_posture, ListenAddr, ServerConfig, TOR_FILE_OPTION};
@@ -255,13 +256,19 @@ fn auth_of(resolved: &Resolved, faults: &mut Vec<Diagnostic>) -> Option<AuthConf
     }
 }
 
+/// `daemon-socks`, the address. Unset when the row is absent.
+#[must_use]
+pub fn socks_addr(resolved: &Resolved) -> Option<std::net::SocketAddr> {
+    match resolved.get("daemon-socks") {
+        Some(Value::Endpoint(addr)) => Some(*addr),
+        _ => None,
+    }
+}
+
 /// `daemon-socks`, as a transport takes it: the proxy resolves names.
 #[must_use]
 pub fn socks_of(resolved: &Resolved) -> Option<String> {
-    match resolved.get("daemon-socks") {
-        Some(Value::Endpoint(addr)) => Some(format!("socks5h://{addr}")),
-        _ => None,
-    }
+    socks_addr(resolved).map(socks5h_url)
 }
 
 /// `daemon-socks` set with no `daemon-endpoint`.
@@ -271,7 +278,7 @@ pub fn socks_of(resolved: &Resolved) -> Option<String> {
 /// CLI's external wallet server — skips this and keeps the target.
 #[must_use]
 pub fn proxy_without_endpoint(resolved: &Resolved) -> Option<Diagnostic> {
-    match (socks_of(resolved), resolved.get("daemon-endpoint")) {
+    match (socks_addr(resolved), resolved.get("daemon-endpoint")) {
         (Some(_), None) => Some(requires(
             "daemon-socks",
             "daemon-endpoint: this computer's node is reached on its owner's socket, never \
@@ -282,22 +289,17 @@ pub fn proxy_without_endpoint(resolved: &Resolved) -> Option<Diagnostic> {
 }
 
 /// `daemon-endpoint` through `daemon-socks`, or "this computer" when unset
-/// (`RPC_CHANNEL.md` RT-15). An onion needs the proxy. A proxy with no
-/// endpoint is not judged here; the caller applies [`proxy_without_endpoint`]
-/// when the proxy has no other job.
+/// (`RPC_CHANNEL.md` RT-15). An onion needs the proxy, which [`PeerRoute`]
+/// refuses. A proxy with no endpoint is not judged here; the caller applies
+/// [`proxy_without_endpoint`] when the proxy has no other job.
 pub fn daemon_of(
     resolved: &Resolved,
     network: Network,
     faults: &mut Vec<Diagnostic>,
 ) -> Option<DaemonTarget> {
-    use shekyl_rpc_transport::channel::{Leg, RemoteNode};
     let key_file = path_of(resolved, "rpc-key-file");
-    let proxy = match resolved.get("daemon-socks") {
-        Some(Value::Endpoint(addr)) => Some(*addr),
-        _ => None,
-    };
     let bundle = path_of(resolved, "daemon-bundle-file");
-    let leg = match resolved.get("daemon-endpoint") {
+    match resolved.get("daemon-endpoint") {
         None => {
             if bundle.is_some() {
                 faults.push(requires(
@@ -305,33 +307,33 @@ pub fn daemon_of(
                     "daemon-endpoint, the node that exported this bundle",
                 ));
             }
-            return Some(DaemonTarget::ThisComputer { network, key_file });
+            Some(DaemonTarget::ThisComputer { network, key_file })
         }
-        Some(Value::Peer(PeerEndpoint::Ip(addr))) => Leg::ip(*addr, proxy),
-        Some(Value::Peer(PeerEndpoint::Onion { host, port })) => {
-            let Some(proxy) = proxy else {
+        Some(Value::Peer(peer)) => {
+            let Some(bundle_file) = bundle else {
                 faults.push(requires(
                     "daemon-endpoint",
-                    "daemon-socks, to reach an onion",
+                    "daemon-bundle-file exported by the node with shekyl-cli rpc bundle show",
                 ));
                 return None;
             };
-            Leg::onion(host.clone(), *port, proxy)
+            match PeerRoute::reach(peer, socks_addr(resolved)) {
+                Ok(route) => Some(DaemonTarget::Channel {
+                    network,
+                    node: RemoteNode {
+                        leg: route.leg(),
+                        bundle_file,
+                    },
+                    key_file,
+                }),
+                Err(error) => {
+                    faults.push(error.diagnostic("daemon-endpoint"));
+                    None
+                }
+            }
         }
-        _ => unreachable!("typed peer endpoint"),
-    };
-    let Some(bundle_file) = bundle else {
-        faults.push(requires(
-            "daemon-endpoint",
-            "daemon-bundle-file exported by the node with shekyl-cli rpc bundle show",
-        ));
-        return None;
-    };
-    Some(DaemonTarget::Channel {
-        network,
-        node: RemoteNode { leg, bundle_file },
-        key_file,
-    })
+        Some(other) => unreachable!("daemon-endpoint is a peer endpoint, not {other:?}"),
+    }
 }
 
 #[cfg(test)]

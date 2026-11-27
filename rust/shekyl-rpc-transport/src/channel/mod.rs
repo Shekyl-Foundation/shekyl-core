@@ -13,7 +13,9 @@
 //!
 //! - [`Leg`]: where the daemon is. An IP may be direct or through a SOCKS
 //!   proxy. An onion carries its proxy. A service's console leg is a
-//!   socket or a Windows pipe. Dialed into a [`LegStream`].
+//!   socket or a Windows pipe. Dialed into a [`LegStream`]. A grammar peer
+//!   becomes that leg through [`PeerRoute`], which is also the plaintext
+//!   HTTP base.
 //! - [`handshake_over`]: the client's side of the handshake over any
 //!   stream, ending in the record stream and the ceiling message 4 carried.
 //!   [`ChannelTarget::open`] dials and runs it under §4.3's policy: the
@@ -43,6 +45,7 @@ mod handshake;
 mod key;
 mod leg;
 mod pool;
+mod reach;
 mod session;
 mod sync;
 
@@ -54,6 +57,7 @@ pub use key::{
 };
 pub use leg::{Leg, LegStream};
 pub use pool::{Lent, Pool, EXTRA_SESSION_IDLE};
+pub use reach::{socks5h_url, PeerRoute, PeerRouteError};
 pub use session::{is_submission, Session};
 pub use sync::ChannelDaemon;
 

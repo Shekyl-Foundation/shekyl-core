@@ -13,9 +13,10 @@ use std::path::{Path, PathBuf};
 
 use shekyl_daemon_config::announce::effective_configuration;
 use shekyl_daemon_config::{load_table, logging_to_named_file, paths, Platform, Resolved, RunMode};
-use shekyl_options::{read_cli_then_words, Code, Diagnostic, PeerEndpoint, Source, Value};
+use shekyl_options::{read_cli_then_words, Code, Diagnostic, Source, Value};
+use shekyl_rpc_transport::channel::PeerRoute;
 use shekyl_rpc_transport::DaemonTarget;
-use shekyl_wallet_rpc::config::{daemon_of, proxy_without_endpoint, socks_of};
+use shekyl_wallet_rpc::config::{daemon_of, proxy_without_endpoint, socks_addr, socks_of};
 use shekyl_wallet_rpc::server::{TorFile, TOR_FILE_OPTION};
 use shekyl_wallet_rpc::Network;
 
@@ -191,8 +192,11 @@ fn build(
     faults: &mut Vec<Diagnostic>,
 ) -> Option<Options> {
     let socks = socks_of(resolved);
-    let wallet_rpc = wallet_rpc_of(resolved, socks.is_some(), faults);
-    let external = wallet_rpc.is_some();
+    // Named, including a row that was set and refused. Absence is the only
+    // hosted run. A refused address is not "no server".
+    let wallet_server = wallet_server(resolved, faults);
+    let external = wallet_server.is_named();
+    let wallet_rpc = wallet_server.into_url();
     let (wallet, named_dir) = wallet_of(resolved, external, faults);
     let wallet_dir = hosted_wallet_dir(named_dir, external, network, platform, faults);
     // The proxy may be the external wallet server's. With no such server it
@@ -221,24 +225,55 @@ fn build(
         _ => None,
     };
     let tor_file = tor_file_of(resolved, external, faults);
-    Some(Options {
-        network,
-        wallet_dir,
-        wallet,
-        daemon: daemon?,
-        wallet_rpc,
-        socks,
-        enroll_remote,
-        rpc_key_file: path_of(resolved, "rpc-key-file"),
-        debug: switch_of(resolved, "debug"),
-        json: switch_of(resolved, "json"),
-        password,
-        archival_complete_tree,
-        archival_acknowledge,
-        script_file,
-        tor_file: tor_file?,
-        effective,
-    })
+    match (daemon, tor_file) {
+        (Some(daemon), Some(tor_file)) if faults.is_empty() => Some(Options {
+            network,
+            wallet_dir,
+            wallet,
+            daemon,
+            wallet_rpc,
+            socks,
+            enroll_remote,
+            rpc_key_file: path_of(resolved, "rpc-key-file"),
+            debug: switch_of(resolved, "debug"),
+            json: switch_of(resolved, "json"),
+            password,
+            archival_complete_tree,
+            archival_acknowledge,
+            script_file,
+            tor_file,
+            effective,
+        }),
+        _ => None,
+    }
+}
+
+/// Where this run's wallet server is. `Refused` is a row that was set and
+/// did not parse: the load fails, and the hosted checks do not run.
+enum WalletServer {
+    /// No `wallet-rpc-endpoint` and no `wallet-rpc-socket-file`. This process
+    /// hosts the server.
+    Hosted,
+    /// An address the session dials.
+    External(String),
+    /// A row was set and refused.
+    Refused,
+}
+
+impl WalletServer {
+    /// The operator named an external server, whether or not its address parsed.
+    fn is_named(&self) -> bool {
+        !matches!(self, Self::Hosted)
+    }
+
+    /// The address the session dials. Absent when this process hosts, and
+    /// when the named address was refused.
+    fn into_url(self) -> Option<String> {
+        match self {
+            Self::External(url) => Some(url),
+            Self::Hosted | Self::Refused => None,
+        }
+    }
 }
 
 /// The Tor binary the hosted server runs. With an external server none is
@@ -272,34 +307,33 @@ fn tor_file_of(
     }
 }
 
-/// `wallet-rpc-endpoint`, or `wallet-rpc-socket-file` in its place, as the
-/// address the session dials.
-fn wallet_rpc_of(
-    resolved: &Resolved,
-    has_socks: bool,
-    faults: &mut Vec<Diagnostic>,
-) -> Option<String> {
+/// `wallet-rpc-endpoint`, or `wallet-rpc-socket-file` in its place.
+///
+/// A row that is present and refused is [`WalletServer::Refused`], not
+/// [`WalletServer::Hosted`]: the hosted checks must not run on a
+/// configuration that named an external server.
+fn wallet_server(resolved: &Resolved, faults: &mut Vec<Diagnostic>) -> WalletServer {
     let socket = path_of(resolved, "wallet-rpc-socket-file");
     match (resolved.get("wallet-rpc-endpoint"), socket) {
+        (None, None) => WalletServer::Hosted,
         (Some(_), Some(_)) => {
             faults.push(conflict(
                 "wallet-rpc-endpoint",
                 "wallet-rpc-socket-file is set",
             ));
-            None
+            WalletServer::Refused
         }
-        (None, None) => None,
-        (None, Some(path)) => socket_url(&path, faults),
-        (Some(Value::Peer(PeerEndpoint::Ip(addr))), None) => Some(format!("http://{addr}")),
-        (Some(Value::Peer(PeerEndpoint::Onion { host, port })), None) => {
-            if !has_socks {
-                faults.push(requires(
-                    "wallet-rpc-endpoint",
-                    "daemon-socks, to reach an onion",
-                ));
+        (None, Some(path)) => match socket_url(&path, faults) {
+            Some(url) => WalletServer::External(url),
+            None => WalletServer::Refused,
+        },
+        (Some(Value::Peer(peer)), None) => match PeerRoute::reach(peer, socks_addr(resolved)) {
+            Ok(route) => WalletServer::External(route.http_base()),
+            Err(error) => {
+                faults.push(error.diagnostic("wallet-rpc-endpoint"));
+                WalletServer::Refused
             }
-            Some(format!("http://{host}:{port}"))
-        }
+        },
         (Some(other), None) => unreachable!("wallet-rpc-endpoint is a peer, not {other:?}"),
     }
 }
@@ -659,6 +693,69 @@ mod tests {
                 &socket
             ]),
             [Code::ValueConflict]
+        );
+    }
+
+    /// A refused external server is not a hosted run. Both addresses, or a
+    /// socket the platform refuses, still name an external server, so a
+    /// proxy without `daemon-endpoint` is not a second fault and a missing
+    /// home is not `config.path.no-home`. Red edit: treat `None` from the
+    /// address parse as hosted, and the proxy line gains `ValueRequires`.
+    #[test]
+    fn a_refused_external_server_is_not_judged_as_hosted() {
+        let socket = absolute("s");
+        assert_eq!(
+            refused(&[
+                "--wallet-rpc-endpoint",
+                "127.0.0.1:1",
+                "--wallet-rpc-socket-file",
+                &socket,
+                "--daemon-socks",
+                "127.0.0.1:9050",
+            ]),
+            [Code::ValueConflict]
+        );
+
+        let file = absolute("alice.wallet");
+        let codes = refused(&[
+            "--wallet-file",
+            &file,
+            "--wallet-rpc-endpoint",
+            "127.0.0.1:1",
+            "--wallet-rpc-socket-file",
+            &socket,
+        ]);
+        assert!(
+            codes.iter().all(|code| *code == Code::ValueConflict),
+            "{codes:?}"
+        );
+        assert!(codes.len() >= 2, "{codes:?}");
+
+        let dir = shekyl_os_account::test_fixture::tempdir().expect("a fixture directory");
+        let config = dir.path().join("shekyl-cli.toml");
+        shekyl_os_account::private_file::write_private(&config, b"")
+            .expect("the configuration file");
+        let Err(faults) = load(
+            [
+                std::ffi::OsString::from("--config-file"),
+                config.into_os_string(),
+                std::ffi::OsString::from("--wallet-rpc-endpoint"),
+                std::ffi::OsString::from("127.0.0.1:1"),
+                std::ffi::OsString::from("--wallet-rpc-socket-file"),
+                std::ffi::OsString::from(&socket),
+            ],
+            &Platform::default(),
+            false,
+        ) else {
+            panic!("both server addresses were accepted");
+        };
+        assert!(
+            faults.iter().any(|fault| fault.code == Code::ValueConflict),
+            "{faults:?}"
+        );
+        assert!(
+            faults.iter().all(|fault| fault.code != Code::PathNoHome),
+            "{faults:?}"
         );
     }
 

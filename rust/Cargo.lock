@@ -4857,6 +4857,7 @@ dependencies = [
  "serde_json",
  "shekyl-address",
  "shekyl-network",
+ "shekyl-options",
  "shekyl-os-account",
  "shekyl-rpc-channel",
  "shekyl-rpc-client",

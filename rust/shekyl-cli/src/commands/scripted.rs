@@ -48,13 +48,19 @@ const SECRET_FILE_BYTES_MAX: u64 = 64 * 1024;
 #[derive(Debug, Serialize)]
 pub struct CreatedWallet {
     pub name: String,
-    pub backup_file: String,
+    /// The file the words were written to. Absent when they were shown on
+    /// the screen, which happens inside the create and is wiped before this
+    /// receipt is returned.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub backup_file: Option<String>,
 }
 
 /// What `wallet restore --mnemonic-file` tells a script.
 #[derive(Debug, Serialize)]
 pub struct RestoredWallet {
     pub name: String,
+    /// The first block scanned. `0` scans from genesis.
+    pub restore_height: u64,
 }
 
 /// Where `wallet-password-file` says the password is.
@@ -99,7 +105,10 @@ impl PasswordSource {
 /// The text of a secret file, refused with a typed code when anyone but
 /// this account can read it. Checked and read through one handle, so the
 /// file judged is the file read.
-fn read_secret_text(path: &Path, option: &str) -> Result<Zeroizing<String>, CommandFailed> {
+pub(crate) fn read_secret_text(
+    path: &Path,
+    option: &str,
+) -> Result<Zeroizing<String>, CommandFailed> {
     let shown = path.display().to_string();
     let unreadable = |error: String| {
         refusal(
@@ -153,7 +162,7 @@ fn read_secret_text(path: &Path, option: &str) -> Result<Zeroizing<String>, Comm
 
 /// The password for a file-backed create or restore: the named source, or
 /// the hidden prompt at a terminal.
-fn new_wallet_password(
+pub(crate) fn new_wallet_password(
     presentation: &Presentation,
     source: Option<&PasswordSource>,
 ) -> Result<Zeroizing<String>, CommandFailed> {
@@ -236,15 +245,19 @@ pub fn run_create(
 
     Ok(CreatedWallet {
         name: name.to_owned(),
-        backup_file: mnemonic_file.display().to_string(),
+        backup_file: Some(mnemonic_file.display().to_string()),
     })
 }
 
 pub(crate) fn show_created_wallet(created: &CreatedWallet) {
+    let Some(path) = &created.backup_file else {
+        // Shown on the screen before this receipt existed. The words are
+        // already wiped.
+        return;
+    };
     crate::out_line!(
-        "Created wallet '{}'. Seed written to {} (mode 0600) — protect or delete it.",
+        "Created wallet '{}'. Seed written to {path} (mode 0600) — protect or delete it.",
         created.name,
-        created.backup_file
     );
 }
 
@@ -263,53 +276,14 @@ pub fn run_restore(
     mnemonic_file: &Path,
     restore_height: Option<u64>,
 ) -> CommandResult<RestoredWallet> {
-    super::require_closed(rpc)?;
-    let receipt = name.to_owned();
-    post_restore(
+    super::lifecycle::restore_wallet(
         rpc,
         presentation,
         source,
         name,
-        mnemonic_file,
+        Some(mnemonic_file),
         restore_height,
-    )?;
-    rpc.set_open(name);
-    Ok(RestoredWallet { name: receipt })
-}
-
-fn post_restore(
-    rpc: &RpcSession,
-    presentation: &Presentation,
-    source: Option<&PasswordSource>,
-    name: &str,
-    mnemonic_file: &Path,
-    restore_height: Option<u64>,
-) -> CommandResult<()> {
-    // The file first: a refused file costs no password prompt.
-    let seed = read_secret_text(mnemonic_file, "--mnemonic-file")?;
-    let password = new_wallet_password(presentation, source)?;
-
-    rpc.make_wallet_dir()?;
-    let result = rpc.call(
-        "restore_wallet",
-        params::Restore {
-            name,
-            password: &password,
-            mnemonic: seed.trim(),
-            restore_height: restore_height.unwrap_or(0),
-        },
-    );
-    drop(password);
-    drop(seed);
-
-    match result {
-        Ok(_) => Ok(()),
-        Err(e) => Err(rpc.report("Failed to restore wallet", &e)),
-    }
-}
-
-pub(crate) fn show_restored_wallet(restored: &RestoredWallet) {
-    crate::out_line!("Restored wallet '{}'.", restored.name);
+    )
 }
 
 fn strip_one_trailing_newline(s: &mut String) {
