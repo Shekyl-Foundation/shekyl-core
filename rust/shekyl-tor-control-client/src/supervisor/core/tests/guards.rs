@@ -164,8 +164,12 @@ fn a_pin_that_fails_before_the_first_publish_withholds_the_onion() {
     assert!(at > 0, "the sample re-asked at least once");
     assert_eq!(core.status().respawn_count, respawns, "nothing respawned");
 
-    let again = core.on_deadline(retry);
-    assert!(pins(&again), "the pin is asked again at the cap: {again:?}");
+    // The liveness sample comes due at the same tick and goes first; the
+    // pin follows once it is answered.
+    assert!(
+        run_until_pin(&mut core, retry),
+        "the pin is asked again at the cap"
+    );
     let pinned = answer(
         &mut core,
         Input::GuardsPinned {
