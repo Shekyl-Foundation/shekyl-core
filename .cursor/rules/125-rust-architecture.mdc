@@ -15,7 +15,8 @@ tree holds no first-party C or C++, the only C is vendored under
 `shekyl-ffi`. **Do not add a C ABI to reach a Rust crate:** a crate is
 called from Rust, and an export would be a permanent audit obligation.
 `cargo xtask` (`rust/xtask`, its `matrix.toml`) runs the cargo build and gives
-each host its C flags. The retired `RULE_20_RUST_VS_CPP` and `RULE_40_FFI_DISCIPLINE` are records:
+each host its C flags. The Rust-vs-C++ and FFI rules this replaced are
+retired; their text is kept in the records
 [`RULE_20_RUST_VS_CPP.md`](../../docs/completed/RULE_20_RUST_VS_CPP.md) and
 [`RULE_40_FFI_DISCIPLINE.md`](../../docs/completed/RULE_40_FFI_DISCIPLINE.md).
 

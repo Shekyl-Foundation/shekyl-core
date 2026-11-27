@@ -540,7 +540,7 @@ Hardening applied:
 - All test fixtures in `shekyl-tx-builder/src/tests.rs` corrected to be
   spec-derived (c1/c2 split computed from depth per the tower
   alternation rule, not pasted from observed behavior).
-- Testing rule added to `.cursor/rules/40-testing.mdc`: fixtures must
+- Testing rule added to `.cursor/rules/50-testing.mdc`: fixtures must
   be spec-derived, not behavior-derived.
 
 ### FFI depth-to-layers convention fix (April 15, 2026)
