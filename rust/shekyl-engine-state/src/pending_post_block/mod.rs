@@ -61,7 +61,7 @@ pub use plan::{
 /// Pre-genesis: refuse, don't
 /// migrate. **v12** retypes
 /// `PendingBondPost::bond_post_offset_blocks` (deleted in v15) from bare `u64` to
-/// [`BlockCount`] (height-semantics Phase 2e, C4; postcard bytes of the
+/// [`BlockCount`](shekyl_types::BlockCount) (height-semantics Phase 2e, C4; postcard bytes of the
 /// transparent `u64` are identical; the schema type-name change still
 /// bumps per rule 42). Pre-genesis: refuse, don't migrate. **v11** retypes the
 /// dispatch-clock stamp fields (`anchor_t0`, `Dispatched::at`) from

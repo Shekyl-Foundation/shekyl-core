@@ -188,7 +188,7 @@ impl std::fmt::Debug for EndedPlan {
     }
 }
 
-/// What [`PendingPostBlock::sign_plan`] and [`PendingPostBlock::resign_post`]
+/// What [`PendingPostBlock::sign_plan`](super::PendingPostBlock::sign_plan) and [`PendingPostBlock::resign_post`](super::PendingPostBlock::resign_post)
 /// decided about a post signed outside the pending lock.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SignAdmission {
@@ -207,7 +207,7 @@ pub enum SignAdmission {
     InputRaced,
 }
 
-/// What [`PendingPostBlock::withdraw_plan`] did.
+/// What [`PendingPostBlock::withdraw_plan`](super::PendingPostBlock::withdraw_plan) did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Withdrawal {
     /// The plan ended as withdrawn; its funding is drained next.
