@@ -1375,13 +1375,18 @@ mod tests {
     /// so the cheapest-per-weight prefix pays its fee for nothing on its way
     /// to the bodies that do free room. Every miner column's search matches
     /// every choice of drops cohort by cohort, and the prefix does not.
+    ///
+    /// The light body weighs one byte, so its drop decides a packing only
+    /// when the cheapest one leaves no byte spare. At a thousand bytes it
+    /// decided the cheapest packing once the cap's stuffing bodies grew to
+    /// 143 920 bytes: the prefix then found the cheapest attack too.
     #[test]
     fn mixed_build_weights_are_searched_by_class_not_by_prefix() {
         let params = SimParams::default();
         let economic = params.economic();
         let mut last = block_at(1_000, &params);
         let ordinary = last.listed[0];
-        let light_weight = 1_000;
+        let light_weight = 1;
         // 95 % of the ordinary rate: the cheapest per weight.
         let light_fee = u64::try_from(
             u128::from(ordinary.fee) * u128::from(light_weight) * 95
