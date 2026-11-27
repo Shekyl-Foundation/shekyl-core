@@ -383,6 +383,10 @@ pub enum CollectUnstakedError {
         /// The anchoring helper's own (scalar-free) reason.
         detail: String,
     },
+    /// The node named its own remedy while preparing the sweep. The fault
+    /// is the sentence; this is not the retry-as-unreachable arm.
+    #[error("{0}")]
+    Daemon(shekyl_rpc_client::DaemonFault),
     /// A daemon query needed to prepare the sweep failed transiently — the
     /// dispatch-tip clock read. Pre-seal, so nothing propagated: check the
     /// daemon and retry. Distinct from `Unanchorable` (the wallet's reference
@@ -1019,7 +1023,7 @@ fn flatten_unstake_error(e: ReleaseRequestError) -> UnstakeError {
         }
         // A target refusal on the fee query is not a fee problem and not a
         // retry. The fee arm is reached before the record fetch.
-        ReleaseRequestError::Fee(FeeEstimatorError::Daemon(fault)) if fault.is_target_refusal() => {
+        ReleaseRequestError::Fee(FeeEstimatorError::Daemon(fault)) if fault.has_own_remedy() => {
             UnstakeError::DaemonTarget(fault)
         }
         ReleaseRequestError::Fee(e) => UnstakeError::FeeEstimate(e),
@@ -1028,7 +1032,7 @@ fn flatten_unstake_error(e: ReleaseRequestError) -> UnstakeError {
         // malformed response is an untrusted-input rejection (internal).
         // A target refusal is neither: it is the fault, and it is not retried.
         ReleaseRequestError::Fetch(e) => match e {
-            EmissionSourceError::Rpc(error) if error.fault().is_target_refusal() => {
+            EmissionSourceError::Rpc(error) if error.fault().has_own_remedy() => {
                 UnstakeError::DaemonTarget(error.fault())
             }
             EmissionSourceError::Rpc(error) => UnstakeError::DaemonUnreachable {
@@ -1041,6 +1045,7 @@ fn flatten_unstake_error(e: ReleaseRequestError) -> UnstakeError {
         },
         // Pre-seal daemon-tip failure: retryable, never the opaque internal
         // -32603 a sealed-store read gets.
+        ReleaseRequestError::Target(fault) => UnstakeError::DaemonTarget(fault),
         ReleaseRequestError::DaemonUnreachable { context, detail } => {
             UnstakeError::DaemonUnreachable {
                 detail: format!("{context}: {detail}"),
@@ -1106,6 +1111,7 @@ fn flatten_collect_error(e: DrainRequestError) -> CollectUnstakedError {
         },
         // Pre-seal daemon-tip failure: retryable, never the opaque internal
         // -32603 a sealed-store read gets.
+        DrainRequestError::Target(fault) => CollectUnstakedError::Daemon(fault),
         DrainRequestError::DaemonUnreachable { context, detail } => {
             CollectUnstakedError::DaemonUnreachable {
                 detail: format!("{context}: {detail}"),

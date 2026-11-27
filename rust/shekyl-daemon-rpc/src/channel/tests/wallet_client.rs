@@ -59,8 +59,7 @@ async fn wallet_enrollment_wrong_bundle_and_revocation() {
     .unwrap();
     let local_wallet = || {
         client::WalletChannel::new(
-            local
-                .wallet_channel(network, Some(&key_file))
+            shekyl_rpc_transport::service_channel(&local, network, Some(&key_file))
                 .unwrap()
                 .expect("the service published a channel"),
             Duration::from_secs(5),

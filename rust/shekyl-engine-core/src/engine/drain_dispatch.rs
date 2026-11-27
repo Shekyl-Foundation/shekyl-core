@@ -166,6 +166,10 @@ pub(crate) enum DrainRequestError {
         /// The transport's own rendering of the failure.
         detail: String,
     },
+    /// The node named its own remedy: a channel fault, a peer check, or a
+    /// service at this computer. Not the retry-as-unreachable arm.
+    #[error("{0}")]
+    Target(shekyl_rpc_client::DaemonFault),
     /// A live pending drain already exists for this persona. One live drain
     /// per persona: the live record IS the in-flight input reservation — a
     /// second drain would race for the same swept inputs. Wait for the pending
@@ -228,6 +232,14 @@ impl DrainRequestError {
         Self::DaemonUnreachable {
             context,
             detail: detail.to_string(),
+        }
+    }
+
+    /// A tip read. A fault that names its own remedy stays that fault.
+    fn from_tip(error: crate::engine::pscan::block_source::BlockSourceError) -> Self {
+        match error.own_remedy() {
+            Some(fault) => Self::Target(fault),
+            None => Self::daemon_unreachable("dispatch tip", error),
         }
     }
 }
@@ -416,7 +428,7 @@ where
         // stamps (WI-3 R2-1).
         let dispatch_tip = daemon_claimed_tip(&daemon)
             .await
-            .map_err(|e| DrainRequestError::daemon_unreachable("dispatch tip", e))?;
+            .map_err(DrainRequestError::from_tip)?;
         let persona = *assembled.bound_tx.persona();
         let sealed = PendingDrain {
             persona,

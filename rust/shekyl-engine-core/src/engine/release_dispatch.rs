@@ -210,6 +210,10 @@ pub(crate) enum ReleaseRequestError {
         /// The transport's own rendering of the failure.
         detail: String,
     },
+    /// The node named its own remedy: a channel fault, a peer check, or a
+    /// service at this computer. Not the retry-as-unreachable arm.
+    #[error("{0}")]
+    Target(shekyl_rpc_client::DaemonFault),
     /// The record-facts fetch failed on the persona-isolated transport. Its
     /// [`EmissionSourceError`] inner class decides the disposition at the
     /// façade: `Rpc`/`Status` are a reachable daemon outage (retryable),
@@ -286,6 +290,16 @@ impl ReleaseRequestError {
         Self::DaemonUnreachable {
             context,
             detail: detail.to_string(),
+        }
+    }
+
+    /// A tip read. A fault that names its own remedy stays that fault.
+    /// Syncing and a plain miss stay the unreachable arm: the façade's
+    /// retry code is that arm's.
+    fn from_tip(error: crate::engine::pscan::block_source::BlockSourceError) -> Self {
+        match error.own_remedy() {
+            Some(fault) => Self::Target(fault),
+            None => Self::daemon_unreachable("dispatch tip", error),
         }
     }
 }
@@ -594,7 +608,7 @@ where
         // daemon-claimed-tip clock as the bond/claim/drain dispatch.
         let dispatch_tip = daemon_claimed_tip(&daemon)
             .await
-            .map_err(|e| ReleaseRequestError::daemon_unreachable("dispatch tip", e))?;
+            .map_err(ReleaseRequestError::from_tip)?;
         let persona = *assembled.bound_tx.persona();
         let sealed = PendingRelease {
             persona,
@@ -713,10 +727,12 @@ fn admit_exit_record(fetched: &ClaimSourceFor) -> Result<(), ReleaseRequestError
     match fetched.actionable() {
         Ok(_) => Ok(()),
         Err(TimelineBreak::DaemonSyncing) => Err(ReleaseRequestError::DaemonSyncing),
-        Err(why) => Err(ReleaseRequestError::daemon_unreachable(
-            "exit-path chain facts",
-            format!("{why:?}"),
-        )),
+        Err(why) => Err(match why.own_remedy() {
+            Some(fault) => ReleaseRequestError::Target(fault),
+            None => {
+                ReleaseRequestError::daemon_unreachable("exit-path chain facts", format!("{why:?}"))
+            }
+        }),
     }
 }
 

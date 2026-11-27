@@ -120,6 +120,11 @@ pub(crate) enum EmissionClaimRequestError {
     /// encoding — a corrupted resident key; fail closed.
     #[error("persona identity encoding: {0}")]
     Identity(shekyl_crypto_pq::CryptoError),
+    /// The dispatch tip could not be read, and the fault names its remedy.
+    /// A plain miss stays [`Self::State`]'s caller; this arm is the channel,
+    /// the peer check, and a service at this computer.
+    #[error("{0}")]
+    Daemon(shekyl_rpc_client::DaemonFault),
     /// A sealed-state read failed (the P-scan seal or the pending-post
     /// seal) — fail-closed, never an invented-empty set over a bad seal.
     #[error("engine state read ({context}): {detail}")]
@@ -371,9 +376,15 @@ where
         // SA-4). A crash after this seal resumes as "maybe sent", which is
         // safe because every resend is byte-identical. `at` reads the same
         // named daemon-claimed-tip clock as the bond dispatch (WI-3 R2-1).
-        let dispatch_tip = daemon_claimed_tip(&daemon)
-            .await
-            .map_err(|e| EmissionClaimRequestError::state("dispatch tip", e))?;
+        let dispatch_tip = match daemon_claimed_tip(&daemon).await {
+            Ok(tip) => tip,
+            Err(error) => {
+                return Err(match error.own_remedy() {
+                    Some(fault) => EmissionClaimRequestError::Daemon(fault),
+                    None => EmissionClaimRequestError::state("dispatch tip", error),
+                });
+            }
+        };
         let persona = *assembled.bound_tx.persona();
         let sealed = PendingEmissionClaim {
             persona,

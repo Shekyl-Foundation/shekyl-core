@@ -2192,7 +2192,7 @@ const fn channel_rpc_code(fault: shekyl_rpc_client::WalletChannelFault) -> Walle
 /// only. The "no answer" arm is `-29201`; a caller whose contract names a
 /// narrower "no answer" code (the fee query's `-29102`) matches that arm
 /// before delegating here.
-pub(crate) fn from_daemon_fault(fault: DaemonFault, detail: &str) -> WalletRpcError {
+pub fn from_daemon_fault(fault: DaemonFault, detail: &str) -> WalletRpcError {
     match fault {
         DaemonFault::Unreachable => {
             tracing::info!(detail, "daemon did not answer");
@@ -2885,6 +2885,7 @@ impl From<DrainToPrincipalError> for WalletRpcError {
                 bound,
             },
             DrainToPrincipalError::Signer(fault) => fault.into(),
+            DrainToPrincipalError::Daemon(fault) => from_daemon_fault(fault, "drain"),
             DrainToPrincipalError::State { context, detail } => internal_detail(context, detail),
             DrainToPrincipalError::Submit { detail } => {
                 tracing::warn!(detail = %detail, "drain dispatch failed at the choke point");
@@ -2985,6 +2986,7 @@ impl From<shekyl_engine_core::CollectUnstakedError> for WalletRpcError {
             // daemon") is not `CollectSyncing`'s ("wait for sync"), so it gets
             // its own code rather than borrowing one with the wrong text
             // NOT -32603.
+            E::Daemon(fault) => from_daemon_fault(fault, "collect"),
             E::DaemonUnreachable { detail } => Self::CollectDaemonUnreachable { detail },
             E::FeeEstimate(e) => e.into(),
             E::FeeUnreasonable {

@@ -94,12 +94,31 @@ impl std::fmt::Debug for WalletChannel {
 }
 
 impl WalletChannel {
-    /// Construct a pool that uses the permissions enrolled on the daemon.
-    /// The existing wire request mask uses all bits to select the full ceiling.
+    /// A pool that has not dialed. The first [`Self::post`] admits the key.
+    /// [`Self::open`] admits before it returns, which is what a chain read
+    /// uses so an unenrolled key fails as this call.
     pub fn new(target: ChannelTarget, within: Duration) -> Self {
         Self {
             pool: Pool::new(target, GrantSet::ALL),
             within,
+        }
+    }
+
+    /// Admit the key, then hold the pool. `within` bounds the admission and
+    /// every later post. A deadline is [`ChannelFault::Budget`]. The kept
+    /// session is parked for the next post, and the body of that post is
+    /// not the admission.
+    ///
+    /// # Errors
+    ///
+    /// [`ChannelFault`], from the admission: not enrolled, not this node,
+    /// not recognised, or the leg did not answer.
+    pub async fn open(target: ChannelTarget, within: Duration) -> Result<Self, ChannelFault> {
+        let channel = Self::new(target, within);
+        match tokio::time::timeout(within, channel.pool.open_kept()).await {
+            Ok(Ok(_)) => Ok(channel),
+            Ok(Err(fault)) => Err(fault),
+            Err(_) => Err(ChannelFault::Budget),
         }
     }
 

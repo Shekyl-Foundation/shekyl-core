@@ -60,6 +60,15 @@ pub enum DaemonError {
     /// own, including the view listener to set. Not a refused connection,
     /// and not a hint to start another daemon.
     Service(String),
+    /// The enrolled channel refused. The sentence is the fault's own.
+    /// `hint` is the start-the-daemon line when this machine's node did
+    /// not answer.
+    Channel {
+        /// Why the channel did not carry the call.
+        fault: ChannelFault,
+        /// Recovery copy for a loopback leg that did not answer.
+        hint: Option<String>,
+    },
     Other(String),
 }
 
@@ -100,6 +109,13 @@ impl fmt::Display for DaemonError {
                 "The daemon has no method {method}: it is on another RPC version than this \
                  build; align the two."
             ),
+            Self::Channel { fault, hint } => {
+                write!(f, "{fault}")?;
+                if let Some(hint) = hint {
+                    write!(f, "\n{hint}")?;
+                }
+                Ok(())
+            }
             Self::Other(detail) => write!(f, "Daemon client error: {detail}"),
         }
     }
@@ -229,7 +245,11 @@ impl DaemonClient {
     /// A channel opens with the grants enrolled on the daemon. Later calls
     /// reuse the pool, including the status reads that disclose data by grant.
     fn open(&self) -> Result<Connection, DaemonError> {
-        match self.target.resolve().map_err(Self::channel_error)? {
+        match self
+            .target
+            .resolve()
+            .map_err(|fault| self.channel_error(fault))?
+        {
             ResolvedDaemon::Address { url, proxy } => {
                 if url.is_empty() {
                     return Err(DaemonError::NotConfigured);
@@ -241,7 +261,7 @@ impl DaemonClient {
             }
             ResolvedDaemon::Channel(target) => Ok(Connection::Channel(
                 ChannelDaemon::connect_enrolled(&target, DAEMON_TIMEOUT)
-                    .map_err(Self::channel_error)?,
+                    .map_err(|fault| self.channel_error(fault))?,
             )),
             ResolvedDaemon::Owner(target) => Ok(Connection::Owner(target)),
         }
@@ -314,7 +334,7 @@ impl DaemonClient {
                 .map_err(|error| reply_error(error, |fault| self.owner_fault(fault))),
             Connection::Channel(channel) => channel
                 .json_rpc(name, &NoParams)
-                .map_err(|error| reply_error(error, Self::channel_error)),
+                .map_err(|error| reply_error(error, |fault| self.channel_error(fault))),
         }
     }
 
@@ -336,8 +356,31 @@ impl DaemonClient {
     // CLIPPY: `map_err` and `reply_error` pass the owned fault. The sentence
     // borrows it; the signature is the callback's.
     #[allow(clippy::needless_pass_by_value)]
-    fn channel_error(fault: ChannelFault) -> DaemonError {
-        DaemonError::Other(fault.to_string())
+    /// The channel's own sentence. A loopback leg that did not answer also
+    /// carries the start-the-daemon hint, the same hint the owner socket
+    /// attaches to "not running".
+    fn channel_error(&self, fault: ChannelFault) -> DaemonError {
+        let hint = match &fault {
+            ChannelFault::Unreachable { at, .. } if self.answers_on_this_machine(at) => {
+                self.down_hint.clone()
+            }
+            _ => None,
+        };
+        DaemonError::Channel { fault, hint }
+    }
+
+    /// Whether `at` is this machine's node: the configured target is this
+    /// computer, or the leg that failed is loopback.
+    fn answers_on_this_machine(&self, at: &str) -> bool {
+        match &self.target {
+            DaemonTarget::Owner(_) | DaemonTarget::ThisComputer { .. } => true,
+            DaemonTarget::Channel { node, .. } => {
+                is_loopback_endpoint(&node.leg.to_string()) || is_loopback_endpoint(at)
+            }
+            DaemonTarget::Address { url, .. } => {
+                is_loopback_endpoint(url) || is_loopback_endpoint(at)
+            }
+        }
     }
 
     /// Call method `M` after the handshake.
@@ -370,7 +413,7 @@ impl DaemonClient {
                 .map_err(|error| reply_error(error, |fault| self.owner_fault(fault))),
             Connection::Channel(channel) => channel
                 .call::<M>(request)
-                .map_err(|error| reply_error(error, Self::channel_error)),
+                .map_err(|error| reply_error(error, |fault| self.channel_error(fault))),
         }
     }
 
@@ -661,6 +704,69 @@ mod tests {
         assert!(
             matches!(down, DaemonError::ConnectionRefused { hint: Some(_), .. }),
             "{down:?}"
+        );
+    }
+
+    /// A channel fault is its own sentence. A loopback miss carries the
+    /// start-the-daemon hint. Red edit: map the fault through
+    /// `DaemonError::Other`, and the sentence is prefixed "Daemon client
+    /// error".
+    #[test]
+    fn a_channel_fault_keeps_its_sentence() {
+        use shekyl_rpc_transport::channel::ChannelFault;
+        let client = super::DaemonClient::new(
+            shekyl_rpc_transport::DaemonTarget::ThisComputer {
+                network: super::Network::Testnet,
+                key_file: None,
+            },
+            Some("Start the testnet daemon with: shekyld --network testnet".into()),
+            super::Network::Testnet,
+        )
+        .expect("this computer");
+        let enrolled = client.channel_error(ChannelFault::NotEnrolled {
+            fingerprint: [9; 32],
+        });
+        let shown = enrolled.to_string();
+        assert!(
+            shown.contains("shekyl-cli rpc client add"),
+            "the enrollment command is the sentence: {shown}"
+        );
+        assert!(
+            !shown.contains("Daemon client error"),
+            "the sentence is not an internal client error: {shown}"
+        );
+        assert!(
+            !shown.contains("Start the testnet daemon"),
+            "enrollment is not a hint to start a daemon: {shown}"
+        );
+
+        let down = client.channel_error(ChannelFault::Unreachable {
+            at: "127.0.0.1:12029".into(),
+            cause: "connection refused".into(),
+        });
+        let shown = down.to_string();
+        assert!(
+            shown.contains("did not answer"),
+            "the channel sentence stays: {shown}"
+        );
+        assert!(
+            shown.contains("Start the testnet daemon"),
+            "a loopback miss names how to start the node: {shown}"
+        );
+
+        let remote = super::DaemonClient::new(
+            shekyl_rpc_transport::DaemonTarget::fixture_address("http://203.0.113.5:18081"),
+            None,
+            super::Network::Testnet,
+        )
+        .expect("a named node");
+        let remote_down = remote.channel_error(ChannelFault::Unreachable {
+            at: "203.0.113.5:18081".into(),
+            cause: "timed out".into(),
+        });
+        assert!(
+            matches!(remote_down, DaemonError::Channel { hint: None, .. }),
+            "a remote leg gets no start-the-daemon hint: {remote_down:?}"
         );
     }
 }

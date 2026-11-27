@@ -897,6 +897,7 @@ fn first_stake_rpc_error(error: shekyl_engine_core::FirstStakeError) -> WalletRp
         // A failed fee query: the build path's mapping, so the same
         // cause answers the same code — never the "fund and retry"
         // misdiagnosis (rule 82).
+        E::Daemon(fault) => shekyl_wallet_contract::error::from_daemon_fault(fault, "stake"),
         E::FeeEstimate(e) => e.into(),
         // The daemon ANSWERED and the wallet refused the answer. The
         // same -29102/-29109 split the send path draws, for the same
@@ -980,11 +981,17 @@ fn stake_fill_error(fill: shekyl_engine_core::CompleteTreeFillError) -> WalletRp
         C::Fill(F::LocalNodeRequired) => WalletRpcError::StakeLocalNodeRequired {
             detail: shekyl_rpc_transport::PLAINTEXT_NOT_THIS_COMPUTER.to_owned(),
         },
-        C::Fill(F::Channel(fault)) => WalletRpcError::Channel(fault),
-        C::Fill(F::DaemonSyncing) => WalletRpcError::StakeDaemonSyncing,
-        C::Fill(F::DaemonUnreachable { detail }) => {
-            WalletRpcError::StakeDaemonUnreachable { detail }
+        // A plain miss is this verb's unreachable code. A fault that names
+        // its own remedy uses the shared catalog, so enrollment is not
+        // reported as "the node could not be read".
+        C::Fill(F::Daemon {
+            fault: shekyl_rpc_client::DaemonFault::Unreachable,
+            detail,
+        }) => WalletRpcError::StakeDaemonUnreachable { detail },
+        C::Fill(F::Daemon { fault, detail }) => {
+            shekyl_wallet_contract::error::from_daemon_fault(fault, &detail)
         }
+        C::Fill(F::DaemonSyncing) => WalletRpcError::StakeDaemonSyncing,
         C::Fill(F::Discarded { shard }) => WalletRpcError::StakeShardDiscarded {
             shard: shard.to_raw(),
         },

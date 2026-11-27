@@ -52,7 +52,7 @@ use tokio::sync::RwLock;
 use std::sync::Arc;
 
 use super::prpc::{open_chain_reader, ChainOpen};
-use super::pscan::block_source::{daemon_claimed_tip, BlockSourceError};
+use super::pscan::block_source::daemon_claimed_tip;
 use super::pscan::start::load_pscan_state_for_engine;
 use super::signer::EngineSignerKind;
 use super::stake_engine::body_store_actor::BodyStoreHandle;
@@ -102,19 +102,21 @@ pub enum FillFailure {
     /// The fill's plaintext daemon address is not this computer.
     #[error("{}", shekyl_rpc_transport::PLAINTEXT_NOT_THIS_COMPUTER)]
     LocalNodeRequired,
-    /// The enrolled channel refused before the fill could read the node.
-    #[error("{0}")]
-    Channel(shekyl_rpc_client::WalletChannelFault),
+    /// The node could not be read. `fault` is the remedy; `detail` is the
+    /// log line. A channel fault, a peer check, and a service at this
+    /// computer keep their own sentences ([`DaemonFault::has_own_remedy`]).
+    /// A plain miss stays "could not be read".
+    #[error("{}", read_sentence(*fault, detail))]
+    Daemon {
+        /// What the operator does about this read.
+        fault: shekyl_rpc_client::DaemonFault,
+        /// The failure's own rendering, including a channel's leg.
+        detail: String,
+    },
     /// The node reports that it is still synchronizing, so it has no tip to
     /// judge finality against.
     #[error("the node is still synchronizing; retry once it has caught up")]
     DaemonSyncing,
-    /// The node could not be read.
-    #[error("the node could not be read: {detail}")]
-    DaemonUnreachable {
-        /// The transport's reason.
-        detail: String,
-    },
     /// The persona scan's sealed state would not load.
     #[error("the persona scan's state could not be read: {detail}")]
     ScanStateUnreadable {
@@ -264,11 +266,46 @@ impl FillContext {
     }
 }
 
+/// The sentence [`FillFailure::Daemon`] shows. A fault with its own remedy
+/// is that sentence. A plain miss keeps the "could not be read" frame, and
+/// `detail` stays the transport line the wallet's unreachable code carries.
+fn read_sentence(fault: shekyl_rpc_client::DaemonFault, detail: &str) -> String {
+    if fault.has_own_remedy() {
+        fault.to_string()
+    } else {
+        format!("the node could not be read: {detail}")
+    }
+}
+
+/// One reading of an [`RpcError`] for a fill. The fault is the remedy.
+fn read_of_rpc(error: &shekyl_rpc_client::RpcError) -> FillFailure {
+    let fault = error.fault();
+    if fault.has_own_remedy() {
+        tracing::warn!(detail = error.detail(), %fault, "the fill could not read the node");
+    }
+    FillFailure::Daemon {
+        fault,
+        detail: error.log_line(),
+    }
+}
+
+/// One reading of the tip clock for a fill.
+fn read_of_source(error: super::pscan::block_source::BlockSourceError) -> FillFailure {
+    use super::pscan::block_source::BlockSourceError;
+    match error {
+        BlockSourceError::DaemonSyncing => FillFailure::DaemonSyncing,
+        BlockSourceError::Failed { fault, detail } => {
+            if fault.has_own_remedy() {
+                tracing::warn!(%detail, %fault, "the fill could not read the node");
+            }
+            FillFailure::Daemon { fault, detail }
+        }
+    }
+}
+
 fn failure_of(e: ShardFillError) -> FillFailure {
     match e {
-        ShardFillError::Daemon { source, .. } => FillFailure::DaemonUnreachable {
-            detail: source.to_string(),
-        },
+        ShardFillError::Daemon { source, .. } => read_of_rpc(&source),
         ShardFillError::Discarded { shard } => FillFailure::Discarded { shard },
         ShardFillError::Mismatch { shard, kind } => FillFailure::DaemonMismatch {
             shard,
@@ -303,11 +340,12 @@ where
                     ChainOpen::PlaintextNotLocal => FillFailure::LocalNodeRequired,
                     ChainOpen::Channel { fault, detail } => {
                         tracing::warn!(%detail, "the fill could not open the channel");
-                        FillFailure::Channel(fault)
+                        FillFailure::Daemon {
+                            fault: shekyl_rpc_client::DaemonFault::Channel(fault),
+                            detail,
+                        }
                     }
-                    ChainOpen::Unusable(error) => FillFailure::DaemonUnreachable {
-                        detail: error.to_string(),
-                    },
+                    ChainOpen::Unusable(error) => read_of_rpc(&error),
                 })?;
         let bodies = {
             let g = self_arc.read().await;
@@ -325,10 +363,7 @@ where
             Some(state) => (state.cursor().archival().clone(), state.synced_height()),
             None => (ArchivalFold::genesis(), BlockHeight::ZERO),
         };
-        let claimed = daemon_claimed_tip(&rpc).await.map_err(|e| match e {
-            BlockSourceError::DaemonSyncing => FillFailure::DaemonSyncing,
-            BlockSourceError::Source(detail) => FillFailure::DaemonUnreachable { detail },
-        })?;
+        let claimed = daemon_claimed_tip(&rpc).await.map_err(read_of_source)?;
         // The P-scan's own horizon expression, with consensus's cap: a close
         // below it sits at least the cap under the claimed tip.
         let final_horizon = claimed

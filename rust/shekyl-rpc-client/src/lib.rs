@@ -273,13 +273,27 @@ impl DaemonFault {
     /// "this computer". The same target answers the same way, so a caller
     /// keeps the fault and does not dial again. Narrower than
     /// [`Self::is_retryable`]: an identity refusal and a grant refusal are
-    /// also not retried, and they are not this.
+    /// also not retried, and they are not this. A channel fault that can
+    /// clear on retry is not this; it still keeps its sentence
+    /// ([`Self::has_own_remedy`]).
     #[must_use]
     pub const fn is_target_refusal(self) -> bool {
         if let Self::Channel(fault) = self {
             return fault.terminal();
         }
         matches!(self, Self::PeerCheck | Self::Service(_))
+    }
+
+    /// The operator's remedy is this fault's own sentence.
+    ///
+    /// Every channel fault is this, including one [`Self::is_retryable`]
+    /// says may clear: busy, closed, and over budget are channel facts, and
+    /// folding them into "the daemon did not answer" names the wrong action.
+    /// A peer check and a service at this computer are this, and they are
+    /// not retried.
+    #[must_use]
+    pub const fn has_own_remedy(self) -> bool {
+        matches!(self, Self::Channel(_) | Self::PeerCheck | Self::Service(_))
     }
 }
 
@@ -291,6 +305,19 @@ impl RpcError {
         match self {
             Self::Channel(_, detail) => detail,
             _ => "",
+        }
+    }
+
+    /// The sentence a log records. A channel fault keeps its leg or local
+    /// cause beside the sentence; every other failure's sentence already
+    /// includes what the log needs.
+    #[must_use]
+    pub fn log_line(&self) -> String {
+        let place = self.detail();
+        if place.is_empty() {
+            self.to_string()
+        } else {
+            format!("{self} ({place})")
         }
     }
 

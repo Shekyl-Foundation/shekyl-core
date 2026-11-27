@@ -287,7 +287,7 @@ impl<R: WalletChainReader + Sync> ServeSetPinner for EngineServeSetPinner<R> {
                 // ledger forgets under the fault the fetch returned.
                 let why = match &e {
                     crate::engine::emission_source::EmissionSourceError::Rpc(error)
-                        if error.fault().is_target_refusal() =>
+                        if error.fault().has_own_remedy() =>
                     {
                         TimelineBreak::from_facts_error(error)
                     }

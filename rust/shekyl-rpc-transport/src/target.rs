@@ -123,6 +123,61 @@ impl std::fmt::Debug for DaemonTarget {
 /// computer. It names no host and no credential.
 pub const PLAINTEXT_NOT_THIS_COMPUTER: &str = "This reads your own node. A plaintext address on another computer is not that node. Leave the daemon endpoint unset for this computer, or name the node with its bundle.";
 
+/// The enrolled channel for a local service, or `None` when the owner
+/// rendezvous is the door.
+///
+/// The owner socket wins when its path exists: the owner dial verifies the
+/// peer, including a stale socket. A service record is the door only when
+/// that path is absent. The record's channel must be loopback. An unreadable
+/// record is a refusal, so a caller cannot fall through to another transport.
+///
+/// # Errors
+///
+/// A malformed or unreadable service record, a channel that is not loopback,
+/// an unusable bundle, or an account identity that needs enrollment.
+pub fn service_channel(
+    local: &local::LocalTarget,
+    network: shekyl_network::Network,
+    key_file: Option<&std::path::Path>,
+) -> Result<Option<channel::ChannelTarget>, channel::ChannelFault> {
+    if let Some(owner) = local.path() {
+        match std::fs::symlink_metadata(owner) {
+            Ok(_) => return Ok(None),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(channel::ChannelFault::Local(format!(
+                    "cannot inspect the owner rendezvous {}: {error}",
+                    owner.display()
+                )))
+            }
+        }
+    }
+    let Some(record) = local.service()? else {
+        return Ok(None);
+    };
+    let service = record.channel.ok_or_else(|| {
+        channel::ChannelFault::Local(
+            "the local service has no channel listener. Set rpc-listen on the node to a loopback address"
+                .into(),
+        )
+    })?;
+    if !crate::listen::is_loopback_ip(service.address.ip()) {
+        return Err(channel::ChannelFault::Local(
+            "the service record must name a loopback channel".into(),
+        ));
+    }
+    let bundle = channel::bundle_from_bytes(&service.bundle).ok_or_else(|| {
+        channel::ChannelFault::Local("the local service published an invalid channel bundle".into())
+    })?;
+    channel::account_target(
+        network,
+        channel::Leg::ip(service.address, None),
+        bundle,
+        key_file,
+    )
+    .map(Some)
+}
+
 impl DaemonTarget {
     /// A plaintext daemon URL. The desktop wallet still calls this for an
     /// address a person typed. Wallet binaries build a [`Self::Channel`].
@@ -169,7 +224,7 @@ impl DaemonTarget {
             )?))),
             Self::ThisComputer { network, key_file } => {
                 let local = local::LocalTarget::this_computer(*network);
-                match local.wallet_channel(*network, key_file.as_deref())? {
+                match service_channel(&local, *network, key_file.as_deref())? {
                     Some(target) => Ok(ResolvedDaemon::Channel(Box::new(target))),
                     None => Ok(ResolvedDaemon::Owner(local)),
                 }
@@ -186,13 +241,17 @@ impl DaemonTarget {
     /// [`local::CALL_WITHIN`] when `None`. The same bound reaches the owner
     /// socket, the enrolled channel, and plaintext.
     ///
+    /// An enrolled channel is admitted here, under that bound. A key that
+    /// is not enrolled, a bundle that is not this node, and a leg that does
+    /// not answer fail as [`channel::ChannelFault`]. The owner socket and a
+    /// plaintext address do not dial here: a node that is not running, or a
+    /// failed peer check, is the first call's error.
+    ///
     /// # Errors
     ///
     /// A named address this transport cannot dial (see
-    /// [`HttpRpc::with_proxy`]). "This computer" does not fail here: a node
-    /// that is not running, a service, or a failed peer check is the first
-    /// call's error. An enrolled channel that is not yet enrolled fails here,
-    /// as [`channel::ChannelFault`].
+    /// [`HttpRpc::with_proxy`]), or [`channel::ChannelFault`] from admitting
+    /// an enrolled channel.
     pub async fn connect(&self, timeout: Option<Duration>) -> Result<DaemonTransport, RpcError> {
         self.resolve()?
             .open(timeout.unwrap_or(local::CALL_WITHIN))
@@ -237,9 +296,9 @@ impl ResolvedDaemon {
     /// carried as [`RpcError::Channel`].
     pub async fn open(self, within: Duration) -> Result<DaemonTransport, RpcError> {
         match self {
-            Self::Channel(target) => Ok(DaemonTransport::Channel(WalletChannel::new(
-                *target, within,
-            ))),
+            Self::Channel(target) => Ok(DaemonTransport::Channel(
+                WalletChannel::open(*target, within).await?,
+            )),
             Self::Owner(target) => Ok(DaemonTransport::ThisComputer(LocalRpc::within(
                 target, within,
             ))),

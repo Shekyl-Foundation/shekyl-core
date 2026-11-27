@@ -32,7 +32,9 @@ mod target;
 pub mod wallet_http;
 
 use http_client::{error_chain, HttpClient, HttpError, TransportTls};
-pub use target::{DaemonTarget, PlaintextGate, ResolvedDaemon, PLAINTEXT_NOT_THIS_COMPUTER};
+pub use target::{
+    service_channel, DaemonTarget, PlaintextGate, ResolvedDaemon, PLAINTEXT_NOT_THIS_COMPUTER,
+};
 
 /// A failure of the connection itself, classified where it is raised.
 ///
