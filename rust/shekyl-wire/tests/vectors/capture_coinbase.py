@@ -98,7 +98,11 @@ def start_daemon(workdir, addr, attempts=5):
         # dev_block_generate is an armed test lever. The row is set on this
         # spawn, and the announcement is checked once RPC is up.
         daemon = subprocess.Popen(
-            [SHEKYLD, "--network", "regtest", "--clearnet", "off", "--tor", "off",
+            # `--config-file none`: the default file is the machine's
+            # (`/etc/shekyl`), where a host's own regtest node keeps its
+            # settings.
+            [SHEKYLD, "--network", "regtest", "--config-file", "none",
+             "--clearnet", "off", "--tor", "off",
              "--dev-difficulty", "1", armed_lever.FLAG, "--mine-address", addr,
              "--data-dir", workdir,
              "--log-file", os.path.join(workdir, "shekyld.log"),

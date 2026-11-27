@@ -488,7 +488,10 @@ def _measure_with_probe(args, work, seed_dir, daemon, addr, subj_dir):
     # (a fresh chain is a fresh data directory). The daemon takes no sync-mode
     # option (IG-Q4): its constant is DRS-D9's, and each run's durability is the
     # one its daemon reports at start.
-    common = ["--network", "regtest", "--dev-difficulty", "1", "--p2p-local",
+    # `--config-file none`: the default file is the machine's (`/etc/shekyl`),
+    # where a host's own regtest node keeps its settings.
+    common = ["--network", "regtest", "--config-file", "none",
+              "--dev-difficulty", "1", "--p2p-local",
               "--tor", "off", "--log-level", args.log_level]
     (sp2p, srpc, bp2p, brpc), held = _reserve_ports(4)
     for sk in held:

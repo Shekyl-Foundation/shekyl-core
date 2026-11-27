@@ -51,7 +51,9 @@ rm -rf "$DATA"; mkdir -p -m 0700 "$DATA"
 # socket, so the daemon needs no session directory and never meets another
 # at the default rendezvous (RPC_CHANNEL.md section 7.1).
 mkdir -m 0700 "$DATA/sock"
-"$BIN" --network regtest --clearnet off --tor off --dev-difficulty 1 --dev-rpc \
+# `--config-file none`: the default file is the machine's (/etc/shekyl),
+# where a host's own regtest node keeps its settings.
+"$BIN" --network regtest --config-file none --clearnet off --tor off --dev-difficulty 1 --dev-rpc \
   --mine-address "$ADDR" \
   --rpc-admin-listen "127.0.0.1:$PORT" --rpc-socket-dir "$DATA/sock" \
   --data-dir "$DATA" --log-file "$DATA/shekyld.log" --log-level info < /dev/null > "$DATA/daemon.out" 2>&1 &

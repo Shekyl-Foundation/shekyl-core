@@ -109,6 +109,10 @@ class Daemon:
                 self.binary,
                 "--network",
                 "regtest",
+                # The default file is the machine's (`/etc/shekyl`), where a
+                # host's own regtest node keeps its settings.
+                "--config-file",
+                "none",
                 "--clearnet",
                 "off",
                 "--tor",

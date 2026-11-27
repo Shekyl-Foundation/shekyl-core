@@ -73,7 +73,10 @@ fn run_child_if_requested() {
     .iter()
     .map(std::ffi::OsString::from)
     .collect();
-    let status = shekyl_daemon::run::main(
+    // The default configuration file is the machine's on Unix
+    // (`/etc/shekyl`), whatever the platform says, and a host that runs a
+    // regtest node keeps its settings there. This daemon reads none of it.
+    let status = shekyl_daemon::run::main_loading(
         &args,
         &Platform {
             home: Some(dir),
@@ -81,6 +84,7 @@ fn run_child_if_requested() {
             session_dir: None,
             service_rendezvous: None,
         },
+        shekyl_daemon_config::load_default_file_unread,
     );
     std::process::exit(status);
 }

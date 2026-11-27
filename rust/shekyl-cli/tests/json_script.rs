@@ -322,6 +322,10 @@ impl SpawnedDaemon {
             .args([
                 "--network",
                 "testnet",
+                // The default file is the machine's (`/etc/shekyl`); a host
+                // that runs a testnet node keeps its settings there.
+                "--config-file",
+                "none",
                 "--clearnet",
                 "off",
                 "--tor",
