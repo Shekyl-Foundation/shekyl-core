@@ -24,6 +24,8 @@ use std::fmt;
 use std::sync::Mutex;
 
 use shekyl_node::NodeEnd;
+
+use crate::tor::SupervisorEnd;
 use shekyl_process::stop::{FirstStop, Inherited, Stops, Trigger};
 use tokio::sync::Notify;
 
@@ -44,6 +46,24 @@ pub enum StopCause {
     OwningConnectionClosed,
     /// A task the node owns ended on its own ([`shekyl_node::Node::ended`]).
     Fatal(NodeEnd),
+    /// The Tor supervisor, which the daemon starts beside the node, ended
+    /// on its own ([`crate::tor::Supervisor::ended`]).
+    TorEnded(SupervisorEnd),
+}
+
+impl StopCause {
+    /// Whether this stop makes the exit a failure: a task's own end, not an
+    /// operator's stop.
+    #[must_use]
+    pub fn fails_the_exit(&self) -> bool {
+        match self {
+            Self::Fatal(_) | Self::TorEnded(_) => true,
+            Self::Signal(_)
+            | Self::Requested
+            | Self::RendezvousGone
+            | Self::OwningConnectionClosed => false,
+        }
+    }
 }
 
 impl fmt::Display for StopCause {
@@ -56,6 +76,7 @@ impl fmt::Display for StopCause {
                 f.write_str("the process that started this daemon closing its owning connection")
             }
             Self::Fatal(end) => write!(f, "{end}"),
+            Self::TorEnded(end) => write!(f, "{end}"),
         }
     }
 }
@@ -129,6 +150,12 @@ pub fn owning_connection_closed() {
 /// a failure, as does the arm that reads the node's end directly.
 pub fn fatal(end: NodeEnd) {
     latch(StopCause::Fatal(end));
+}
+
+/// The Tor supervisor ended on its own, as `end` says. Latched as
+/// [`fatal`] latches a node task's end.
+pub fn tor_ended(end: SupervisorEnd) {
+    latch(StopCause::TorEnded(end));
 }
 
 /// The program's name in the lines the start says about its stops.

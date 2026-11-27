@@ -58,7 +58,7 @@ impl Drive {
         let Some(service) = self.service.clone() else {
             return Input::ProbeNotDialed;
         };
-        let Some(proxy) = self.network.managed_route(self.probe_pair.shared()) else {
+        let Some(proxy) = self.network.managed_route(self.boot().probe_pair.shared()) else {
             return Input::ProbeNotDialed;
         };
         let Some(mut handshake) = self.network.mint_probe() else {

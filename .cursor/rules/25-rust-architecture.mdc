@@ -57,7 +57,10 @@ New functionality:
   words, which are the words the exit line quotes. A task whose end is
   silent leaves a node that is up and does nothing: on 2026-11-02 an
   ingest service stopped on a full disk and the daemon answered RPC
-  from the old tip for 34 minutes.
+  from the old tip for 34 minutes. The Tor supervisor, which the daemon
+  starts beside the node rather than inside it, reports its end the same
+  way through its own `Supervisor::ended()`, and the daemon's one wait
+  (`shekyl-daemon` `run.rs` `run_or_stop`) reads both.
 - **A feature never changes a public type's shape.** A variant of a
   `pub` enum, and a `pub` field of a `pub` struct, carries no
   `#[cfg(...)]` that names a feature: it exists in every build, and the

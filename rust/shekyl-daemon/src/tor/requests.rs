@@ -273,7 +273,7 @@ impl Drive {
         let plan = directory.plan(self.kept.take());
         let events = self.events.clone();
         let data_dir = self.data_dir.clone();
-        let guard_state = self.guard_state.clone();
+        let guard_state = self.boot().guard_state.clone();
         let (abandon, abandoned) = watch::channel(false);
         self.launch = Some((number, abandon));
         self.hold_later(number, async move {
@@ -414,7 +414,7 @@ impl Drive {
             return Some(vec![Input::ForwardAbsent]);
         }
         tracing::info!(target: "tor", "publishing this node's onion again");
-        let onion = Arc::clone(&self.onion);
+        let onion = Arc::clone(&self.boot().onion);
         self.answer_later(number, async move {
             Answer::Inputs(match asker.delete_onion(&onion).await {
                 Ok(()) => Vec::new(),
@@ -440,13 +440,13 @@ impl Drive {
         let Some(forward) = self.forward else {
             return Some(vec![Input::ForwardAbsent]);
         };
-        let service = self.onion.service_id().clone();
+        let service = self.boot().onion.service_id().clone();
         self.rounds = Some(match &self.rounds {
             Some(previous) => previous.next_publication(service.clone()),
             None => UploadRounds::new(service.clone()),
         });
         self.service = Some(service);
-        let onion = Arc::clone(&self.onion);
+        let onion = Arc::clone(&self.boot().onion);
         let virtual_port = self.virtual_port;
         self.answer_later(number, async move {
             let outcome = asker

@@ -36,7 +36,7 @@ use shekyl_p2p::{
     DownCause, LinkCensus, LinkTally, OriginVerdict, PathFact, PathReading as Reading,
     PerConnector, SupervisorFeeds, TOR_SOCKS_TIMEOUT,
 };
-use shekyl_timing_engine::{Clock, MonotonicClock, OwnerClass};
+use shekyl_timing_engine::{Clock, EngineError, MonotonicClock, OwnerClass};
 use shekyl_tor_control_client::binary::{
     discover_and_verify, discover_and_verify_at, TorBinaryError,
 };
@@ -177,9 +177,96 @@ pub fn prepare(persistent_onion: Option<OnionIdentity>) -> (Prepared, Supervisor
 /// down.
 pub struct Supervisor {
     owner: Owner,
-    task: JoinHandle<()>,
+    /// The loop's task, until [`Self::ended`] has read its end.
+    task: Option<JoinHandle<Result<(), SupervisorEnd>>>,
     /// Whether it runs this node's Tor (`tor = managed`).
     managed: bool,
+}
+
+/// Why the supervisor ended while the daemon ran (rule 25: a long-lived task
+/// reports its end). The daemon stops on it and exits failed: with `tor =
+/// managed` and clearnet off, a node without its supervisor has no network,
+/// and under every setting `daemon_status` answers "not ready".
+///
+/// Its own type, not a `shekyl_node::NodeEnd` variant: the daemon starts
+/// the supervisor beside the node, not inside it, and the daemon's wait
+/// reads it (`run.rs`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SupervisorEnd {
+    /// The node's timing engine refused the supervisor's registration.
+    NoScheduler(EngineError),
+    /// The operating system's random source refused the managed Tor's
+    /// per-boot onion key. There is no fallback: a weaker source would mint
+    /// a guessable key.
+    NoOnionKey,
+    /// The operating system's random source refused the isolation pair the
+    /// managed Tor's probe dials on.
+    NoProbeIsolation,
+    /// The loop returned though no stop was asked. The loop ends only when
+    /// its queue closes, and only [`Supervisor::shutdown`] or dropping the
+    /// supervisor closes it, so this is a broken promise, not an operating
+    /// condition.
+    Returned,
+    /// The loop panicked, in the panic's own words. A shipped build aborts
+    /// the process on a panic, so this arm is reached only where panics
+    /// unwind.
+    Panicked(String),
+    /// The runtime cancelled the loop's task.
+    Cancelled,
+}
+
+impl SupervisorEnd {
+    /// What the operator does about it (rule 82), said after the end.
+    #[must_use]
+    pub fn remedy(&self) -> &'static str {
+        match self {
+            Self::NoOnionKey | Self::NoProbeIsolation => {
+                "Check that the system's random source works, then start the daemon again"
+            }
+            Self::NoScheduler(_) | Self::Returned | Self::Panicked(_) | Self::Cancelled => {
+                "Start the daemon again; if this repeats, report it with this log"
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for SupervisorEnd {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoScheduler(error) => write!(
+                f,
+                "the Tor supervisor did not start: the node's timing engine refused it ({error:?})"
+            ),
+            Self::NoOnionKey => f.write_str(
+                "the Tor supervisor did not start: the system's random source refused this node's onion key",
+            ),
+            Self::NoProbeIsolation => f.write_str(
+                "the Tor supervisor did not start: the system's random source refused its probe's isolation",
+            ),
+            Self::Returned => f.write_str("the Tor supervisor stopped though no stop was asked"),
+            Self::Panicked(words) => write!(f, "the Tor supervisor panicked: {words}"),
+            Self::Cancelled => f.write_str("the Tor supervisor's task was cancelled"),
+        }
+    }
+}
+
+/// The end a joined loop task reports. Read only while the daemon runs: the
+/// supervisor's queue is still open, so an `Ok` is a return nobody asked for.
+fn joined_end(joined: Result<Result<(), SupervisorEnd>, tokio::task::JoinError>) -> SupervisorEnd {
+    match joined {
+        Ok(Err(end)) => end,
+        Ok(Ok(())) => SupervisorEnd::Returned,
+        Err(error) if error.is_panic() => {
+            let payload = error.into_panic();
+            let words = payload
+                .downcast_ref::<&str>()
+                .map(|words| (*words).to_owned())
+                .or_else(|| payload.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "a panic with no message".to_owned());
+            SupervisorEnd::Panicked(words)
+        }
+        Err(_) => SupervisorEnd::Cancelled,
+    }
 }
 
 impl Supervisor {
@@ -203,13 +290,40 @@ impl Supervisor {
         self.owner.ask_status()?.await.ok()
     }
 
+    /// Resolves when the loop has ended on its own, with why; never, once
+    /// it has. Only the daemon's wait reads it, while the daemon runs: the
+    /// stop ([`Self::shutdown`]) is not an end. Cancel-safe: dropped before
+    /// the loop ends, it leaves the task to the next call or the stop.
+    pub async fn ended(&mut self) -> SupervisorEnd {
+        let Some(task) = self.task.as_mut() else {
+            return std::future::pending().await;
+        };
+        let joined = task.await;
+        self.task = None;
+        joined_end(joined)
+    }
+
+    /// A supervisor over `task`, for the daemon's wait tests: the task
+    /// stands in for the loop, and its end is the loop's.
+    #[cfg(test)]
+    pub(crate) fn over_task(task: JoinHandle<Result<(), SupervisorEnd>>) -> Self {
+        let (owner, _inbox, _feeds) = inbox::inbox();
+        Self {
+            owner,
+            task: Some(task),
+            managed: false,
+        }
+    }
+
     /// Stop Tor and wait for the directory to be torn down.
     pub async fn shutdown(self) {
         let Self {
             mut owner, task, ..
         } = self;
         owner.stop();
-        let _joined = task.await;
+        if let Some(task) = task {
+            let _joined = task.await;
+        }
     }
 }
 
@@ -340,21 +454,18 @@ pub fn begin(
     let managed = matches!(supervises, Supervises::Managed { .. });
     let Prepared { owner, inbox, .. } = prepared;
     let data_dir = data_dir.to_path_buf();
-    let task = handle.spawn(async move {
-        drive(
-            supervises,
-            policy(),
-            clearnet_on,
-            virtual_port,
-            data_dir,
-            inbox,
-            network,
-        )
-        .await;
-    });
+    let task = handle.spawn(drive(
+        supervises,
+        policy(),
+        clearnet_on,
+        virtual_port,
+        data_dir,
+        inbox,
+        network,
+    ));
     Supervisor {
         owner,
-        task,
+        task: Some(task),
         managed,
     }
 }
@@ -526,6 +637,8 @@ enum PinSource {
     Unchecked(shekyl_tor_control_client::binary::VerifiedTorBinary),
 }
 
+/// The loop: started, then run until its stop. A start that cannot be made
+/// is the supervisor's end.
 async fn drive(
     supervises: Supervises,
     policy: Policy,
@@ -534,8 +647,8 @@ async fn drive(
     data_dir: PathBuf,
     inbox: Inbox,
     network: Network,
-) {
-    if let Some(drive) = Drive::start(
+) -> Result<(), SupervisorEnd> {
+    Drive::start(
         supervises,
         policy,
         clearnet_on,
@@ -543,15 +656,62 @@ async fn drive(
         data_dir,
         inbox,
         network,
-    ) {
-        drive.run().await;
+    )?
+    .run()
+    .await;
+    Ok(())
+}
+
+/// What a managed Tor holds for the boot: the binary's source, the onion
+/// and its guards, and the probe's isolation pair. Under `off` or an
+/// operator's Tor the supervisor runs no Tor and holds none of it.
+struct ManagedBoot {
+    /// Where the binary comes from.
+    pin: PinSource,
+    /// The boot's onion identity: the keypair Tor is handed on every
+    /// publish, held until the daemon stops. Shared with the publish's task,
+    /// never copied.
+    onion: Arc<OnionIdentity>,
+    /// A persistent onion's kept guards, handed to every launch; `None` for
+    /// a per-boot onion.
+    guard_state: Option<GuardState>,
+    /// The probe's isolation pair, held beside the onion for the boot.
+    probe_pair: IsolationPair,
+}
+
+impl ManagedBoot {
+    /// The boot's secrets for a managed Tor: a persistent onion and its
+    /// guards, or a new onion; and the probe's isolation pair, minted beside
+    /// the onion and held with it for the boot (§4.5), so the probe's
+    /// circuits are its own.
+    fn mint(pin: PinSource, onion: OnionSource, data_dir: &Path) -> Result<Self, SupervisorEnd> {
+        // A persistent onion keeps its guards beside the directory cache, in
+        // a directory of its own (`TSR-Q2` as amended); a per-boot onion keeps
+        // none. Both mints fail only when the random source refuses.
+        let (onion, guard_state) = match onion {
+            OnionSource::Persistent(onion) => {
+                let guards = GuardState::for_onion(data_dir, onion.service_id().as_str());
+                (onion, Some(guards))
+            }
+            OnionSource::PerBoot => (
+                DaemonTorControl::mint_identity().map_err(|_| SupervisorEnd::NoOnionKey)?,
+                None,
+            ),
+        };
+        let probe_pair = IsolationPair::mint().map_err(|_| SupervisorEnd::NoProbeIsolation)?;
+        Ok(Self {
+            pin,
+            onion: Arc::new(onion),
+            guard_state,
+            probe_pair,
+        })
     }
 }
 
 impl Drive {
     /// The driver, its core started and the network's state at start
-    /// folded; `None`, said, when the boot's secrets or a scheduler are
-    /// not to be had.
+    /// folded; the supervisor's end when a scheduler or a managed Tor's
+    /// secrets are not to be had.
     fn start(
         supervises: Supervises,
         policy: Policy,
@@ -560,43 +720,17 @@ impl Drive {
         data_dir: PathBuf,
         inbox: Inbox,
         network: Network,
-    ) -> Option<Self> {
+    ) -> Result<Self, SupervisorEnd> {
         let engine = network.engine();
-        let owner = match engine.register(OwnerClass::Housekeeping) {
-            Ok(owner) => owner,
-            Err(error) => {
-                tracing::error!(target: "global", "the Tor supervisor has no scheduler: {error:?}");
-                return None;
-            }
-        };
-        let (tor, binary, onion) = match supervises {
-            Supervises::Managed { pin, onion } => (TorSetting::Managed, Some(pin), onion),
-            Supervises::Unmanaged(setting) => (setting, None, OnionSource::PerBoot),
-        };
-        // A persistent onion keeps its guards beside the directory cache, in
-        // a directory of its own (`TSR-Q2` as amended); a per-boot onion keeps
-        // none.
-        let (onion, guard_state) = match onion {
-            OnionSource::Persistent(onion) => {
-                let guards = GuardState::for_onion(&data_dir, onion.service_id().as_str());
-                (onion, Some(guards))
-            }
-            OnionSource::PerBoot => match DaemonTorControl::mint_identity() {
-                Ok(onion) => (onion, None),
-                Err(error) => {
-                    tracing::error!(target: "global", "the Tor supervisor has no onion key: {error}");
-                    return None;
-                }
-            },
-        };
-        // The probe's isolation pair, minted beside the onion and held with it
-        // for the boot (§4.5): the probe's circuits are its own.
-        let probe_pair = match IsolationPair::mint() {
-            Ok(pair) => pair,
-            Err(error) => {
-                tracing::error!(target: "global", "the Tor supervisor has no probe isolation: {error}");
-                return None;
-            }
+        let owner = engine
+            .register(OwnerClass::Housekeeping)
+            .map_err(SupervisorEnd::NoScheduler)?;
+        let (tor, managed) = match supervises {
+            Supervises::Managed { pin, onion } => (
+                TorSetting::Managed,
+                Some(ManagedBoot::mint(pin, onion, &data_dir)?),
+            ),
+            Supervises::Unmanaged(setting) => (setting, None),
         };
         let connectors = Connectors { tor, clearnet_on };
         let clock = owner.clock().clone();
@@ -608,16 +742,13 @@ impl Drive {
             core,
             step,
             clock,
-            binary,
+            managed,
             data_dir,
-            guard_state,
             events: poster.events(),
             poster,
             inbox,
             timer,
             forward: None,
-            onion: Arc::new(onion),
-            probe_pair,
             virtual_port,
             network,
             service: None,
@@ -640,7 +771,17 @@ impl Drive {
         // (`DIALER_OUTAGE_EVIDENCE.md` §6.1).
         let first = drive.changed_inputs();
         drive.fold_after_start(first, started);
-        Some(drive)
+        Ok(drive)
+    }
+
+    /// What the managed Tor holds for the boot. The core asks for a pin, a
+    /// launch, a publish or a probe only while it runs this node's Tor
+    /// (`AbsentDuty::Unmanaged` asks for none); an ask without one is that
+    /// promise broken.
+    fn boot(&self) -> &ManagedBoot {
+        self.managed
+            .as_ref()
+            .expect("the Tor supervisor was asked to run a Tor under a tor setting that runs none")
     }
 }
 
@@ -650,12 +791,10 @@ struct Drive {
     step: Step,
     /// The process clock: the network's, which the dialer's stamps are on.
     clock: MonotonicClock,
-    /// The binary's source, for a Tor this daemon launches.
-    binary: Option<PinSource>,
+    /// What a Tor this daemon launches holds for the boot; `None` under
+    /// `off` or an operator's Tor.
+    managed: Option<ManagedBoot>,
     data_dir: PathBuf,
-    /// A persistent onion's kept guards, handed to every launch; `None` for
-    /// a per-boot onion.
-    guard_state: Option<GuardState>,
     /// The sink Tor's control connection routes its events into. Each
     /// incarnation gets a clone; the drop count spans them all.
     events: EventSink,
@@ -668,12 +807,6 @@ struct Drive {
     timer: Timer,
     /// The zone host's forward listener, once bound.
     forward: Option<SocketAddr>,
-    /// The boot's onion identity: the keypair Tor is handed on every
-    /// publish, held until the daemon stops. Shared with the publish's task,
-    /// never copied.
-    onion: Arc<OnionIdentity>,
-    /// The probe's isolation pair, held beside the onion for the boot.
-    probe_pair: IsolationPair,
     virtual_port: u16,
     /// The network the route, the onion and the inbound facet are
     /// published on, and the probe is minted and dialed through.
@@ -1081,14 +1214,9 @@ impl Drive {
         inputs
     }
 
-    /// Check the binary a managed Tor launches. The core asks for a pin
-    /// only while it runs this node's Tor (`AbsentDuty::Unmanaged` asks
-    /// for none). A pin with no binary is that promise broken.
+    /// Check the binary a managed Tor launches ([`Self::boot`]).
     fn pin(&mut self) -> Input {
-        let source = self.binary.as_ref().expect(
-            "the Tor supervisor was asked to check a Tor binary under a tor setting that runs none",
-        );
-        let verified = match source {
+        let verified = match &self.boot().pin {
             PinSource::Discover(Some(path)) => discover_and_verify_at(path),
             PinSource::Discover(None) => discover_and_verify(),
             #[cfg(all(test, unix))]
