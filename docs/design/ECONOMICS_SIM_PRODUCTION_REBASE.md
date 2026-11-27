@@ -5743,7 +5743,25 @@ compares them: each table's pin reads its own file.
 - **The view's 135 years go to a CSV that an on-demand test helper writes from the two slice summaries** (`lifecycle_csv_from_two_summaries`). The helper refuses a production summary whose table is not the committed slice's.
 - **The run regenerates no fixture and no pin.** The production slice it folds is byte-identical to the committed narration.
 
-**The family is `SS-1`…`SS-10`.** `SS-1`…`SS-7` are the brief's P1–P7, written by the design review against #1476's full table. `SS-8`…`SS-10` are the sim agent's. The sim agent wrote its own figures for all ten against the slice's seed-1 rows before any held-arm fold, and dated them. They are the last column of §5.38.1's table.
+**The predictions, family `SS-1`…`SS-10`.** Each was written and dated before any held-arm fold.
+- **`SS-1`…`SS-7`** are the brief's P1–P7, written by the design review against #1476's full table (the median across seeds).
+- **`SS-8`…`SS-10`** are the sim agent's.
+- **The sim agent's figures for `SS-1`…`SS-7`** were written against the slice's own seed-1 rows, which the run compares.
+
+All are A-honest, gross, N = 90 unless named.
+
+| # | Measure | Design review | Sim agent |
+| --- | --- | --- | --- |
+| SS-1 | Half-supply year, GB a day, archive at y135, burn | unchanged | unchanged; GB a day and the archive within 0.1 %; burn within 0.002 |
+| SS-2 | Stakers' emission y10 / y30 / y60, SKL a block | about 85 / 24 / 3.7 | 84.7 / 24.2 / 3.70 |
+| SS-3 | Miner income y10 / y30 / y60 / y135 | about 481 / 137 / 20.9 / 0.51 | 481.3 / 137.6 / 21.0 / 0.51 |
+| SS-4 | Standard fee | about −1 % in y1, −10 % at y10, −14 % from y30 on | −0.9 % in y1, −10.0 % at y10, −14.4 % at y30, −15.0 % from y60 on, ±1.7 % from the lattice at y135 |
+| SS-5 | Tail ratio at y100 and y135 | within 5 % | within 2 %, plus the lattice |
+| SS-6 | Stakers' pay per GB-year y10 / y30 (/ y60) | about 15,000 / 1,400 | 14,200 / 1,310 / 99 |
+| SS-7 | B and every C arm | the same movement as A-honest, within 1 % | the same money ratios within 1 %; a C1 destination that pays stakers the penalty moves the stakers' totals less; A-stuffed's bloat unchanged |
+| SS-8 | Inherited zone, gross: production's transition near y19 | (none) | comes later, by under three years; P1's "unchanged" fails there |
+| SS-9 | Inherited zone, miner's net | (none) | carried bodies, median and penalty unmoved; money moves by the ratios above |
+| SS-10 | The view's new measures | (none) | shares 0.15 / 0.85 flat; destroyed scales like the fees; net issuance equal to two figures, slightly higher held in the tail era |
 
 **The sim agent's mechanism.**
 - **The paid emission is blind to the split.** `already_generated` advances by both legs. Only a change in what the template lists, and so in the penalty, moves it.
@@ -5770,38 +5788,39 @@ e9e4c199ed5070bde6653b40825f42615a850eb01722131cc16dbdf8382ca618  lifecycle.csv
 
 All figures below are A-honest, gross, N = 90 unless named; seed 1.
 
-| # | Measure | Production | Held, measured | Design review | Sim agent |
-| --- | --- | --- | --- | --- | --- |
-| SS-1 | Half-supply year; archive at y135; burn | 11.06; 22,291.2 GB; the slice's | 11.06; 22,291.2 GB; identical at every printed year | held | held |
-| SS-2 | Stakers' emission y10 / y30 / y60 | 31.19 / 1.084 / 0.007 | 84.71 / 24.22 / 3.70 | held (85 / 24 / 3.7) | held (84.7 / 24.2 / 3.70) |
-| SS-3 | Miner income y10 / y30 / y60 / y135 | 534.97 / 160.82 / 24.73 / 0.60 | 481.31 / 137.62 / 21.03 / 0.51 | held | held |
-| SS-4 | Standard fee change, y1 / y10 / y30 / y60 / y100 / y135 | | −0.9 % / −10.0 % / −14.5 % / −15.1 % / −8.4 % / 0.0 % | held to y60; **missed from y100** | held to y60; **missed from y100** |
-| SS-5 | Miner's-net reward over p95 fees, y100 / y135 | 182.4 / 162.9 | 157.5 / 138.5 (−13.7 % / −15.0 %) | **missed** (within 5 %) | **missed** (within 2 %) |
-| SS-6 | Stakers' pay per GB-year y10 / y30 / y60 | 5,232 / 62.94 / 0.63 | 14,176 / 1,310 / 99.1 | missed, low by 5–6 % (15,000 / 1,400) | held (14,200 / 1,310 / 99) |
-| SS-7 | B, C1, C2, C3, together, A-stuffed | | every money ratio within 1 % of A-honest's, to y60; A-stuffed's archive −0.04 % | held to y60 | held to y60 |
-| SS-8 | Inherited zone, A-honest gross: production's y19 transition | | **never reached by y135** | (none) | **missed** (later by under 3 years) |
-| SS-8 | Inherited zone, B gross | transition at y11 | at y16; the end state is the same | (none) | missed on size (5 years) |
-| SS-9 | Inherited zone, miner's net | | carried bodies, median, archive and burn unmoved; money by r | (none) | held |
-| SS-10 | The new measures | | shares 0.15 / 0.85 flat; destroyed by r to y60 (0.8996 at y10); net issuance equal to four figures | (none) | held, but for "held net issuance slightly higher in the tail era": equal at y135 |
+| # | Production | Held, measured | Design review | Sim agent |
+| --- | --- | --- | --- | --- |
+| SS-1 | 11.06; 22,291.2 GB; the slice's burn | 11.06; 22,291.2 GB; the burn identical at every printed year | held | held |
+| SS-2 | 31.19 / 1.084 / 0.007 | 84.71 / 24.22 / 3.70 | held | held |
+| SS-3 | 534.97 / 160.82 / 24.73 / 0.60 | 481.31 / 137.62 / 21.03 / 0.51 | held | held |
+| SS-4 | | −0.9 % / −10.0 % / −14.5 % / −15.1 % / −8.4 % / 0.0 % at y1 / y10 / y30 / y60 / y100 / y135 | held to y60; **missed from y100** | held to y60; **missed from y100** |
+| SS-5 | p50: 159.1 / 486.5; p95: 182.4 / 162.9 | p50: 148.9 / 413.6 (−6.4 % / −15.0 %); p95: 157.5 / 138.5 (−13.7 % / −15.0 %) | **missed** | **missed** |
+| SS-6 | 5,232 / 62.94 / 0.63 | 14,176 / 1,310 / 99.1 | missed, low by 5–6 % | held |
+| SS-7 | | income, fee and stakers' emission within 1 % of A-honest's movement in every arm, to y60; stakers' pay per GB-year within 1 % at y10, **not at y30** | **missed at y30** | **missed at y30** |
+| SS-8 | A-honest's transition at y19; B's at y11 | A-honest's **not reached by y135**; B's at y16, same end state | (none) | **missed** |
+| SS-9 | | carried bodies, median, archive and burn unmoved; money moves by r | (none) | held |
+| SS-10 | | shares 0.15 / 0.85 flat; destroyed by r to y60 (0.8996 at y10); net issuance equal to four figures | (none) | held, but for the tail-era clause: equal at y135, because the fees stopped scaling (`SS-4`) |
 
 **The fee leaves `C` late in the chain (`SS-4`, `SS-5`).** From about year 100, the Economy rung's rate is a few atomic units per weight unit.
 - `relay_fee_floor` truncates `R·C·w_ref/M²` to an integer and floors it at 1.
-- At y135 the A-honest Standard fee is 4 atomic units per weight unit, an Economy rung of 1, in both arms. Holding σ lowers `C` and moves no fee.
+- At y135 the A-honest Standard fee is 4 atomic units per weight unit, an Economy rung of 1, in both arms. Holding σ lowers `C` and moves no fee, while the miner's tail falls by 0.85.
 - At y100 the rung is between 2 and 3. Some blocks step down and some do not, so the year's mean falls 8.4 %.
-- A-stuffed's y100 rung steps from 3 to 2, and its Standard fee falls a third (0.000 18 to 0.000 12 SKL). Its tail ratio rises 28 %, where A-honest's falls 14 %.
+- A-stuffed's y100 rung steps from 3 to 2, and its Standard fee falls a third (0.000 18 to 0.000 12 SKL). Its p95 tail ratio rises 28 %, where A-honest's falls 14 %.
 
 So the fees sit at the floor's integer grain, not where `C` puts them. In the tail era, the share reaches the miner's tail and not the fees. This bears on the fee design's lattice row (`FEE_LADDER_DERIVATION.md` §12, owed to EUP-5): it holds regardless of σ, because production's own late fee is set by the integer grain.
 
-**The inherited zone's gross transition is the share's own decay (`SS-8`).**
-- In production, A-honest's gross blocks go from carrying 22 bodies to 50 at y19. The median grows from 324 KB to about 1 MB, `M_r` steps from 0.8 to 1.0, and the burn follows.
-- In the held arm this never happens by y135:
-  - blocks carry 22;
-  - the archive at y135 is 9,750 GB against 20,592;
-  - the tail era is not reached (emitted 0.9988);
-  - from about y50 the miner's income is higher, because less penalty was withheld (36.5 against 31.3 SKL a block at y60).
-- The held gross row lands within 1 % of production's miner's-net row on archive and on the y135 tail ratio. Holding σ closes most of the gap between the two template rules that `WE-7` found in this zone.
-- The arithmetic is consistent with the crossing being made by the decay itself. Under the gross rule the fee carries `1 − σ` and δ does not. `1 − σ` rises from 0.857 to 0.979 between y1 and y19, the same 14 % the held arm removes.
-- B, whose burn reads the fixed baseline and so sits higher early, still crosses, five years late. Its end state matches production's, and its archive at y135 is 2.3 % lower.
+**The other arms at y30 (`SS-7`).** Stakers' pay per GB-year rises 20.8-fold for A-honest, B, C1 and C2. It rises less where the pool's fee part is a larger share of the stakers' income, because that part shrinks by r instead of growing:
+- the C3 knees and the together arms, 18.3 to 20.0-fold;
+- A-stuffed, 17.1-fold.
+
+**The inherited zone, gross, held: no transition by y135 (`SS-8`).**
+- **In production,** A-honest's gross blocks go from carrying 22 bodies to 50 at y19. The median grows from 324 KB to about 1 MB, `M_r` steps from 0.8 to 1.0, and the burn follows.
+- **In the held arm, blocks carry 22 in every year to y135,** on a median of 324 to 338 KB. `M_r` stays at 0.8.
+- **Held emission over production's** is 0.81 at y20, which is `M_r`'s 0.8 against 1.0. The held arm pays the curve out more slowly. Its emission passes production's at about y40, and the miner's income at y48 (36.5 against 31.3 SKL a block at y60).
+- **The archive at y135** is 9,750 GB against 20,592, and the tail era is not reached (emitted 0.9988).
+- **The held gross row is close to production's miner's-net row:** within 1 % on the archive at y135 (9,749.7 against 9,837.6 GB), and within 2 % on the y135 tail ratio (27.6 against 28.2). In this zone, holding σ closes most of the gap between the two template rules that `WE-7` found.
+- **B's burn reads the fixed baseline and so sits higher early.** It still crosses, five years late. Its end state matches production's, and its archive at y135 is 2.3 % lower.
+- **A hypothesis this run cannot separate from other causes:** the crossing in production is made by the share's own decay. Under the gross rule the fee carries `1 − σ` and δ does not. `1 − σ` rises from 0.857 to 0.979 between y1 and y19, the same 14 % the held arm removes. A run that holds σ at its year-19 value would test it.
 
 **What this does not measure** (brief §5): a share that rises over time (production code, Rick first), a falling or redirected burn (EUP-4 arms if this supports them), and any other zone, `w_ref`, scenario or seed.
 
