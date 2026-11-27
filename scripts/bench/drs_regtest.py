@@ -132,7 +132,7 @@ class Session:
             B._await_posted(self.srpc, self.args.startup_timeout)
             timeout = getattr(self.args, "gen_timeout", _GEN_TIMEOUT_S)
             resp = B._rpc(self.srpc, "dev_block_generate", {"count": count}, timeout=timeout)
-            if not B.generated("redb", resp):
+            if not B.generated(resp):
                 B._fail(f"dev_block_generate refused: {json.dumps(resp)[:300]}")
             return B.chain_count(self.srpc)
 
