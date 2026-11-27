@@ -21,10 +21,16 @@
 # `shekyl_daemon_config::load_default_file_unread` (or builds its
 # configuration with `after_file`, which opens no file).
 #
-# The subject is the launcher set `check_owner_socket_launchers.py` finds:
+# The subject is what `check_owner_socket_launchers.py`'s finder matches:
 # adjacent `--network regtest` argv tokens and the binary's name, outside
-# comments. Its REQUIRED list and its NOT_A_SPAWN list are this gate's too,
-# so the two gates read one set of launchers.
+# comments. Its REQUIRED launchers are this gate's too, with the in-process
+# starts that gate leaves out; this gate's own NOT_A_SPAWN names the files
+# that match and have no file step at all.
+#
+# What it does not see: it judges a file, not a spawn, so a file with one
+# launcher that chooses its file and another that does not passes; and it
+# reads regtest launches only, so a testnet daemon a test starts
+# (`shekyl-cli`'s json_script) is outside it.
 #
 # Rule 47: the known launchers are asserted present, and `--selftest` shows
 # that an empty set and a spawn that names no file fail. Rule 46: the exit
@@ -41,6 +47,25 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, SCRIPTS)
 import check_armed_lever_launchers as L  # noqa: E402
 import check_owner_socket_launchers as S  # noqa: E402
+
+# The owner-socket gate's launchers, and the in-process starts it leaves
+# out because they serve no socket: they must choose their file too.
+REQUIRED = S.REQUIRED + (
+    "rust/shekyl-daemon/src/run_tests.rs",
+    "rust/shekyl-daemon/src/verify.rs",
+    "rust/shekyl-daemon/tests/config_file.rs",
+)
+
+# Files that match the shape and have no file step: no daemon starts, and no
+# loader runs that could open the default file.
+NOT_A_SPAWN = {
+    "scripts/ci/check_armed_lever_launchers.py": "a gate; its fixtures are the patterns it matches",
+    "scripts/ci/check_launcher_config_file.py": "this gate; its fixtures are the patterns it matches",
+    "scripts/bench/test_drs_bench.py": "tests drs_bench's argv and artifact logic; spawns nothing",
+    "rust/shekyl-daemon-config/src/announce.rs": "builds a configuration from parsed rows; no file step",
+    "rust/shekyl-daemon-config/src/owner_socket.rs": "the socket plan's own tests; no file step",
+    "rust/shekyl-daemon-config/src/sections/tests.rs": "builds configurations from parsed rows; no file step",
+}
 
 # A spawned binary names its file; an in-process daemon loads with the
 # default file unread, or builds its configuration after the file step.
@@ -130,7 +155,7 @@ def selftest():
             for name, text in files.items():
                 with open(os.path.join(tmp, name), "w", encoding="utf-8") as fh:
                     fh.write(text)
-            problems = problems_of(S.find_launchers(tmp), required)
+            problems = problems_of(S.find_launchers(tmp, NOT_A_SPAWN), required)
         ok = (not problems) if not expect else len(problems) == len(expect) and all(
             any(e in p for p in problems) for e in expect
         )
@@ -142,8 +167,11 @@ def selftest():
 def main(argv):
     if "--selftest" in argv:
         return selftest()
-    found = S.find_launchers(ROOT)
-    problems = problems_of(found, S.REQUIRED)
+    found = S.find_launchers(ROOT, NOT_A_SPAWN)
+    problems = problems_of(found, REQUIRED)
+    for path in NOT_A_SPAWN:
+        if not os.path.exists(os.path.join(ROOT, path)):
+            problems.append(f"subject absent: {path} is listed as not a spawn and does not exist")
     if problems:
         L.report(problems)
         return 1

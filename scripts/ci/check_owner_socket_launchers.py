@@ -84,6 +84,9 @@ SERVICE = '"--service"'
 
 
 def is_launcher(text, suffix):
+    # The raw text first, as `L.may_launch` explains; "shekyld" likewise.
+    if "shekyld" not in text or not L.may_launch(text):
+        return False
     stripped = L.code(text, suffix)
     return L.SPAWN.search(stripped) is not None and "shekyld" in stripped
 
@@ -93,11 +96,14 @@ def names_the_directory(text, suffix):
     return any(token in stripped for token in NAMED) or SERVICE in stripped
 
 
-def find_launchers(root):
+def find_launchers(root, not_a_spawn=None):
+    """The launchers under `root`, less `not_a_spawn` (this gate's
+    NOT_A_SPAWN when None): another gate names its own exclusions."""
+    skip = NOT_A_SPAWN if not_a_spawn is None else not_a_spawn
     found = {}
     for path in L.iter_files(root, L.SOURCE_SUFFIXES):
         relative = L.rel(root, path)
-        if relative == GATE_REL or relative in NOT_A_SPAWN:
+        if relative == GATE_REL or relative in skip:
             continue
         text = L.read(path)
         suffix = os.path.splitext(path)[1]

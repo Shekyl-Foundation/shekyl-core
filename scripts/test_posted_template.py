@@ -59,7 +59,10 @@ class Stub:
 
         self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.url = f"http://127.0.0.1:{self.server.server_address[1]}/json_rpc"
-        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        # A short poll, so each stub's shutdown returns at once.
+        threading.Thread(
+            target=self.server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True
+        ).start()
 
     def close(self):
         self.server.shutdown()
@@ -79,7 +82,7 @@ class AwaitPosted(unittest.TestCase):
         stub = Stub(refusals=None)
         try:
             with self.assertRaises(RuntimeError) as raised:
-                posted_template.await_posted(stub.url, timeout_s=0.5)
+                posted_template.await_posted(stub.url, timeout_s=0.3)
             self.assertIn("no_view", str(raised.exception))
         finally:
             stub.close()
@@ -89,7 +92,7 @@ class AwaitPosted(unittest.TestCase):
         url = stub.url
         stub.close()
         with self.assertRaises(RuntimeError):
-            posted_template.await_posted(url, timeout_s=0.5)
+            posted_template.await_posted(url, timeout_s=0.3)
 
     def test_the_command_line_verdict_is_the_exit_status(self):
         script = os.path.join(HERE, "posted_template.py")
@@ -102,7 +105,7 @@ class AwaitPosted(unittest.TestCase):
         stub = Stub(refusals=None)
         try:
             refused = subprocess.run(
-                [sys.executable, script, stub.url, "0.5"], check=False, capture_output=True)
+                [sys.executable, script, stub.url, "0.3"], check=False, capture_output=True)
             self.assertEqual(refused.returncode, 1)
         finally:
             stub.close()
