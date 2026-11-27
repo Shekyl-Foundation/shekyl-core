@@ -145,7 +145,7 @@ class Harness:
             # an empty daemon serves the subject's port for the creation.
             empty = os.path.join(self.session.work, "wallet-init")
             shutil.rmtree(empty, ignore_errors=True)
-            os.makedirs(empty)
+            B.owner_dir(empty)
             proc = self.session.spawn("wallet-init", empty, [], self.session.bp2p,
                                       self.session.brpc, offline=True)
             with self.session.running(proc, self.session.brpc) as ready:
@@ -266,7 +266,7 @@ class Harness:
         def fresh(subject, from_dir=None):
             shutil.rmtree(subject, ignore_errors=True)
             if from_dir is None:
-                os.makedirs(subject)
+                B.owner_dir(subject)
             else:
                 shutil.copytree(from_dir, subject)
 

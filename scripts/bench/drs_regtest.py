@@ -84,8 +84,7 @@ class Session:
 
     def __init__(self, args):
         self.args = args
-        self.work = os.path.abspath(args.work_dir)
-        os.makedirs(self.work, exist_ok=True)
+        self.work = B.owner_dir(args.work_dir)
         self.daemon = B.daemon_executable(args.daemon)
         self.replay = os.path.abspath(args.replay_bin)
         (self.sp2p, self.srpc, self.fp2p, self.frpc, self.bp2p, self.brpc), held = \
@@ -149,9 +148,7 @@ class Session:
         self.prefix = prefix
         for directory in (seed_dir, fork_dir):
             shutil.rmtree(directory, ignore_errors=True)
-            # Owner-only: the daemon refuses an existing data directory
-            # others can enter (`config.data-dir.exposed`).
-            os.makedirs(directory, mode=B.DATA_DIR_MODE)
+            B.owner_dir(directory)
         self.generate(seed_dir, prefix, address)
         shutil.rmtree(fork_dir)
         shutil.copytree(seed_dir, fork_dir)

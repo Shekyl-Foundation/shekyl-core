@@ -56,6 +56,30 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR_MODE = 0o700
 
 
+def owner_dir(path):
+    """Make `path` owner-only, with any parent it lacks, and set an existing
+    `path` to that mode; return its absolute path.
+
+    The daemon also refuses a data directory under a directory any other
+    principal can write (`config.data-dir.ancestor-writable`), its account's
+    own group included. A directory made at the process umask is
+    group-writable where the umask is 002, and one others can enter where it
+    is 022. So every daemon data directory these harnesses make, and every
+    directory they make above one, comes from here. The directories above
+    the first that exists are the operator's; the daemon's refusal names
+    them."""
+    path = os.path.abspath(path)
+    missing = []
+    probe = path
+    while not os.path.isdir(probe):
+        missing.append(probe)
+        probe = os.path.dirname(probe)
+    for directory in reversed(missing):
+        os.mkdir(directory, DATA_DIR_MODE)
+    os.chmod(path, DATA_DIR_MODE)
+    return path
+
+
 def _fail(msg):
     print(f"drs_bench: {msg}", file=sys.stderr)
     sys.exit(1)
@@ -429,14 +453,10 @@ def measure(args):
     subject is always wiped (an IBD from a partial chain is a different
     experiment).
     """
-    work = os.path.abspath(args.work_dir)
-    os.makedirs(work, exist_ok=True)
-    seed_dir = os.path.abspath(args.seed_dir or os.path.join(work, "seed"))
-    # Owner-only: the daemon refuses an existing data directory others can
-    # enter (`config.data-dir.exposed`). A seed kept from an earlier run is
-    # this script's own directory, so it is set here.
-    os.makedirs(seed_dir, mode=DATA_DIR_MODE, exist_ok=True)
-    os.chmod(seed_dir, DATA_DIR_MODE)
+    # The work directory and a seed kept from an earlier run are this
+    # script's own, so their mode is set here (`owner_dir`).
+    work = owner_dir(args.work_dir)
+    seed_dir = owner_dir(args.seed_dir or os.path.join(work, "seed"))
     daemon = daemon_executable(args.daemon)
     pre = A.measurement_preflight(daemon=daemon, work_dir=work,
         seed_dir=seed_dir, disk_class=args.disk_class)
@@ -446,10 +466,10 @@ def measure(args):
 
     subj_dir = os.path.join(work, "subject")
     shutil.rmtree(subj_dir, ignore_errors=True)
-    os.makedirs(subj_dir, mode=DATA_DIR_MODE)
+    owner_dir(subj_dir)
     if args.fresh_seed:
         shutil.rmtree(seed_dir, ignore_errors=True)
-        os.makedirs(seed_dir, mode=DATA_DIR_MODE)
+        owner_dir(seed_dir)
 
     # The control channel (§1.3a rule 2): the fsync probe on the subject's
     # filesystem from before the seed starts to after the sync ends, so the
