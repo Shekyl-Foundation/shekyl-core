@@ -80,7 +80,7 @@
 
 #[cfg(test)]
 use serde_json::Value;
-use shekyl_rpc_client::{Rpc, RpcError};
+use shekyl_rpc_client::{DaemonFault, Rpc, RpcError};
 use shekyl_rpc_types::wire::daemon::DaemonStatus;
 use shekyl_types::{BlockHash, BlockHeight, ChainCount};
 
@@ -404,6 +404,8 @@ pub(crate) enum TimelineBreak {
     /// computer"'s rendezvous (`RPC_CHANNEL.md` RT-15): a security failure.
     /// Nothing was read; retrying cannot clear it.
     PeerCheckFailed,
+    /// A channel failure with its operator remedy.
+    Channel(shekyl_rpc_client::WalletChannelFault),
     /// "This computer"'s node is a service, which the wallet does not dial
     /// (RT-W10 step 5): `Some` is its view listener, the address to set.
     ServiceHere(Option<std::net::SocketAddr>),
@@ -439,7 +441,6 @@ impl TimelineBreak {
     ///
     /// [`DaemonFault`]: shekyl_rpc_client::DaemonFault
     pub(crate) fn from_facts_error(err: &RpcError) -> Self {
-        use shekyl_rpc_client::DaemonFault;
         match err.fault() {
             DaemonFault::Unreachable => Self::DaemonUnreachable,
             DaemonFault::Identity(mismatch) => Self::IdentityRefused(mismatch),
@@ -447,8 +448,28 @@ impl TimelineBreak {
             | DaemonFault::FeeResponse
             | DaemonFault::Internal
             | DaemonFault::NotPermitted => Self::FactsUnreadable,
+            DaemonFault::Channel(fault) => Self::Channel(fault),
             DaemonFault::PeerCheck => Self::PeerCheckFailed,
             DaemonFault::Service(view) => Self::ServiceHere(view),
+        }
+    }
+
+    /// The daemon fault this break still carries, when folding it into
+    /// "the daemon did not answer" would name the wrong action. Syncing,
+    /// a rollback, and an unreadable reply have none: those are this
+    /// break's own arms.
+    #[must_use]
+    pub(crate) fn own_remedy(self) -> Option<DaemonFault> {
+        match self {
+            Self::Channel(fault) => Some(DaemonFault::Channel(fault)),
+            Self::PeerCheckFailed => Some(DaemonFault::PeerCheck),
+            Self::ServiceHere(view) => Some(DaemonFault::Service(view)),
+            Self::DaemonUnreachable
+            | Self::DaemonSyncing
+            | Self::FactsUnreadable
+            | Self::IdentityRefused(_)
+            | Self::ChainRolledBack
+            | Self::WitnessBlockReplaced => None,
         }
     }
 }

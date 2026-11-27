@@ -11,56 +11,46 @@
 //! therefore *uncallable* — the Monero light-wallet selective-request leak is
 //! unrepresentable on the surface (`ARCHIVAL_BOND_2D1_PSCAN_PLAN.md` SP-0 / §4).
 //!
-//! 2d-1 ships [`DaemonBlockSource`], a thin firewall-shaped view over an existing
-//! daemon connection that establishes the *interface*. 2d-2 implements the real
-//! per-`P`-isolated transport behind the same trait — a bundled Tor-over-SOCKS
-//! client, not Arti (`ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md` §3) — adding the network
-//! **isolation** (separate connection, no shared cache with the principal) this
-//! placeholder does not provide.
-//!
-//! ## Staging note
-//!
-//! SP-0 is the keystone; its non-test consumer is the **SP-5** scan loop (the
-//! `P`-scan task that drives this source), live since the WI-1 lifecycle wiring
-//! (`Engine::start_pscan`). [`PBlockSource`] still carries transient
-//! `#[allow(dead_code)]`: its consumer is the 2d-2 posture selector (DQ-T2.3),
-//! explicitly out of WI-1's scope.
+//! The persona scan reads whole blocks through the wallet's operator-owned daemon.
 
 use std::future::Future;
 
-use shekyl_p_transport::PTorClient;
-use shekyl_rpc_client::{Rpc, RpcError};
+use shekyl_rpc_client::{DaemonFault, Rpc, RpcError};
 use shekyl_scanner::ScannableBlock;
 use shekyl_types::{BlockHeight, ChainCount};
 
-use crate::engine::block_fetch::default_fetch_scannable_block;
 use crate::engine::daemon::synced_chain_facts::fetch_synced_chain_facts;
-use crate::engine::prpc::PRpc;
 use crate::engine::traits::DaemonEngine;
 
 /// Error from a [`BlockSource`].
 ///
-/// Transport-agnostic (it carries a rendered message, not a transport type) so
-/// 2d-2's transport maps its own failures in without this type ever depending on
-/// a specific transport's error enum.
+/// A failed read carries [`DaemonFault`], the remedy classified where the
+/// RPC error was raised. The string is the log line. Syncing stays its own
+/// variant: "the daemon did not answer" and "the daemon answered that it
+/// does not know yet" are different faults (rule 82), and `R-B` makes only
+/// the second one routine.
 #[derive(Debug, Clone)]
 pub(crate) enum BlockSourceError {
-    /// The underlying source (transport, parse, or daemon) failed.
-    Source(String),
+    /// The source failed. `fault` is the remedy. `detail` is the log line.
+    Failed {
+        /// What the operator does about this read.
+        fault: DaemonFault,
+        /// The failure's own rendering, including a channel's leg.
+        detail: String,
+    },
     /// The daemon reports it is still synchronizing, so it has no tip to
     /// claim.
-    ///
-    /// Deliberately **not** folded into [`Self::Source`]: "the daemon did not
-    /// answer" and "the daemon answered that it does not know yet" are
-    /// different faults with different operator remedies (rule 82), and
-    /// `R-B` makes only the second one routine.
     DaemonSyncing,
 }
 
 impl std::fmt::Display for BlockSourceError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Source(msg) => write!(f, "block source failure: {msg}"),
+            // A fault with its own sentence is that sentence. The log line
+            // already carries the leg. Anything else is a source failure
+            // whose text is the transport's.
+            Self::Failed { fault, detail } if fault.has_own_remedy() => f.write_str(detail),
+            Self::Failed { detail, .. } => write!(f, "block source failure: {detail}"),
             Self::DaemonSyncing => write!(
                 f,
                 "the daemon is still synchronizing, so it has no chain tip to claim"
@@ -71,11 +61,34 @@ impl std::fmt::Display for BlockSourceError {
 
 impl std::error::Error for BlockSourceError {}
 
+impl BlockSourceError {
+    /// The daemon fault, when this is a failed read. Syncing has none.
+    #[must_use]
+    pub(crate) fn remedy(&self) -> Option<DaemonFault> {
+        match self {
+            Self::Failed { fault, .. } => Some(*fault),
+            Self::DaemonSyncing => None,
+        }
+    }
+
+    /// The remedy, when folding this into "the daemon did not answer" would
+    /// name the wrong action. Empty for syncing and for a plain transport miss.
+    #[must_use]
+    pub(crate) fn own_remedy(&self) -> Option<DaemonFault> {
+        self.remedy().filter(|fault| fault.has_own_remedy())
+    }
+}
+
 impl From<RpcError> for BlockSourceError {
     fn from(err: RpcError) -> Self {
-        // `Display` (the `thiserror` `#[error(...)]` message), not `Debug` — this
-        // is a rendered, human-facing message, not a structural dump.
-        Self::Source(err.to_string())
+        let fault = err.fault();
+        // The log line keeps a channel's leg. `Debug` would dump the enum.
+        let detail = if fault.has_own_remedy() {
+            err.log_line()
+        } else {
+            err.to_string()
+        };
+        Self::Failed { fault, detail }
     }
 }
 
@@ -137,12 +150,6 @@ pub(crate) trait BlockSource {
     ) -> impl Future<Output = Result<Option<ScannableBlock>, BlockSourceError>> + Send;
 }
 
-// Shared [`BlockSource`] conversion scaffolding: the `tip_height` body and the
-// `block_at` height→number conversion are transport-agnostic, so both the local
-// `DaemonBlockSource` and the remote `PBlockSource` route through these helpers
-// rather than re-deriving the same checked conversions (and the same error
-// strings) per impl, where the copies could drift.
-
 /// A source's claimed tip, **only if the daemon reports itself synchronized**.
 ///
 /// Returns the [`SyncedChainFacts`](crate::engine::daemon::synced_chain_facts::SyncedChainFacts)
@@ -179,9 +186,6 @@ pub(crate) trait BlockSource {
 /// here). Explicitly **not** `synced_height` or `ingested_tip_height` —
 /// those clocks have different bases and must not feed `anchor_t0`.
 ///
-/// Generic over the transport so the local (`DaemonEngine: Rpc`) and remote
-/// ([`PRpc`]) sources share one body; the returned future is `Send` because
-/// `get_height`'s is.
 pub(crate) async fn daemon_claimed_tip<R: Rpc>(rpc: &R) -> Result<ChainCount, BlockSourceError> {
     let facts = fetch_synced_chain_facts(rpc)
         .await?
@@ -196,11 +200,9 @@ pub(crate) async fn daemon_claimed_tip<R: Rpc>(rpc: &R) -> Result<ChainCount, Bl
 /// converted fail-closed. Shared by both `block_at` impls, which then differ only
 /// in *which* single-height fetch they issue.
 fn block_number(height: BlockHeight) -> Result<usize, BlockSourceError> {
-    usize::try_from(height.to_raw()).map_err(|_| {
-        BlockSourceError::Source(format!(
-            "height {} exceeds the platform's usize",
-            height.to_raw()
-        ))
+    usize::try_from(height.to_raw()).map_err(|_| BlockSourceError::Failed {
+        fault: DaemonFault::Internal,
+        detail: format!("height {} exceeds the platform's usize", height.to_raw()),
     })
 }
 
@@ -245,59 +247,6 @@ impl<D: DaemonEngine> BlockSource for DaemonBlockSource<D> {
         // the test double override) — not the bare `Rpc`, which would bypass
         // them.
         let block = self.daemon.fetch_scannable_block(number).await?;
-        Ok(Some(block))
-    }
-}
-
-/// The 2d-2 **remote-posture** [`BlockSource`]: fetches whole blocks over `P`'s
-/// **own** Tor circuit via [`PRpc`] (a plain fetch shim — the Round-0
-/// disposition attached no decorrelation duty, DQ-T2.5).
-///
-/// Constructed **only** from a [`PTorClient`] + the daemon base URL (DQ-T2.3,
-/// §416): there is no principal-`DaemonClient` path and no `Default`, so a remote
-/// source **cannot** be built over the shared principal connection — the posture
-/// conflation the firewall forbids (`P` routing its fetch over a shared circuit)
-/// is unrepresentable on the constructor, not merely discouraged.
-//
-// The posture selector at the SP-5 scan-loop wiring is the outstanding
-// consumer. Note the split: the struct and its `BlockSource` impl need no
-// suppression, while the `new` constructor below does — the module test is its
-// only caller until that selector lands.
-pub(crate) struct PBlockSource {
-    rpc: PRpc,
-}
-
-#[allow(dead_code)]
-impl PBlockSource {
-    /// Build a remote-posture source dialing `base_url` over `client`'s circuit.
-    pub(crate) fn new(client: PTorClient, base_url: String) -> Self {
-        Self {
-            rpc: PRpc::new(client, base_url),
-        }
-    }
-}
-
-impl BlockSource for PBlockSource {
-    async fn tip_height(&self) -> Result<ChainCount, BlockSourceError> {
-        // `PRpc: Rpc`, so `get_height` is the inherited tip query — over `P`'s
-        // circuit, same claimed-not-trusted semantics as any single source.
-        daemon_claimed_tip(&self.rpc).await
-    }
-
-    async fn block_at(
-        &self,
-        height: BlockHeight,
-    ) -> Result<Option<ScannableBlock>, BlockSourceError> {
-        let number = block_number(height)?;
-        // P-SH: exactly one height per call — the fetch issues a single
-        // `block_show` (+ its txs) for `number`. Skeletons bound to their
-        // txids, same as `DaemonBlockSource` (`SB-Q2`): the three served
-        // operands are the daemon's to choose and buy it nothing — a wrong
-        // operand hashes to another identity and the body does not bind.
-        // Like `DaemonBlockSource`, a missing block surfaces as `Err` (this
-        // source cannot *prove* absence; `Ok(None)` is the
-        // withheld-body-robustness slice, out of scope for SP-T2).
-        let block = default_fetch_scannable_block(&self.rpc, number).await?;
         Ok(Some(block))
     }
 }
@@ -399,31 +348,35 @@ mod tests {
         );
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn remote_source_over_a_dead_proxy_errors_without_leaking_the_username() {
-        use shekyl_p_transport::TorSocksEndpoint;
-        use shekyl_types::PCanonicalId;
-
-        // No Tor: a closed SOCKS port (`:1`) refuses immediately, so the remote
-        // source's transport error path is exercised fast. `PBlockSource::new`
-        // takes only a `PTorClient` — there is no principal path to construct it
-        // over a shared connection (DQ-T2.3). The failure is a `Source` error and
-        // must not render the SOCKS username (invariant (a)).
-        let client = PTorClient::for_persona(
-            &PCanonicalId::from_bytes([9u8; 32]),
-            &TorSocksEndpoint::loopback(1),
-        )
-        .expect("proxy config is well-formed");
-        let username = client.username().as_str().to_owned();
-        let source = PBlockSource::new(client, "http://127.0.0.1:18081".to_string());
-
-        let err = source
-            .tip_height()
-            .await
-            .expect_err("a dead SOCKS proxy must fail the tip query");
+    /// A channel refusal stays a channel refusal on the read that every
+    /// poster stamps from. Red edit: store only `err.to_string()` in
+    /// `Failed`, and `own_remedy` is `None`.
+    #[test]
+    fn a_channel_fault_keeps_its_remedy_on_a_block_read() {
+        let fingerprint = [7_u8; 32];
+        let err = RpcError::Channel(
+            shekyl_rpc_client::WalletChannelFault::NotEnrolled(fingerprint),
+            "127.0.0.1:11029".into(),
+        );
+        let source = BlockSourceError::from(err);
+        assert_eq!(
+            source.own_remedy(),
+            Some(DaemonFault::Channel(
+                shekyl_rpc_client::WalletChannelFault::NotEnrolled(fingerprint)
+            ))
+        );
+        let shown = source.to_string();
         assert!(
-            !format!("{err}").contains(&username),
-            "invariant (a): a block-source error must never render the SOCKS username"
+            shown.contains("shekyl-cli rpc client add"),
+            "the enrollment command is the sentence: {shown}"
+        );
+        assert!(
+            shown.contains("127.0.0.1:11029"),
+            "the leg stays beside the sentence: {shown}"
+        );
+        assert!(
+            !shown.contains("block source failure"),
+            "a channel fault is not a generic source failure: {shown}"
         );
     }
 }

@@ -93,8 +93,7 @@ pub(crate) const TXS_PER_REQUEST: usize = 100;
 /// default: one `block_show` by height under `prune`, which carries the
 /// block's bytes, its non-miner transactions as skeletons with their txid
 /// operands, and the global index of its first output (RW-Q5). Also the
-/// body behind the `DaemonClient` inherent method and the remote-posture
-/// `PBlockSource`, which carry a bare `Rpc` rather than a `DaemonEngine`.
+/// body behind the `DaemonClient` inherent method.
 pub(crate) async fn default_fetch_scannable_block<R: Rpc>(
     rpc: &R,
     number: usize,

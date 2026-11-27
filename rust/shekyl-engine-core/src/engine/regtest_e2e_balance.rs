@@ -82,9 +82,9 @@ async fn wallets() -> Wallets {
     let twin_dir = tempfile::tempdir().expect("twin dir");
     create_wallet(&daemon, payee_dir.path(), PAYEE, &PAYEE_SEED).await;
     create_wallet(&daemon, twin_dir.path(), PAYEE, &PAYEE_SEED).await;
-    let funder = WalletServer::spawn(funder_dir.path(), daemon.rpc_port, logs.path(), "funder");
-    let payee = WalletServer::spawn(payee_dir.path(), daemon.rpc_port, logs.path(), "payee");
-    let twin = WalletServer::spawn(twin_dir.path(), daemon.rpc_port, logs.path(), "twin");
+    let funder = WalletServer::spawn(funder_dir.path(), &daemon, logs.path(), "funder");
+    let payee = WalletServer::spawn(payee_dir.path(), &daemon, logs.path(), "payee");
+    let twin = WalletServer::spawn(twin_dir.path(), &daemon, logs.path(), "twin");
     open(&funder, FUNDER);
     open(&payee, PAYEE);
     open(&twin, PAYEE);

@@ -367,10 +367,7 @@ mod tests {
         let tenants = tokio::sync::Mutex::new(TenantState::new(
             dir.path().to_path_buf(),
             Network::Testnet,
-            DaemonTarget::Address {
-                url: "http://127.0.0.1:1".to_string(),
-                proxy: None,
-            },
+            DaemonTarget::fixture_with_proxy("http://127.0.0.1:1".to_string(), None),
             crate::server::TorFile::discover(),
         ));
 

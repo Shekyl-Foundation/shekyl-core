@@ -100,7 +100,7 @@ impl Rpc for ClaimSourceDaemon {
 // production wiring must satisfy, so the test transport has to satisfy it
 // too — a fixture exempt from the pin would test a signature nothing else
 // can call.
-impl PersonaIsolatedTransport for ClaimSourceDaemon {}
+impl WalletChainReader for ClaimSourceDaemon {}
 
 /// A claim-source reply at `chain_height`, holding `shard_ids` (or no
 /// bond record at all when `shard_ids` is `None`).
@@ -643,7 +643,7 @@ impl Rpc for ScheduledDaemon {
     }
 }
 
-impl PersonaIsolatedTransport for ScheduledDaemon {}
+impl WalletChainReader for ScheduledDaemon {}
 
 /// The heights a resync walks through: a pre-bond height, then a climb
 /// crossing **four** settlement-epoch opens — far past the two the gate

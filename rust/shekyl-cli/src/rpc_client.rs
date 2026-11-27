@@ -108,12 +108,8 @@ enum Transport {
     /// `shekyl_win_sec::open_verified`; the name is the only state held.
     #[cfg(windows)]
     NamedPipe(String),
-    /// HTTP(S) over TCP to an external `shekyl-wallet-rpc` server (the
-    /// `wallet-rpc-endpoint` target — not the node daemon; cf. `daemon::DaemonClient`),
-    /// through a ureq agent that carries the `daemon-socks` SOCKS config (if any) —
-    /// so a proxied `wallet-rpc-endpoint` is genuinely proxied, which the network-posture
-    /// disclosure relies on.
-    Http { url: String, agent: ureq::Agent },
+    /// An externally hosted wallet. A proxy resolves the target at its far end.
+    Http(Box<shekyl_rpc_transport::wallet_http::WalletHttp>),
 }
 
 /// The runtime and server handle backing a self-hosted session.
@@ -368,7 +364,7 @@ impl RpcSession {
     /// Connect to an externally managed `shekyl-wallet-rpc` **server** (not the
     /// node daemon — cf. [`crate::daemon::DaemonClient`]).
     ///
-    /// Accepts `http://…` / `https://…` URLs or, on Unix, a
+    /// Accepts `http://…` URLs or, on Unix, a
     /// `uds:///path/to.sock` socket path. `proxy` (a SOCKS address) applies
     /// **only** to the HTTP(S) transport; a `uds://` session is a local socket
     /// with no network path to route, so the argument is ignored for it.
@@ -378,10 +374,9 @@ impl RpcSession {
             RpcUrlForm::Uds(path) => Transport::Uds(path),
             // `wallet-rpc-endpoint` names the server; the call goes to the one path
             // both RPC servers take JSON-RPC at.
-            RpcUrlForm::Http => Transport::Http {
-                url: format!("{}{JSON_RPC_PATH}", rpc_url.trim_end_matches('/')),
-                agent: build_http_agent(proxy)?,
-            },
+            RpcUrlForm::Http => Transport::Http(Box::new(
+                shekyl_rpc_transport::wallet_http::WalletHttp::new(rpc_url, proxy)?,
+            )),
         };
         let session = Self {
             transport,
@@ -411,7 +406,7 @@ impl RpcSession {
     pub fn socket_path(&self) -> Option<&Path> {
         match &self.transport {
             Transport::Uds(path) => Some(path),
-            Transport::Http { .. } => None,
+            Transport::Http(_) => None,
         }
     }
 
@@ -421,7 +416,7 @@ impl RpcSession {
     pub fn pipe_name(&self) -> Option<&str> {
         match &self.transport {
             Transport::NamedPipe(name) => Some(name),
-            Transport::Http { .. } => None,
+            Transport::Http(_) => None,
         }
     }
 
@@ -465,10 +460,10 @@ impl RpcSession {
     #[cfg(test)]
     pub(crate) fn offline_for_test() -> Self {
         Self {
-            transport: Transport::Http {
-                url: "http://127.0.0.1:9".to_owned(),
-                agent: build_http_agent(None).expect("agent"),
-            },
+            transport: Transport::Http(Box::new(
+                shekyl_rpc_transport::wallet_http::WalletHttp::new("http://127.0.0.1:9", None)
+                    .expect("client"),
+            )),
             hosted: None,
             next_id: Cell::new(1),
             open_wallet: RefCell::new(None),
@@ -518,15 +513,15 @@ impl RpcSession {
         // The response buffer holds cleartext secret material for some
         // methods (create_wallet returns the new BIP-39 mnemonic / raw seed).
         // Wrap it so the serialized bytes are wiped on drop (rule 35).
-        let raw = Zeroizing::new(match &self.transport {
+        let raw = match &self.transport {
             #[cfg(unix)]
             Transport::Uds(path) => http_post_uds(path, &payload)?,
             #[cfg(windows)]
             Transport::NamedPipe(name) => http_post_pipe(name, &payload)?,
-            Transport::Http { url, agent } => http_post_tcp(agent, url, &payload)?,
-        });
+            Transport::Http(client) => client.post(payload).map_err(RpcError::Transport)?,
+        };
 
-        let parsed: Value = serde_json::from_str(&raw)
+        let parsed: Value = serde_json::from_slice(&raw)
             .map_err(|e| RpcError::Transport(format!("malformed JSON-RPC response: {e}")))?;
         if let Some(err) = parsed.get("error") {
             return Err(RpcError::Rpc {
@@ -644,7 +639,7 @@ pub fn exit_if_output_closed(close: WalletClose) {
 /// POST the JSON-RPC body over a Unix domain socket (HTTP/1.1,
 /// `Connection: close`) and return the response body.
 #[cfg(unix)]
-fn http_post_uds(path: &Path, payload: &[u8]) -> Result<String, RpcError> {
+fn http_post_uds(path: &Path, payload: &[u8]) -> Result<Zeroizing<Vec<u8>>, RpcError> {
     // Takes the caller's already-serialized bytes: `RpcSession::call` owns the
     // one `Zeroizing` buffer, so this helper cannot make a second copy of a
     // password or mnemonic even by accident.
@@ -671,7 +666,7 @@ fn http_post_uds(path: &Path, payload: &[u8]) -> Result<String, RpcError> {
 /// is the dial-side half of containment (`WINDOWS_WALLET_SUPPORT.md` §8.1),
 /// not a courtesy check. No timeout, for the reason at [`UDS_IO_TIMEOUT`].
 #[cfg(windows)]
-fn http_post_pipe(name: &str, payload: &[u8]) -> Result<String, RpcError> {
+fn http_post_pipe(name: &str, payload: &[u8]) -> Result<Zeroizing<Vec<u8>>, RpcError> {
     let mut pipe = shekyl_win_sec::open_verified(name)
         .map_err(|e| RpcError::Transport(format!("cannot connect to the wallet RPC pipe: {e}")))?;
     http_post_over(&mut pipe, payload)
@@ -684,10 +679,12 @@ fn http_post_pipe(name: &str, payload: &[u8]) -> Result<String, RpcError> {
 /// re-serializes nothing (see [`RpcSession::call`]). The read buffer is
 /// wiped on drop: the response can carry secret material (`create_wallet`
 /// returns the seed).
-fn http_post_over<S: Read + Write>(stream: &mut S, payload: &[u8]) -> Result<String, RpcError> {
-    let body = shekyl_rpc_transport::local::post_over(stream, JSON_RPC_PATH, payload)
-        .map_err(RpcError::Transport)?;
-    String::from_utf8(body.to_vec()).map_err(|_| RpcError::Transport("non-UTF-8 HTTP body".into()))
+fn http_post_over<S: Read + Write>(
+    stream: &mut S,
+    payload: &[u8],
+) -> Result<Zeroizing<Vec<u8>>, RpcError> {
+    shekyl_rpc_transport::local::post_over(stream, JSON_RPC_PATH, payload)
+        .map_err(RpcError::Transport)
 }
 
 /// The accepted `wallet-rpc-endpoint` forms.
@@ -725,11 +722,11 @@ fn parse_rpc_url(rpc_url: &str) -> Result<RpcUrlForm, String> {
     if let Some(path) = rpc_url.strip_prefix("uds://") {
         return uds_form(path);
     }
-    if rpc_url.starts_with("http://") || rpc_url.starts_with("https://") {
+    if rpc_url.starts_with("http://") {
         if shekyl_rpc_transport::network_posture::host_of(rpc_url).is_empty() {
             return Err(format!(
                 "invalid wallet-rpc-endpoint '{rpc_url}': missing host \
-                 (expected http://host:port or https://host:port)"
+                 (expected http://host:port)"
             ));
         }
         return Ok(RpcUrlForm::Http);
@@ -741,11 +738,11 @@ fn parse_rpc_url(rpc_url: &str) -> Result<RpcUrlForm, String> {
 
 /// What the rejection message offers, per platform.
 #[cfg(unix)]
-const ACCEPTED_RPC_URL_FORMS: &str = "http://host:port, https://host:port, or uds:///path/to.sock";
+const ACCEPTED_RPC_URL_FORMS: &str = "http://host:port, or uds:///path/to.sock";
 /// What the rejection message offers, per platform.
 #[cfg(windows)]
 const ACCEPTED_RPC_URL_FORMS: &str =
-    "http://host:port or https://host:port (uds:// is Unix-only; leave wallet-rpc-endpoint unset to self-host)";
+    "http://host:port (uds:// is Unix-only; leave wallet-rpc-endpoint unset to self-host)";
 
 /// The `uds://` form on Unix: a non-empty socket path.
 #[cfg(unix)]
@@ -784,34 +781,6 @@ pub fn is_supported_rpc_url(rpc_url: &str) -> bool {
     parse_rpc_url(rpc_url).is_ok()
 }
 
-/// Build the ureq agent for the `wallet-rpc-endpoint` HTTP transport, applying the
-/// operator's `daemon-socks` SOCKS config when set. This is what makes a proxied
-/// `wallet-rpc-endpoint` actually route through the proxy — mirrors `daemon::DaemonClient`
-/// so both CLI HTTP paths honor `daemon-socks` identically.
-fn build_http_agent(proxy: Option<&str>) -> Result<ureq::Agent, String> {
-    let mut config = ureq::Agent::config_builder();
-    if let Some(proxy_addr) = proxy {
-        let proxy_obj = ureq::Proxy::new(proxy_addr)
-            .map_err(|e| format!("invalid daemon-socks '{proxy_addr}': {e}"))?;
-        config = config.proxy(Some(proxy_obj));
-    }
-    Ok(config.build().new_agent())
-}
-
-fn http_post_tcp(agent: &ureq::Agent, url: &str, payload: &[u8]) -> Result<String, RpcError> {
-    // Same contract as `http_post_uds`: the bytes are the caller's, already
-    // wiped-on-drop, and this path re-serializes nothing.
-    let mut response = agent
-        .post(url)
-        .header("Content-Type", "application/json")
-        .send(payload)
-        .map_err(|e| RpcError::Transport(e.to_string()))?;
-    response
-        .body_mut()
-        .read_to_string()
-        .map_err(|e| RpcError::Transport(format!("read response: {e}")))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -844,7 +813,7 @@ mod tests {
         // swallows the failure, so a malformed URL would otherwise surface as
         // a confusing error at the first real command — and would reach the
         // network-posture disclosure as an empty host.
-        for bad in ["http://", "https://", "http:///", "http://:29500"] {
+        for bad in ["http://", "http:///", "http://:29500"] {
             let err = RpcSession::connect(bad, None, false)
                 .err()
                 .unwrap_or_else(|| panic!("hostless '{bad}' must be rejected"));
@@ -881,7 +850,7 @@ mod tests {
     fn is_supported_rpc_url_tracks_connect_accepted_forms() {
         // Accepted forms match connect_rejects_unknown_scheme above.
         assert!(is_supported_rpc_url("http://host:1"));
-        assert!(is_supported_rpc_url("https://host:1"));
+        assert!(!is_supported_rpc_url("https://host:1"));
         #[cfg(unix)]
         assert!(is_supported_rpc_url("uds:///tmp/x.sock"));
         #[cfg(windows)]
@@ -892,7 +861,7 @@ mod tests {
         // rather than being the thing that keeps the two in step.
         assert!(!is_supported_rpc_url("uds://"));
         assert!(!is_supported_rpc_url("ftp://host"));
-        for bad in ["http://", "https://", "http:///", "http://:29500"] {
+        for bad in ["http://", "http:///", "http://:29500"] {
             assert!(
                 !is_supported_rpc_url(bad),
                 "hostless '{bad}' must be rejected"
