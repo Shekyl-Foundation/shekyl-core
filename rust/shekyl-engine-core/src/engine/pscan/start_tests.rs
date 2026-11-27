@@ -589,6 +589,7 @@ async fn nothing_staking_leaves_on_a_fat_volume() {
     let reference_height = BlockHeight::from_raw(1_000);
     let tip = ChainCount::from_raw(1_010);
     let bond_post = move |byte: u8| PendingBondPost {
+        wait: None,
         p_slot: PSlot::from_raw(u32::from(byte)),
         persona: persona(byte),
         tx_bytes: vec![byte; 4],

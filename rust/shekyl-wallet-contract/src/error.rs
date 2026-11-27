@@ -355,7 +355,8 @@ wallet_rpc_error_codes! {
     /// Stake: funding not ready (W1-clean refusal — fund the persona /
     /// let the scan catch up, then retry).
     StakeNotReady = -29500 => "STAKE_NOT_READY",
-    /// Stake: a signed bond post is already awaiting dispatch.
+    /// Stake: a stake is already in flight (a plan, a post awaiting
+    /// dispatch, or an ended plan whose funds are returning).
     StakeInFlight = -29501 => "STAKE_IN_FLIGHT",
     /// Stake: the wallet already holds a confirmed bond (idempotency).
     AlreadyStaked = -29502 => "ALREADY_STAKED",

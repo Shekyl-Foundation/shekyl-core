@@ -473,9 +473,14 @@ to confirm or change):
   spent elsewhere, and an ended persona as drained, only once the sealed
   scan has covered the block its funding sits in (`funded_through`), so a
   rescan never ends a plan or retires a funded persona.
-- **An ending deactivates its persona at once**, and **a retired slot leaves
-  the live staking record in the same session** (as the open-time
-  reconcile does), so staking again takes a new persona without a reopen.
+- **An ending deactivates its persona at once**, and every later tick
+  deactivates every ended plan, so a deactivation that failed is retried.
+  The actor call is idempotent. **A retired slot leaves the live staking
+  record in the same session** (as the open-time reconcile does), so
+  staking again takes a new persona without a reopen.
+- **The wait reason is stored on the row that is waiting**: the plan, and
+  a post never sent. `in_flight` shows it for both. A sent post is not
+  waiting, and a further attempt does not record a reason on it.
 
 **Privacy dependency on PR A.** The automatic drain's timing is safe only
 if a drain is indistinguishable from an ordinary transfer. It is not yet:

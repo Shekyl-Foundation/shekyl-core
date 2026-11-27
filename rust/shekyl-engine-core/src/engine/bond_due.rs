@@ -18,7 +18,7 @@ use shekyl_engine_state::pending_post_block::{
 };
 use shekyl_rpc_transport::DaemonTarget;
 use shekyl_tx_builder::{LeafEntry, TreeContext};
-use shekyl_types::{BlockHeight, ChainCount, PCanonicalId, PSlot};
+use shekyl_types::{BlockHeight, ChainCount, GlobalOutputIndex, PCanonicalId, PSlot};
 use shekyl_units::AtomicUnits;
 use tokio::sync::RwLock;
 
@@ -122,6 +122,25 @@ impl DueBlock {
     }
 }
 
+/// The funding a due-block read takes off the row it is about to sign.
+struct HeldFunding {
+    p_slot: PSlot,
+    posture: PlannedPosture,
+    /// The row's own reservation, which the sweep may spend.
+    own: Vec<GlobalOutputIndex>,
+}
+
+/// Which row the due-block read found. A plan is signed for the first time;
+/// a post never sent is signed again at the canonical reference.
+enum HeldStake {
+    Plan(HeldFunding),
+    UnsentPost {
+        funding: HeldFunding,
+        /// The due the plan was signed at. The maximum wait is measured from it.
+        due: ChainCount,
+    },
+}
+
 #[allow(private_bounds)] // same Engine-trait privacy posture as start_pscan_with
 impl<S, D, L, E, R, P> Engine<S, D, L, E, R, P, WalletFile>
 where
@@ -172,40 +191,48 @@ where
         };
         let store = pending_post_store_for_engine(self_arc.clone(), pending_gate);
 
-        // What is being signed: the plan, or the post never sent.
+        // What is being signed: the plan, or the post never sent. The driver
+        // named the persona; the row decides which.
         let held = store
             .read(|block| {
+                if let Some(plan) = block.plans().iter().find(|p| p.persona == persona) {
+                    return Some(HeldStake::Plan(HeldFunding {
+                        p_slot: plan.p_slot,
+                        posture: plan.posture.clone(),
+                        own: plan.funding_gindexes.clone(),
+                    }));
+                }
                 block
-                    .plans()
+                    .posts()
                     .iter()
                     .find(|p| p.persona == persona)
-                    .map(|p| {
-                        (
-                            p.p_slot,
-                            p.posture.clone(),
-                            p.funding_gindexes.clone(),
-                            None,
-                        )
-                    })
-                    .or_else(|| {
-                        block
-                            .posts()
-                            .iter()
-                            .find(|p| p.persona == persona)
-                            .map(|p| {
-                                (
-                                    p.p_slot,
-                                    p.posture.clone(),
-                                    p.funding_gindexes.clone(),
-                                    Some(p.due),
-                                )
-                            })
+                    .map(|post| HeldStake::UnsentPost {
+                        funding: HeldFunding {
+                            p_slot: post.p_slot,
+                            posture: post.posture.clone(),
+                            own: post.funding_gindexes.clone(),
+                        },
+                        due: post.due,
                     })
             })
             .await
             .map_err(|e| DueBlock::assembly("pending read", e))?;
-        let Some((p_slot, posture, own, signed_due)) = held else {
+        let Some(held) = held else {
             return Ok(PlanAttempt::Raced);
+        };
+        // A plan is signed at this tick's tip. A post never sent keeps the
+        // due it was signed at, which is where its maximum wait is measured.
+        let (
+            HeldFunding {
+                p_slot,
+                posture,
+                own,
+            },
+            post_due,
+            resign,
+        ) = match held {
+            HeldStake::Plan(funding) => (funding, tip, false),
+            HeldStake::UnsentPost { funding, due } => (funding, due, true),
         };
         let canonical = canonical_reference(tip).ok_or(DueBlock::Wait(PlanWait::WalletBehind))?;
 
@@ -323,11 +350,12 @@ where
         }
 
         let post = PendingBondPost {
+            wait: None,
             p_slot,
             persona: *assembled.bound_tx.persona(),
             tx_bytes: assembled.bound_tx.bytes().to_vec(),
             posture,
-            due: signed_due.unwrap_or(tip),
+            due: post_due,
             funded_through,
             funding_gindexes: assembled.funding_gindexes,
             state: PendingPostState::Pending,
@@ -340,7 +368,6 @@ where
                 "the signed post names another persona",
             ));
         }
-        let resign = signed_due.is_some();
         let admission = store
             .mutate(|block| {
                 let admission = if resign {

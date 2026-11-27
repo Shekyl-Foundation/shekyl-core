@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 use shekyl_curve_tree::reference::{select_reference_height, REF_ANCHOR_AGE};
 use shekyl_engine_state::pscan_state::PFundingOutputRecord;
 use shekyl_engine_state::PendingBondPlan;
-use shekyl_types::{BlockCount, BlockHeight, ChainCount, GlobalOutputIndex, PSlot};
+use shekyl_types::{BlockCount, BlockHeight, ChainCount, GlobalOutputIndex, PCanonicalId, PSlot};
 
 use super::stake_timing::DEFAULT_ENTRY_GAP;
 
@@ -99,6 +99,43 @@ pub(crate) fn past_max_wait(due: ChainCount, tip: ChainCount) -> bool {
 /// below the first legal reference.
 pub(crate) fn canonical_reference(tip: ChainCount) -> Option<BlockHeight> {
     tip.tip().and_then(select_reference_height)
+}
+
+/// What one tick signs. A plan is signed for the first time. A post never
+/// sent, whose reference is no longer canonical, is signed again. The due
+/// is where the maximum wait is measured from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SignSubject {
+    /// A plan at or past its due count.
+    Plan {
+        /// The persona the plan is for.
+        persona: PCanonicalId,
+        /// The plan's due count.
+        due: ChainCount,
+    },
+    /// A post never sent, signed again before its first send.
+    UnsentPost {
+        /// The persona the post is bound to.
+        persona: PCanonicalId,
+        /// The due count the plan was signed at.
+        due: ChainCount,
+    },
+}
+
+impl SignSubject {
+    /// The persona this tick signs for.
+    pub(crate) fn persona(self) -> PCanonicalId {
+        match self {
+            Self::Plan { persona, .. } | Self::UnsentPost { persona, .. } => persona,
+        }
+    }
+
+    /// The due the maximum wait is measured from.
+    pub(crate) fn due(self) -> ChainCount {
+        match self {
+            Self::Plan { due, .. } | Self::UnsentPost { due, .. } => due,
+        }
+    }
 }
 
 #[cfg(test)]

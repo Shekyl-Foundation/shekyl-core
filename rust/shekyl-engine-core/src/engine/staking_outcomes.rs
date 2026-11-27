@@ -19,8 +19,8 @@ use std::sync::Arc;
 
 use shekyl_engine_file::WalletFile;
 use shekyl_engine_state::pending_post_block::{
-    end_date, end_date_disposition, EndDateDisposition, OutcomeKind, RecordKind, SealedRecord,
-    StakingOutcome, TerminalCause,
+    end_date, end_date_disposition, record_was_sent, EndDateDisposition, OutcomeKind, RecordKind,
+    SealedRecord, StakingOutcome, TerminalCause,
 };
 use shekyl_engine_state::pscan_state::PScanState;
 use shekyl_engine_state::{PendingPostBlock, PendingPostState, PlanWait};
@@ -85,11 +85,11 @@ pub struct Sends {
 /// after it, still carrying the cause.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InFlightState {
-    /// A planned stake, not yet signed (`ARCHIVAL_BOND_POST_DELAY.md` BD-Q3):
-    /// it is signed and sent at its due block. `wait` is why its last attempt
-    /// at or past due was not signed, if one was blocked (ruled 2026-11-26:
-    /// "`in_flight` shows the reason"). The wire calls it `pending`, the
-    /// state WR-Q1 ruled a planned stake fits.
+    /// A stake that has not been sent (`ARCHIVAL_BOND_POST_DELAY.md` BD-Q3):
+    /// a plan, or a post never sent whose re-sign is blocked. `wait` is why
+    /// its last attempt at or past due was not signed, if one was blocked
+    /// (ruled 2026-11-26: "`in_flight` shows the reason"). The wire calls it
+    /// `pending`, the state WR-Q1 ruled a planned stake fits.
     Planned {
         /// Why the last attempt was blocked, if it was.
         wait: Option<PlanWait>,
@@ -502,6 +502,13 @@ fn project(
             cause,
             funds_return_at,
         };
+    }
+    // A post never sent can be blocked on its re-sign. The reason lives on
+    // that row, and the wire still calls the state `pending`.
+    if let Some(wait) = record.sign_wait {
+        if !record_was_sent(record.state, record.terminal) {
+            return InFlightState::Planned { wait: Some(wait) };
+        }
     }
     if matches!(record.state, PendingPostState::Dispatched { .. }) {
         InFlightState::Dispatched

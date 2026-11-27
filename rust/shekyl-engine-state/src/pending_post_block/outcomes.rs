@@ -254,6 +254,9 @@ pub struct SealedRecord<'a> {
     pub terminal: Option<TerminalCause>,
     /// The inputs the record reserves.
     pub reserved: &'a [GlobalOutputIndex],
+    /// Why a post never sent could not be signed again. Only a bond post
+    /// carries one; the other kinds are `None`.
+    pub sign_wait: Option<super::PlanWait>,
 }
 
 impl std::fmt::Debug for SealedRecord<'_> {
@@ -265,6 +268,7 @@ impl std::fmt::Debug for SealedRecord<'_> {
             .field("reference_height", &self.reference_height)
             .field("terminal", &self.terminal)
             .field("reserved", &self.reserved.len())
+            .field("sign_wait", &self.sign_wait)
             .finish()
     }
 }
@@ -308,6 +312,7 @@ impl PendingPostBlock {
             reference_height: record.reference_height,
             terminal: record.terminal,
             reserved: record.funding_gindexes.as_slice(),
+            sign_wait: record.wait,
         });
         let claims = self.claims.iter().map(|record| SealedRecord {
             kind: RecordKind::Claim,
@@ -316,6 +321,7 @@ impl PendingPostBlock {
             reference_height: record.reference_height,
             terminal: record.terminal,
             reserved: record.fee_gindexes.as_slice(),
+            sign_wait: None,
         });
         let drains = self.drains.iter().map(|record| SealedRecord {
             kind: RecordKind::Drain,
@@ -324,6 +330,7 @@ impl PendingPostBlock {
             reference_height: record.reference_height,
             terminal: record.terminal,
             reserved: record.funding_gindexes.as_slice(),
+            sign_wait: None,
         });
         let releases = self.releases.iter().map(|record| SealedRecord {
             kind: RecordKind::Release,
@@ -332,6 +339,7 @@ impl PendingPostBlock {
             reference_height: record.reference_height,
             terminal: record.terminal,
             reserved: record.funding_gindexes.as_slice(),
+            sign_wait: None,
         });
         posts.chain(claims).chain(drains).chain(releases)
     }
@@ -581,6 +589,7 @@ mod tests {
 
     fn post(persona_byte: u8, funding: &[u64]) -> PendingBondPost {
         PendingBondPost {
+            wait: None,
             p_slot: PSlot::from_raw(0),
             persona: PCanonicalId::from_bytes([persona_byte; 32]),
             tx_bytes: vec![0xAB; 16],

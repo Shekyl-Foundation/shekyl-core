@@ -204,6 +204,7 @@ impl BondPlanSigner for std::sync::Arc<ScriptedSigner> {
                 .clone();
             block.resign_post(
                 PendingBondPost {
+                    wait: None,
                     reference_height: reference,
                     ..held
                 },
@@ -242,6 +243,7 @@ fn signed_post(
 ) -> PendingBondPost {
     let byte = persona.as_bytes()[0];
     PendingBondPost {
+        wait: None,
         p_slot,
         persona,
         tx_bytes: vec![byte, 0xBE, 0xEF],
@@ -1937,6 +1939,11 @@ async fn a_withdrawn_plan_is_drained_once_and_its_persona_retired() {
         signer.drains(),
         vec![(PSlot::from_raw(0xA1), persona(0xA1))]
     );
+    assert_eq!(
+        signer.ended(),
+        vec![PSlot::from_raw(0xA1)],
+        "deactivated from the ended row"
+    );
     assert!(out.retire.is_empty(), "still funded");
     assert!(
         signer.signed().is_empty(),
@@ -1945,6 +1952,11 @@ async fn a_withdrawn_plan_is_drained_once_and_its_persona_retired() {
 
     // The drain confirmed: the persona holds nothing, so it is retired.
     let out = tick_funded(&mut driver, 1_300, &BTreeMap::new(), &BTreeSet::new()).await;
+    assert_eq!(
+        signer.ended(),
+        vec![PSlot::from_raw(0xA1), PSlot::from_raw(0xA1)],
+        "an ended plan is deactivated again on the next tick"
+    );
     assert_eq!(signer.drains().len(), 1, "one drain");
     assert_eq!(out.retire.len(), 1);
     assert_eq!(out.retire[0].persona, persona(0xA1));

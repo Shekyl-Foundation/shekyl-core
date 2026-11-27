@@ -343,6 +343,7 @@ mod tests {
             .mutate(move |block| {
                 let g = block.generation();
                 let post = shekyl_engine_state::PendingBondPost {
+                    wait: None,
                     p_slot: shekyl_types::PSlot::from_raw(3),
                     persona: staker,
                     tx_bytes: vec![0x0A],

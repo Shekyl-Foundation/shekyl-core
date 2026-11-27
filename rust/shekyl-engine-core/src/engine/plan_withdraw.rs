@@ -55,20 +55,22 @@ where
         })?;
     match withdrawal {
         Withdrawal::Withdrawn(ended) => {
-            // The persona never receives a second funding: it stops being the
-            // active one at once, before the save's durability is judged.
-            let stake = { engine.read().await.stake_handle() };
-            if let Some(stake) = stake {
-                stake
-                    .deactivate_ended_persona(ended.p_slot)
-                    .await
-                    .map_err(|e| UnstakeError::Engine {
-                        context: "deactivate the withdrawn persona",
-                        detail: e.to_string(),
-                    })?;
-            }
+            // The save is the withdrawal. An unconfirmed one is undone by the
+            // seal's own guard, so the persona is deactivated only once the
+            // ending is durable. A deactivation that fails is retried by every
+            // later dispatch tick, which deactivates every ended plan.
             crate::engine::dispatch_durability::require_confirmed(durability)
                 .map_err(UnstakeError::SealNotSaved)?;
+            let stake = { engine.read().await.stake_handle() };
+            if let Some(stake) = stake {
+                if let Err(error) = stake.deactivate_ended_persona(ended.p_slot).await {
+                    tracing::warn!(
+                        %error,
+                        "staking: a withdrawn persona could not be deactivated; the next \
+                         scan deactivates it"
+                    );
+                }
+            }
             Ok(UnstakeOutcome::Withdrawn)
         }
         Withdrawal::AlreadySigned => Err(UnstakeError::BondConfirming),

@@ -18,7 +18,9 @@ use shekyl_types::{BlockCount, BlockHeight, ChainCount, GlobalOutputIndex, PCano
 use tokio_util::sync::CancellationToken;
 
 use super::dispatch::{DispatchError, PendingPostStore, PendingSealStore, TickEvidence};
-use crate::engine::bond_plan::{canonical_reference, past_max_wait, plan_due, FundingPlace};
+use crate::engine::bond_plan::{
+    canonical_reference, past_max_wait, plan_due, FundingPlace, SignSubject,
+};
 
 /// What one attempt to sign a stake at its due block came to
 /// (`ARCHIVAL_BOND_POST_DELAY.md` BD-Q3; how a plan ends, ruled 2026-11-26).
@@ -65,9 +67,10 @@ pub(crate) trait BondPlanSigner: Send + Sync + 'static {
     ) -> impl std::future::Future<Output = ()> + Send;
 
     /// The persona at `p_slot` ended without a bond: it stops being the
-    /// active persona at once, so it never receives a second funding, and its
-    /// retirement is not held back as active. Called after the seal that
-    /// ended it.
+    /// active persona, so it never receives a second funding, and its
+    /// retirement is not held back as active. Called for every ended plan on
+    /// every tick. The actor call is idempotent, so a tick whose previous
+    /// call failed deactivates it on the next one.
     fn persona_ended(&self, p_slot: PSlot) -> impl std::future::Future<Output = ()> + Send;
 
     /// The ended persona at `p_slot` is durably retired (its retired record is
@@ -80,16 +83,16 @@ pub(crate) trait BondPlanSigner: Send + Sync + 'static {
 /// A post never sent whose reference is no longer the canonical one for
 /// `tip`: it is signed again before its first send (BD-Q3 Rule 1), never
 /// sent at an older age. Lowest persona first.
-pub(super) fn resign_candidate(
-    posts: &[PendingBondPost],
-    tip: ChainCount,
-) -> Option<(PCanonicalId, ChainCount)> {
+pub(super) fn resign_candidate(posts: &[PendingBondPost], tip: ChainCount) -> Option<SignSubject> {
     let canonical = canonical_reference(tip)?;
     posts
         .iter()
         .filter(|p| !record_was_sent(p.state, p.terminal) && p.reference_height != canonical)
-        .map(|p| (p.persona, p.due))
-        .min_by_key(|(persona, _)| *persona)
+        .map(|p| SignSubject::UnsentPost {
+            persona: p.persona,
+            due: p.due,
+        })
+        .min_by_key(|subject| subject.persona())
 }
 
 /// The due plan to sign this tick: the earliest due at or below `tip`
@@ -100,35 +103,30 @@ pub(super) fn sign_candidate(
     funding: &BTreeMap<GlobalOutputIndex, FundingPlace>,
     reorg_depth: BlockCount,
     tip: ChainCount,
-) -> Option<(PCanonicalId, ChainCount)> {
+) -> Option<SignSubject> {
     plans
         .iter()
-        .filter_map(|p| plan_due(p, funding, reorg_depth).map(|due| (p.persona, due)))
-        .filter(|(_, due)| *due <= tip)
-        .min_by_key(|(persona, due)| (*due, *persona))
-}
-
-/// What the driver signs this tick, if anything: a post never sent comes
-/// before a plan, because it was due first.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct SignTarget {
-    pub(super) persona: PCanonicalId,
-    /// The due count the plan was (or is) due at: the maximum wait is
-    /// measured from it.
-    pub(super) due: ChainCount,
+        .filter_map(|p| {
+            plan_due(p, funding, reorg_depth).map(|due| SignSubject::Plan {
+                persona: p.persona,
+                due,
+            })
+        })
+        .filter(|subject| subject.due() <= tip)
+        .min_by_key(|subject| (subject.due(), subject.persona()))
 }
 
 /// What to sign this tick: a post never sent whose reference aged first
-/// (BD-Q3 Rule 1), else the earliest due plan (BD-Q2).
+/// (BD-Q3 Rule 1), else the earliest due plan (BD-Q2). A post never sent
+/// comes before a plan, because it was due first.
 pub(super) fn select_sign_target(
     block: &PendingPostBlock,
     funding: &BTreeMap<GlobalOutputIndex, FundingPlace>,
     reorg_depth: BlockCount,
     tip: ChainCount,
-) -> Option<SignTarget> {
+) -> Option<SignSubject> {
     resign_candidate(block.posts(), tip)
         .or_else(|| sign_candidate(block.plans(), funding, reorg_depth, tip))
-        .map(|(persona, due)| SignTarget { persona, due })
 }
 
 /// End every plan, and every post never sent, whose reserved funding left
@@ -178,7 +176,7 @@ pub(super) fn end_spent_elsewhere(
 pub(super) async fn sign_due<S: PendingSealStore, G: BondPlanSigner>(
     store: &PendingPostStore<S>,
     signer: &G,
-    target: SignTarget,
+    target: SignSubject,
     tip: ChainCount,
     at: BlockHeight,
     cancel: &CancellationToken,
@@ -189,17 +187,17 @@ pub(super) async fn sign_due<S: PendingSealStore, G: BondPlanSigner>(
     let attempt = tokio::select! {
         biased;
         () = cancel.cancelled() => return Ok(()),
-        attempt = signer.sign_at_due(target.persona, tip) => attempt,
+        attempt = signer.sign_at_due(target.persona(), tip) => attempt,
     };
     let ended = match attempt {
         PlanAttempt::Signed | PlanAttempt::Raced => None,
         PlanAttempt::Wait(wait) => {
-            let waited_out = wait.is_limited() && past_max_wait(target.due, tip);
+            let waited_out = wait.is_limited() && past_max_wait(target.due(), tip);
             let ended = store
                 .mutate(|block| {
-                    let mut changed = block.set_plan_wait(&target.persona, Some(wait));
+                    let mut changed = block.set_sign_wait(&target.persona(), Some(wait));
                     let ended = waited_out
-                        .then(|| block.end_plan(&target.persona, PlanEnding::WaitedOut, at))
+                        .then(|| block.end_plan(&target.persona(), PlanEnding::WaitedOut, at))
                         .flatten();
                     changed |= ended.is_some();
                     (changed, ended)
@@ -221,7 +219,7 @@ pub(super) async fn sign_due<S: PendingSealStore, G: BondPlanSigner>(
         PlanAttempt::Unbondable => {
             let ended = store
                 .mutate(|block| {
-                    let ended = block.end_plan(&target.persona, PlanEnding::Unbondable, at);
+                    let ended = block.end_plan(&target.persona(), PlanEnding::Unbondable, at);
                     (ended.is_some(), ended)
                 })
                 .await
@@ -260,12 +258,15 @@ pub(super) struct PlanPass {
     /// Ended plans whose persona's funding is drained: the task retires them.
     pub(super) drained: Vec<EndedPlan>,
     /// The stake to sign this tick, chosen from a covered seal.
-    pub(super) sign: Option<SignTarget>,
+    pub(super) sign: Option<SignSubject>,
     /// The one ended persona whose drain is owed this tick, if any.
     pub(super) drain_owed: Option<(PSlot, PCanonicalId)>,
     /// Slots of ended personas whose retirement is durable: their records
     /// were dropped this tick, and they leave the live staking record.
     pub(super) retired_slots: Vec<PSlot>,
+    /// Every ended plan's slot. Each tick deactivates these, so a failed
+    /// deactivation is retried while the row remains.
+    pub(super) ended_slots: Vec<PSlot>,
 }
 
 /// The plan half of phase 1: end what was spent elsewhere, drop ended plans
@@ -286,6 +287,11 @@ pub(super) fn plan_pass(
     let dropped = block.drop_retired_plans(evidence.retired);
     let changed = !spent_elsewhere.is_empty() || !dropped.is_empty();
     let retired_slots = dropped.iter().map(|e| e.p_slot).collect();
+    let ended_slots = block
+        .ended_plans()
+        .iter()
+        .map(|ended| ended.p_slot)
+        .collect();
     let drained: Vec<EndedPlan> = block
         .drained_plans(&funded_slots, evidence.scanned_through)
         .cloned()
@@ -306,21 +312,23 @@ pub(super) fn plan_pass(
             sign,
             drain_owed,
             retired_slots,
+            ended_slots,
         },
     )
 }
 
-/// After the seal that decided them: each spent-elsewhere persona stops
-/// being the active one, and each durably retired slot leaves the live
-/// staking record.
+/// After the seal that decided them: each durably retired slot leaves the
+/// live staking record, and every ended plan's persona stops being the
+/// active one. The second call covers endings from earlier ticks whose
+/// deactivation did not land.
 pub(super) async fn report_plan_endings<G: BondPlanSigner>(signer: &G, pass: &PlanPass) {
     for slot in &pass.retired_slots {
         signer.slot_retired(*slot).await;
     }
-    let ended = &pass.spent_elsewhere;
-    for plan in ended {
-        signer.persona_ended(plan.p_slot).await;
+    for slot in &pass.ended_slots {
+        signer.persona_ended(*slot).await;
     }
+    let ended = &pass.spent_elsewhere;
     if !ended.is_empty() {
         tracing::warn!(
             count = ended.len(),

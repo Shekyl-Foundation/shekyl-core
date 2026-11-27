@@ -314,9 +314,9 @@ pub enum FirstStakeError {
     /// then retry.
     #[error("staking recovered this session: close and reopen the wallet to finish recovery")]
     RecoveredPendingReopen,
-    /// A signed bond post is already sealed and awaiting dispatch (W3): the
-    /// stake is in flight; the dispatch driver will broadcast it.
-    #[error("a signed bond post is already awaiting dispatch")]
+    /// A stake is already in flight: a plan, a post awaiting dispatch, or an
+    /// ended plan whose funds are returning. The dispatch driver finishes it.
+    #[error("a stake is already in flight")]
     BondInFlight,
     /// A confirmed bond post exists on-chain for **any** recorded bonded
     /// persona: the wallet is already staking; a second call must not mint
@@ -766,29 +766,30 @@ where
     Self: Send + Sync,
 {
     /// The first-stake continuation (`ARCHIVAL_STAKE_ACTIVATION_PLAN.md`
-    /// §5.0 steps 4–6, SA-R1-b typestate-forced order): idempotency/W2 split
-    /// → **preflight sweep** → **the fill** (every shard the bond owes is
-    /// fetched from `node`, verified and written to the persona body store,
-    /// `WSS-Q4`; the assembly takes only what a completed fill returns) →
-    /// both before any durable staker
-    /// state — a failure here is W1-clean, nothing to reconcile) →
-    /// `persist_bond_record` (the durable point: mints the ticket, flips
-    /// `staking_enabled`, writes `bonded_slots[slot]`) → sign + assemble →
-    /// the `.wallet.pending` seal. **No broadcast** (SA-DQ-5): the post-open
-    /// bond dispatch driver sends the sealed post at its GF-7 offset (W3 is
-    /// held-across-reopen by the pending seal).
+    /// §5.0 steps 4–6, SA-R1-b typestate-forced order; `ARCHIVAL_BOND_POST_DELAY.md`
+    /// BD-Q2, BD-Q3): idempotency/W2 split → **preflight sweep** → **the fill**
+    /// (every shard the bond owes is fetched from `node`, verified and written
+    /// to the persona body store, `WSS-Q4`) → both before any durable staker
+    /// state, so a failure here is W1-clean → `persist_bond_record` (the
+    /// durable point: mints the ticket, flips `staking_enabled`, writes
+    /// `bonded_slots[slot]`) → [`Self::seal_bond_plan`]. Nothing is signed
+    /// here. The dispatch driver signs the post at its due block
+    /// ([`Self::sign_bond_at_due`]) and sends it in that tick. **No broadcast**
+    /// from this call (SA-DQ-5).
     ///
     /// Entry precondition: a StakeEngine is resident — either the wallet is
     /// already a staker (W2 resume) or this open carried the transient
     /// first-stake intent (SA-R1-a). The caller is the credentialed `stake`
     /// RPC (or an in-process embedder like the GUI).
     ///
-    /// A failure **after** `persist_bond_record` is the W2 window: durable
-    /// `bonded_slots[slot]` with no pending post. Recovery is re-invoking
-    /// `stake` (this function detects the resume case and re-mints the
-    /// ticket — `persist_bond_record` is re-entrant); the un-resumed slot is
-    /// benign by the `StakingBlock` hint design and, post-genesis, arm #3's
-    /// backstop.
+    /// A failure **after** `persist_bond_record` and before a confirmed plan
+    /// seal is the W2 window: `staking_enabled` and `bonded_slots[slot]` are
+    /// durable, and the pending block holds no plan, post, or ended plan.
+    /// Recovery is re-invoking `stake` (this function detects the resume and
+    /// re-mints the ticket — `persist_bond_record` is re-entrant — then seals
+    /// the plan). A plan, a signed post, or an ended plan already in the
+    /// block is in flight and refuses. The un-resumed slot is benign by the
+    /// `StakingBlock` hint design and, post-genesis, arm #3's backstop.
     ///
     /// # The posture is the caller's, and it is mandatory
     ///
@@ -801,12 +802,12 @@ where
     /// so no code state exists in which an ordinary staker silently owes
     /// the corpus.
     ///
-    /// Nothing posture-shaped is persisted, and nothing needs to be: the
-    /// posture is realized as the assembled post's `HoldingsDescriptor`,
-    /// and from there the **connected bond record** is the durable, chain-
-    /// owned marker every later consumer reads (the serving pinner derives
-    /// its obligation from it; `staking_info` renders it). A W2 resume
-    /// passes the posture again, exactly as the first call did.
+    /// The plan persists the posture (`PlannedPosture`) until the due block,
+    /// where it becomes the post's holdings. After the post lands, the
+    /// **connected bond record** is the durable, chain-owned marker later
+    /// consumers read (the serving pinner derives its obligation from it;
+    /// `staking_info` renders it). A W2 resume passes the posture again, and
+    /// the seal stores that one.
     pub async fn first_stake(
         self_arc: Arc<RwLock<Self>>,
         node: &DaemonTarget,
@@ -853,11 +854,12 @@ where
         // Idempotency / W2 split (§5.1 + §5.7 W2) — every guard is
         // **wallet-level**, keyed on the wallet's own recorded state rather
         // than the caller-passed slot, so no slot value can route around a
-        // refusal. A signed post awaiting dispatch is W3 — refuse; a
-        // confirmed on-chain post for any bonded persona makes this wallet
-        // an active staker — refuse (a second call must not mint a second
-        // first-stake); a durable slot with NEITHER is the W2 phantom —
-        // resume, and only at a recorded bonded slot.
+        // refusal. A plan, a signed post, or an ended plan is in flight —
+        // refuse. A confirmed on-chain post for any bonded persona makes this
+        // wallet an active staker — refuse (a second call must not mint a
+        // second first-stake). A durable slot with neither a record nor a
+        // confirmation is the W2 phantom — resume, and only at a recorded
+        // bonded slot.
         let pending_exists = store
             .read(PendingPostBlock::has_stake_in_flight)
             .await

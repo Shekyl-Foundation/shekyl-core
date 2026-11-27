@@ -26,7 +26,9 @@ fn in_flight(
 use std::collections::BTreeSet;
 
 use shekyl_engine_state::pending_post_block::SealAdmission;
-use shekyl_engine_state::{PendingBondPost, PendingDrain, PendingEmissionClaim, PendingRelease};
+use shekyl_engine_state::{
+    PendingBondPost, PendingDrain, PendingEmissionClaim, PendingRelease, PlanWait,
+};
 use shekyl_types::{GlobalOutputIndex, PCanonicalId, PSlot};
 
 const REFERENCE: BlockHeight = BlockHeight::from_raw(5_000);
@@ -42,6 +44,7 @@ fn gindexes(g: &[u64]) -> Vec<GlobalOutputIndex> {
 
 fn post(b: u8, g: &[u64]) -> PendingBondPost {
     PendingBondPost {
+        wait: None,
         p_slot: PSlot::from_raw(u32::from(b)),
         persona: persona(b),
         tx_bytes: vec![b],
@@ -132,6 +135,34 @@ fn a_sealed_record_reads_pending_then_dispatched_with_its_height() {
         }),
         "the first send's count, as a tip height"
     );
+}
+
+/// A post never sent records why its re-sign was blocked, and `in_flight`
+/// says so. A sent post does not: the reason is not a property of a record
+/// that has already gone out.
+#[test]
+fn an_unsent_post_shows_why_its_re_sign_is_blocked() {
+    let mut block = PendingPostBlock::empty();
+    seal(&mut block, Record::Post(post(1, &[1])));
+    assert!(block.set_sign_wait(&persona(1), Some(PlanWait::FeeAboveFunding)));
+    let waiting = in_flight(&block, at(5_010), ScanEvidence::unscanned());
+    assert_eq!(
+        waiting[0].state,
+        InFlightState::Planned {
+            wait: Some(PlanWait::FeeAboveFunding),
+        }
+    );
+    assert!(
+        waiting[0].state.reason().unwrap().contains("network fees"),
+        "the reason is the user's sentence"
+    );
+
+    assert!(block
+        .mark_dispatched(&persona(1), ChainCount::from_raw(5_011))
+        .is_some());
+    let sent = in_flight(&block, at(5_020), ScanEvidence::unscanned())[0];
+    assert_eq!(sent.state, InFlightState::Dispatched);
+    assert_eq!(sent.state.reason(), None);
 }
 
 /// The boundary is the driver's no-send rule on the ledger clock: at a

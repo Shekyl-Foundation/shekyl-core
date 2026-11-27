@@ -179,6 +179,7 @@ fn in_progress_states_are_named_before_nothing_staked() {
     assert_eq!(
         block.seal_post(
             PendingBondPost {
+                wait: None,
                 p_slot: PSlot::from_raw(0),
                 persona: persona(9),
                 tx_bytes: vec![0xAB; 4],

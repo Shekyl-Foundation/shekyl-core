@@ -288,6 +288,7 @@ fn synthetic_persona(arm_tag: u64, run: usize, wallet: usize, slot: usize) -> PC
 /// record for the next round's seed.
 fn synthetic_post(persona: PCanonicalId, slot: usize, round: usize) -> PendingBondPost {
     PendingBondPost {
+        wait: None,
         p_slot: PSlot::from_raw(u32::try_from(slot).expect("slot fits u32")),
         persona,
         tx_bytes: format!("gf7-sealing-run synthetic post slot={slot} round={round}").into_bytes(),

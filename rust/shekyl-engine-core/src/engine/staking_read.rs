@@ -586,6 +586,7 @@ mod tests {
 
     fn pending_post(id: u8) -> PendingBondPost {
         PendingBondPost {
+            wait: None,
             p_slot: PSlot::from_raw(0),
             persona: persona(id),
             tx_bytes: vec![0xAB; 4],

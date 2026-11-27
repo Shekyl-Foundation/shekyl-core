@@ -967,6 +967,7 @@ mod tests {
         let persona = PCanonicalId::from_bytes([9u8; 32]);
         let bytes = vec![1, 2, 3, 4];
         let post = PendingBondPost {
+            wait: None,
             p_slot: PSlot::from_raw(0),
             persona,
             tx_bytes: bytes.clone(),

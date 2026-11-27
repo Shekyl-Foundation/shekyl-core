@@ -961,6 +961,53 @@
                         }
                       }
                     }
+                  },
+                  {
+                    "name": "wait",
+                    "ty": {
+                      "name": "Option<T>",
+                      "ty": {
+                        "Option": {
+                          "name": "PlanWait",
+                          "ty": {
+                            "Enum": [
+                              {
+                                "name": "NodeUnreachable",
+                                "ty": "UnitVariant"
+                              },
+                              {
+                                "name": "NodeSyncing",
+                                "ty": "UnitVariant"
+                              },
+                              {
+                                "name": "WalletBehind",
+                                "ty": "UnitVariant"
+                              },
+                              {
+                                "name": "FeeAboveFunding",
+                                "ty": "UnitVariant"
+                              },
+                              {
+                                "name": "NodeNotLocal",
+                                "ty": "UnitVariant"
+                              },
+                              {
+                                "name": "NodeMismatch",
+                                "ty": "UnitVariant"
+                              },
+                              {
+                                "name": "StoreFailed",
+                                "ty": "UnitVariant"
+                              },
+                              {
+                                "name": "AssemblyFailed",
+                                "ty": "UnitVariant"
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
                   }
                 ]
               }
