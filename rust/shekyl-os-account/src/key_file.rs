@@ -19,11 +19,17 @@
 //! credential. An access-list entry is not read: it is how systemd grants
 //! the service's account, and the mode's group bits are its mask.
 //!
-//! On Windows the judgment is the path's owner-only label
-//! ([`crate::private_file::check_private`]), made before any byte is copied.
-//! It is not a judgment of the open handle. A swap of the name between the
-//! judgment and the read is the known gap, and a handle judgment is the next
-//! increment.
+//! On Windows the judgment is the open handle too. The open shares reading
+//! only, so while it is held no other open can write, rename, replace or
+//! delete the file: a swap of the name between the judgment and the read
+//! cannot happen. A reader that shares reading, such as a backup agent or a
+//! scanner, does not stop it; a holder with write access does, and the open
+//! fails. The open does not follow a reparse point at the name, and a
+//! reparse point, such as a symbolic link, is refused. The rule is the
+//! owner-only labelled descriptor that [`crate::private_file::check_private`]
+//! applies to a path (owned by this account, a protected access list that
+//! admits no other principal, a no-read-up label), read here from the
+//! handle's own descriptor, so what is judged is what is read.
 
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -142,37 +148,61 @@ fn judge_key_file(file: &File, path: &Path) -> Result<(), KeyFileError> {
     Ok(())
 }
 
-/// Open `path`. `Ok(None)` when the name is absent.
+/// Open `path` for the judgment, sharing reading only and not following a
+/// reparse point at the name. `Ok(None)` when the name is absent.
+///
+/// Sharing reading only is the point: while this handle is held, no open
+/// with write or delete access succeeds, so the name cannot be renamed,
+/// replaced or written between the judgment and the read. Denying readers
+/// too would add nothing (who may read is the access list's to say) and
+/// would refuse the start whenever a backup agent or a scanner held the file.
 #[cfg(windows)]
 fn open_key_file(path: &Path) -> Result<Option<File>, KeyFileError> {
-    match File::open(path) {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Storage::FileSystem::{FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ};
+
+    let mut opts = std::fs::OpenOptions::new();
+    opts.read(true)
+        .share_mode(FILE_SHARE_READ)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    match opts.open(path) {
         Ok(file) => Ok(Some(file)),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(KeyFileError::Io(path.to_path_buf(), error)),
     }
 }
 
-/// Judge the path's owner-only label before any byte is copied.
-///
-/// `file` is the handle the read will use. The label is still the path's:
-/// this is not a judgment of that handle.
+/// Judge the handle `open_key_file` returned: what is judged is what is read.
+/// A reparse point (opened as itself, not followed) and anything not a
+/// regular file are refused; then the handle's own descriptor must be
+/// owner-only and labelled.
 #[cfg(windows)]
-fn judge_key_file(_file: &File, path: &Path) -> Result<(), KeyFileError> {
-    match crate::private_file::check_private(path) {
-        Ok(()) => Ok(()),
-        Err(error) => Err(from_private(path, error)),
+fn judge_key_file(file: &File, path: &Path) -> Result<(), KeyFileError> {
+    use std::os::windows::fs::MetadataExt;
+    use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+
+    let meta = file
+        .metadata()
+        .map_err(|error| KeyFileError::Io(path.to_path_buf(), error))?;
+    if meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return Err(KeyFileError::Exposed(
+            path.to_path_buf(),
+            REPARSE_POINT.to_owned(),
+        ));
     }
+    if !meta.is_file() {
+        return Err(KeyFileError::Exposed(
+            path.to_path_buf(),
+            "is not a regular file".to_owned(),
+        ));
+    }
+    shekyl_win_sec::rendezvous::check_owner_only_labelled_file(file)
+        .map_err(|error| KeyFileError::Exposed(path.to_path_buf(), error.to_string()))
 }
 
+/// Why a reparse point at the name is refused.
 #[cfg(windows)]
-fn from_private(path: &Path, error: crate::private_file::PrivateFileError) -> KeyFileError {
-    use crate::private_file::PrivateFileError;
-    match error {
-        PrivateFileError::Exposed(path, why) => KeyFileError::Exposed(path, why),
-        PrivateFileError::Io(path, error) => KeyFileError::Io(path, error),
-        other => KeyFileError::Io(path.to_path_buf(), std::io::Error::other(other.to_string())),
-    }
-}
+const REPARSE_POINT: &str = "is a reparse point, such as a symbolic link";
 
 /// What a key file's handle says about who can reach it.
 #[cfg(unix)]
@@ -282,6 +312,107 @@ mod tests {
             matches!(read_key_file(&key, 96), Err(KeyFileError::Exposed(..))),
             "a plain file was read as a key"
         );
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows {
+    use super::*;
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    };
+
+    /// Windows' "the process cannot access the file because it is being
+    /// used by another process".
+    const SHARING_VIOLATION: i32 = 32;
+
+    /// A private key file of 96 bytes in a fresh directory.
+    fn private_key() -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().expect("directory");
+        let key = dir.path().join("key");
+        crate::private_file::write_private(&key, &[7; 96]).expect("key");
+        (dir, key)
+    }
+
+    /// Open `path` as another process would, sharing everything.
+    fn hold(path: &Path, write: bool) -> File {
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(write)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .open(path)
+            .expect("the other holder")
+    }
+
+    /// **While the judged handle is held, the name cannot be renamed or the
+    /// file written.** The swap the judgment would otherwise miss cannot
+    /// happen. Once the handle is closed both succeed, so the refusal is the
+    /// handle's. Red edit: share writing or deleting in `open_key_file`.
+    #[test]
+    // CLIPPY: disallowed_methods — the rename is the swap under test, not a replace.
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "test support: a rename of the held name is the swap the share mode must refuse"
+    )]
+    fn a_judged_key_file_cannot_be_renamed_or_written_while_held() {
+        let (dir, key) = private_key();
+        let held = open_key_file(&key).expect("open").expect("present");
+        judge_key_file(&held, &key).expect("a private key file is a key file");
+        let moved = dir.path().join("moved");
+        let renamed = std::fs::rename(&key, &moved).expect_err("the name was renamed while held");
+        assert_eq!(renamed.raw_os_error(), Some(SHARING_VIOLATION), "{renamed}");
+        let written = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&key)
+            .expect_err("the file was opened for writing while held");
+        assert_eq!(written.raw_os_error(), Some(SHARING_VIOLATION), "{written}");
+        drop(held);
+        std::fs::rename(&key, &moved).expect("the rename once the handle is closed");
+    }
+
+    /// **A key file another process holds for reading is still read; one it
+    /// holds for writing is refused.** A backup agent or a scanner shares
+    /// reading, so the start goes on. A writer could change the key under
+    /// the judgment, so the open fails with a sharing violation. Red edit:
+    /// open sharing nothing (the reader's hold refuses the start), or share
+    /// writing (the writer's hold is read).
+    #[test]
+    fn a_reader_s_hold_is_read_and_a_writer_s_is_refused() {
+        let (_dir, key) = private_key();
+        let reader = hold(&key, false);
+        let read = read_key_file(&key, 96)
+            .expect("read beside a reader")
+            .expect("present");
+        assert_eq!(read.as_slice(), &[7; 96]);
+        drop(reader);
+        let writer = hold(&key, true);
+        match read_key_file(&key, 96) {
+            Err(KeyFileError::Io(_, error)) => {
+                assert_eq!(error.raw_os_error(), Some(SHARING_VIOLATION), "{error}");
+            }
+            other => panic!("a key file a writer holds was not refused: {other:?}"),
+        }
+        drop(writer);
+    }
+
+    /// **A symbolic link at the name is refused, not followed.** The link
+    /// points at a private key file this account could read; it is refused
+    /// as a reparse point before any byte is copied. Creating the link needs
+    /// the symbolic-link privilege or developer mode, which this test
+    /// requires. Red edit: drop `FILE_FLAG_OPEN_REPARSE_POINT` (the target
+    /// is read through the link), or the reparse-point check (the link is
+    /// refused for another reason, and the reason is asserted).
+    #[test]
+    fn a_symbolic_link_at_the_name_is_refused() {
+        let (dir, key) = private_key();
+        let link = dir.path().join("link");
+        std::os::windows::fs::symlink_file(&key, &link)
+            .expect("this test needs the symbolic-link privilege or developer mode");
+        match read_key_file(&link, 96) {
+            Err(KeyFileError::Exposed(_, why)) => assert_eq!(why, REPARSE_POINT),
+            other => panic!("a link was not refused as a reparse point: {other:?}"),
+        }
     }
 }
 

@@ -31,13 +31,15 @@ use std::fmt;
 use std::fs::File;
 use std::io;
 use std::os::windows::ffi::OsStrExt;
-use std::os::windows::io::FromRawHandle;
+use std::os::windows::io::{AsRawHandle, FromRawHandle};
 use std::path::Path;
 
 use windows_sys::Win32::Foundation::{
     LocalFree, ERROR_ALREADY_EXISTS, ERROR_INVALID_ACL, GENERIC_WRITE, INVALID_HANDLE_VALUE,
 };
-use windows_sys::Win32::Security::Authorization::{GetNamedSecurityInfoW, SE_FILE_OBJECT};
+use windows_sys::Win32::Security::Authorization::{
+    GetNamedSecurityInfoW, GetSecurityInfo, SE_FILE_OBJECT,
+};
 use windows_sys::Win32::Security::{
     AclSizeInformation, GetAce, GetAclInformation, GetSecurityDescriptorControl, ACE_HEADER, ACL,
     ACL_SIZE_INFORMATION, DACL_SECURITY_INFORMATION, LABEL_SECURITY_INFORMATION,
@@ -208,8 +210,33 @@ fn create_new_file(path: &Path, descriptor: &OwnerOnlyDescriptor) -> Result<File
 /// [`RendezvousError::Refused`] naming the condition that failed, or the
 /// descriptor could not be read.
 pub fn check_owner_only_labelled(path: &Path) -> Result<(), RendezvousError> {
+    owner_only_labelled(&SecurityRead::of(path)?, || {
+        let reads = read_grantees(path)?;
+        Ok((reads, write_grantees(path)?))
+    })
+}
+
+/// [`check_owner_only_labelled`] of the open file `file`: its descriptor is
+/// read through the handle, so the judgment is of the object the handle
+/// holds, whatever its name points at by then.
+///
+/// # Errors
+/// [`RendezvousError::Refused`] naming the condition that failed, or the
+/// descriptor could not be read.
+pub fn check_owner_only_labelled_file(file: &File) -> Result<(), RendezvousError> {
+    owner_only_labelled(&SecurityRead::of_file(file)?, || {
+        crate::dacl::file_grantees(file)
+    })
+}
+
+/// The owner-only labelled rule over one descriptor: `read` for the owner,
+/// the protection and the label, `grantees` for who may read and who may
+/// write, both read from the same object.
+fn owner_only_labelled(
+    read: &SecurityRead,
+    grantees: impl FnOnce() -> Result<(Vec<Grantee>, Vec<Grantee>), crate::dacl::DaclError>,
+) -> Result<(), RendezvousError> {
     let me = current_user_sid()?;
-    let read = SecurityRead::of(path)?;
     let owner = read.owner()?;
     if owner != me {
         return Err(RendezvousError::Refused(format!(
@@ -228,8 +255,7 @@ pub fn check_owner_only_labelled(path: &Path) -> Result<(), RendezvousError> {
             Grantee::Permitted => None,
         })
     };
-    let reads = read_grantees(path).map_err(|e| RendezvousError::Refused(e.to_string()))?;
-    let writes = write_grantees(path).map_err(|e| RendezvousError::Refused(e.to_string()))?;
+    let (reads, writes) = grantees().map_err(|e| RendezvousError::Refused(e.to_string()))?;
     if let Some(sid) = foreign(reads).or_else(|| foreign(writes)) {
         return Err(RendezvousError::Refused(format!(
             "its access list admits {sid}"
@@ -306,9 +332,9 @@ struct SecurityRead {
 
 impl Drop for SecurityRead {
     fn drop(&mut self) {
-        // SAFETY: `GetNamedSecurityInfoW` allocated the descriptor with
-        // `LocalAlloc`; it is freed exactly once, here. `owner` and `sacl`
-        // point into it and are not read after this.
+        // SAFETY: `GetNamedSecurityInfoW` or `GetSecurityInfo` allocated the
+        // descriptor with `LocalAlloc`; it is freed exactly once, here.
+        // `owner` and `sacl` point into it and are not read after this.
         unsafe { LocalFree(self.psd.cast::<c_void>()) };
     }
 }
@@ -326,6 +352,33 @@ impl SecurityRead {
         let rc = unsafe {
             GetNamedSecurityInfoW(
                 w.as_ptr(),
+                SE_FILE_OBJECT,
+                OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION | LABEL_SECURITY_INFORMATION,
+                &raw mut owner,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &raw mut sacl,
+                &raw mut psd,
+            )
+        };
+        if rc != 0 {
+            return Err(RendezvousError::Read(rc));
+        }
+        Ok(Self { psd, owner, sacl })
+    }
+
+    /// The same read as [`Self::of`], of the open file `file` through its
+    /// handle.
+    fn of_file(file: &File) -> Result<Self, RendezvousError> {
+        let mut owner: *mut c_void = std::ptr::null_mut();
+        let mut sacl: *mut ACL = std::ptr::null_mut();
+        let mut psd: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
+        // SAFETY: `file`'s handle is open for the call, with read access,
+        // which carries `READ_CONTROL`; every out-parameter is a local. The
+        // label is read as in `of`.
+        let rc = unsafe {
+            GetSecurityInfo(
+                file.as_raw_handle(),
                 SE_FILE_OBJECT,
                 OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION | LABEL_SECURITY_INFORMATION,
                 &raw mut owner,

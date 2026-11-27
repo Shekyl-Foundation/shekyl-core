@@ -19,13 +19,17 @@
 #![cfg(windows)]
 
 use std::ffi::c_void;
+use std::fs::File;
 use std::os::windows::ffi::OsStrExt;
+use std::os::windows::io::AsRawHandle;
 use std::path::Path;
 
 use windows_sys::Win32::Foundation::{
     LocalFree, ERROR_INVALID_ACL, GENERIC_ALL, GENERIC_READ, GENERIC_WRITE,
 };
-use windows_sys::Win32::Security::Authorization::{GetNamedSecurityInfoW, SE_FILE_OBJECT};
+use windows_sys::Win32::Security::Authorization::{
+    GetNamedSecurityInfoW, GetSecurityInfo, SE_FILE_OBJECT,
+};
 use windows_sys::Win32::Security::{
     AclSizeInformation, GetAce, GetAclInformation, ACCESS_ALLOWED_ACE, ACE_HEADER, ACL,
     ACL_SIZE_INFORMATION, DACL_SECURITY_INFORMATION, INHERIT_ONLY_ACE, OWNER_SECURITY_INFORMATION,
@@ -150,37 +154,62 @@ impl Drop for Descriptor {
 }
 
 fn grantees(path: &Path, mask: u32, include_owner: bool) -> Result<Vec<Grantee>, DaclError> {
+    let wide: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    Ok(grantees_in(
+        &read_descriptor(&wide, SE_FILE_OBJECT)?,
+        mask,
+        include_owner,
+    ))
+}
+
+/// Who may read and who may write the open file `file`, from its own
+/// descriptor: the same entries [`read_grantees`] and [`write_grantees`]
+/// read through a name, read here through the handle, so what is judged is
+/// the object the handle holds and not whatever the name points at now.
+///
+/// # Errors
+/// [`DaclError`] when the descriptor cannot be read.
+pub(crate) fn file_grantees(file: &File) -> Result<(Vec<Grantee>, Vec<Grantee>), DaclError> {
+    let view = read_file_descriptor(file)?;
+    Ok((
+        grantees_in(&view, READ_MASK, false),
+        grantees_in(&view, WRITE_MASK, true),
+    ))
+}
+
+/// The grantees in `view` holding a right in `mask`, the owner first when
+/// `include_owner`. This account and the platform's principals are
+/// [`Grantee::Permitted`].
+fn grantees_in(view: &DescriptorView, mask: u32, include_owner: bool) -> Vec<Grantee> {
     let me = current_user_sid().ok();
-    let classify = |s: SidString| -> Grantee {
-        let permitted = is_platform_principal(&s) || me.as_ref() == Some(&s);
+    let classify = |s: &SidString| -> Grantee {
+        let permitted = is_platform_principal(s) || me.as_ref() == Some(s);
         if permitted {
             Grantee::Permitted
         } else {
             Grantee::Other(s.as_str().to_owned())
         }
     };
-    let wide: Vec<u16> = path
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect();
-    let view = read_descriptor(&wide, SE_FILE_OBJECT)?;
     let mut out = Vec::new();
     if include_owner {
-        out.extend(view.owner.map(classify));
+        out.extend(view.owner.as_ref().map(classify));
     }
-    match view.allowed {
+    match &view.allowed {
         None => out.push(Grantee::Other(
             "Everyone (no access-control list)".to_owned(),
         )),
         Some(allowed) => out.extend(
             allowed
-                .into_iter()
+                .iter()
                 .filter(|(_, ace_mask)| ace_mask & mask != 0)
                 .map(|(sid, _)| classify(sid)),
         ),
     }
-    Ok(out)
+    out
 }
 
 /// An object's owner and its allow and deny entries that apply to the
@@ -221,6 +250,46 @@ pub(crate) fn read_descriptor(
         return Err(DaclError(rc));
     }
     let _guard = Descriptor(psd);
+    // SAFETY: `owner` and `dacl` point into `psd`, which `_guard` keeps alive
+    // until this returns.
+    unsafe { view_of(owner, dacl) }
+}
+
+/// Read the owner and the DACL of the open file `file`, from its handle.
+fn read_file_descriptor(file: &File) -> Result<DescriptorView, DaclError> {
+    let mut owner: *mut c_void = std::ptr::null_mut();
+    let mut dacl: *mut ACL = std::ptr::null_mut();
+    let mut psd: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
+    // SAFETY: `file`'s handle is open for the call (it was opened with read
+    // access, which carries `READ_CONTROL`); every out-parameter is a local;
+    // `owner` and `dacl` point into `psd`, which the guard frees after they
+    // are consumed.
+    let rc = unsafe {
+        GetSecurityInfo(
+            file.as_raw_handle(),
+            SE_FILE_OBJECT,
+            OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+            &raw mut owner,
+            std::ptr::null_mut(),
+            &raw mut dacl,
+            std::ptr::null_mut(),
+            &raw mut psd,
+        )
+    };
+    if rc != 0 {
+        return Err(DaclError(rc));
+    }
+    let _guard = Descriptor(psd);
+    // SAFETY: as in `read_descriptor`.
+    unsafe { view_of(owner, dacl) }
+}
+
+/// The owner and the entries of a DACL that apply to the object itself.
+///
+/// # Safety
+/// `owner` is null or a valid SID, and `dacl` is null or a valid ACL, both
+/// inside a descriptor that outlives this call.
+unsafe fn view_of(owner: *mut c_void, dacl: *mut ACL) -> Result<DescriptorView, DaclError> {
     let owner = if owner.is_null() {
         None
     } else {
