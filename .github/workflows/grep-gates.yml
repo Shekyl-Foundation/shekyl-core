@@ -411,6 +411,11 @@ jobs:
           # has three owners and they agree. `--selftest` first (rule 47).
           run_one "Armed lever: log check" \
             python3 scripts/test_armed_lever.py
+          # Every launcher that mines waits for the daemon's first posted
+          # template (scripts/posted_template.py); the wait's own test, no
+          # daemon.
+          run_one "Posted template: the wait's test" \
+            python3 scripts/test_posted_template.py
           run_one "Armed lever: launcher gate selftest" \
             python3 scripts/ci/check_armed_lever_launchers.py --selftest
           run_one "Armed lever: every regtest lever spawn arms the row" \

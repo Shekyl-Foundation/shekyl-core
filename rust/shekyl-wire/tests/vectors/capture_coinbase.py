@@ -31,6 +31,7 @@ ROOT = os.path.abspath(os.path.join(HERE, "..", "..", "..", ".."))
 sys.path.insert(0, os.path.join(ROOT, "scripts"))
 import armed_lever  # noqa: E402
 import owner_socket  # noqa: E402
+import posted_template  # noqa: E402
 SHEKYLD = os.environ.get("SHEKYLD_BIN", os.path.join(ROOT, "build", "bin", "shekyld"))
 # Default to a freshly-derived current-format regtest address committed beside the
 # vectors (regenerate via `cargo test -p shekyl-wire --test emit_regtest_addr
@@ -144,26 +145,6 @@ def start_daemon(workdir, addr, attempts=5):
     raise RuntimeError(f"shekyld failed to start after {attempts} attempts: {last}")
 
 
-def await_posted(url, timeout_s=60):
-    """Wait for the daemon's first posted template.
-
-    A regtest daemon with no peers reads Synced at open and posts a template
-    once its follower has looped; a `dev_block_generate` sent before that is
-    refused `mine.not_synced` (`no_view`), honestly. Ready is the first posted
-    job, as in the Rust harness (`regtest_e2e.rs` `await_posted`).
-    """
-    deadline = time.monotonic() + timeout_s
-    last = "no answer"
-    while time.monotonic() < deadline:
-        try:
-            rpc(url, "block_template")
-            return
-        except Exception as e:  # refused until the first post
-            last = str(e)
-        time.sleep(0.1)
-    raise RuntimeError(f"the daemon posted no template within {timeout_s}s; last answer: {last}")
-
-
 def main():
     with open(MINING_RECIPIENTS_PATH) as f:
         addr = json.load(f)["recipients"][0]["address"]
@@ -174,7 +155,7 @@ def main():
     workdir = tempfile.mkdtemp(prefix=f"{os.getpid()}-cbcap_", dir=root)
     daemon, url, log = start_daemon(workdir, addr)
     try:
-        await_posted(url)
+        posted_template.await_posted(url)
         rpc(url, "dev_block_generate", {"count": N_BLOCKS})
         hashes = {}
         for h in CAPTURE_HEIGHTS:

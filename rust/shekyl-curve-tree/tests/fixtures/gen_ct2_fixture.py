@@ -47,6 +47,7 @@ _SCRIPTS = Path(__file__).resolve().parents[4] / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
 import armed_lever  # noqa: E402
 import owner_socket  # noqa: E402
+import posted_template  # noqa: E402
 
 _RECIPIENTS = (
     Path(__file__).resolve().parents[3]
@@ -148,6 +149,9 @@ class Daemon:
                         f"the daemon did not announce {armed_lever.ANNOUNCEMENT!r} "
                         f"at start; see {self.log.name}"
                     )
+                # Answering is not ready to mine: a generate before the
+                # first posted template is refused `no_view`.
+                posted_template.await_posted(self.url)
                 return
             time.sleep(0.5)
         raise RuntimeError("daemon RPC did not become ready")

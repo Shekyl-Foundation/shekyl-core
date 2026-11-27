@@ -60,23 +60,12 @@ mkdir -m 0700 "$DATA/sock"
 DPID=$!
 echo "daemon pid $DPID, port $PORT"
 
-# Wait for RPC readiness rather than sleeping a guessed interval.
-#
-# No pipe: `curl ... | grep -q` would put an EARLY-EXIT consumer on the end of
-# the pipeline, which is the SIGPIPE trap 46-shell-gate-exits names, and the
-# verdict that matters (did the daemon answer?) would travel through it. The
-# reply is captured and tested in the shell instead.
-for _ in $(seq 1 60); do
-  REPLY_BODY=$(curl -s -m 2 -X POST "http://127.0.0.1:$PORT/json_rpc" \
-    -H 'Content-Type: application/json' \
-    -d '{"jsonrpc":"2.0","id":0,"method":"daemon_status"}')
-  case "$REPLY_BODY" in
-    *'"result"'*) READY=1; break ;;
-  esac
-  sleep 2
-done
-if [ "${READY:-0}" != 1 ]; then
-  echo "daemon never became ready; tail of its log:"; tail -20 "$DATA/daemon.out"
+# Wait for the first posted template, rather than sleeping a guessed
+# interval or taking an answer to another method as ready: a
+# dev_block_generate sent before it is refused `no_view`. The helper's exit
+# status is the verdict; nothing is piped (46-shell-gate-exits).
+if ! python3 "$WT/scripts/posted_template.py" "http://127.0.0.1:$PORT/json_rpc" 120; then
+  echo "the daemon posted no template; tail of its log:"; tail -20 "$DATA/daemon.out"
   kill -9 "$DPID" 2>/dev/null; exit 9
 fi
 echo "daemon ready"

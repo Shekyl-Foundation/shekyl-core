@@ -46,6 +46,7 @@ import fsync_probe  # noqa: E402
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import armed_lever  # noqa: E402
 import owner_socket  # noqa: E402
+import posted_template  # noqa: E402
 
 ROOT = A.ROOT
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -381,22 +382,13 @@ class _RunningDaemon:
 
 
 def _await_posted(port, timeout):
-    """Wait until the daemon on `port` answers `block_template`: its node
-    has posted a template, so `dev_block_generate` will not be refused at
-    start. Fails the run when no template is posted within `timeout`."""
-    deadline = time.time() + timeout
-    last = None
-    while time.time() < deadline:
-        try:
-            resp = _rpc(port, "block_template")
-            if "result" in resp:
-                return
-            last = resp.get("error")
-        except (urllib.error.URLError, OSError, json.JSONDecodeError, TimeoutError) as e:
-            last = repr(e)
-        time.sleep(0.1)
-    _fail(f"the seed on 127.0.0.1:{port} posted no template within {timeout}s; "
-          f"last answer: {last}")
+    """Wait until the daemon on `port` has posted a template, so
+    `dev_block_generate` will not be refused at start (`posted_template.py`).
+    Fails the run when no template is posted within `timeout`."""
+    try:
+        posted_template.await_posted(f"http://127.0.0.1:{port}/json_rpc", timeout)
+    except RuntimeError as refused:
+        _fail(str(refused))
 
 
 def mining_address(timeout):
