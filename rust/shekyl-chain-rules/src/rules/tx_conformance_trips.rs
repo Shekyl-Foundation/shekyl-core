@@ -8,8 +8,8 @@
 //! live in `tx_conformance_tests`.
 
 use crate::harness::fixture::{
-    bp_plus_layout_for, coinbase, coinbase_extra, listed, persona, point, pqc_auth_filler,
-    pqc_extra, G, TWO_G,
+    bp_plus_layout_for, coinbase, coinbase_extra, listed, persona, point, point_at,
+    pqc_auth_filler, pqc_extra, G, TWO_G,
 };
 use shekyl_types::KeyImage;
 use shekyl_wire::transaction::{
@@ -107,7 +107,12 @@ pub(super) fn emission_input() -> Input {
 }
 
 pub(super) fn spend_input(k: usize) -> Input {
-    Input::fcmp_spend(KeyImage::from_bytes(point(k)))
+    // `point_at`, not the pinned `point`: the I4 trip spends one past the
+    // cap, more than the sixteen pinned points, and the two agree on those
+    // sixteen (`fixture_points_are_what_they_claim`).
+    Input::fcmp_spend(KeyImage::from_bytes(point_at(
+        u64::try_from(k).expect("a fixture's input index fits u64"),
+    )))
 }
 
 /// `spend2()` with `input` appended and an auth for it.
