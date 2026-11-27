@@ -777,6 +777,7 @@ P2P onion and the archival-serving persona's onion **on the same host**.
 | **data directory** | **NO** | holds the control cookie and tor state; a shared directory re-links what the process split severed |
 | control **cookie / auth file** | **NO** | consequence of the data directory and the control connection |
 | control-protocol **client code** (types, parser, `AddOnion`, reply evaluation) | **YES** | library. No runtime state crosses; duplicating it is the ruled-against error |
+| **guard manager code** (selection, rotation, persistence, the `VanguardsActive` witness) | **YES** | library (`TSR-W1`, Rick, 2026-11-26/27). Each supervisor holds its own manager, loaded from a state path it passes in, so sharing the code cannot share a guard set: the row above stands |
 | tor **binary discovery + hash pin** | **YES, as policy** | a verification *rule*, not a runtime handle. Both sides should verify the same binary against the same pin; that shares a decision, not a session |
 | **listening ports** | **NO**, and must not collide | not shared state, but two instances need disjoint control/SOCKS ports — an allocation constraint the build must make explicit rather than discover |
 
@@ -817,8 +818,10 @@ onion identity encoding (`onion_identity.rs`) were lifted into it out of
 old shape and then migrated.
 
 `shekyl-tor-control-wallet` keeps exactly what the table marks **NO**: the `WalletTorControl`
-supervisor and its cross-incarnation state, the vanguard rotation state machine
-and the `VanguardsActive` witness, and the persona publish orchestration. It
+supervisor and its cross-incarnation state (its own guard manager and state
+file), and the persona publish orchestration. The guard manager's code and the
+`VanguardsActive` witness are in the neutral crate (`TSR-W1`), where the
+daemon's persistent onion holds a manager of its own. It
 depends on the client crate and does **not** re-export the launch path
 (`TorControlClient`, `ManagedTor`, `AddOnion`), so a consumer that wants to
 speak the protocol names the client crate. Types already on `WalletTorControl`'s

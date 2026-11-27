@@ -53,7 +53,15 @@ zeroize = { version = "1", default-features = false, features = ["alloc", "deriv
 tokio = { version = "1", features = ["net", "io-util", "sync", "time", "rt", "macros", "process", "fs"] }
 kameo = { workspace = true }
 futures-core = "0.3"
+# OS CSPRNG: the SAFECOOKIE nonce and the guard manager's layer-2/layer-3
+# draws (VG-1).
 getrandom = "0.2"
+# The guard manager's state file is replaced through the tree's one replace,
+# its staged file a journal the read-back recovers (Rick, 2026-11-18). On
+# Windows the directory cache's save also shares the one replace's wait
+# (`REPLACE_WAIT`) and its held-file refusal (`HeldOpen`); the rename itself
+# is shekyl-win-sec's creating handle.
+shekyl-os-account = { path = "../shekyl-os-account" }
 
 [build-dependencies]
 # Compile the Tor disposition for the build target out of config/tor_pins.json
@@ -74,10 +82,6 @@ libc = "0.2"
 # handle's inheritance flag (`SetHandleInformation`) is set here, beside the
 # socket the launch hands tor.
 shekyl-win-sec = { path = "../shekyl-win-sec" }
-# The one replace's wait (`REPLACE_WAIT`) and its held-file refusal
-# (`HeldOpen`), which the cache's save on Windows shares; the rename itself is
-# shekyl-win-sec's creating handle.
-shekyl-os-account = { path = "../shekyl-os-account" }
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Security",
