@@ -375,7 +375,7 @@ fn onion_sentence(tor: &ManagedTor, unknown: &mut bool) -> Option<String> {
                 .to_owned(),
         ),
         (OnionState::Unreachable, Some(OnionCause::GuardsRefused)) => Some(
-            "Tor refused this node's guard settings, so its address is not published and peers cannot reach it through Tor. This is a fault in this release; please report it. The node tries again every few minutes."
+            "Tor refused this node's guard settings, so its address is not published and peers cannot reach it through Tor. This is a fault in this release; please report it. The node keeps trying."
                 .to_owned(),
         ),
         (OnionState::Unreachable, Some(OnionCause::GuardsUnfilled)) => Some(
