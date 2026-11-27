@@ -423,6 +423,13 @@ jobs:
             python3 scripts/ci/check_owner_socket_launchers.py --selftest
           run_one "Owner socket: every regtest shekyld spawn names a socket directory" \
             python3 scripts/ci/check_owner_socket_launchers.py
+          # INPUT_GRAMMAR.md §5 (`config-file`): the default file is the
+          # machine's, so every regtest shekyld spawn chooses its file and a
+          # test or bench daemon never reads the host's. `--selftest` first.
+          run_one "Config file: launcher gate selftest" \
+            python3 scripts/ci/check_launcher_config_file.py --selftest
+          run_one "Config file: every regtest shekyld spawn chooses its configuration file" \
+            python3 scripts/ci/check_launcher_config_file.py
 
           # ESR-14 (ECONOMICS_SIM_PRODUCTION_REBASE.md §5.20): the economics
           # sim's fold files form chain quantities in production's integers
