@@ -301,12 +301,9 @@ ARMED=(
 # Consensus gates too heavy for the per-PR lane (depth-3 spend, 13 min
 # measured 2026-09-08; the two slice-7 gates ~5 min each in a debug build,
 # fifty spends apiece). The nightly live-daemon workflow runs these with
-# GATE_LANE=slow. The four bonded walks joined on 2026-10-29, when the Rust
-# daemon first admitted a kind-5 JoinMarket (the DRS-X flip), each
+# GATE_LANE=slow. The three bonded walks joined on 2026-10-29, when the
+# Rust daemon first admitted a kind-5 JoinMarket (the DRS-X flip), each
 # observed green on that daemon before it moved here:
-#   e2e_staker_bond_post_accepted_and_applied — the production stake entry
-#     (a complete-tree bond: mine + fund + discover + stake + submit +
-#     confirm), 264 s.
 #   e2e_drain_wire_shape_matches_a_real_transfer — the drain wire shape
 #     over a complete-tree bond, 165 s.
 #   The two market-bond walks stake a compact join onto shard 0, which
@@ -329,11 +326,14 @@ ARMED=(
 # production dispatch driver against the wallet's own node, local debug
 # build, 2026-11-27:
 #   e2e_a_plan_signed_at_its_due_block_lands_at_reference_age_six — the
-#     bond-post delay round's falsifier: the driver signs at the due block
-#     and the first send carries reference age 6. It mines out the plan's
-#     real draw (0–600 blocks at the box's block pace), so its time moves
-#     with the draw: green 1 727 s. Red with `select_reference_height` one
-#     block older: the first send carried age 7.
+#     bond-post delay round's falsifier: the production stake entry, the
+#     driver signs at the due block, the first send carries reference age
+#     6, and the bond lands, its swept funding pruned and its change found
+#     again. It mines out the plan's real draw (0–600 blocks at the box's
+#     block pace), so its time moves with the draw: green 1 727 s. The
+#     draw is logged; SHEKYL_TEST_REPLAY_PLAN_DRAW replays one. Red with
+#     `select_reference_height` one block older: the first send carried
+#     age 7.
 #   e2e_a_withdrawn_plan_is_drained_to_the_principal_and_retired — a
 #     withdrawn plan, a reopen between its ending's save and the drain,
 #     one drain to the principal, the persona retired: green 358 s. Red
@@ -342,7 +342,6 @@ ARMED_SLOW=(
   engine::regtest_e2e::e2e_fcmp_spend_over_depth3_tree
   engine::regtest_e2e::e2e_cxx_template_fills_to_its_median
   engine::regtest_e2e::e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx
-  engine::regtest_e2e::e2e_staker_bond_post_accepted_and_applied
   engine::regtest_e2e::e2e_drain_wire_shape_matches_a_real_transfer
   engine::regtest_e2e::e2e_release_accepted_and_connected
   engine::regtest_e2e::e2e_unstake_collect_retire_composed_arc

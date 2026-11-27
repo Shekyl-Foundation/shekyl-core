@@ -4603,11 +4603,6 @@ struct ConfirmedBondFixture {
     /// and the persona's surviving funding set (the `BondPostChange`
     /// change — the emission claim's fee-input substrate).
     state: shekyl_engine_state::pscan_state::PScanState,
-    /// The pre-post funding gindexes `first_stake` swept (pruned from the
-    /// sealed set by the arm-1 key-image watch).
-    swept_gindexes: Vec<u64>,
-    /// How many pre-post funding records the discovery scan found.
-    pre_post_discovered: usize,
     /// Tip height when the confirmation scan sealed — the geography anchor
     /// for the emission e2e's epoch-close/claim layout.
     confirmed_tip_height: u64,
@@ -4631,8 +4626,6 @@ struct SubmittedBondPost {
     pscan_seal: std::path::PathBuf,
     /// The pre-post funding gindexes `first_stake` swept.
     swept_gindexes: Vec<u64>,
-    /// How many pre-post funding records the discovery scan found.
-    pre_post_discovered: usize,
     /// The daemon's answer to the wallet-built post, through the audited
     /// posture→submitter choke point.
     verdict: Result<
@@ -4709,7 +4702,6 @@ async fn stake_persona_to_confirmed_bond(
         persona_id,
         pscan_seal,
         swept_gindexes,
-        pre_post_discovered,
         verdict,
     } = stake_persona_and_submit_bond(daemon, seed, slot_raw, funding_cushion, stake_entry, wallet)
         .await;
@@ -4767,19 +4759,10 @@ async fn stake_persona_to_confirmed_bond(
         persona_id,
         pscan_seal,
         state,
-        swept_gindexes,
-        pre_post_discovered,
         confirmed_tip_height,
     }
 }
 
-/// The first half of [`stake_persona_to_confirmed_bond`], up to and
-/// including the submit: fund the principal, fund the persona, discover the
-/// funding through the production P-scan, enter the stake (the production
-/// `first_stake` entry or the market-bond assembly), re-lift the sealed
-/// pending post and dispatch it through the audited posture→submitter
-/// choke point. The verdict is returned, not judged, so one body serves
-/// the confirmed-bond fixture and the FND-20 tripwire.
 /// What `plan_persona_stake` hands back: the staker wallet with its persona
 /// funded and discovered, and its stake **planned** (BD-Q3: funding reserved,
 /// delay drawn, nothing signed or sent).
@@ -4792,8 +4775,6 @@ struct PlannedPersonaStake {
     principal: String,
     /// The sealed P-scan state path.
     pscan_seal: std::path::PathBuf,
-    /// How many pre-post funding records the discovery scan found.
-    pre_post_discovered: usize,
     /// The planned stake's persona.
     plan_persona: shekyl_types::PCanonicalId,
 }
@@ -5084,11 +5065,17 @@ async fn plan_persona_stake(
         tmp,
         principal,
         pscan_seal,
-        pre_post_discovered,
         plan_persona,
     }
 }
 
+/// The first half of [`stake_persona_to_confirmed_bond`], up to and
+/// including the submit: fund the principal, fund the persona, discover the
+/// funding through the production P-scan, enter the stake (the production
+/// `first_stake` entry or the market-bond assembly), re-lift the sealed
+/// pending post and dispatch it through the audited posture→submitter
+/// choke point. The verdict is returned, not judged, so one body serves
+/// the confirmed-bond fixture and the FND-20 tripwire.
 async fn stake_persona_and_submit_bond(
     daemon: &RegtestDaemon,
     seed: &[u8; shekyl_crypto_pq::account::SEED_BYTES],
@@ -5109,7 +5096,6 @@ async fn stake_persona_and_submit_bond(
         tmp,
         principal,
         pscan_seal,
-        pre_post_discovered,
         plan_persona,
     } = plan_persona_stake(daemon, seed, slot_raw, funding_cushion, stake_entry, wallet).await;
 
@@ -5185,7 +5171,6 @@ async fn stake_persona_and_submit_bond(
         persona_id,
         pscan_seal,
         swept_gindexes,
-        pre_post_discovered,
         verdict,
     }
 }
@@ -5249,6 +5234,12 @@ async fn e2e_a_plan_signed_at_its_due_block_lands_at_reference_age_six() {
     .await;
     let arc = planned.arc.clone();
     let persona = planned.plan_persona;
+
+    // The delay is the real draw, so the walk's length follows it. It is
+    // logged so a failure can be replayed with the same draw:
+    // `SHEKYL_TEST_REPLAY_PLAN_DRAW=<blocks>` re-seals the plan with that
+    // draw through the block's own transitions before the driver starts.
+    let swept = replay_or_log_plan_draw(&arc, &persona).await;
     let pscan = start_driving_pscan(&arc, &daemon).await;
 
     // Mine toward the due block a few blocks at a time, letting the wallet
@@ -5283,27 +5274,111 @@ async fn e2e_a_plan_signed_at_its_due_block_lands_at_reference_age_six() {
     );
 
     // It lands: mined, past the scan horizon, and matched by the wallet's
-    // own scan, which then retires the record.
-    let mut landed = false;
+    // own scan, which then retires the record. The swept funding records are
+    // pruned at scan time (SP-R0 arm 1: the key-image watch fires on the
+    // bond post's own funding spends), and the bond's change is found again
+    // as the persona's rung-2 `BondPostChange` funding, the substrate a claim
+    // spends from. The prune can land a seal batch after the match, so the
+    // wait covers all three.
+    let applied = |s: &shekyl_engine_state::pscan_state::PScanState| {
+        let matched = s
+            .bond_post_matches()
+            .iter()
+            .any(|m| m.p_canonical_id == persona);
+        let pruned = s
+            .funding_outputs()
+            .iter()
+            .all(|r| !swept.contains(&r.gindex));
+        let change = s.funding_outputs().iter().any(|r| {
+            r.lineage == shekyl_engine_state::pscan_state::MintLineageOutput::BondPostChange
+        });
+        (matched, pruned, change)
+    };
+    let mut seen = (false, false, false);
     for _ in 0..60 {
         daemon.generate_blocks(2).await;
         refresh(&arc).await;
         tokio::time::sleep(Duration::from_millis(1_000)).await;
-        let matched = load_pscan_state_for_engine(arc.clone())
+        seen = load_pscan_state_for_engine(arc.clone())
             .await
             .expect("pscan seal")
-            .is_some_and(|s| {
-                s.bond_post_matches()
-                    .iter()
-                    .any(|m| m.p_canonical_id == persona)
-            });
-        if matched && pending_block(&arc).await.posts().is_empty() {
-            landed = true;
+            .as_ref()
+            .map_or((false, false, false), applied);
+        if seen == (true, true, true) && pending_block(&arc).await.posts().is_empty() {
             break;
         }
     }
     pscan.shutdown().await;
-    assert!(landed, "the post signed at due lands and is matched");
+    let (matched, pruned, change) = seen;
+    assert!(matched, "the post signed at due lands and is matched");
+    assert!(
+        pruned,
+        "the swept funding records are pruned from the sealed set (SP-R0 arm 1)"
+    );
+    assert!(
+        change,
+        "the bond's change is re-discovered as BondPostChange funding"
+    );
+    assert!(
+        pending_block(&arc).await.posts().is_empty(),
+        "the landed post's record retires"
+    );
+    maybe_capture_chain_vector(
+        &daemon,
+        "bond-post",
+        "e2e_a_plan_signed_at_its_due_block_lands_at_reference_age_six",
+        None,
+    )
+    .await;
+}
+
+/// Log the persona's planned draw, or re-seal the plan with the draw named
+/// by `SHEKYL_TEST_REPLAY_PLAN_DRAW`, and return the funding it reserved.
+async fn replay_or_log_plan_draw(
+    arc: &Arc<RwLock<super::Engine<super::SoloSigner>>>,
+    persona: &shekyl_types::PCanonicalId,
+) -> Vec<shekyl_types::GlobalOutputIndex> {
+    use super::pscan::start::pending_post_store_for_engine;
+    let replay = std::env::var("SHEKYL_TEST_REPLAY_PLAN_DRAW").ok().map(|v| {
+        v.parse::<u64>()
+            .expect("SHEKYL_TEST_REPLAY_PLAN_DRAW is a block count")
+    });
+    let pending_gate = { arc.read().await.pending_gate.clone() };
+    let store = pending_post_store_for_engine(arc.clone(), pending_gate);
+    let plan = store
+        .mutate(|block| {
+            let Some(draw) = replay else {
+                return (
+                    false,
+                    block
+                        .plans()
+                        .iter()
+                        .find(|p| &p.persona == persona)
+                        .cloned(),
+                );
+            };
+            let mut plan = block.remove_plan(persona).expect("the persona's plan");
+            plan.draw = BlockCount::from_raw(draw);
+            let generation = block.generation();
+            assert!(
+                matches!(
+                    block.seal_plan(plan.clone(), generation),
+                    shekyl_engine_state::pending_post_block::SealAdmission::Admit
+                ),
+                "the replayed plan re-seals"
+            );
+            (true, Some(plan))
+        })
+        .await
+        .expect("pending-post write")
+        .expect("the persona's plan");
+    eprintln!(
+        "plan draw: {} blocks{} (replay with SHEKYL_TEST_REPLAY_PLAN_DRAW={})",
+        plan.draw.to_raw(),
+        if replay.is_some() { ", replayed" } else { "" },
+        plan.draw.to_raw()
+    );
+    plan.funding_gindexes
 }
 
 /// A withdrawn plan on the real pathway: `unstake` withdraws the planned
@@ -5479,115 +5554,6 @@ async fn reopen_staker(
     .expect("reopen the staker wallet")
     .into_wallet();
     Arc::new(RwLock::new(opened))
-}
-
-/// PR-4 staker harness (`EMISSION_CLAIM_BUILDER.md` §8 PR-4): a staker wallet
-/// funds its persona on-chain (the production `stake_in`: a wallet-built
-/// FCMP++ transfer to the active persona's payment keys — rung-1
-/// `ExternalTransfer` funding),
-/// the production P-scan discovers the funding, and the production bond path
-/// ([`Engine::assemble_bond_post`](super::Engine::assemble_bond_post) →
-/// posture→submitter choke point) dispatches the bond post over real RPC.
-///
-/// **Accepted-and-applied (the promoted PR-4a tripwire).** The daemon's
-/// PR-4b bond-post Phase-C battery (`DAEMON_SUBMIT_VERDICT.md` §8.7.1 BP
-/// rows; `shekyl-daemon-rpc/src/submit/verifier.rs::verify_bond_post`)
-/// verifies the wallet-built post over real RPC. The trailing assertions
-/// pin the full loop: submit accepted, bond mined, and the rung-2
-/// bond-post match + `BondPostChange` change funding re-discovered by this
-/// same production scan, with the swept pre-post funding records PRUNED
-/// from the sealed state — the SP-R0 arm-#1 **production fire** (DQ-F):
-/// the stake enters through [`Engine::first_stake`], whose preflight sweep
-/// mints the `arm1_watch_pruning_live` witness, so the whole
-/// persist → assemble → seal → dispatch → confirm → prune loop runs on
-/// production code. The surviving funding set is the `BondPostChange`
-/// change — the substrate the emission-claim e2e (PR-4c) spends from.
-/// (This test was the PR-4a daemon-gap tripwire pinning the old
-/// unimplemented-arm `Malformed` refusal; PR-4b promoted it.)
-///
-/// Bounded deviations from production, each named:
-/// - The sealed pending post is re-lifted (`PBoundBytes::from_pending`) and
-///   dispatched directly through the audited posture→submitter choke point
-///   rather than by WI-3's block-timed dispatch driver: the driver's
-///   decorrelation offsets span up to ~600 blocks (its timing law has its
-///   own KATs); the harness proves the chain-facing contract.
-/// - A shallow P-scan finality horizon + tight cadence via the injectable
-///   `start_pscan_with` seam (see [`PSCAN_TEST_REORG_DEPTH`]).
-#[tokio::test(flavor = "multi_thread")]
-#[ignore = "slow lane (run_live_daemon_gates.sh ARMED_SLOW): requires SHEKYLD_BIN; a bonded walk (mine, fund, stake, confirm)"]
-async fn e2e_staker_bond_post_accepted_and_applied() {
-    use super::stake_engine::PSlot;
-    use shekyl_engine_state::pscan_state::MintLineageOutput;
-
-    const SLOT: u32 = 0;
-    /// Extra persona funding above `floor + fee`, so the sweep-all bond leaves
-    /// a non-zero change output — the persona's rung-2 `BondPostChange` funding
-    /// (the emission-claim e2e sizes its own, larger cushion).
-    const FUNDING_CUSHION: u64 = 200_000_000;
-
-    let seed = [0x44u8; shekyl_crypto_pq::account::SEED_BYTES];
-    let daemon = RegtestDaemon::start_for_seed(&seed).await;
-    // Schedule guard (serial lock now held): this test's wallet epoch
-    // arithmetic must run on the genesis pin. A sibling e2e that armed the
-    // SEB lever in this process would otherwise bleed its schedule in
-    // silently (the `OnceLock` is irreversible) — fail loudly instead.
-    assert_eq!(
-        shekyl_archival_retention::effective_settlement_epoch_blocks(),
-        shekyl_archival_retention::SETTLEMENT_EPOCH_BLOCKS,
-        "another test latched a levered settlement-epoch schedule in this process; \
-         run the regtest e2es in separate processes"
-    );
-    let slot = PSlot::from_raw(SLOT);
-    let fixture = stake_persona_to_confirmed_bond(
-        &daemon,
-        &seed,
-        SLOT,
-        FUNDING_CUSHION,
-        FixtureStake::FirstStake,
-        None,
-    )
-    .await;
-
-    let post_change = fixture
-        .state
-        .funding_outputs()
-        .iter()
-        .filter(|r| r.p_slot == slot && r.lineage == MintLineageOutput::BondPostChange)
-        .count();
-    let total = fixture
-        .state
-        .funding_outputs()
-        .iter()
-        .filter(|r| r.p_slot == slot)
-        .count();
-    // The swept pre-post funding records are PRUNED at scan time (SP-R0
-    // arm 1: the key-image watch fires on the bond post's own funding
-    // spends), so the persona's surviving funding set is the bond-post
-    // change — the rung-2 substrate PR-4c spends from — not a superset of
-    // the pre-post record(s).
-    assert!(
-        fixture
-            .state
-            .funding_outputs()
-            .iter()
-            .all(|r| !fixture.swept_gindexes.contains(&r.gindex.to_raw())),
-        "the swept funding record must be pruned from the sealed set (SP-R0 arm 1)"
-    );
-    eprintln!(
-        "bond post accepted-and-applied: match re-discovered; {post_change} \
-         BondPostChange output(s), {total} persona funding output(s) \
-         ({} pre-post record(s) swept+pruned)",
-        fixture.pre_post_discovered
-    );
-    // The bond post is located by its vin class at load; the fixture does
-    // not surface its txid.
-    maybe_capture_chain_vector(
-        &daemon,
-        "bond-post",
-        "e2e_staker_bond_post_accepted_and_applied",
-        None,
-    )
-    .await;
 }
 
 /// PR-4c emission-claim harness (`EMISSION_CLAIM_BUILDER.md` §8 PR-4c): the

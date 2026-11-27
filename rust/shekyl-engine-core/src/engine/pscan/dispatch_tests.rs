@@ -1831,6 +1831,13 @@ async fn a_plan_signed_at_its_due_block_is_sent_at_reference_age_six() {
 /// A plan blocked past the draw window by a fee above its funding signs and
 /// is sent when the fee falls; the window bounds when a post comes due, not
 /// when it lands. Its reason is kept while it waits.
+///
+/// **Scripted, not live:** the signer's answers are scripted
+/// (`ScriptedSigner`). A regtest chain cannot hold a fee above a plan's
+/// funding without a fee lever in production, which is ruled out, so this
+/// runs the real driver against scripted waits. The mapping from a real
+/// funding shortfall to [`PlanWait::FeeAboveFunding`] is
+/// `bond_due_tests.rs`.
 #[tokio::test]
 async fn a_plan_blocked_past_the_window_by_the_fee_signs_when_the_fee_falls() {
     let (mut driver, store, broadcast, signer) =
@@ -1863,6 +1870,13 @@ async fn a_plan_blocked_past_the_window_by_the_fee_signs_when_the_fee_falls() {
 
 /// A plan still blocked for a limited reason when its maximum wait passes
 /// ends with its own outcome; a temporary reason never ends it.
+///
+/// **Scripted, not live:** the signer's answers are scripted
+/// (`ScriptedSigner`). A regtest chain cannot hold a fee above a plan's
+/// funding without a fee lever in production, which is ruled out, so this
+/// runs the real driver against scripted waits. The mapping from a real
+/// funding shortfall to [`PlanWait::FeeAboveFunding`] is
+/// `bond_due_tests.rs`.
 #[tokio::test]
 async fn a_plan_at_its_maximum_ends_waited_out_and_a_temporary_wait_never_does() {
     let (mut driver, store, broadcast, signer) =
