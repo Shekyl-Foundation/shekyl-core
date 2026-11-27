@@ -24,6 +24,7 @@ mod clock_evidence;
 mod clock_jump;
 mod dials;
 mod directories;
+mod guards;
 mod network_view;
 mod onion_path;
 mod probe;
@@ -33,6 +34,7 @@ mod running;
 
 use crate::binary::VerifiedTorBinary;
 use crate::control::{DescriptorKey, NetworkView, RelayFingerprint, ServiceDescriptor};
+use crate::vanguard_rotation::VanguardsMode;
 use announce::{Announcements, Cadence};
 use backoff::Backoff;
 use dials::Dials;
@@ -40,6 +42,7 @@ pub use dials::{DialTally, TorCensus};
 pub use directories::{
     Counted, DirectoryAnswer, DirectoryFetch, DirectoryReport, Exclusion, OpenUploads,
 };
+pub use guards::GuardFault;
 pub use onion_path::{OnionPath, PathReading, CHECK_LONGEST, CHECK_SPACING, READING_WAIT};
 use probe::Probe;
 
@@ -114,6 +117,11 @@ pub struct Policy {
     /// core's clock, restarted at a wake. The driver never waits on it; the
     /// request runs off the loop (Rick, 2026-11-10).
     pub reply_bound: Duration,
+    /// Whether this Tor's second-layer guards are pinned before its onion is
+    /// published (`TSR-W1`): [`VanguardsMode::Managed`] for an onion that
+    /// keeps its guards, [`VanguardsMode::Off`] for one whose Tor keeps its
+    /// own. Not a wait: the one field here a host sets per instance.
+    pub vanguards: VanguardsMode,
 }
 
 impl Policy {
@@ -160,6 +168,8 @@ impl Policy {
             // second; 30 s keeps a wedge a fault within about a minute with
             // `alive_every`.
             reply_bound: REPLY_BOUND,
+            // A per-boot onion; an onion that keeps its guards sets Managed.
+            vanguards: VanguardsMode::Off,
         }
     }
 }
@@ -377,6 +387,15 @@ pub enum Action {
         /// How far past its deadline the waited timer fired.
         late_by: Duration,
     },
+    /// Pin this Tor's second-layer guards: the guard manager's whole
+    /// pipeline, one request (`TSR-W1`). Answered by
+    /// [`Input::GuardsPinned`], [`Input::GuardsRefused`] or
+    /// [`Input::GuardsUnfilled`]; a control failure is
+    /// [`Input::ControlEnded`].
+    PinGuards,
+    /// A rotation on a Tor already pinned did not take, for this reason. The
+    /// confirmed set keeps serving. Said at warn, once per attempt.
+    RotationFailed(GuardFault),
     /// Say the posture. At most once per cap interval, except a recovery.
     /// The driver logs a healthy posture at info and any other at warn.
     Announce,
@@ -645,6 +664,18 @@ pub enum Input {
     Sessions(Sessions),
     /// Tor's sampled view of its network. Ignored unless Running.
     NetworkView(NetworkView),
+    /// [`Action::PinGuards`] was confirmed. The set's earliest expiry and
+    /// the wall it was read beside, both in Unix seconds.
+    GuardsPinned {
+        /// The earliest expiry of the pinned set.
+        next_expiry: u64,
+        /// The wall when the pin was confirmed.
+        wall: u64,
+    },
+    /// Tor refused the pins' `SETCONF`.
+    GuardsRefused,
+    /// Tor's view could not fill the set, or it had no consensus to read.
+    GuardsUnfilled,
     /// Tor says it reaches its network: `NETWORK_LIVENESS UP` or
     /// `CIRCUIT_ESTABLISHED`.
     ExternalCleared,
@@ -782,6 +813,7 @@ enum Phase {
         onion: Duty,
         disk: Disk,
         link: Link,
+        guards: guards::Guards,
     },
     Stopping,
 }
@@ -869,6 +901,11 @@ pub struct Core {
     service_republish: bool,
     /// The requests to Tor, and the one in flight.
     requests: requests::Requests,
+    /// When the pinned guard set next expires (`TSR-W1`). Outlives a Tor:
+    /// the set is the manager's, not one incarnation's.
+    guard_clock: Option<guards::GuardClock>,
+    /// The consensus `valid-after` the sample last read, in Unix seconds.
+    valid_after: Option<u64>,
 }
 
 impl Core {
@@ -918,6 +955,8 @@ impl Core {
             clock_evidence: clock_evidence::ClockEvidence::default(),
             service_republish: false,
             requests: requests::Requests::default(),
+            guard_clock: None,
+            valid_after: None,
         };
         let first = if core.managed() {
             vec![Action::CheckPin]
@@ -972,7 +1011,9 @@ impl Core {
             } => self.round_ended(now, descriptor, tally, draw),
             Input::UploadRoundForgotten { descriptor } => self.round_forgotten(now, descriptor),
             Input::ConsensusClock { valid_after, wall } => {
-                self.consensus_clock(now, valid_after, wall)
+                let mut actions = self.consensus_clock(now, valid_after, wall);
+                actions.extend(self.guards_on_consensus(valid_after, wall));
+                actions
             }
             Input::DescriptorRefetched { draw } => self.refetched(now, draw),
             Input::JumpProbeDrawn { draw } => self.jump_probe_drawn(now, draw),
@@ -1025,6 +1066,9 @@ impl Core {
                 self.path_fact(OnionPath::Working, at)
             }
             Input::PathWanted { after, draw } => self.path_wanted(now, after, draw),
+            Input::GuardsPinned { next_expiry, wall } => self.guards_pinned(now, next_expiry, wall),
+            Input::GuardsRefused => self.guards_failed(now, GuardFault::Refused),
+            Input::GuardsUnfilled => self.guards_failed(now, GuardFault::Unfilled),
         };
         let mut actions = actions;
         // Tor's own statement that it cannot reach its network is an
@@ -1167,6 +1211,9 @@ impl Core {
         if self.path_due().is_some_and(|at| now >= at) {
             actions.extend(self.on_path_deadline(now));
         }
+        if self.guards_due().is_some_and(|at| now >= at) {
+            actions.extend(self.on_guards_deadline(now));
+        }
         self.step(now, actions)
     }
 
@@ -1207,7 +1254,7 @@ impl Core {
                 (Phase::Running { .. }, Cause::None) => self.dials.line(),
                 _ => None,
             },
-            inbound: self.inbound,
+            inbound: self.inbound_shown(),
             stuck_upload_rounds: self.stuck_rounds,
             clock_behind: self.clock_lag(),
         }
@@ -1227,6 +1274,7 @@ impl Core {
             self.directories_due(),
             self.republish_due(),
             self.path_due(),
+            self.guards_due(),
             self.requests.due(duration_ns(self.policy.reply_bound)),
         ]
         .into_iter()
@@ -1608,7 +1656,7 @@ impl Core {
     }
 
     fn say_key(&self) -> announce::SayKey {
-        announce::SayKey::new(self.shown(), &self.cause, self.inbound)
+        announce::SayKey::new(self.shown(), &self.cause, self.inbound_shown())
     }
 
     /// The relay's verdict moved. Only a change in whether a local origin
@@ -1676,7 +1724,7 @@ impl Core {
         // does not: Usable is the outbound link, and an onion not yet proven
         // is not one found unreachable.
         if matches!(self.phase, Phase::Running { .. })
-            && matches!(self.inbound, Inbound::Unreachable { .. })
+            && matches!(self.inbound_shown(), Inbound::Unreachable { .. })
         {
             return Shown::Degraded;
         }
@@ -1783,9 +1831,10 @@ impl Core {
     fn step(&mut self, now: u64, actions: Vec<Action>) -> Step {
         let mut actions = self.route_requests(now, actions);
         self.settle_shown(now);
-        if self.inbound != self.published_inbound {
-            self.published_inbound = self.inbound;
-            actions.push(Action::PublishInbound(self.inbound));
+        let inbound = self.inbound_shown();
+        if inbound != self.published_inbound {
+            self.published_inbound = inbound;
+            actions.push(Action::PublishInbound(inbound));
         }
         Step {
             actions,

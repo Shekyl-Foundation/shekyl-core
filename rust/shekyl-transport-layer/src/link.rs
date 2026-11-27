@@ -86,6 +86,13 @@ pub enum InboundCause {
     /// directory holds a copy newer than any this node published
     /// (`TOR_SUPERVISOR.md` §4.5).
     PublishedElsewhere,
+    /// The address keeps its second-layer guards and Tor refused their
+    /// pins, so it is not published (`TOR_SUPERVISOR.md` §4.4, `TSR-W1`).
+    GuardsRefused,
+    /// The address keeps its second-layer guards and Tor's view of the
+    /// network could not fill the set, so it is not published yet
+    /// (`TOR_SUPERVISOR.md` §4.4, `TSR-W1`).
+    GuardsUnfilled,
 }
 
 /// Can peers reach this node's address through the link

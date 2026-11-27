@@ -51,6 +51,7 @@ use shekyl_tor_control_client::supervisor::{
     Core, DialTally, Input, ManagedRunning, NetworkView, OnionPath, OriginVerdict as FoldedOrigin,
     PathReading, Policy, Sessions, Space, Step, TorCensus as QuietCensus, TorSetting,
 };
+use shekyl_tor_control_client::vanguard_rotation::{VanguardsActive, VanguardsMode};
 use shekyl_tor_control_daemon::{
     space_needed, sweep_stale_data_dirs, CacheSave, DaemonTorControl, DaemonTorStartError,
     IsolationPair, KeptDataDir, KeptLog, KeptSave, Retirement, TombstoneEnd, TorDeath,
@@ -59,6 +60,7 @@ use shekyl_tor_status::{held_at_start_sentence, install_sentence, render, TorSta
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
+mod guards;
 mod inbox;
 #[cfg(all(test, unix))]
 mod loop_tests;
@@ -202,6 +204,14 @@ pub enum SupervisorEnd {
     /// The operating system's random source refused the isolation pair the
     /// managed Tor's probe dials on.
     NoProbeIsolation,
+    /// The operating system's random source refused the draw of a persistent
+    /// onion's second-layer guards (`TSR-W1`). There is no fallback: a
+    /// predictable draw is one an adversary can steer into.
+    NoGuardDraw,
+    /// The core asked for a publish of an onion that keeps its guards, and
+    /// this Tor holds no confirmed pin: a broken promise between the core
+    /// and this driver (`TSR-W1`). Nothing is published.
+    UnpinnedPublish,
     /// The loop returned though no stop was asked. The loop ends only when
     /// its queue closes, and only [`Supervisor::shutdown`] or dropping the
     /// supervisor closes it, so this is a broken promise, not an operating
@@ -232,6 +242,8 @@ pub enum TorAsk {
     Publish,
     /// Probe this node's onion.
     Probe,
+    /// Pin this node's onion's second-layer guards.
+    Guards,
 }
 
 impl TorAsk {
@@ -241,6 +253,7 @@ impl TorAsk {
             Self::Launch => "launch a Tor",
             Self::Publish => "publish an onion",
             Self::Probe => "probe an onion",
+            Self::Guards => "pin an onion's guards",
         }
     }
 
@@ -252,6 +265,7 @@ impl TorAsk {
             Action::Spawn(_) => Some(Self::Launch),
             Action::RepublishOnion | Action::AddOnion => Some(Self::Publish),
             Action::Probe => Some(Self::Probe),
+            Action::PinGuards => Some(Self::Guards),
             _ => None,
         }
     }
@@ -262,11 +276,12 @@ impl SupervisorEnd {
     #[must_use]
     pub fn remedy(&self) -> &'static str {
         match self {
-            Self::NoOnionKey | Self::NoProbeIsolation => {
+            Self::NoOnionKey | Self::NoProbeIsolation | Self::NoGuardDraw => {
                 "Check that the system's random source works, then start the daemon again"
             }
             Self::NoScheduler(_)
             | Self::NoTorToRun(_)
+            | Self::UnpinnedPublish
             | Self::Returned
             | Self::Panicked(_)
             | Self::Cancelled => "Start the daemon again; if this repeats, report it with this log",
@@ -286,6 +301,12 @@ impl std::fmt::Display for SupervisorEnd {
             ),
             Self::NoProbeIsolation => f.write_str(
                 "the Tor supervisor did not start: the system's random source refused its probe's isolation",
+            ),
+            Self::NoGuardDraw => f.write_str(
+                "the Tor supervisor stopped: the system's random source refused the draw of this node's onion guards",
+            ),
+            Self::UnpinnedPublish => f.write_str(
+                "the Tor supervisor stopped: it was asked to publish this node's onion before its guards were pinned",
             ),
             Self::NoTorToRun(ask) => write!(
                 f,
@@ -723,6 +744,9 @@ struct ManagedBoot {
     /// A persistent onion's kept guards, handed to every launch; `None` for
     /// a per-boot onion.
     guard_state: Option<GuardState>,
+    /// A persistent onion's second-layer guard manager (`TSR-W1`); `None`
+    /// for a per-boot onion, whose Tor keeps its own.
+    guards: Option<guards::GuardSlot>,
     /// The probe's isolation pair, held beside the onion for the boot.
     probe_pair: IsolationPair,
 }
@@ -747,10 +771,12 @@ impl ManagedBoot {
             ),
         };
         let probe_pair = IsolationPair::mint().map_err(|_| SupervisorEnd::NoProbeIsolation)?;
+        let guards = guard_state.as_ref().map(guards::GuardSlot::load);
         Ok(Self {
             pin,
             onion: Arc::new(onion),
             guard_state,
+            guards,
             probe_pair,
         })
     }
@@ -781,6 +807,17 @@ impl Drive {
             Supervises::Unmanaged(setting) => (setting, None),
         };
         let connectors = Connectors { tor, clearnet_on };
+        // An onion that keeps its guards pins them before each publish
+        // (`TSR-W1`); a per-boot onion's Tor keeps its own.
+        let vanguards = if managed.as_ref().is_some_and(|boot| boot.guards.is_some()) {
+            VanguardsMode::Managed
+        } else {
+            VanguardsMode::Off
+        };
+        let policy = Policy {
+            vanguards,
+            ..policy
+        };
         let clock = owner.clock().clone();
         let poster = inbox.poster();
         let timer = Timer::start(owner, poster.clone());
@@ -811,6 +848,8 @@ impl Drive {
             generation: 0,
             held: None,
             launch: None,
+            witness: None,
+            ending: None,
         };
         // What the network published before this loop: the relay's verdict,
         // the tally and the sessions at start. Folded after the start's own
@@ -886,6 +925,13 @@ struct Drive {
     /// The launch in flight, by its number, and the signal that abandons
     /// its wait for Tor's first reply ([`Self::abandon_launch`]).
     launch: Option<(u64, watch::Sender<bool>)>,
+    /// The confirmed pin of this incarnation's guards (`TSR-W1`): what a
+    /// persistent onion's publish is sent through. Dropped when the Tor it
+    /// was minted on goes.
+    witness: Option<VanguardsActive>,
+    /// An end an answer named (the guards' draw refused, or a broken
+    /// promise), taken at the next pass before anything else runs.
+    ending: Option<SupervisorEnd>,
 }
 
 /// What [`Drive::perform`] decided for the loop.
@@ -993,6 +1039,9 @@ impl Drive {
     /// stop. [`Performed::Ending`] is a Tor action this supervisor cannot
     /// run, and nothing that action returned is folded.
     fn perform(&mut self) -> Performed {
+        if let Some(end) = self.ending.take() {
+            return Performed::Ending(end);
+        }
         let mut queue: VecDeque<Action> = self.step.actions.drain(..).collect();
         while let Some(action) = queue.pop_front() {
             let inputs = match self.act(action) {
@@ -1086,7 +1135,12 @@ impl Drive {
             | Action::AddOnion
             | Action::RefetchDescriptor
             | Action::CheckDirectories
-            | Action::FetchFromDirectory { .. }) => Acted::fold(self.send(action)?),
+            | Action::FetchFromDirectory { .. }
+            | Action::PinGuards) => Acted::fold(self.send(action)?),
+            Action::RotationFailed(fault) => {
+                Self::rotation_failed(fault);
+                Acted::fold(Vec::new())
+            }
             Action::WatchState => Acted::fold(self.watch_state().into_iter().collect()),
             Action::Publish(route) => Acted::fold(vec![self.publish_route(route)]),
             Action::Probe => Acted::fold(vec![self.probe()?]),

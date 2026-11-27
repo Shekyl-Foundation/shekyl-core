@@ -178,6 +178,8 @@ fn onion(inbound: Inbound, now: u64) -> Option<wire::Onion> {
                 InboundCause::UploadsRefused => wire::OnionCause::UploadsRefused,
                 InboundCause::DescriptorNotFound => wire::OnionCause::DescriptorMissing,
                 InboundCause::PublishedElsewhere => wire::OnionCause::PublishedElsewhere,
+                InboundCause::GuardsRefused => wire::OnionCause::GuardsRefused,
+                InboundCause::GuardsUnfilled => wire::OnionCause::GuardsUnfilled,
                 InboundCause::ClockBehind { behind } => {
                     wire::OnionCause::ClockBehind(behind.as_secs())
                 }

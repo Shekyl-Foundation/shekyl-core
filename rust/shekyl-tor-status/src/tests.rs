@@ -109,6 +109,8 @@ fn onion_cause_arm(cause: &OnionCause) -> u8 {
         OnionCause::DescriptorMissing => 2,
         OnionCause::ClockBehind(_) => 3,
         OnionCause::PublishedElsewhere => 5,
+        OnionCause::GuardsRefused => 6,
+        OnionCause::GuardsUnfilled => 7,
         OnionCause::Unknown { .. } => 4,
     }
 }
@@ -120,6 +122,8 @@ fn onion_causes() -> Vec<OnionCause> {
         OnionCause::DescriptorMissing,
         OnionCause::ClockBehind(3_600),
         OnionCause::PublishedElsewhere,
+        OnionCause::GuardsRefused,
+        OnionCause::GuardsUnfilled,
         OnionCause::Unknown {
             tag: unknown("blinded"),
         },
