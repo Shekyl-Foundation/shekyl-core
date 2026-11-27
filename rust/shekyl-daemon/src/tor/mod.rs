@@ -212,6 +212,11 @@ pub enum SupervisorEnd {
     /// this Tor holds no confirmed pin: a broken promise between the core
     /// and this driver (`TSR-W1`). Nothing is published.
     UnpinnedPublish,
+    /// The core asked for a guard pin, and this driver holds no managed
+    /// guard manager: a broken promise between the core and this driver
+    /// (`TSR-W1`). A per-boot onion's Tor keeps its own guards, and the
+    /// core does not ask. Nothing is pinned.
+    NoGuardManager,
     /// The loop returned though no stop was asked. The loop ends only when
     /// its queue closes, and only [`Supervisor::shutdown`] or dropping the
     /// supervisor closes it, so this is a broken promise, not an operating
@@ -282,6 +287,7 @@ impl SupervisorEnd {
             Self::NoScheduler(_)
             | Self::NoTorToRun(_)
             | Self::UnpinnedPublish
+            | Self::NoGuardManager
             | Self::Returned
             | Self::Panicked(_)
             | Self::Cancelled => "Start the daemon again; if this repeats, report it with this log",
@@ -307,6 +313,9 @@ impl std::fmt::Display for SupervisorEnd {
             ),
             Self::UnpinnedPublish => f.write_str(
                 "the Tor supervisor stopped: it was asked to publish this node's onion before its guards were pinned",
+            ),
+            Self::NoGuardManager => f.write_str(
+                "the Tor supervisor stopped: it was asked to pin this node's onion guards, and it holds no guard manager",
             ),
             Self::NoTorToRun(ask) => write!(
                 f,

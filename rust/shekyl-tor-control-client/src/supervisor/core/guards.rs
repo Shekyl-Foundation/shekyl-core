@@ -18,10 +18,11 @@
 //!
 //! How a pin ends, and what follows:
 //!
-//! - **Pinned:** the onion owed is published, and the next expiry is armed.
+//! - **Pinned:** the onion owed is published, and the set's expiry is armed
+//!   on the pin. A set with no expiry is not rotated by the clock.
 //! - **The control failed, or the reply missed its bound:** a process fault,
-//!   folded as every other request's ([`Input::ControlEnded`], the reply
-//!   bound). Tor's set and ours are in doubt, so Tor is started again.
+//!   folded as every other request's ([`super::Input::ControlEnded`], the
+//!   reply bound). Tor's set and ours are in doubt, so Tor is started again.
 //! - **Tor refused the pins:** the pinned Tor should accept them, so this is
 //!   a defect to report. No respawn: a new Tor would refuse them again. Asked
 //!   again at the cap.
@@ -33,19 +34,23 @@
 //!   as it does when the onion's key cannot be drawn. Nothing reaches the
 //!   core.
 //!
-//! A first pin that fails withholds the onion, and the onion's facet says
-//! why: [`InboundCause::GuardsRefused`] or [`InboundCause::GuardsUnfilled`]
-//! where it would otherwise say no onion is offered. A rotation that fails
-//! on a Tor already pinned keeps serving on the confirmed set, which Tor
-//! still holds, and says so ([`Action::RotationFailed`]); unpublishing a
-//! reachable onion because one guard is overdue costs more than it protects.
+//! A first pin that fails is the onion's facet: [`InboundCause::GuardsRefused`]
+//! or [`InboundCause::GuardsUnfilled`], written the way every other onion
+//! cause is. A later Tor does not keep the previous offer. Until its pin is
+//! confirmed the facet is not offered, unless a clock is already named, and
+//! that clock keeps its cause. When the clock clears, the pin's cause stands
+//! ([`Core::inbound_for_unproven`]). A rotation that fails on a Tor already
+//! pinned keeps serving on the confirmed set, which Tor still holds, and says
+//! so ([`Action::RotationFailed`]); unpublishing a reachable onion because one
+//! guard is overdue costs more than it protects.
 //!
-//! Expiry is wall time; this core's deadlines are awake time. The pin
-//! reports the next expiry with the wall it was read at, and the awake
-//! deadline is the gap between them. A sleep moves the wall and not this
-//! clock, so every consensus clock the sample reads also compares the wall
-//! with the expiry: a guard that expired in a sleep is replaced at the
-//! sample the wake asks for.
+//! Expiry is wall time and lives on the confirmed pin; this core's deadlines
+//! are awake time. The pin reports the next expiry with the wall it was read
+//! at, and the awake deadline is the gap between them. A sleep moves the wall
+//! and not this clock, so every consensus clock the sample reads also compares
+//! the wall with the expiry: a guard that expired in a sleep is replaced at
+//! the sample the wake asks for. The clock does not outlive the pin. A new
+//! Tor confirms its own.
 
 use super::super::posture::{Inbound, InboundCause};
 use super::{duration_ns, Action, Cadence, Core, Duty, Phase};
@@ -76,19 +81,59 @@ pub(super) enum Guards {
     /// Tor keeps its own second-layer guards: nothing is pinned, and the
     /// onion is published as soon as it is owed. A per-boot onion.
     TorsOwn,
-    /// Not pinned on this Tor. No onion is published. `withheld` is why the
+    /// Not pinned on this Tor. No onion is published. `fault` is why the
     /// last pin did not take, while one has failed.
-    Unpinned { withheld: Option<Withheld> },
-    /// Pinned and confirmed on this Tor. `rotation` is why the last rotation
+    Unpinned { fault: Option<FailedPin> },
+    /// Pinned and confirmed on this Tor. `fault` is why the last rotation
     /// did not take, while one has failed; the confirmed set keeps serving.
-    Pinned { rotation: Option<Withheld> },
+    /// `clock` is that set's expiry, and it is absent while a rotation is
+    /// in flight.
+    Pinned {
+        fault: Option<FailedPin>,
+        clock: Option<GuardClock>,
+    },
 }
 
-/// A pin that did not take.
+impl Guards {
+    /// Whether a publish may go out. An unpinned set may not.
+    pub(super) fn allows_publish(&self) -> bool {
+        !matches!(self, Self::Unpinned { .. })
+    }
+
+    /// The open failure's retry. The same record on an unpinned set and on
+    /// a rotation that did not take.
+    fn open_retry(&self) -> Option<Retry> {
+        match self {
+            Self::Unpinned {
+                fault: Some(failed),
+            }
+            | Self::Pinned {
+                fault: Some(failed),
+                ..
+            } => Some(failed.retry),
+            _ => None,
+        }
+    }
+
+    fn open_retry_mut(&mut self) -> Option<&mut Retry> {
+        match self {
+            Self::Unpinned {
+                fault: Some(failed),
+            }
+            | Self::Pinned {
+                fault: Some(failed),
+                ..
+            } => Some(&mut failed.retry),
+            _ => None,
+        }
+    }
+}
+
+/// A pin that did not take, and when it is asked again.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct Withheld {
+pub(super) struct FailedPin {
     fault: GuardFault,
-    /// When the first pin of this run failed, in this core's clock.
+    /// When this run of failures started, in this core's clock.
     since: u64,
     retry: Retry,
 }
@@ -105,7 +150,8 @@ enum Retry {
     Asked,
 }
 
-/// When the pinned set next expires.
+/// When the pinned set next expires. It lives on the pin, so a new Tor
+/// cannot see the previous set's deadline.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct GuardClock {
     /// The earliest expiry, in Unix seconds of wall time.
@@ -115,11 +161,17 @@ pub(super) struct GuardClock {
 }
 
 impl Core {
+    /// Whether this Tor's onion keeps its guards.
+    pub(super) fn owes_guard_pin(&self) -> bool {
+        matches!(self.policy.vanguards, VanguardsMode::Managed)
+    }
+
     /// The guards a Tor entering Running owes.
     pub(super) fn guards_for_new_tor(&self) -> Guards {
-        match self.policy.vanguards {
-            VanguardsMode::Off => Guards::TorsOwn,
-            VanguardsMode::Managed => Guards::Unpinned { withheld: None },
+        if self.owes_guard_pin() {
+            Guards::Unpinned { fault: None }
+        } else {
+            Guards::TorsOwn
         }
     }
 
@@ -131,7 +183,7 @@ impl Core {
     /// Whether a publish may go to the driver: no Tor that owes a pin
     /// publishes before it is confirmed.
     pub(super) fn guards_allow_publish(&self) -> bool {
-        !matches!(self.guards(), Some(Guards::Unpinned { .. }))
+        self.guards().is_none_or(|guards| guards.allows_publish())
     }
 
     fn guards(&self) -> Option<Guards> {
@@ -148,24 +200,70 @@ impl Core {
         }
     }
 
-    /// The pin was confirmed at `now`; the set's earliest expiry is
-    /// `next_expiry`, read beside the wall `wall` (both Unix seconds).
-    pub(super) fn guards_pinned(&mut self, now: u64, next_expiry: u64, wall: u64) -> Vec<Action> {
+    /// The open failure of an unpinned set, as the facet names it.
+    fn open_guard_cause(&self) -> Option<(InboundCause, u64)> {
+        match self.guards() {
+            Some(Guards::Unpinned {
+                fault: Some(failed),
+            }) => Some((failed.fault.cause(), failed.since)),
+            _ => None,
+        }
+    }
+
+    /// The facet of an onion this incarnation has not proved. A withheld pin
+    /// names itself. An onion already published on this Tor is publishing.
+    /// Every other unproved onion is not offered.
+    pub(super) fn inbound_for_unproven(&self, now: u64) -> Inbound {
+        if let Some((cause, since)) = self.open_guard_cause() {
+            return Inbound::Unreachable { cause, since };
+        }
+        if self.onion_published_here() {
+            Inbound::Publishing { since: now }
+        } else {
+            Inbound::NotOffered
+        }
+    }
+
+    /// A confirmed pin retires its own cause. A clock's cause stays.
+    fn clear_guard_cause(&mut self) {
+        if matches!(
+            self.inbound,
+            Inbound::Unreachable {
+                cause: InboundCause::GuardsRefused | InboundCause::GuardsUnfilled,
+                ..
+            }
+        ) {
+            self.inbound = Inbound::NotOffered;
+        }
+    }
+
+    /// The pin was confirmed at `now`. `next_expiry` is the set's earliest
+    /// expiry, read beside the wall `wall` (both Unix seconds). `None` is a
+    /// set the clock does not rotate.
+    pub(super) fn guards_pinned(
+        &mut self,
+        now: u64,
+        next_expiry: Option<u64>,
+        wall: u64,
+    ) -> Vec<Action> {
+        let clock = next_expiry.map(|expiry| {
+            let left = std::time::Duration::from_secs(expiry.saturating_sub(wall));
+            GuardClock {
+                wall_due: expiry,
+                awake_due: now.saturating_add(duration_ns(left)),
+            }
+        });
         let Some(guards) = self.guards_mut() else {
             return Vec::new();
         };
         let before = *guards;
-        if before == Guards::TorsOwn {
+        if matches!(before, Guards::TorsOwn) {
             return Vec::new();
         }
-        *guards = Guards::Pinned { rotation: None };
-        let left = std::time::Duration::from_secs(next_expiry.saturating_sub(wall));
-        self.guard_clock = Some(GuardClock {
-            wall_due: next_expiry,
-            awake_due: now.saturating_add(duration_ns(left)),
-        });
+        *guards = Guards::Pinned { fault: None, clock };
+        self.clear_guard_cause();
         let mut actions = Vec::new();
-        if let Guards::Unpinned { withheld } = before {
+        if let Guards::Unpinned { fault } = before {
             // The publish this Tor has owed since it entered Running.
             if matches!(
                 self.phase,
@@ -176,7 +274,7 @@ impl Core {
             ) {
                 actions.push(Action::RepublishOnion);
             }
-            if withheld.is_some() {
+            if fault.is_some() {
                 actions.extend(self.say(now, Cadence::Due));
             }
         }
@@ -189,29 +287,36 @@ impl Core {
             GuardFault::Refused => Retry::At(now.saturating_add(self.cap())),
             GuardFault::Unfilled => Retry::NextConsensus(self.valid_after),
         };
-        let Some(guards) = self.guards_mut() else {
-            return Vec::new();
+        let unpinned = match self.guards_mut() {
+            Some(Guards::Unpinned { fault: open }) => {
+                let since = open.map_or(now, |held| held.since);
+                *open = Some(FailedPin {
+                    fault,
+                    since,
+                    retry,
+                });
+                true
+            }
+            Some(Guards::Pinned { fault: open, .. }) => {
+                let since = open.map_or(now, |held| held.since);
+                *open = Some(FailedPin {
+                    fault,
+                    since,
+                    retry,
+                });
+                false
+            }
+            _ => return Vec::new(),
         };
-        match guards {
-            Guards::TorsOwn => Vec::new(),
-            Guards::Unpinned { withheld } => {
-                let since = withheld.map_or(now, |held| held.since);
-                *withheld = Some(Withheld {
-                    fault,
-                    since,
-                    retry,
-                });
-                self.say(now, Cadence::Due)
-            }
-            Guards::Pinned { rotation } => {
-                let since = rotation.map_or(now, |held| held.since);
-                *rotation = Some(Withheld {
-                    fault,
-                    since,
-                    retry,
-                });
-                vec![Action::RotationFailed(fault)]
-            }
+        // A named clock keeps its cause. The pin's cause is written when
+        // that clock clears (`inbound_for_unproven`).
+        if unpinned && !self.clock_is_behind() {
+            self.inbound_unreachable(now, fault.cause());
+        }
+        if unpinned {
+            self.say(now, Cadence::Due)
+        } else {
+            vec![Action::RotationFailed(fault)]
         }
     }
 
@@ -221,89 +326,60 @@ impl Core {
     /// little awake time went by.
     pub(super) fn guards_on_consensus(&mut self, valid_after: u64, wall: u64) -> Vec<Action> {
         self.valid_after = Some(valid_after);
-        let clock = self.guard_clock;
         let Some(guards) = self.guards_mut() else {
             return Vec::new();
         };
-        match guards {
-            Guards::Unpinned {
-                withheld: Some(held),
-            }
-            | Guards::Pinned {
-                rotation: Some(held),
-            } => match held.retry {
-                Retry::NextConsensus(seen) if seen != Some(valid_after) => {
-                    held.retry = Retry::Asked;
-                    vec![Action::PinGuards]
+        if let Some(retry) = guards.open_retry_mut() {
+            if let Retry::NextConsensus(seen) = *retry {
+                if seen != Some(valid_after) {
+                    *retry = Retry::Asked;
+                    return vec![Action::PinGuards];
                 }
-                _ => Vec::new(),
-            },
-            Guards::Pinned { rotation: None } if clock.is_some_and(|c| wall >= c.wall_due) => {
-                self.guard_clock = None;
-                vec![Action::PinGuards]
             }
-            _ => Vec::new(),
+            return Vec::new();
         }
+        if let Guards::Pinned { fault: None, clock } = guards {
+            if clock.is_some_and(|due| wall >= due.wall_due) {
+                *clock = None;
+                return vec![Action::PinGuards];
+            }
+        }
+        Vec::new()
     }
 
     /// When guard work is next due in this core's clock: a refusal's retry,
     /// or the pinned set's expiry.
     pub(super) fn guards_due(&self) -> Option<u64> {
-        match self.guards()? {
-            Guards::Unpinned {
-                withheld: Some(held),
-            }
-            | Guards::Pinned {
-                rotation: Some(held),
-            } => match held.retry {
-                Retry::At(at) => Some(at),
-                _ => None,
-            },
-            Guards::Pinned { rotation: None } => self.guard_clock.map(|c| c.awake_due),
+        let guards = self.guards()?;
+        if let Some(Retry::At(at)) = guards.open_retry() {
+            return Some(at);
+        }
+        match guards {
+            Guards::Pinned { fault: None, clock } => clock.map(|due| due.awake_due),
             _ => None,
         }
     }
 
     /// The guard deadline fired: ask the pin again.
     pub(super) fn on_guards_deadline(&mut self, now: u64) -> Vec<Action> {
-        let clock_due = self.guard_clock.is_some_and(|c| now >= c.awake_due);
         let Some(guards) = self.guards_mut() else {
             return Vec::new();
         };
-        match guards {
-            Guards::Unpinned {
-                withheld: Some(held),
+        if let Some(retry) = guards.open_retry_mut() {
+            if let Retry::At(at) = *retry {
+                if now >= at {
+                    *retry = Retry::Asked;
+                    return vec![Action::PinGuards];
+                }
             }
-            | Guards::Pinned {
-                rotation: Some(held),
-            } if matches!(held.retry, Retry::At(at) if now >= at) => {
-                held.retry = Retry::Asked;
-                vec![Action::PinGuards]
-            }
-            Guards::Pinned { rotation: None } if clock_due => {
-                self.guard_clock = None;
-                vec![Action::PinGuards]
-            }
-            _ => Vec::new(),
+            return Vec::new();
         }
-    }
-
-    /// The onion facet as shown: why a withheld onion is not published,
-    /// where the facet would otherwise say none is offered. Every other
-    /// facet stands as it is, so a clock named before the first publish
-    /// keeps its cause.
-    pub(super) fn inbound_shown(&self) -> Inbound {
-        match (self.inbound, self.guards()) {
-            (
-                Inbound::NotOffered,
-                Some(Guards::Unpinned {
-                    withheld: Some(held),
-                }),
-            ) => Inbound::Unreachable {
-                cause: held.fault.cause(),
-                since: held.since,
-            },
-            (inbound, _) => inbound,
+        if let Guards::Pinned { fault: None, clock } = guards {
+            if clock.is_some_and(|due| now >= due.awake_due) {
+                *clock = None;
+                return vec![Action::PinGuards];
+            }
         }
+        Vec::new()
     }
 }

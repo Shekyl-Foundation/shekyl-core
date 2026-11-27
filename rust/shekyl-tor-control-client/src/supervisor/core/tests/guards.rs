@@ -97,7 +97,7 @@ fn published(core: &mut Core) -> u64 {
     let pinned = answer(
         core,
         Input::GuardsPinned {
-            next_expiry: WALL + LIFETIME,
+            next_expiry: Some(WALL + LIFETIME),
             wall: WALL,
         },
         0,
@@ -173,7 +173,7 @@ fn a_pin_that_fails_before_the_first_publish_withholds_the_onion() {
     let pinned = answer(
         &mut core,
         Input::GuardsPinned {
-            next_expiry: WALL + LIFETIME,
+            next_expiry: Some(WALL + LIFETIME),
             wall: WALL,
         },
         retry,
@@ -337,4 +337,155 @@ fn a_per_boot_onion_publishes_without_a_pin() {
     let entered = bring_up(&mut core);
     assert!(!pins(&entered), "{entered:?}");
     assert!(publishes_onion(&entered), "{entered:?}");
+}
+
+/// A withheld onion does not hold the fast sample once the route is in and
+/// the state file has been seen. The liveness sample stays: its consensus
+/// clock is what asks an unfilled pin again. Red edit: let an owed onion
+/// keep sampling whatever its guards, and the next deadline is `sample_every`.
+#[test]
+fn a_withheld_onion_does_not_hold_the_fast_sample() {
+    let (mut core, _) = Core::start(guarded(), managed(true), 0);
+    running(&mut core);
+    core.on(Input::RouteInstalled, 0);
+    // The state file's `SETCONF` waits behind the pin. The deadline is the
+    // check: the fast sample is gone, and the liveness sample remains.
+    let appeared = core.on(Input::StateFileAppeared, 0);
+    let alive = secs(policy().alive_every.as_secs());
+    let next = appeared.deadline.expect("the liveness sample stays armed");
+    assert!(
+        next >= alive,
+        "the fast sample is still armed at {next}, and the liveness sample is {alive}"
+    );
+}
+
+/// A pin that confirms no expiry is not rotated by the clock. Red edit:
+/// treat a missing expiry as a deadline at the end of the clock, and
+/// `guards_due` is set.
+#[test]
+fn a_pin_with_no_expiry_is_not_rotated_by_the_clock() {
+    let (mut core, _) = Core::start(guarded(), managed(true), 0);
+    running(&mut core);
+    let pinned = answer(
+        &mut core,
+        Input::GuardsPinned {
+            next_expiry: None,
+            wall: WALL,
+        },
+        0,
+    );
+    assert!(publishes_onion(&pinned), "{pinned:?}");
+    assert_eq!(core.guards_due(), None);
+}
+
+/// A later Tor's first pin is this Tor's facet. The previous offer is not
+/// kept, and a refusal names itself and degrades the Tor. Red edit: keep
+/// the previous `Publishing` at entry, and the refusal still says the onion
+/// is publishing.
+#[test]
+fn a_later_tor_names_a_refused_pin_on_its_own_facet() {
+    let (mut core, _) = Core::start(guarded(), managed(true), 0);
+    published(&mut core);
+    assert!(matches!(core.status().inbound, Inbound::Publishing { .. }));
+    let ended = core.on(Input::ControlEnded, 0);
+    assert!(ended.actions.contains(&Action::Reap), "{ended:?}");
+    super::replied(&mut core, 0);
+    let due = core.deadline().expect("the respawn wait");
+    let step = core.on_deadline(due);
+    assert!(step.actions.contains(&Action::CheckPin), "{step:?}");
+    core.on(Input::accepted(), due);
+    core.on(Input::Spawned, due);
+    super::replied(&mut core, due);
+    super::replied(&mut core, due);
+    core.on(
+        Input::DirectorySample {
+            progress: Some(10),
+            socks: Some(super::socks()),
+            read: None,
+        },
+        due,
+    );
+    super::replied(&mut core, due);
+    let running = core.on(Input::BootstrapComplete, due);
+    assert!(pins(&running), "the new Tor asks its pin: {running:?}");
+    assert!(
+        !publishes_onion(&running),
+        "the new Tor withholds the publish: {running:?}"
+    );
+    assert!(
+        matches!(core.status().inbound, Inbound::NotOffered),
+        "the previous offer is not this Tor's: {:?}",
+        core.status().inbound
+    );
+    let refused = answer(&mut core, Input::GuardsRefused, due);
+    assert!(
+        !publishes_onion(&refused) && !spawns(&refused),
+        "{refused:?}"
+    );
+    assert!(
+        matches!(
+            core.status().inbound,
+            Inbound::Unreachable {
+                cause: InboundCause::GuardsRefused,
+                ..
+            }
+        ),
+        "{:?}",
+        core.status().inbound
+    );
+    assert_eq!(core.status().shown, Shown::Degraded);
+}
+
+/// A clock that clears while the pin is still withheld names the pin. The
+/// clock's cause stood while the clock did. Red edit: clear the clock back
+/// to not offered, and the withheld pin disappears from the facet.
+#[test]
+fn a_cleared_clock_names_the_pin_that_is_still_withheld() {
+    let (mut core, _) = Core::start(guarded(), managed(true), 0);
+    running(&mut core);
+    answer(&mut core, Input::GuardsRefused, 0);
+    assert!(matches!(
+        core.status().inbound,
+        Inbound::Unreachable {
+            cause: InboundCause::GuardsRefused,
+            ..
+        }
+    ));
+    let behind = WALL - 2 * 86_400;
+    core.on(
+        Input::ConsensusClock {
+            valid_after: WALL,
+            wall: behind,
+        },
+        1,
+    );
+    assert!(
+        matches!(
+            core.status().inbound,
+            Inbound::Unreachable {
+                cause: InboundCause::ClockBehind { .. },
+                ..
+            }
+        ),
+        "the clock stands while it is named: {:?}",
+        core.status().inbound
+    );
+    core.on(
+        Input::ConsensusClock {
+            valid_after: WALL,
+            wall: WALL,
+        },
+        2,
+    );
+    assert!(
+        matches!(
+            core.status().inbound,
+            Inbound::Unreachable {
+                cause: InboundCause::GuardsRefused,
+                ..
+            }
+        ),
+        "the pin's cause stands once the clock clears: {:?}",
+        core.status().inbound
+    );
 }

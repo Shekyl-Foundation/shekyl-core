@@ -1011,11 +1011,26 @@ impl VanguardManager {
         )
     }
 
-    /// Bring this incarnation's vanguards up: fetch consensus, restore (or
-    /// select fresh), expire anything the clock aged out, `SETCONF`, persist.
+    /// Pin this managed set: fetch consensus, restore or select, expire,
+    /// repair, `SETCONF`, persist. Always a witness or a fault. The caller
+    /// loaded the manager [`VanguardsMode::Managed`].
     ///
-    /// Returns `None` when mode is [`VanguardsMode::Off`]. On Managed, mints
-    /// the sealed [`VanguardsActive`] witness after a confirmed `SETCONF`.
+    /// # Errors
+    ///
+    /// [`VanguardsAbort`] on actor death, timeout, refusal, or an
+    /// unfillable set.
+    pub async fn pin(
+        &mut self,
+        actor: &kameo::actor::ActorRef<TorControlClient>,
+        reply_deadline: Duration,
+        now: SystemTime,
+    ) -> Result<VanguardsActive, VanguardsAbort> {
+        self.pin_set(actor, reply_deadline, now).await
+    }
+
+    /// Bring this incarnation's vanguards up: [`Self::pin`] when the mode is
+    /// [`VanguardsMode::Managed`]. Returns `None` when the mode is
+    /// [`VanguardsMode::Off`], which mints no witness.
     ///
     /// # Errors
     ///
@@ -1030,8 +1045,7 @@ impl VanguardManager {
         if !self.is_managed() {
             return Ok(None);
         }
-        let witness = self.pin_set(actor, reply_deadline, now).await?;
-        Ok(Some(witness))
+        self.pin(actor, reply_deadline, now).await.map(Some)
     }
 
     /// Mid-life reconcile: repair relays that left the consensus **and**
@@ -1057,11 +1071,11 @@ impl VanguardManager {
         if !self.is_managed() || self.state.is_none() {
             return Ok(());
         }
-        let _witness = self.pin_set(actor, reply_deadline, now).await?;
+        let _witness = self.pin(actor, reply_deadline, now).await?;
         Ok(())
     }
 
-    /// Shared pin pipeline used by both establish and mid-life reconcile:
+    /// Shared pin pipeline used by [`Self::pin`]:
     /// consensus → restore-or-fresh → expire → repair → SETCONF → commit memory
     /// → persist.
     ///

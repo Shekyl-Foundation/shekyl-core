@@ -85,10 +85,11 @@ pub(super) enum Answer {
         forward: SocketAddr,
         outcome: Result<ServiceId, DaemonTorPublishError>,
     },
-    /// A guard pin's outcome, and the manager it took, coming home.
+    /// A guard pin's outcome, and the manager it took, coming home. A
+    /// managed pin is a witness or a fault.
     Guards {
         manager: Box<VanguardManager>,
-        outcome: Result<Option<VanguardsActive>, VanguardsAbort>,
+        outcome: Result<VanguardsActive, VanguardsAbort>,
     },
 }
 

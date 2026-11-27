@@ -59,7 +59,7 @@ impl PoolDoor for EmptyPool {
 }
 
 /// An offline network whose Tor link the supervisor feeds.
-fn network(dir: &std::path::Path, feeds: SupervisorFeeds) -> Network {
+pub(super) fn network(dir: &std::path::Path, feeds: SupervisorFeeds) -> Network {
     let (_, node_sync) = watch::channel(NodeSync::Unsynchronised);
     let (_, tip) = watch::channel(CoreSyncData {
         current_height: 1,
@@ -288,10 +288,10 @@ fn nothing_outlives(dir: &Path, after: &str) {
 
 /// The directory a loop test works in, by path. The directory itself is
 /// [`on_the_loops_runtime`]'s, which removes it only once the runtime is gone.
-struct Dir(PathBuf);
+pub(super) struct Dir(PathBuf);
 
 impl Dir {
-    fn path(&self) -> &Path {
+    pub(super) fn path(&self) -> &Path {
         &self.0
     }
 }
@@ -303,7 +303,9 @@ impl Dir {
 /// directory was the test's own and went first, while that task still
 /// launched into it; the removal could stop part-way and leave the stand-in
 /// behind.
-fn on_the_loops_runtime<F: std::future::Future<Output = ()>>(test: impl FnOnce(Dir) -> F) {
+pub(super) fn on_the_loops_runtime<F: std::future::Future<Output = ()>>(
+    test: impl FnOnce(Dir) -> F,
+) {
     let dir = tempfile::tempdir().expect("tempdir");
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
@@ -732,7 +734,7 @@ fn a_tor_action_without_a_managed_tor_ends_the_supervisor() {
 
 /// A driver for a persistent onion: its guard manager is loaded from the
 /// onion's own guard directory under `dir`.
-fn persistent(dir: &Path) -> Drive {
+pub(super) fn persistent(dir: &Path) -> Drive {
     let data_dir = dir.join("data");
     std::fs::create_dir_all(&data_dir).expect("the data directory");
     let (_owner, inbox, feeds) = inbox();
@@ -752,170 +754,4 @@ fn persistent(dir: &Path) -> Drive {
         network,
     )
     .expect("the driver")
-}
-
-fn guard_slot(drive: &mut Drive) -> &mut super::guards::GuardSlot {
-    drive
-        .managed
-        .as_mut()
-        .and_then(|boot| boot.guards.as_mut())
-        .expect("a persistent onion's guard manager")
-}
-
-/// **A pin's answer the core gave up on still brings the guard manager
-/// home.** The manager's state moved with the pin; dropping it with a stale
-/// answer would make the next pin draw a new set, the restart-driven
-/// rotation the manager exists to prevent. A pin asked while the manager
-/// was out waits for it, off the loop. Red edit: return before
-/// `guards_answered` puts the manager home when the number is not in
-/// flight.
-#[test]
-fn a_pin_answer_the_core_gave_up_on_brings_the_manager_home() {
-    use shekyl_tor_control_client::vanguard_rotation::VanguardsAbort;
-    on_the_loops_runtime(|dir| async move {
-        let mut drive = persistent(dir.path());
-        assert!(guard_slot(&mut drive).is_home(), "loaded at the start");
-        let manager = guard_slot(&mut drive)
-            .take_home()
-            .expect("the manager is home");
-
-        // The core gave up on that pin, and asked another while it was out.
-        assert_eq!(drive.send_pin(9), Ok(None), "the second pin waits");
-        assert_eq!(guard_slot(&mut drive).waiting(), Some(9));
-
-        assert_eq!(
-            drive.core.in_flight(),
-            None,
-            "the first pin is not in flight"
-        );
-        let folded = drive.guards_answered(5, manager, Err(VanguardsAbort::ActorGone));
-        assert!(
-            folded.is_empty(),
-            "a stale answer folds nothing: {folded:?}"
-        );
-        assert!(guard_slot(&mut drive).is_home(), "the manager came home");
-        assert!(drive.witness.is_none());
-        assert!(drive.ending.is_none());
-        // The network owns a runtime, which is not dropped on an async thread.
-        tokio::task::spawn_blocking(move || drop(drive))
-            .await
-            .expect("the driver drops");
-    });
-}
-
-/// **Each way a pin ends reaches the core as its remedy** (§4.4, the
-/// guard-pinning row). A control failure is a process fault; Tor refusing
-/// the pins and a view that cannot fill the set are their own inputs and
-/// respawn nothing; a refused random source ends the supervisor; a manager
-/// that pins nothing is a broken promise. Red edit: fold a refused pin as
-/// `ControlEnded`, and a Tor that refuses its options is respawned forever.
-#[test]
-fn each_pin_outcome_reaches_the_core_as_its_remedy() {
-    use shekyl_tor_control_client::control::ControlError;
-    use shekyl_tor_control_client::vanguard_rotation::{
-        RotationError, VanguardsAbort, VanguardsError,
-    };
-    on_the_loops_runtime(|dir| async move {
-        let mut drive = persistent(dir.path());
-        let failed = |error| Err(VanguardsAbort::Failed(error));
-        let cases = [
-            (Err(VanguardsAbort::ActorGone), vec![Input::ControlEnded]),
-            (
-                failed(VanguardsError::Control(ControlError::Timeout)),
-                vec![Input::ControlEnded],
-            ),
-            (
-                failed(VanguardsError::PinsRefused { status: 552 }),
-                vec![Input::GuardsRefused],
-            ),
-            (
-                failed(VanguardsError::ConsensusRefused { status: 551 }),
-                vec![Input::GuardsUnfilled],
-            ),
-            (
-                failed(VanguardsError::Rotation(RotationError::TooFewEligible {
-                    available: 3,
-                    needed: 12,
-                })),
-                vec![Input::GuardsUnfilled],
-            ),
-            (
-                failed(VanguardsError::Rotation(RotationError::ConsensusUnusable {
-                    decoded: 10,
-                    announced: 7_000,
-                })),
-                vec![Input::GuardsUnfilled],
-            ),
-        ];
-        for (outcome, expected) in cases {
-            let label = format!("{outcome:?}");
-            assert_eq!(drive.pin_outcome(outcome, None), expected, "{label}");
-            assert!(drive.ending.is_none(), "{label}: no end");
-        }
-        assert!(drive
-            .pin_outcome(
-                failed(VanguardsError::Rotation(RotationError::RngUnavailable)),
-                None
-            )
-            .is_empty());
-        assert_eq!(drive.ending.take(), Some(SupervisorEnd::NoGuardDraw));
-        assert!(drive.pin_outcome(Ok(None), None).is_empty());
-        assert_eq!(
-            drive.ending.take(),
-            Some(SupervisorEnd::NoTorToRun(TorAsk::Guards))
-        );
-        tokio::task::spawn_blocking(move || drop(drive))
-            .await
-            .expect("the driver drops");
-    });
-}
-
-/// **A persistent onion is published only through the pin confirmed on its
-/// Tor.** With no witness held, the publish is the supervisor's end, never
-/// a send on the plain control: the core withholds it, so reaching here is
-/// a broken promise. A per-boot onion's Tor keeps its own guards and needs
-/// none. Red edit: publish a persistent onion through `self.asker()`.
-#[test]
-fn a_persistent_onion_is_not_published_without_its_pin() {
-    on_the_loops_runtime(|dir| async move {
-        let mut drive = persistent(dir.path());
-        drive.forward = Some(std::net::SocketAddr::from(([127, 0, 0, 1], 18_022)));
-        assert_eq!(drive.send_add(1), Err(SupervisorEnd::UnpinnedPublish));
-        tokio::task::spawn_blocking(move || drop(drive))
-            .await
-            .expect("the driver drops");
-
-        let data_dir = dir.path().join("per-boot");
-        std::fs::create_dir_all(&data_dir).expect("the data directory");
-        let (_owner, inbox, feeds) = inbox();
-        let network = network(dir.path(), feeds);
-        let mut per_boot = Drive::start(
-            Supervises::Managed {
-                pin: PinSource::Discover(None),
-                onion: super::OnionSource::PerBoot,
-            },
-            super::policy(),
-            true,
-            18_021,
-            data_dir,
-            inbox,
-            network,
-        )
-        .expect("the driver");
-        assert!(
-            per_boot
-                .managed
-                .as_ref()
-                .is_some_and(|boot| boot.guards.is_none()),
-            "a per-boot onion has no guard manager"
-        );
-        assert_eq!(
-            per_boot.send_add(1),
-            Ok(Some(vec![Input::ControlEnded])),
-            "with no Tor, a per-boot publish answers at once"
-        );
-        tokio::task::spawn_blocking(move || drop(per_boot))
-            .await
-            .expect("the driver drops");
-    });
 }

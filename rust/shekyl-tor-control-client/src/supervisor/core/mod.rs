@@ -664,11 +664,12 @@ pub enum Input {
     Sessions(Sessions),
     /// Tor's sampled view of its network. Ignored unless Running.
     NetworkView(NetworkView),
-    /// [`Action::PinGuards`] was confirmed. The set's earliest expiry and
-    /// the wall it was read beside, both in Unix seconds.
+    /// [`Action::PinGuards`] was confirmed. The set's earliest expiry, when
+    /// it has one, and the wall it was read beside, both in Unix seconds.
+    /// `None` is a set the clock does not rotate.
     GuardsPinned {
         /// The earliest expiry of the pinned set.
-        next_expiry: u64,
+        next_expiry: Option<u64>,
         /// The wall when the pin was confirmed.
         wall: u64,
     },
@@ -901,10 +902,8 @@ pub struct Core {
     service_republish: bool,
     /// The requests to Tor, and the one in flight.
     requests: requests::Requests,
-    /// When the pinned guard set next expires (`TSR-W1`). Outlives a Tor:
-    /// the set is the manager's, not one incarnation's.
-    guard_clock: Option<guards::GuardClock>,
     /// The consensus `valid-after` the sample last read, in Unix seconds.
+    /// A pin that waits for a new consensus records the one it has seen.
     valid_after: Option<u64>,
 }
 
@@ -955,7 +954,6 @@ impl Core {
             clock_evidence: clock_evidence::ClockEvidence::default(),
             service_republish: false,
             requests: requests::Requests::default(),
-            guard_clock: None,
             valid_after: None,
         };
         let first = if core.managed() {
@@ -1254,7 +1252,7 @@ impl Core {
                 (Phase::Running { .. }, Cause::None) => self.dials.line(),
                 _ => None,
             },
-            inbound: self.inbound_shown(),
+            inbound: self.inbound,
             stuck_upload_rounds: self.stuck_rounds,
             clock_behind: self.clock_lag(),
         }
@@ -1613,22 +1611,24 @@ impl Core {
     }
 
     fn keeps_sampling(&self) -> bool {
-        match self.phase {
-            Phase::Bootstrapping { .. }
-            | Phase::Running {
-                disk: Disk::Watching,
-                ..
-            }
-            | Phase::Running {
-                route: Duty::Owed, ..
-            } => true,
-            // An onion withheld for its guards waits on the pin, not the
-            // sample: the liveness sample's consensus clock is what asks an
-            // unfilled pin again (`guards`).
+        match &self.phase {
+            Phase::Bootstrapping { .. } => true,
+            // The fast cadence watches the state file, an owed route, or an
+            // owed onion whose pin already allows the publish. A withheld
+            // onion waits on the pin: the liveness sample's consensus clock
+            // asks an unfilled pin again (`guards`).
             Phase::Running {
-                onion: Duty::Owed, ..
-            } => self.guards_allow_publish(),
-            _ => false,
+                disk,
+                route,
+                onion,
+                guards,
+                ..
+            } => {
+                *disk == Disk::Watching
+                    || *route == Duty::Owed
+                    || (*onion == Duty::Owed && guards.allows_publish())
+            }
+            Phase::Absent { .. } | Phase::Launching | Phase::Stopping => false,
         }
     }
 
@@ -1657,7 +1657,7 @@ impl Core {
     }
 
     fn say_key(&self) -> announce::SayKey {
-        announce::SayKey::new(self.shown(), &self.cause, self.inbound_shown())
+        announce::SayKey::new(self.shown(), &self.cause, self.inbound)
     }
 
     /// The relay's verdict moved. Only a change in whether a local origin
@@ -1725,7 +1725,7 @@ impl Core {
         // does not: Usable is the outbound link, and an onion not yet proven
         // is not one found unreachable.
         if matches!(self.phase, Phase::Running { .. })
-            && matches!(self.inbound_shown(), Inbound::Unreachable { .. })
+            && matches!(self.inbound, Inbound::Unreachable { .. })
         {
             return Shown::Degraded;
         }
@@ -1832,7 +1832,7 @@ impl Core {
     fn step(&mut self, now: u64, actions: Vec<Action>) -> Step {
         let mut actions = self.route_requests(now, actions);
         self.settle_shown(now);
-        let inbound = self.inbound_shown();
+        let inbound = self.inbound;
         if inbound != self.published_inbound {
             self.published_inbound = inbound;
             actions.push(Action::PublishInbound(inbound));
