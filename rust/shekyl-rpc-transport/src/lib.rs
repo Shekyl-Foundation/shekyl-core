@@ -28,9 +28,13 @@ mod http_client;
 pub mod listen;
 pub mod local;
 pub mod network_posture;
-use http_client::{error_chain, HttpClient, HttpError, TransportTls};
+mod target;
+pub mod wallet_http;
 
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
+use http_client::{error_chain, HttpClient, HttpError, TransportTls};
+pub use target::{
+    service_channel, DaemonTarget, PlaintextGate, ResolvedDaemon, PLAINTEXT_NOT_THIS_COMPUTER,
+};
 
 /// A failure of the connection itself, classified where it is raised.
 ///
@@ -138,16 +142,16 @@ enum Authentication {
     },
 }
 
-/// A wallet's one daemon target (`RPC_CHANNEL.md` RT-15): "this computer",
-/// the owner's leg of the node this account runs, or a named address over
-/// HTTP until RT-W12. A client holds exactly one: it connects to it or says
-/// why it cannot, and never falls back to the other.
+/// The RPC connection chosen for one wallet. A local owner uses its private
+/// rendezvous. An enrolled wallet uses an authenticated channel.
 #[derive(Clone, Debug)]
 pub enum DaemonTransport {
     /// "This computer": the owner's socket or pipe ([`local::LocalRpc`]).
     ThisComputer(local::LocalRpc),
-    /// A named address.
+    /// Legacy HTTP adapter for explicit fixture and pre-cutover callers.
     Address(HttpRpc),
+    /// An enrolled channel to the operator’s node.
+    Channel(channel::WalletChannel),
 }
 
 impl From<HttpRpc> for DaemonTransport {
@@ -171,90 +175,9 @@ impl Rpc for DaemonTransport {
         async move {
             match self {
                 Self::ThisComputer(rpc) => rpc.post(route, body).await,
+                Self::Channel(rpc) => rpc.post(route, body).await.map_err(RpcError::from),
                 Self::Address(rpc) => rpc.post(route, body).await,
             }
-        }
-    }
-}
-
-/// What a wallet is configured to reach (`RPC_CHANNEL.md` RT-15): "this
-/// computer" when no `daemon-endpoint` is given, otherwise the address named.
-/// Exactly one; [`Self::connect`] makes its one [`DaemonTransport`].
-#[derive(Clone)]
-pub enum DaemonTarget {
-    /// The node this account runs on this computer, over its owner's leg
-    /// ([`local::LocalTarget::this_computer`]). The network is all a wallet
-    /// names: where this account's node and the machine's service keep
-    /// their rendezvous is this platform's to say, never the wallet's.
-    ThisComputer {
-        /// The wallet's network: which node's rendezvous.
-        network: shekyl_network::Network,
-    },
-    /// A named daemon address (plaintext HTTP until RT-W12), and the SOCKS5h
-    /// proxy its connections go through.
-    Address {
-        /// The daemon's base URL; may carry digest credentials.
-        url: String,
-        /// The SOCKS5h proxy; `None` is direct.
-        proxy: Option<String>,
-    },
-}
-
-/// Manual: an address may carry digest credentials in its authority, so it
-/// renders through [`redacted_endpoint`], as the proxy does.
-impl std::fmt::Debug for DaemonTarget {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::ThisComputer { network } => f
-                .debug_struct("ThisComputer")
-                .field("network", network)
-                .finish(),
-            Self::Address { url, proxy } => f
-                .debug_struct("Address")
-                .field("url", &redacted_endpoint(url))
-                .field("proxy", &proxy.as_deref().map(redacted_endpoint))
-                .finish(),
-        }
-    }
-}
-
-impl DaemonTarget {
-    /// A named address, dialled directly (no proxy).
-    #[must_use]
-    pub fn address(url: impl Into<String>) -> Self {
-        Self::Address {
-            url: url.into(),
-            proxy: None,
-        }
-    }
-
-    /// This target's transport, each call bounded by `timeout`, or by the
-    /// transport's default when `None`.
-    ///
-    /// # Errors
-    ///
-    /// A named address this transport cannot dial (see
-    /// [`HttpRpc::with_proxy`]). "This computer" does not fail here: a node
-    /// that is not running, a service, or a failed peer check is the first
-    /// call's error.
-    pub async fn connect(&self, timeout: Option<Duration>) -> Result<DaemonTransport, RpcError> {
-        match self {
-            Self::ThisComputer { network } => {
-                let target = local::LocalTarget::this_computer(*network);
-                Ok(DaemonTransport::ThisComputer(match timeout {
-                    Some(within) => local::LocalRpc::within(target, within),
-                    None => local::LocalRpc::new(target),
-                }))
-            }
-            Self::Address { url, proxy } => Ok(DaemonTransport::Address(
-                HttpRpc::with_options(
-                    url.clone(),
-                    timeout.unwrap_or(DEFAULT_TIMEOUT),
-                    proxy.clone(),
-                )
-                .await
-                .map_err(RpcError::from)?,
-            )),
         }
     }
 }
@@ -280,18 +203,18 @@ pub struct HttpRpc {
 
 /// The offline half of construction: the daemon URL parsed and normalized,
 /// with any authority credentials split out.
-struct ParsedEndpoint {
+pub(crate) struct ParsedEndpoint {
     /// Credential-free base URL, no trailing `/`.
-    url: String,
+    pub(crate) url: String,
     /// Path component of `url` (`""` when it has none).
-    path_prefix: String,
+    pub(crate) path_prefix: String,
     /// `(username, password)` from the URL's authority, if present —
     /// already split and shape-checked, so the offline validator and the
     /// constructor share one credential grammar structurally.
-    credentials: Option<(Zeroizing<String>, Zeroizing<String>)>,
+    pub(crate) credentials: Option<(Zeroizing<String>, Zeroizing<String>)>,
     /// Whether the client builds a TLS layer. `http://` never loads a
     /// root store (see `HttpClient`).
-    tls: TransportTls,
+    pub(crate) tls: TransportTls,
 }
 
 /// Locate a URL's authority userinfo '@' — the credential terminator:
@@ -332,7 +255,7 @@ pub fn redacted_endpoint(url: &str) -> String {
     }
 }
 
-fn parse_endpoint(url: String) -> Result<ParsedEndpoint, RpcError> {
+pub(crate) fn parse_endpoint(url: String) -> Result<ParsedEndpoint, RpcError> {
     // See `authority_at`: only the authority's '@' selects the credential
     // split; the rest of the URL is never consulted.
     let (after_scheme, at_in_authority) = authority_at(&url);
@@ -480,7 +403,7 @@ impl HttpRpc {
     /// A daemon requiring authentication can be used via including the username and password in the
     /// URL.
     pub async fn new(url: String) -> Result<HttpRpc, RpcError> {
-        Self::with_options(url, DEFAULT_TIMEOUT, None)
+        Self::with_options(url, local::CALL_WITHIN, None)
             .await
             .map_err(RpcError::from)
     }
@@ -506,12 +429,12 @@ impl HttpRpc {
     /// A daemon requiring authentication can be used via including the username and password in the
     /// URL.
     pub async fn with_proxy(url: String, proxy: Option<String>) -> Result<HttpRpc, RpcError> {
-        Self::with_options(url, DEFAULT_TIMEOUT, proxy)
+        Self::with_options(url, local::CALL_WITHIN, proxy)
             .await
             .map_err(RpcError::from)
     }
 
-    async fn with_options(
+    pub(crate) async fn with_options(
         url: String,
         request_timeout: Duration,
         proxy: Option<String>,

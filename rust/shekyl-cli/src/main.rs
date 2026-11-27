@@ -184,7 +184,13 @@ fn main() {
 /// the only place the CLI shows it, and the exposure warnings a start would
 /// give are on standard error.
 fn verify(options: &Options) {
-    if let DaemonTarget::Address { url, proxy } = &options.daemon {
+    if let DaemonTarget::Channel { node, .. } = &options.daemon {
+        if let Err(e) = node.bundle() {
+            shekyl_cli::err_line!("{PROGRAM}: {e}");
+            std::process::exit(EXIT_REFUSED);
+        }
+    }
+    if let DaemonTarget::Address { url, proxy, .. } = &options.daemon {
         if let Err(e) = shekyl_rpc_transport::validate_endpoint(url, proxy.as_deref()) {
             shekyl_cli::err_line!("{PROGRAM}: {e}");
             std::process::exit(EXIT_REFUSED);
@@ -274,9 +280,12 @@ fn disclose_network_posture(options: &Options, endpoints: &Endpoints) {
         }
     }
 
+    if let DaemonTarget::Channel { node, .. } = &endpoints.daemon().target {
+        say(node.leg.disclosures("daemon endpoint"));
+    }
     // "This computer" is no network path: nothing to disclose.
     if let DaemonEndpoint {
-        target: DaemonTarget::Address { url, proxy },
+        target: DaemonTarget::Address { url, proxy, .. },
         resolution,
     } = endpoints.daemon()
     {
@@ -354,7 +363,7 @@ fn daemon_down_hint(network: Network, target: &DaemonTarget) -> Option<String> {
         other => format!(" --network {other}"),
     };
     match target {
-        DaemonTarget::ThisComputer { .. } => Some(format!(
+        DaemonTarget::Owner(_) | DaemonTarget::ThisComputer { .. } => Some(format!(
             "Start the {network} daemon with: shekyld{flag} (this shell reaches it on its own \
              socket)."
         )),
@@ -366,7 +375,7 @@ fn daemon_down_hint(network: Network, target: &DaemonTarget) -> Option<String> {
             "Start the {network} daemon with: shekyld{flag} (its RPC answers on port {port}).",
             port = network.ports().rpc,
         )),
-        DaemonTarget::Address { .. } => None,
+        DaemonTarget::Channel { .. } | DaemonTarget::Address { .. } => None,
     }
 }
 

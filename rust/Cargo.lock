@@ -3581,7 +3581,6 @@ dependencies = [
  "time",
  "tokio",
  "tracing",
- "ureq",
  "zeroize",
 ]
 
@@ -4002,11 +4001,11 @@ dependencies = [
  "shekyl-p-loopback",
  "shekyl-p-serve",
  "shekyl-p-store",
- "shekyl-p-transport",
  "shekyl-p2p-transport",
  "shekyl-proofs",
  "shekyl-relay",
  "shekyl-rpc-client",
+ "shekyl-rpc-rendezvous",
  "shekyl-rpc-transport",
  "shekyl-rpc-types",
  "shekyl-runtime",
@@ -5146,10 +5145,8 @@ dependencies = [
 name = "shekyl-tor-control-wallet"
 version = "3.1.0"
 dependencies = [
- "getrandom 0.2.17",
  "kameo",
  "shekyl-onion-key",
- "shekyl-os-account",
  "shekyl-p-transport",
  "shekyl-spawn",
  "shekyl-tor-control-client",

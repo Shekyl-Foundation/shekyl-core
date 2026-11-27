@@ -602,19 +602,10 @@ pub(crate) async fn make_daemon(
     daemon: &DaemonTarget,
     network: Network,
 ) -> Result<DaemonClient, WalletRpcError> {
-    // "This computer" is the owner's leg (RT-W10 step 5). A named address
-    // goes through its SOCKS5h proxy when one is set: the daemon's block scan
-    // then resolves the node hostname *at the proxy*, never leaking it to
-    // the local resolver.
-    let rpc = daemon.connect(None).await.map_err(|e| {
-        // Startup already refused a malformed address/proxy
-        // (`validate_endpoint` in `server`), so what remains here is
-        // connectivity-shaped; the client-facing error stays stable, but
-        // the cause is never discarded (rule 82) — it lands in the
-        // server log.
-        tracing::warn!(error = %e, "daemon transport construction failed");
-        WalletRpcError::DaemonUnreachable
-    })?;
+    let rpc = daemon
+        .connect(None)
+        .await
+        .map_err(|error| crate::error::from_daemon_rpc_error(&error))?;
     // Identity-verifying (VC-4): the daemon must prove it is this network,
     // running this build's rules and RPC contract, before the first request.
     // The match is exact on every network, regtest included (VC-R3).
@@ -906,6 +897,7 @@ fn first_stake_rpc_error(error: shekyl_engine_core::FirstStakeError) -> WalletRp
         // A failed fee query: the build path's mapping, so the same
         // cause answers the same code — never the "fund and retry"
         // misdiagnosis (rule 82).
+        E::Daemon(fault) => shekyl_wallet_contract::error::from_daemon_fault(fault, "stake"),
         E::FeeEstimate(e) => e.into(),
         // The daemon ANSWERED and the wallet refused the answer. The
         // same -29102/-29109 split the send path draws, for the same
@@ -986,13 +978,20 @@ fn stake_fill_error(fill: shekyl_engine_core::CompleteTreeFillError) -> WalletRp
             scanned: scanned.to_raw(),
             needed: needed.to_raw(),
         },
-        C::Fill(F::LocalNodeRequired { detail }) => {
-            WalletRpcError::StakeLocalNodeRequired { detail }
+        C::Fill(F::LocalNodeRequired) => WalletRpcError::StakeLocalNodeRequired {
+            detail: shekyl_rpc_transport::PLAINTEXT_NOT_THIS_COMPUTER.to_owned(),
+        },
+        // A plain miss is this verb's unreachable code. A fault that names
+        // its own remedy uses the shared catalog, so enrollment is not
+        // reported as "the node could not be read".
+        C::Fill(F::Daemon {
+            fault: shekyl_rpc_client::DaemonFault::Unreachable,
+            detail,
+        }) => WalletRpcError::StakeDaemonUnreachable { detail },
+        C::Fill(F::Daemon { fault, detail }) => {
+            shekyl_wallet_contract::error::from_daemon_fault(fault, &detail)
         }
         C::Fill(F::DaemonSyncing) => WalletRpcError::StakeDaemonSyncing,
-        C::Fill(F::DaemonUnreachable { detail }) => {
-            WalletRpcError::StakeDaemonUnreachable { detail }
-        }
         C::Fill(F::Discarded { shard }) => WalletRpcError::StakeShardDiscarded {
             shard: shard.to_raw(),
         },
@@ -1306,10 +1305,7 @@ mod tests {
             // engine tolerates an unreachable daemon; the P-scan task's first
             // tip fetch fails-and-retries inside the spawned loop), so the
             // lifecycle wiring is exercised without a live node.
-            DaemonTarget::Address {
-                url: "http://127.0.0.1:1".to_string(),
-                proxy: None,
-            },
+            DaemonTarget::fixture_with_proxy("http://127.0.0.1:1".to_string(), None),
             crate::server::TorFile::discover(),
         ))
     }
@@ -1650,10 +1646,7 @@ mod tests {
         Mutex::new(TenantState::new(
             dir.to_path_buf(),
             Network::Stagenet,
-            DaemonTarget::Address {
-                url: "http://127.0.0.1:1".to_string(),
-                proxy: None,
-            },
+            DaemonTarget::fixture_with_proxy("http://127.0.0.1:1".to_string(), None),
             crate::server::TorFile::discover(),
         ))
     }

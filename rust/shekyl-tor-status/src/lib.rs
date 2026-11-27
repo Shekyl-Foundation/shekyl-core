@@ -540,6 +540,12 @@ pub enum OnionCause {
     /// Another Tor holding this onion's key is publishing it: a directory
     /// holds a copy newer than any this node published.
     PublishedElsewhere,
+    /// The onion keeps its second-layer guards and Tor refused their pins,
+    /// so it is not published (`TSR-W1`).
+    GuardsRefused,
+    /// The onion keeps its second-layer guards and Tor's view of the network
+    /// could not fill the set, so it is not published yet (`TSR-W1`).
+    GuardsUnfilled,
     /// A key this build does not know.
     Unknown {
         /// The key as it arrived.
@@ -555,6 +561,8 @@ impl Serialize for OnionCause {
             Self::DescriptorMissing => one_key(serializer, "descriptor-missing", &()),
             Self::ClockBehind(seconds) => one_key(serializer, "clock-behind", seconds),
             Self::PublishedElsewhere => one_key(serializer, "published-elsewhere", &()),
+            Self::GuardsRefused => one_key(serializer, "guards-refused", &()),
+            Self::GuardsUnfilled => one_key(serializer, "guards-unfilled", &()),
             Self::Unknown { tag } => one_key(serializer, tag, &()),
         }
     }
@@ -582,6 +590,14 @@ one_key_visitor!(
             "published-elsewhere" => {
                 map.next_value::<()>()?;
                 OnionCause::PublishedElsewhere
+            }
+            "guards-refused" => {
+                map.next_value::<()>()?;
+                OnionCause::GuardsRefused
+            }
+            "guards-unfilled" => {
+                map.next_value::<()>()?;
+                OnionCause::GuardsUnfilled
             }
             _ => return Ok(None),
         }))

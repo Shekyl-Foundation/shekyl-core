@@ -107,7 +107,7 @@ fn foundation_posture_is_complete_tree_with_the_empty_encoding() {
 #[test]
 fn assemble_imports_named_daemon_claimed_tip() {
     // `daemon_claimed_tip` is in scope in this module (assemble path) and
-    // is the body of `DaemonBlockSource::tip_height` / `PBlockSource::tip_height`.
+    // is the body of `DaemonBlockSource::tip_height`.
     // A rename that forked the two clocks would break this shared import.
     let assemble_name =
         std::any::type_name_of_val(&daemon_claimed_tip::<crate::engine::test_support::TestDaemon>);

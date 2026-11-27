@@ -14,7 +14,9 @@
 //! This crate owns what PWD-E9 marks **NO** to share with the daemon:
 //!
 //! - the supervisor that keeps one managed tor alive (`service`)
-//! - vanguard rotation and the `VanguardsActive` witness (`vanguard_rotation`)
+//! - this supervisor's guard set: its own `VanguardManager` and state file.
+//!   The manager's code is shared (`shekyl_tor_control_client::vanguard_rotation`,
+//!   `TSR-W1`); each instance holds its own state, never another's
 //! - persona publish orchestration (`onion_service`)
 //!
 //! It does **not** re-export the launch path (`TorControlClient`, `ManagedTor`,
@@ -26,7 +28,6 @@
 
 pub mod onion_service;
 pub mod service;
-pub mod vanguard_rotation;
 
 #[cfg(test)]
 mod test_support;
