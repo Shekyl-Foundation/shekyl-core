@@ -73,7 +73,7 @@ impl ChainOpen {
 ///
 /// An enrolled channel and this computer pass through [`DaemonTarget::connect`].
 /// A plaintext address must be this computer; the refusal does not name the
-/// address. A channel fault is [`DaemonFault::Channel`], not a loopback refusal.
+/// address. A channel fault is [`ChainOpen::Channel`], not a loopback refusal.
 ///
 /// # Errors
 ///
