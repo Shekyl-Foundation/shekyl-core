@@ -7626,9 +7626,10 @@ plan ends; `ARCHIVAL_BOND_POST_DELAY.md` §3, §3.6).
 - **Endings:** signed and sent (the end date ends it); spent elsewhere; withdrawn
   by the owner before it is signed; shards that can no longer be bonded; the
   maximum wait from the due block. Each has its own outcome.
-- **The maximum** is measured from the due block and derived from outlasting
-  a fee spike; Rick names the figure (the floor's median window, 100 000
-  blocks, or one draw window). 94 is not used.
+- **The maximum** is measured from the due block: one draw window (ruled
+  2026-11-27; the floor's median window, 100 000 blocks or about 139 days,
+  is no use as a limit on reserved funds). It moves with the window. 94 is
+  not used.
 - **The drain owed is one persisted state**, written in the same save that
   ends the plan, and retried without a maximum.
 - **Proposed by the slice, awaiting Rick** (`ARCHIVAL_BOND_POST_DELAY.md`

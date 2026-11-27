@@ -27,10 +27,9 @@ use super::stake_timing::DEFAULT_ENTRY_GAP;
 /// due block; never the 94-block proof lifetime, because a plan holds no
 /// proof).
 ///
-/// **Awaiting Rick's figure.** The two candidates he asked for: the fee
-/// floor's own median window (`BLOCK_WEIGHT_LONG_TERM_WINDOW`, 100 000
-/// blocks), the window a fee spike has to outlast; or one draw window, which
-/// moves with BD-Q4. This reads the draw window until he names one.
+/// **One draw window** (ruled 2026-11-27), read from the window's own
+/// constant so it moves with BD-Q4: at 600 blocks a plan that cannot sign
+/// gives up about 20 hours after it came due.
 pub(crate) const PLAN_MAX_WAIT: BlockCount = BlockCount::from_raw(DEFAULT_ENTRY_GAP.as_blocks());
 
 /// Where one live funding output sits: what a plan's anchor and an ended

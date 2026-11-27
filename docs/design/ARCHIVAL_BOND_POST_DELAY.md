@@ -2,11 +2,11 @@
 
 **Status:** RULED IN PART — Round 0 posed 2026-10-15; **BD-Q1, BD-Q2, BD-Q3
 and BD-Q5 ruled 2026-10-16** (Rick); **how a plan ends ruled 2026-11-26**
-(§3.6). **BD-Q4, the window, is open**, with the inputs it needs first
-(§3), and so is **the plan's maximum wait** (§3.6), which Rick names. The
-implementation slice (BD-Q2, BD-Q3, §3.6, the BD-Q5 deletion) is built
-against the window and the maximum as named constants and does not wait
-for either ([`26-sub-pr-design-discipline`](../../.cursor/rules/26-sub-pr-design-discipline.mdc));
+(§3.6), and **the plan's maximum wait ruled 2026-11-27: one draw
+window** (§3.6). **BD-Q4, the window, is open**, with the inputs it needs
+first (§3). The implementation slice (BD-Q2, BD-Q3, §3.6, the BD-Q5
+deletion) is built against the window as a named constant and does not
+wait for it ([`26-sub-pr-design-discipline`](../../.cursor/rules/26-sub-pr-design-discipline.mdc));
 §5 says where each part landed.
 
 **Ground:** `shekyl-core` `dev` at `0419e6780` (the #1082 merge, after
@@ -420,26 +420,15 @@ proposal**, `bond_due.rs` `DueBlock`, awaiting Rick):
 | node unreachable or syncing; scan, tree or ledger behind | temporary | each clears by itself |
 | any other assembly failure | limited (`AssemblyFailed`) | logged with its cause; a plan that can never be assembled ends and its funds return |
 
-**The maximum** is measured from the plan's due block and derived from
-what the wait is for, outlasting a fee spike. **Awaiting Rick's figure.**
-The candidates he asked for:
-
-- **The fee floor's own median window**: the floor is
-  `F = R·C·w_ref/M²` (`shekyl-economics` `fee/relay.rs`), and `M` is the
-  long-term effective median over `BLOCK_WEIGHT_LONG_TERM_WINDOW` =
-  100 000 blocks (about 139 days at 120 s; `shekyl-economics`
-  `params.rs:44`, from `config/consensus_constants.json`
-  `block_weight_long_term_window_blocks`). `M` is floored at the full
-  reward zone, so it can only fall back toward the zone, slowly.
-- **The floor's fast input**, for comparison: `R`, the release multiplier,
-  is clamped to `[0.8, 1.3]` and read over `TX_VOLUME_WINDOW` = 720 blocks
-  (`params.rs:70`). A volume-driven rise of the floor is therefore at most
-  about 1.6× and washes out over 720 blocks.
-- **One window**: 600 blocks, moving with BD-Q4.
-
-The slice reads one window through the named constant `PLAN_MAX_WAIT`
-(`engine/bond_plan.rs`) until Rick names the figure. 94 is not used: it is
-a signed proof's lifetime, and a plan holds no proof.
+**The maximum** is measured from the plan's due block: **one draw window**
+(Rick, 2026-11-27), read through `PLAN_MAX_WAIT` (`engine/bond_plan.rs`) from
+the window's own constant, so it moves with BD-Q4. At today's 600 blocks a
+plan that cannot sign gives up about 20 hours after it came due. The
+alternative was the fee floor's median window, `BLOCK_WEIGHT_LONG_TERM_WINDOW`
+= 100 000 blocks (about 139 days at 120 s; `shekyl-economics` `params.rs:44`),
+the window over which `M` in `F = R·C·w_ref/M²` moves; it is no use as a limit
+on reserved funds. 94 is not used: it is a signed proof's lifetime, and a
+plan holds no proof.
 
 **Ending with a drain.** One persisted state, not two steps: the record
 moves from plan to "ended, drain owed" (`EndedPlan`) in one confirmed
