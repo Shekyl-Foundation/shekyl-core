@@ -150,37 +150,71 @@ impl Drop for Descriptor {
 }
 
 fn grantees(path: &Path, mask: u32, include_owner: bool) -> Result<Vec<Grantee>, DaclError> {
+    let wide: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    Ok(grantees_in(
+        &read_descriptor(&wide, SE_FILE_OBJECT)?,
+        mask,
+        include_owner,
+    ))
+}
+
+/// Who may read and who may write, from an owner and a DACL already in
+/// hand. The same classification as [`read_grantees`] and [`write_grantees`],
+/// with no second query: a caller that already holds the descriptor judges
+/// that snapshot.
+///
+/// # Safety
+///
+/// `owner` is null or a valid SID, and `dacl` is null or a valid ACL, both
+/// alive for this call.
+///
+/// # Errors
+/// [`DaclError`] when the access list cannot be walked.
+pub(crate) unsafe fn grantees_of(
+    owner: *mut c_void,
+    dacl: *mut ACL,
+) -> Result<(Vec<Grantee>, Vec<Grantee>), DaclError> {
+    // SAFETY: the caller upholds `view_of`'s contract for this call.
+    let view = unsafe { view_of(owner, dacl) }?;
+    Ok((
+        grantees_in(&view, READ_MASK, false),
+        grantees_in(&view, WRITE_MASK, true),
+    ))
+}
+
+/// The grantees in `view` holding a right in `mask`, the owner first when
+/// `include_owner`. This account and the platform's principals are
+/// [`Grantee::Permitted`].
+fn grantees_in(view: &DescriptorView, mask: u32, include_owner: bool) -> Vec<Grantee> {
     let me = current_user_sid().ok();
-    let classify = |s: SidString| -> Grantee {
-        let permitted = is_platform_principal(&s) || me.as_ref() == Some(&s);
+    let classify = |s: &SidString| -> Grantee {
+        let permitted = is_platform_principal(s) || me.as_ref() == Some(s);
         if permitted {
             Grantee::Permitted
         } else {
             Grantee::Other(s.as_str().to_owned())
         }
     };
-    let wide: Vec<u16> = path
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect();
-    let view = read_descriptor(&wide, SE_FILE_OBJECT)?;
     let mut out = Vec::new();
     if include_owner {
-        out.extend(view.owner.map(classify));
+        out.extend(view.owner.as_ref().map(classify));
     }
-    match view.allowed {
+    match &view.allowed {
         None => out.push(Grantee::Other(
             "Everyone (no access-control list)".to_owned(),
         )),
         Some(allowed) => out.extend(
             allowed
-                .into_iter()
+                .iter()
                 .filter(|(_, ace_mask)| ace_mask & mask != 0)
                 .map(|(sid, _)| classify(sid)),
         ),
     }
-    Ok(out)
+    out
 }
 
 /// An object's owner and its allow and deny entries that apply to the
@@ -221,6 +255,17 @@ pub(crate) fn read_descriptor(
         return Err(DaclError(rc));
     }
     let _guard = Descriptor(psd);
+    // SAFETY: `owner` and `dacl` point into `psd`, which `_guard` keeps alive
+    // until this returns.
+    unsafe { view_of(owner, dacl) }
+}
+
+/// The owner and the entries of a DACL that apply to the object itself.
+///
+/// # Safety
+/// `owner` is null or a valid SID, and `dacl` is null or a valid ACL, both
+/// inside a descriptor that outlives this call.
+unsafe fn view_of(owner: *mut c_void, dacl: *mut ACL) -> Result<DescriptorView, DaclError> {
     let owner = if owner.is_null() {
         None
     } else {

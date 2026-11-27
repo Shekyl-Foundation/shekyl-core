@@ -202,7 +202,7 @@ a local group.
 # tor = "managed"
 
 # The operator's Tor SOCKS endpoint; required with tor = operator.
-# tor-socks = "127.0.0.1:11029"
+# tor-socks = "<address>:<port>"
 
 # The SOCKS username for tor-socks.
 # tor-socks-username = "<secret>"
@@ -215,7 +215,7 @@ a local group.
 
 # The local endpoint the operator's Tor forwards tor-onion to; required
 # with it.
-# tor-onion-listen = "127.0.0.1:11029"
+# tor-onion-listen = "<address>:<port>"
 
 # This node's persistent onion: Tor's own hs_ed25519_secret_key; tor =
 # managed only. Unset, the managed Tor's onion is new at every boot.
@@ -227,7 +227,7 @@ a local group.
 # tor-file = "/path"
 
 # A SOCKS proxy for clearnet dials.
-# clearnet-socks = "127.0.0.1:11029"
+# clearnet-socks = "<address>:<port>"
 
 # The SOCKS username for clearnet-socks.
 # clearnet-socks-username = "<secret>"
@@ -238,7 +238,7 @@ a local group.
 # The clearnet listen endpoints; `none` is dial-only on clearnet. Beside
 # `clearnet off`, `none` confirms it.
 # Default: 0.0.0.0 and the network's p2p port.
-# clearnet-listen = ["127.0.0.1:11029"]
+# clearnet-listen = ["0.0.0.0:11021"]
 
 # The clearnet endpoints peers can reach this node at; at most one per
 # address family. Beside `clearnet off`, `none` confirms it.
