@@ -35,6 +35,7 @@ mod posture;
 mod read;
 
 pub use ban::read_ban_file;
+pub(crate) use materialize::listen_default;
 
 #[cfg(test)]
 mod tests;
