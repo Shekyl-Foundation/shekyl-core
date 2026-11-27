@@ -148,9 +148,12 @@ fn bench_admission(c: &mut Criterion) {
         // (`max_inputs_at`, the one legal-shape function; `ICD-R5`). So there
         // is no functional form to choose and nothing to extrapolate: measuring
         // all of them makes the surface itself the specification (§80). The
+        // Depth 1 is no spend depth (a non-empty tree is depth 2 or more), so
+        // its control row sweeps the shallowest spend depth's legal counts.
+        let layers = SpendLayers::new(tree_depth).unwrap_or(SpendLayers::SHALLOWEST);
         let most = max_inputs_at(
             NonCoinbaseOutputs::new(n_out).expect("the bench's output count is mineable"),
-            SpendLayers::known(tree_depth),
+            layers,
         );
         for n_in in 1usize..=most {
             // Wall-clock timing averages over many samples, so a fresh random
