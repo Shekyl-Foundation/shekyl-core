@@ -5330,7 +5330,7 @@ async fn e2e_staker_bond_post_accepted_and_applied() {
 /// `ToKey` fee inputs (`fee_gindexes` non-empty), not the Q11 zero-fee
 /// form, so the fee-subset battery leg runs live.
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "acceptance lane (run_live_daemon_gates.sh GATE_LANE=acceptance), about thirteen hours: five daemons on the pinned managed Tor, each connected to the others, over the public Tor network; waits on a healthy public onion network, and a failure on propagation is a rerun (docs/FOLLOWUPS.md, the emission walk); needs SHEKYLD_BIN and SHEKYL_TEST_TOR_BINARY"]
+#[ignore = "acceptance lane (run_live_daemon_gates.sh GATE_LANE=acceptance), about thirteen hours: five daemons on the pinned managed Tor, each connected to the others, over the public Tor network; waits on a healthy public onion network, and a failure on propagation is a rerun; needs SHEKYLD_BIN and SHEKYL_TEST_TOR_BINARY"]
 async fn e2e_emission_claim_accepted_and_applied() {
     use super::bond_assembly::SpentRecordsDurablyPruned;
     use super::claim_dispatch::EmissionClaimRequestError;
