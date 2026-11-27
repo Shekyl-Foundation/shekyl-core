@@ -16,8 +16,9 @@ That trade is sound only while the feature stays on dev-dependency edges:
 
   * `resolver = "2"` (pinned in `rust/Cargo.toml`) unifies a dev-dependency's
     features only when dev-dependency targets are actually being built, and
-  * the release path never builds test targets (`cmake/BuildRust.cmake` invokes
-    cargo with no `--all-targets` / `--tests`),
+  * the release path never builds test targets (`cargo xtask` invokes cargo
+    with `rust/xtask/matrix.toml`'s arguments, no `--all-targets` / `--tests`;
+    check_rt_p4_standing.py holds every argument),
 
 so a shipped binary cannot contain the arm. One normal-dependency edge enabling
 the feature dissolves both of those, silently: the code still compiles, the
@@ -172,6 +173,12 @@ from pathlib import Path
 # declaration that the feature must never reach a shipped binary; adding the
 # feature without a row leaves it ungated, so add both in the same commit.
 TEST_ONLY: dict[tuple[str, str], str] = {
+    (
+        "shekyl-os-account",
+        "test-fixture",
+    ): "where a test keeps a daemon's data directory: ~/.shekyl-test/<pid>-<name>, "
+    "which passes the daemon's real ancestor check (Rick, 2026-11-23). Enabled "
+    "from the dev edges of the crates whose tests start or lock a daemon",
     (
         "shekyl-win-sec",
         "test-utils",
@@ -596,6 +603,9 @@ PERMANENT: dict[tuple[str, str], str] = {
 # `shekyl-p-store` joined 2026-11-20, the commit that declared `test-tamper`
 # for shekyl-engine-core's serve-fault walk. That is its only feature, and
 # it is test-only.
+# `shekyl-os-account` joined 2026-11-23, the commit that declared `test-fixture`
+# for the tests that start or lock a daemon. That is its only feature, and it
+# is test-only.
 #
 # This set is opt-in — the crates named below, out of a workspace approaching
 # seventy — so exhaustiveness holds *within* governance. The rule for joining: **a crate
@@ -636,6 +646,7 @@ GOVERNED_OWNERS: frozenset[str] = frozenset(
         "shekyl-harness-wallet",
         "shekyl-ct-balance",
         "shekyl-p-store",
+        "shekyl-os-account",
     }
 )
 

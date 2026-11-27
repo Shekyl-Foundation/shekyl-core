@@ -6,8 +6,9 @@ ignored in `cargo audit` by ruling (Rick, 2026-10-24); its long-term fix is
 not yet designed. `CA-2` opened 2026-10-24 from CA-1's dynamic measurement:
 operand-dependent timing in the vendored `HelioseleneField` on x86_64,
 mechanism open (§2). `CA-3` opened 2026-11-21 by Rick's ruling: no
-constant-time evidence covers any of Shekyl's post-quantum signing (§3).
-Its FN-DSA run is registered and unmeasured (§3.1).
+registered timing evidence then covered any of Shekyl's post-quantum signers (§3).
+All three signers have since passed their registered runs. CA-3 closed on
+2026-11-25 (§3.1–§3.3).
 
 One row per advisory or audit finding that touches a cryptographic
 dependency or primitive and cannot be closed by a routine lockfile bump. A
@@ -21,7 +22,7 @@ bump's commit is its record.
 | --- | --- | --- |
 | `CA-1` | `crypto-bigint` 0.5.5, RUSTSEC-2026-0387 (timing variability) | **IGNORED BY RULING 2026-10-24** — fix undesigned (§1) |
 | `CA-2` | Operand-dependent timing in the vendored `HelioseleneField` on x86_64, outside BINSEC's model | **OPEN 2026-10-24** — mechanism open (§2) |
-| `CA-3` | No constant-time evidence for post-quantum signing: FN-DSA (receipt countersignature), ML-DSA-65 (transactions), SLH-DSA-192s (messages) | **OPEN 2026-11-21** — FN-DSA CLOSED 2026-11-22, all three runs pass (§3.1); ML-DSA-65 and SLH-DSA-192s unmeasured (§3) |
+| `CA-3` | No constant-time evidence for post-quantum signing: FN-DSA (receipt countersignature), ML-DSA-65 (transactions), SLH-DSA-192s (messages) | **CLOSED 2026-11-25**. FN-DSA (§3.1) and SLH-DSA (§3.3) passed their registered runs. Post-fork ML-DSA-65 passed on the floor (pair 3.57, delta10 657 ns) and the physical Windows desktop (pair 3.33, delta10 139 ns), meeting the final signing criterion (§3.2). |
 
 ## 1. `CA-1` — crypto-bigint 0.5.5, RUSTSEC-2026-0387
 
@@ -398,6 +399,56 @@ vendored crate or upstream and re-measured flat with this harness on the
 direct path on both x86_64 hosts, with a note in the wallet's threat model
 for the release that predates it.
 
+### 2.1 Localisation, and ML-KEM decapsulation's validity gap (registered 2026-11-21)
+
+The [original registration](../formal/checkct/results/2026-11-21/ca2-localisation-registration.md)
+tests the inlined halves and sparse Montgomery `Field25519` rows.
+The [desktop amendment](../formal/checkct/results/2026-11-21/ca2-desktop-amendment.md)
+records the changed host and omits the suspect workstation's CPU-control
+follow-up from this PR. The [desktop results](../formal/checkct/results/2026-11-25/ca2-desktop-localisation.md)
+are flat: ordinary-release halves ≤2.50, fat-LTO halves ≤1.95,
+Montgomery-sparse square 3.16 and mul 1.18. The nulls and positive
+controls met their lines. These results do not localise the previously
+observed field timing effect, and CA-2 remains open.
+
+The same registration covers an observation from RT-P4 that belongs here.
+On the laptop, invalid ML-KEM-768 ciphertexts decapsulate slower than
+valid ones:
+- `valid-vs-invalid` 45.41, about 36 ns;
+- `fixed-vs-bitflip` 10.98;
+- the gap roughly doubled between runs of identical code.
+
+The maintainer has accepted it under `RPC_CHANNEL.md` §4.3's bounds
+(2026-10-25, reaffirmed 2026-11-21). The source holds no branch on
+validity:
+- `fips203` 0.5.0 computes `J(z‖c)` unconditionally (`ml_kem.rs:128`);
+- it selects the key with `conditional_assign` over `subtle`'s `ct_ne`
+  (`:144`).
+
+The hypothesis to test is this core's low-activity effect: a valid
+ciphertext's compare folds equal bytes. The registration times the compare
+alone (`ct_ne 1088` rows), and RT-P4's validity comparisons on other
+silicon and under DOITM, a pinned clock and turbostat. It predicts no gap
+on the floor device. The isolated desktop `ct_ne 1088` rows were
+flat at 1.42 and 1.99 with 100,000 batches per class, reduced to fit
+memory. The harness now keeps those rows on a windowed schedule: a window
+is built, then timed, with a cache pad written between the two, so the
+registered count fits. This figure is the run made before that. The full
+RT-P4 desktop run used one million samples per comparison.
+
+**Floor cross-check (2026-11-25).** The existing [RT-P4 fips203 0.5.0
+floor capture](../benchmarks/rt_p4_mlkem_decaps_timing_20261121_message.md#the-floor-device--pass)
+records `valid-vs-invalid` at 2.26 and `fixed-vs-bitflip` at 1.66.
+The nulls were 2.29 and 1.82, and the planted control was 1331.37.
+Both validity rows are flat under the registered CA-2 thresholds, as
+predicted for the Cortex-A72. This satisfies the floor cross-check.
+**Desktop cross-check (2026-11-25).** The physical i9-13900K
+MSVC build read 1.53 on `valid-vs-invalid` and 2.96 on
+`fixed-vs-bitflip`, with nulls 1.91 and 1.55 and positive control
+409.94. Both comparisons were flat. The desktop did not reproduce
+the Tiger Lake laptop's gap. Its cause remains unresolved. See the
+[desktop RT-P4 record](../formal/checkct/results/2026-11-25/ca2-desktop-rt-p4.md).
+
 ## 3. `CA-3` — no constant-time evidence for post-quantum signing
 
 **Opened 2026-11-21 by Rick's ruling**, from shekyl-core #1494's review of
@@ -408,12 +459,12 @@ fips203/204/205 0.5.0. Owner: the crypto-audit lane. It is not part of
 respect to its secret key, on the floor device (Raspberry Pi 4, rule 76)
 and on x86?
 
-**What covers post-quantum code today.** checkct's drivers and its dynamic
+**Coverage when CA-3 opened.** checkct's drivers and its dynamic
 harness (`docs/formal/checkct/`) cover crypto-bigint 0.5.5,
 `dalek_ff_group::FieldElement` and `HelioseleneField`, and nothing in
 fips203, fips204, fips205 or fn-dsa. RT-P4
 ([`RPC_CHANNEL.md`](RPC_CHANNEL.md) §9) times ML-KEM-768 decapsulation
-only. No registered run covers any signing.
+only. At opening, no registered run covered signing.
 
 **The signers, by exposure.**
 
@@ -654,3 +705,195 @@ above. None is chosen before then.
   fork.
 - **Blinding the key's Gram matrix**, or **a different implementation**.
 - **Accepting the result within bounds**, given the severity above.
+
+### 3.2 ML-DSA-65, transaction authorisation
+
+**CLOSED 2026-11-25.** Post-fork revision 3 passed the registered signing
+line on both devices. The floor recorded pair 3.57, null 2.16, control
+160.82 and delta10 657 ns. The physical Windows desktop recorded pair
+3.33, null 2.04, control 96.68 and delta10 139 ns. Both used 50,000
+samples per comparison with key decode timed. All signature checks held.
+The two earlier VM preflights missed their controls and contributed no
+registered result. This closes the final signer under CA-3's criterion.
+
+Core #1545 pins fips204's fork at `54b76cf714`, removing the secret-coefficient
+branches and hardening the inverse NTT range; the source and guard evidence
+are in [`ca3_pq_branch_sweep_20261123.md`](../benchmarks/ca3_pq_branch_sweep_20261123.md).
+The maintainer ordered the same registered line at 50,000 per comparison,
+on a fresh seed, after merging dev: signing alone with decode timed, floor
+on the performance governor, Windows behind its quiet gate. The maintainer
+substituted a fleet Windows VM for the unavailable laptop on 2026-11-24,
+before its run; the timing record states the conditions and limits. The revision-3
+registration is in the timing record below. Neither earlier device result
+closes the post-fork run.
+
+**Revision 2 record, published fips204 0.5.0 (2026-11-23):**
+- **The laptop PASSES:** attempt 2, sign pair 1.32, null 3.38, control
+  65.73, δ₁₀ 415 ns. Attempt 1 was void: its control was not detected,
+  under load on the measured core's sibling.
+- **The floor device is INCONCLUSIVE:** attempt 1, sign pair 7.55, null
+  3.15, control 118.00, δ₁₀ 1,145 ns. Key A is about 0.4 µs faster in the
+  single-attempt signatures, about 0.03 %.
+- **Observed, not established:** on all three floor pairs the key with
+  more hints per signature is the slower. The hint count is public.
+- **The attempt is not made again.** Diagnostics follow it, and none of them
+  is a pass or a second attempt (2026-11-23):
+  - **The public hint count is not the carrier.** The slope is tens of ns per
+    hint (14 and 55), and adjusting for it moves the fastest signatures'
+    difference only from −277 to −266 ns.
+  - **Not yet attributed to layout.** The registered binary read 10.50 and then
+    4.05 on identical code, so the figure moves between runs of one binary.
+    Two verified layout-only builds read 2.75 and 1.90, one run each. This is
+    with the maintainer.
+
+The record is
+[`ca3_ml_dsa_tx_auth_timing_20261122.md`](../benchmarks/ca3_ml_dsa_tx_auth_timing_20261122.md).
+- **The line:** signing alone from one working slot, with the key's
+  decode timed as the shipped call decodes on every call
+  (`shekyl-crypto-pq/src/signature.rs:354`). The pass line is the pair
+  matched on the work key generation does by design (ExpandS bytes,
+  ExpandA rejections). The composed call (`sign_pqc_auth_for_output`,
+  `output.rs:1182`, through its seeded twin at `:1224`) and key generation
+  alone are information.
+- **The size:** 50,000 samples per comparison on each device. It comes from
+  the threat model below (about one sample per key), the rule ruled for
+  SLH-DSA, and each attempt states its sensitivity as δ₁₀.
+- **The harness:** `rust/shekyl-crypto-pq/examples/ca3_pq_sign_timing.rs`,
+  mode `ml-dsa-registered`.
+- **fips204 0.5.0 has no architecture-specific code,** and its keccak
+  dispatches only on aarch64 behind a feature the workspace does not
+  enable. So one run covers each device.
+
+**Disclosed:**
+- **The size and the line were set after the runs that informed them:**
+  the floor device's shake-down (composed pair 10.44), two localisations,
+  and the shake-down's own binary run again (7.12).
+- **That rerun's crossing follows the build.** The second localisation's
+  build read 3.52 on the same mode, pair, seed and device. So the composed
+  call carries a per-key effect whose size follows the code layout. Its
+  likely carrier is the test repeating each key, which production does
+  not do (about one signature per output key). It is not a reliable line.
+- **Every localisation pair sat above its null** at 50,000: 2.6 to 3.7,
+  against 1.2 to 2.2. That is probably a per-key difference of about
+  0.3 µs, about 0.01 % of the call. Its likely carrier is the same
+  repetition, but it is not identified. A run at 500,000 might cross on it.
+- **The hint count differs per key**, as ML-DSA's design implies, and is
+  public. Within equal hint counts the pairs read as they do overall.
+
+**Threat model.**
+- **Adversary.** A co-resident process on the wallet's host, or an
+  enrolled wallet-RPC client.
+- **Capability: about one sample per key.** Each output's hybrid key is
+  derived from the transaction's combined shared secret and the output
+  index. It signs when that output is spent, and is wiped
+  (`sign_derived_output_auth`, `output.rs:1247`). So a timing observer
+  sees about one signature per key, more only if the user rebuilds the
+  same spend. An enrolled RPC client can request signatures, but it can
+  already spend.
+- **Harm.** Recovering the ML-DSA half forges nothing alone: the hybrid is
+  nested, so an attacker also needs the Ed25519 half. What leaking the
+  ML-DSA half costs is that spend's protection against a future quantum
+  adversary, who could then break Ed25519 too. The key signs one spend, so
+  the exposure ends when the output is spent.
+- **Severity.** Very low. The measurement is owed by `CA-3`'s ruling.
+
+**Source read** (`fips204` 0.5.0).
+1. **The signing loop.** It is bounded at 814 attempts
+   (`ml_dsa.rs:24`). An attempt rejected by the `z` or `r0` check
+   (`ml_dsa.rs:309`) skips the `c·t0` product and the hint (steps 25 to
+   28) that an attempt rejected by the hint check (`:341`) computes. So
+   the attempt count and the check that rejected are both visible in the
+   time, by construction.
+2. **The crate's own constant-time harness bypasses its rejection
+   samplers.** Its `CTEST` parameter replaces them with fixed work, "used
+   only for `dudect` measurements": `coeff_from_three_bytes`
+   (`conversion.rs:40-46`, under ExpandA), `coeff_from_half_byte`
+   (`:80-87`, under ExpandS), `sample_in_ball` (`hashing.rs:85`, `:105`)
+   and `hint_bit_pack` (`conversion.rs:277-307`). The crate's
+   constant-time claim therefore excludes those loops.
+3. **Shekyl derives the key on every call, so key generation's ExpandS is
+   in the timed operation.**
+   - ExpandS rejection-samples the secret coefficients from the secret seed
+     ρ′. The number of rejected nibbles varies per key. Rejected nibbles are
+     discarded, so the count carries no information about the coefficients
+     kept.
+   - ExpandA runs in every signature (`ml_dsa.rs:212`) on the public ρ.
+   - `infinity_norm` takes a `max` the crate says "might be non-CT on some
+     targets" (`helpers.rs:139-147`). The crate's comment covers the
+     accepted `z`, which the signature reveals; `r0` and a rejected `z` are
+     not revealed.
+   - No division or variable shift touches a secret-derived value.
+     `decompose` (`high_low.rs:74-90`) splits a coefficient by
+     multiplication and shifts by constants. The crate's other divisions
+     are of constants (`helpers.rs:34`, `:48`), and the `%` at
+     `helpers.rs:177-178` builds the zeta table in a `const fn`, at
+     compile time.
+4. **The harness's development run.** It used a seed that is not
+   registered, 20,000 samples per comparison, on the development machine.
+   It is not a result.
+   - `fixed-a-vs-varied` read `|t|` 8.16 at the lowest cut-off: the fixed
+     key was 4.1 µs faster among mostly single-attempt signatures.
+   - `fixed-a-vs-fixed-b` read 1.67, the nulls 1.76 and 1.83, and the
+     control 22.49.
+   - Fixed-against-fresh differing while the fixed pair does not is the
+     familiarity pattern `CA-2` met: a key derived and used again and again
+     trains the branch predictor on its own rejection pattern.
+   - It is also why the registration's lines must separate three things
+     before any registered run: variation by design (the rejection counts,
+     ExpandA on ρ), familiarity, and a time that depends on the secret.
+
+### 3.3 SLH-DSA-SHA2-192s, message signing
+
+**Status: CLOSED 2026-11-22. Both registered runs PASS: the floor device's
+and the laptop's.** The registration and its results are in
+[`ca3_slh_dsa_msg_sign_timing_20261122.md`](../benchmarks/ca3_slh_dsa_msg_sign_timing_20261122.md).
+On the 4 GB Pi 4 the fixed pair read 1.40, the null 2.21, and the control
+22.89 at δ = 1.22 ms, which excludes a key-value dependence of 1.22 ms
+(0.023 % of a signature) or more there. On the laptop (x86_64, Windows) the
+fixed pair read 2.43, the null 2.15, and the control 66.60 at its own
+δ = 9.61 ms (1.66 %): a coarser bound, from that machine's larger noise.
+It has three comparisons (the fixed pair, the a/a null, and the control on
+it) at 1,000 signatures per class, and its control is sized from each
+device's measured noise (the maintainer's rulings, 2026-11-21). The harness
+is the same example, mode `slh-dsa`. It times `sign_message_pq_half`
+(`shekyl-crypto-pq/src/message_signing.rs:385`) as the wallet calls it:
+hedged with the OS's randomness (`try_sign(..., true)`), on one fixed
+message.
+
+**Threat model.**
+- **Adversary.** The same callers as §3.2.
+- **Capability.** The key is one per wallet and network, re-derived from
+  the master seed on every call. It is long-lived, but each signature
+  costs about 0.59 s on the development machine and 4.3 s on the floor
+  device, and the user or an enrolled client must ask for each one.
+- **Harm.** Recovering the SLH-DSA key does not reveal the master seed,
+  because the derivation is one-way (HKDF). Forging a message signature
+  also needs the spend key's outer Schnorr half
+  (`sign_outer_with_spend_scalar`).
+- **Severity.** Very low.
+
+**Source read** (`fips205` 0.5.0, against 0.4.1).
+1. **0.5.0 makes every signature's hash count the same.**
+   - In 0.4.1, the hypertree signer skipped `xmss_pk_from_sig` on its top
+     layer (`hypertree.rs:76`, `if j < (d32 - 1)`).
+   - That layer's WOTS chains then run for as many steps as the digits of
+     the message they sign, which is the root of the layer below at the
+     signature's tree index.
+   - In 0.5.0 the top layer is completed as well (`hypertree.rs:90`), so a
+     signature's WOTS chains and their completions sum to a constant.
+2. **What 0.4.1's variation leaked: nothing the signature does not
+   disclose.** The varying count was a function of that root and of the
+   tree index. The tree index comes from the message digest over `R`, and
+   `R` is in the signature. Every verifier recomputes the root from the
+   signature.
+3. **Addresses and indices.** The digest is split into the FORS message
+   and the tree and leaf indices (`slh.rs:190-207`). The FORS indices are
+   read from it (`base_2b`, `fors.rs:123-125`). So every index that selects
+   a secret key element or an authentication path in signing is a function
+   of the digest, which a verifier recomputes from the signature's `R`.
+4. **The harness's development run.** 100 samples per comparison, seed not
+   registered; not a result. Every signature verified. The lines read 0.77
+   and 1.68, and the nulls 1.52 and 0.51. The planted 0.5 % (2.9 ms) read
+   1.27 and was not detected. At this signature's cost, the registered run
+   needs a sample count and control size chosen together, and on the floor
+   device each thousand samples is over an hour per comparison.

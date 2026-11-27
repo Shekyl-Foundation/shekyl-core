@@ -12,13 +12,12 @@ use std::ffi::OsString;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
-use shekyl_daemon_config::resolve::{self, chosen_network};
 use shekyl_daemon_config::Network;
-use shekyl_daemon_config::{file, paths, Logging, Platform, Resolved, RunMode};
-use shekyl_options::{read_cli, read_file, Code, Diagnostic, PeerEndpoint, Source, Value};
+use shekyl_daemon_config::{load_table, paths, Logging, Platform, Resolved, RunMode};
+use shekyl_options::{read_cli, Code, Diagnostic, Source, Value};
 use shekyl_rpc_channel::handshake::StaticPublic;
 use shekyl_rpc_grants::GrantSet;
-use shekyl_rpc_transport::channel::Leg;
+use shekyl_rpc_transport::channel::{Leg, PeerRoute};
 use shekyl_rpc_types::wire::rpc::CeilingWord;
 
 use crate::table::TABLE;
@@ -89,30 +88,15 @@ where
     if given("version") {
         return Ok(Action::Version);
     }
-    let network = chosen_network(&cli);
+    let key_create = given("rpc-key-create");
+    let key_show = given("rpc-key-show");
+    let loaded = load_table(&TABLE, "shekyl-rpc-tunnel", cli, platform)?;
+    let (network, resolved) = (loaded.network, loaded.resolved);
     // The account's root is read only for a default path, so an account
     // with no home (a packaged service's) runs when every path it needs is
     // given; a default that needs the root it cannot have is refused,
     // naming the option to give.
     let root = |option: &str| paths::root(platform, RunMode::User, option).map_err(|d| vec![d]);
-    let (config_path, named) = match cli.given.iter().find(|g| g.row.name == "config-file") {
-        Some(g) => match &g.value {
-            Value::Path(path) => (path.clone(), true),
-            other => unreachable!("config-file is a path, not {other:?}"),
-        },
-        None => (
-            root("config-file")?.join(format!("shekyl-rpc-tunnel-{}.toml", network.name())),
-            false,
-        ),
-    };
-    let key_create = given("rpc-key-create");
-    let key_show = given("rpc-key-show");
-    let opened = file::open(&config_path, named).map_err(|d| vec![d])?;
-    let file_given = match &opened {
-        Some(config_file) => read_file(&TABLE, &config_path, &config_file.text)?,
-        None => Vec::new(),
-    };
-    let resolved = resolve::resolve(&TABLE, network, cli, file_given)?;
     let key_file = match path_of(&resolved, "rpc-key-file") {
         Some(path) => path,
         None => root("rpc-key-file")?.join(format!("rpc-shekyl-rpc-tunnel-{}.key", network.name())),
@@ -143,21 +127,17 @@ fn build(
     key_file: PathBuf,
 ) -> Result<Config, Vec<Diagnostic>> {
     let mut faults = Vec::new();
-    let proxy = match resolved.get("daemon-socks") {
+    let socks = match resolved.get("daemon-socks") {
         Some(Value::Endpoint(addr)) => Some(*addr),
         _ => None,
     };
-    // The table has already parsed the peer. An onion's proxy is part of
-    // the leg; an IP keeps the proxy only when one was given.
+    // The table has already parsed the peer. The route is the channel leg:
+    // an onion's proxy is part of it, an IP keeps one when given.
     let leg = match resolved.get("daemon-endpoint") {
-        Some(Value::Peer(PeerEndpoint::Ip(addr))) => Some(Leg::ip(*addr, proxy)),
-        Some(Value::Peer(PeerEndpoint::Onion { host, port })) => match proxy {
-            Some(proxy) => Some(Leg::onion(host.clone(), *port, proxy)),
-            None => {
-                faults.push(requires(
-                    "daemon-endpoint",
-                    "daemon-socks, to reach an onion",
-                ));
+        Some(Value::Peer(peer)) => match PeerRoute::reach(peer, socks) {
+            Ok(route) => Some(route.leg()),
+            Err(error) => {
+                faults.push(error.diagnostic("daemon-endpoint"));
                 None
             }
         },

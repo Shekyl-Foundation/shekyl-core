@@ -281,6 +281,10 @@ pub enum UnstakeError {
         /// The transport/verdict rendering.
         detail: String,
     },
+    /// The wallet's signer refused the exit: `-29119`, or the code of the
+    /// fault the user can act on. Nothing was sent.
+    #[error("the signer refused the exit: {0}")]
+    Signer(shekyl_tx_builder::SignFault),
     /// A non-transient engine fault: a sealed-state read, the fee quote, a
     /// corrupted resident key, or the assembly itself. Fail closed; not
     /// retryable by waiting.
@@ -416,6 +420,10 @@ pub enum CollectUnstakedError {
     /// (Rick, 2026-11-19). The cause is the save's, and names its fix.
     #[error("the sweep was not sent: {0}")]
     SealNotSaved(#[source] PersistenceError),
+    /// The wallet's signer refused the sweep: `-29119`, or the code of the
+    /// fault the user can act on. Nothing was sent.
+    #[error("the signer refused the sweep: {0}")]
+    Signer(shekyl_tx_builder::SignFault),
     /// A non-transient engine fault. Fail closed; not retryable by waiting.
     #[error("engine state ({context}): {detail}")]
     Engine {
@@ -984,9 +992,12 @@ fn flatten_unstake_error(e: ReleaseRequestError) -> UnstakeError {
         )) => UnstakeError::ExitNotFundable {
             detail: a.to_string(),
         },
-        ReleaseRequestError::Stake(e) => UnstakeError::Engine {
-            context: "exit assembly",
-            detail: e.to_string(),
+        ReleaseRequestError::Stake(e) => match e.sign_fault() {
+            Some(fault) => UnstakeError::Signer(fault),
+            None => UnstakeError::Engine {
+                context: "exit assembly",
+                detail: e.to_string(),
+            },
         },
         // Typed through, never Engine/-32603: the two fee
         // failure classes keep the remedy split every other P-lane verb
@@ -1052,6 +1063,9 @@ fn flatten_unstake_error(e: ReleaseRequestError) -> UnstakeError {
 /// Flatten the crate-internal drain-seam error onto the collect boundary
 /// (scalar-free, module docs).
 fn flatten_collect_error(e: DrainRequestError) -> CollectUnstakedError {
+    if let Some(fault) = e.sign_fault() {
+        return CollectUnstakedError::Signer(fault);
+    }
     match e {
         DrainRequestError::NotStaker => CollectUnstakedError::NotStaker,
         DrainRequestError::DrainPending => CollectUnstakedError::PassInFlight,

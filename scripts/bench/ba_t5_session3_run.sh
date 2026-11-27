@@ -166,7 +166,8 @@ probe() {  # label mode [VAR=value ...] — runs the probe, reading its threads 
 sync_height() { grep -oE 'Synced [0-9]+/[0-9]+' "$WORK/syncdata/stdout.log" 2>/dev/null | tail -1 | grep -oE '[0-9]+/[0-9]+'; }
 
 sync_start() {  # a fresh data directory, then the daemon, then wait until it is syncing
-  rm -rf "$WORK/syncdata"; mkdir -p "$WORK/syncdata"
+  # Owner-only: the daemon refuses an existing data directory others can enter.
+  rm -rf "$WORK/syncdata"; mkdir -p -m 0700 "$WORK/syncdata"
   # A private directory for the owner's socket: the bench runs beside the
   # host's own daemon, as the bench's account (RPC_CHANNEL.md §7.1).
   mkdir -m 0700 "$WORK/syncdata/sock"

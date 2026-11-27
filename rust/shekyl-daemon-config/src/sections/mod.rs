@@ -205,13 +205,7 @@ impl Logging {
     /// refuses anything else, so a built section's words are in that set.
     #[must_use]
     pub fn directive(&self) -> shekyl_logging::filter::Directive {
-        let overrides: Vec<(&str, &str)> = self
-            .categories
-            .iter()
-            .map(|(subsystem, level)| (subsystem.as_str(), *level))
-            .collect();
-        shekyl_logging::subsystem::directive_from_words(self.level, &overrides)
-            .expect("the table admits only level words and subsystem keys")
+        log_directive(self.level, &self.categories)
     }
 
     /// The file sink, sized within the budget by the logging owner.
@@ -227,6 +221,19 @@ impl Logging {
         );
         shekyl_logging::FileSink::within_budget(dir, prefix, self.size_max)
     }
+}
+
+/// The filter for a base level and per-subsystem levels.
+fn log_directive(
+    level: &str,
+    categories: &[(String, &'static str)],
+) -> shekyl_logging::filter::Directive {
+    let overrides: Vec<(&str, &str)> = categories
+        .iter()
+        .map(|(subsystem, level)| (subsystem.as_str(), *level))
+        .collect();
+    shekyl_logging::subsystem::directive_from_words(level, &overrides)
+        .expect("the table admits only level words and subsystem keys")
 }
 
 /// The notify runner's three commands.
@@ -471,15 +478,33 @@ fn taken_path(r: &mut Reader<'_>, option: &str) -> PathBuf {
     }
 }
 
-fn logging_section(r: &mut Reader<'_>, file: PathBuf) -> Option<Logging> {
+/// The logging rows, read once: the level, the per-subsystem overrides, and
+/// the byte budget. Both words and the budget are read before either is
+/// required, so one bad row does not hide the other.
+struct LogRead {
+    level: &'static str,
+    categories: Vec<(String, &'static str)>,
+    size_max: u64,
+}
+
+fn read_logging(r: &mut Reader<'_>) -> Option<LogRead> {
     let words = read_log_words(r);
     let size_max = r.required_bytes("log-size-max");
     let (level, categories) = words?;
-    Some(Logging {
-        file,
+    Some(LogRead {
         level,
         categories,
         size_max: size_max?,
+    })
+}
+
+fn logging_section(r: &mut Reader<'_>, file: PathBuf) -> Option<Logging> {
+    let read = read_logging(r)?;
+    Some(Logging {
+        file,
+        level: read.level,
+        categories: read.categories,
+        size_max: read.size_max,
     })
 }
 
@@ -514,6 +539,43 @@ pub fn logging(resolved: &Resolved, file: PathBuf) -> Result<Logging, Vec<Diagno
         return Err(r.faults);
     }
     Ok(logging.expect("the logging rows were read or a fault was recorded"))
+}
+
+/// The logging of a binary that writes a file only when `log-file` names
+/// one (`shekyl-cli` and `shekyl-wallet-rpc`, Rick 2026-11-23): nothing about
+/// a wallet's activity lands on disk unasked. Its rows are the daemon's
+/// kinds. Unnamed, it logs to standard error at the same filter; named, the
+/// file and its archives share the `log-size-max` budget.
+///
+/// # Errors
+/// A logging row absent where the table fills it, or a word outside it.
+pub fn logging_to_named_file(
+    resolved: &Resolved,
+) -> Result<shekyl_logging::Config, Vec<Diagnostic>> {
+    let mut r = Reader::new(resolved);
+    let file = match r.optional_path("log-file") {
+        Read::Present(path) => Some(path),
+        Read::Absent | Read::Unreadable => None,
+    };
+    let read = read_logging(&mut r);
+    if !r.faults.is_empty() {
+        return Err(r.faults);
+    }
+    let read = read.expect("the logging rows were read or a fault was recorded");
+    let directive = log_directive(read.level, &read.categories);
+    let file_sink = file.map(|file| {
+        Logging {
+            file,
+            level: read.level,
+            categories: read.categories,
+            size_max: read.size_max,
+        }
+        .file_sink()
+    });
+    Ok(shekyl_logging::Config {
+        directive,
+        file_sink,
+    })
 }
 
 /// Installs the logging rows on the live filter.
@@ -812,7 +874,7 @@ pub fn log_location_writable(file: &Path) -> Result<(), Diagnostic> {
     log_location_creatable(file)?;
     let fail = log_unwritable(file);
     if let Some(dir) = file.parent() {
-        std::fs::create_dir_all(dir).map_err(&fail)?;
+        shekyl_os_account::create_account_dir_all(dir).map_err(&fail)?;
     }
     std::fs::OpenOptions::new()
         .append(true)

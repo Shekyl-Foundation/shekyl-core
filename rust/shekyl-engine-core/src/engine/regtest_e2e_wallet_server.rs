@@ -6,7 +6,7 @@
 //! A real `shekyl-wallet-rpc` process for the regtest gates that drive the
 //! wallet through its contract: the A19 gates (`send_durable`) and the
 //! balance and signer gates (`balance`). Requires `SHEKYL_WALLET_RPC_BIN`
-//! (staged in `build/bin` by the CMake build) beside `SHEKYLD_BIN`.
+//! (staged in `build/bin` by `cargo xtask build`) beside `SHEKYLD_BIN`.
 
 #![cfg(test)]
 
@@ -37,6 +37,9 @@ pub(super) struct WalletServer {
     child: Option<Child>,
     port: u16,
     log: PathBuf,
+    /// Holds the server's empty configuration file, named so a file in the
+    /// account's real root never reaches the run.
+    _config_dir: shekyl_os_account::test_fixture::FixtureDir,
 }
 
 impl WalletServer {
@@ -44,7 +47,7 @@ impl WalletServer {
         let bin = std::env::var_os("SHEKYL_WALLET_RPC_BIN").unwrap_or_else(|| {
             panic!(
                 "SHEKYL_WALLET_RPC_BIN not set. Build the wallet server \
-                 (cmake --build build) and pass build/bin/shekyl-wallet-rpc"
+                 (cargo xtask build, in rust/) and pass build/bin/shekyl-wallet-rpc"
             )
         });
         let port = {
@@ -54,18 +57,23 @@ impl WalletServer {
         let log = log_dir.join(format!("wallet-rpc-{tag}.log"));
         let out = std::fs::File::create(log_dir.join(format!("wallet-rpc-{tag}.out")))
             .expect("stdout file");
+        let config_dir = shekyl_os_account::test_fixture::tempdir().expect("a fixture directory");
+        let config = config_dir.path().join("wallet-rpc.toml");
+        shekyl_os_account::private_file::write_private(&config, b"").expect("the config file");
         let mut cmd = Command::new(bin);
-        cmd.arg("--wallet-dir")
+        cmd.arg("--config-file")
+            .arg(&config)
+            .arg("--wallet-dir")
             .arg(wallet_dir)
-            .arg("--rpc-bind")
+            .arg("--rpc-listen")
             .arg(format!("127.0.0.1:{port}"))
-            .arg("--disable-rpc-login")
             .arg("--network")
             .arg("regtest")
-            .arg("--daemon-address")
-            .arg(format!("http://127.0.0.1:{daemon_port}"))
+            .arg("--daemon-endpoint")
+            .arg(format!("127.0.0.1:{daemon_port}"))
             .arg("--log-file")
             .arg(&log)
+            .args(["--log-level", "info"])
             .stdout(out.try_clone().expect("dup"))
             .stderr(out);
         let child = shekyl_spawn::spawn_lock::spawn(&mut cmd).expect("spawn shekyl-wallet-rpc");
@@ -73,6 +81,7 @@ impl WalletServer {
             child: Some(child),
             port,
             log,
+            _config_dir: config_dir,
         };
         let deadline = Instant::now() + Duration::from_secs(60);
         loop {

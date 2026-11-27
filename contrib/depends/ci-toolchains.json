@@ -8,13 +8,13 @@
   {
     "name": "Win64",
     "host": "x86_64-w64-mingw32",
-    "packages": "cmake python3 g++-mingw-w64-x86-64",
+    "packages": "python3 g++-mingw-w64-x86-64",
     "rust_target": "x86_64-pc-windows-gnu"
   },
   {
     "name": "x86_64 Linux",
-    "host": "x86_64-unknown-linux-gnu",
-    "packages": "gperf cmake libdbus-1-dev libharfbuzz-dev",
+    "host": "x86_64-linux-gnu",
+    "packages": "gperf libdbus-1-dev libharfbuzz-dev",
     "rust_target": ""
   },
   {
@@ -34,7 +34,7 @@
   {
     "name": "x86_64 Freebsd",
     "host": "x86_64-unknown-freebsd",
-    "packages": "clang-14 libc++-14-dev libc++abi-14-dev gperf cmake libdbus-1-dev libharfbuzz-dev",
+    "packages": "clang-14 libc++-14-dev libc++abi-14-dev gperf libdbus-1-dev libharfbuzz-dev",
     "rust_target": "x86_64-unknown-freebsd"
   }
 ]

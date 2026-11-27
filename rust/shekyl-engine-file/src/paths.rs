@@ -251,6 +251,31 @@ pub fn pending_post_path_from(base: &Path) -> PathBuf {
     PathBuf::from(os)
 }
 
+/// Extension suffix appended to the base path to derive a group wallet's
+/// ceremony-records path (`.wallet.multisig`, R-30). Appended as raw bytes
+/// (same rule as [`KEYS_FILE_SUFFIX`]) so a base like `group.wallet`
+/// becomes `group.wallet.multisig`, a visible sibling of the `.wallet` /
+/// `.wallet.keys` pair.
+pub const MULTISIG_STATE_SUFFIX: &str = ".multisig";
+
+/// Derive the `.wallet.multisig` path from a user-provided base, the same
+/// way [`pscan_state_path_from`] does (append to the full base, never
+/// replace an extension).
+///
+/// ```
+/// use std::path::Path;
+/// use shekyl_engine_file::paths::multisig_state_path_from;
+/// assert_eq!(
+///     multisig_state_path_from(Path::new("/tmp/group.wallet")),
+///     Path::new("/tmp/group.wallet.multisig"),
+/// );
+/// ```
+pub fn multisig_state_path_from(base: &Path) -> PathBuf {
+    let mut os: OsString = base.as_os_str().to_owned();
+    os.push(MULTISIG_STATE_SUFFIX);
+    PathBuf::from(os)
+}
+
 /// The wallet directory's name inside the per-account root (rule 83 IG-13).
 pub const WALLET_DIR_NAME: &str = "wallets";
 

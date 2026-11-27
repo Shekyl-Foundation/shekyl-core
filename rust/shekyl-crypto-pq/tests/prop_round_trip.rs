@@ -51,12 +51,14 @@ fn run_round_trip(
     let spend_key = spend_point.compress().to_bytes();
 
     let out = construct_output(
-        &tx_key,
+        tx_key
+            .output_positions(usize::try_from(output_index).unwrap() + 1)
+            .at(output_index)
+            .unwrap(),
         &recipient_pk.x25519,
         &recipient_pk.ml_kem,
         &spend_key,
         amount,
-        output_index,
     )
     .expect("construct_output failed");
 

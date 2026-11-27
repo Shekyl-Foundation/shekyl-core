@@ -113,9 +113,8 @@ fn run(config: config::Config, inherited: shekyl_process::stop::Inherited) -> Ex
         }
     };
     let _guard = match shekyl_logging::init(shekyl_logging::Config {
-        fallback_default: tracing::Level::WARN,
         file_sink: Some(config.logging.file_sink()),
-        directive: Some(config.logging.directive()),
+        directive: config.logging.directive(),
     }) {
         Ok(guard) => guard,
         Err(error) => {

@@ -53,6 +53,39 @@ pub fn read_cli<I>(table: &Table, args: I) -> Result<Cli, Vec<Diagnostic>>
 where
     I: IntoIterator<Item = OsString>,
 {
+    read(table, args, Words::Refused).map(|(cli, _)| cli)
+}
+
+/// Reads `argv` for a binary whose options are followed by command words
+/// (`shekyl-cli`): the options as [`read_cli`] reads them, up to the first
+/// argument that does not start with `-`. That word and everything after
+/// it are returned untouched, because they are the command's own and may be
+/// free text; the command's catalog reads them.
+///
+/// # Errors
+/// As [`read_cli`], for the arguments before the first word, and a non-UTF-8
+/// argument anywhere.
+pub fn read_cli_then_words<I>(table: &Table, args: I) -> Result<(Cli, Vec<String>), Vec<Diagnostic>>
+where
+    I: IntoIterator<Item = OsString>,
+{
+    read(table, args, Words::Follow)
+}
+
+/// What a bare word on the command line is.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Words {
+    /// A refusal: this binary's command line is options alone.
+    Refused,
+    /// The first word of the command, which ends the options.
+    Follow,
+}
+
+fn read<I>(table: &Table, args: I, bare: Words) -> Result<(Cli, Vec<String>), Vec<Diagnostic>>
+where
+    I: IntoIterator<Item = OsString>,
+{
+    let mut words = Vec::new();
     let mut faults = Vec::new();
     let mut raw: Vec<(&'static Row, Vec<String>)> = Vec::new();
     let mut tokens = Vec::new();
@@ -67,6 +100,11 @@ where
     let mut it = tokens.into_iter();
     while let Some(token) = it.next() {
         let Some(name) = token.strip_prefix("--") else {
+            if bare == Words::Follow && !token.starts_with('-') {
+                words.push(token);
+                words.extend(it.by_ref());
+                break;
+            }
             faults.push(Diagnostic::new(Code::CliSyntax, Source::Cli).param("token", token));
             continue;
         };
@@ -131,7 +169,7 @@ where
         }
     }
     if faults.is_empty() {
-        Ok(Cli { given })
+        Ok((Cli { given }, words))
     } else {
         Err(faults)
     }
@@ -280,6 +318,45 @@ mod tests {
             .into_iter()
             .map(|d| d.code)
             .collect()
+    }
+
+    /// The options end at the first bare word, and everything from there
+    /// is the command's, an option's spelling included, because a command
+    /// may take free text. Before it, an unknown option is the table's
+    /// refusal. Red edit: keep reading options after the first word, and the
+    /// `--console` inside the text is taken as the switch.
+    #[test]
+    fn options_end_at_the_first_word_and_the_rest_is_verbatim() {
+        let (cli, words) = read_cli_then_words(
+            &TABLE,
+            args(&["--network", "testnet", "sign", "hello", "--console", "  x"]),
+        )
+        .unwrap();
+        assert_eq!(cli.given.len(), 1);
+        assert_eq!(cli.given[0].row.name, "network");
+        assert_eq!(words, ["sign", "hello", "--console", "  x"]);
+
+        let (cli, words) = read_cli_then_words(&TABLE, args(&["--console"])).unwrap();
+        assert_eq!(cli.given.len(), 1);
+        assert!(words.is_empty());
+
+        let refused = read_cli_then_words(&TABLE, args(&["--netwrk", "testnet", "balance"]))
+            .expect_err("a typo before the first word");
+        assert!(
+            refused.iter().any(|d| d.code == Code::NameUnknown),
+            "{refused:?}"
+        );
+        let refused = read_cli_then_words(&TABLE, args(&["-x", "balance"]))
+            .expect_err("a short flag is no word");
+        assert!(
+            refused.iter().any(|d| d.code == Code::CliSyntax),
+            "{refused:?}"
+        );
+        // The options-only reader still refuses a bare word.
+        assert_eq!(
+            codes(read_cli(&TABLE, args(&["balance"]))),
+            [Code::CliSyntax]
+        );
     }
 
     #[test]

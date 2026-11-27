@@ -18,10 +18,14 @@ use std::process::{Command, Stdio};
 fn refused_start(scratch: &Path, tor_file: &Path) -> String {
     let wallets = scratch.join("wallets");
     std::fs::create_dir(&wallets).expect("wallet dir");
+    let config = scratch.join("config.toml");
+    shekyl_os_account::private_file::write_private(&config, b"").expect("config file");
     let socket = scratch.join("s");
     let out = Command::new(env!("CARGO_BIN_EXE_shekyl-wallet-rpc"))
-        .args(["--network", "stagenet", "--disable-rpc-login"])
-        .arg(format!("--rpc-bind=uds://{}", socket.display()))
+        .args(["--network", "stagenet", "--config-file"])
+        .arg(&config)
+        .arg("--rpc-socket-file")
+        .arg(&socket)
         .arg("--wallet-dir")
         .arg(&wallets)
         .arg("--tor-file")
@@ -42,7 +46,7 @@ fn refused_start(scratch: &Path, tor_file: &Path) -> String {
 
 #[test]
 fn a_tor_file_naming_no_file_refuses_the_server_start_with_its_remedy() {
-    let scratch = tempfile::tempdir().expect("tempdir");
+    let scratch = shekyl_os_account::test_fixture::tempdir().expect("fixture");
     let said = refused_start(scratch.path(), &scratch.path().join("no-such-tor"));
     assert!(said.contains("point it at the Tor binary here"), "{said}");
 }
@@ -52,7 +56,7 @@ fn a_tor_file_naming_no_file_refuses_the_server_start_with_its_remedy() {
 /// runs in the crate's directory, where `Cargo.toml` is a file.
 #[test]
 fn a_relative_tor_file_refuses_the_server_start() {
-    let scratch = tempfile::tempdir().expect("tempdir");
+    let scratch = shekyl_os_account::test_fixture::tempdir().expect("fixture");
     let relative = Path::new("Cargo.toml");
     assert!(relative.is_file(), "the test runs in the crate's directory");
     let said = refused_start(scratch.path(), relative);

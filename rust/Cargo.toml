@@ -275,7 +275,7 @@ members = [
     "shekyl-types",
 
     # The build identity (version, release flag, release name) read from the
-    # environment cmake/Version.cmake sets, and the protocol version
+    # environment `cargo xtask` sets, and the protocol version
     # (DAEMON_CONFIG_CUTOVER.md DC-Q20). A leaf: no dependencies.
     "shekyl-version",
 
@@ -394,7 +394,7 @@ members = [
 
     # Dev-only loopback between `PServeEndpoint` and `PFetchClient`.
     # SF-D4 keeps that edge out of both shipped graphs: nothing in
-    # `cmake/BuildRust.cmake` builds this crate, and neither end depends
+    # rust/xtask/matrix.toml builds this crate, and neither end depends
     # on it except as a dev-dependency.
     "shekyl-p-loopback",
 
@@ -539,6 +539,11 @@ members = [
     # Shard data-source abstraction (list + aggregate lookup) consumed by the
     # GUI shard view. Fixtures-backed today; ArchivalEngine impl at Stage 5.
     "shekyl-shard-source",
+
+    # The release build (`cargo xtask`, rust/.cargo/config.toml): reads
+    # rust/xtask/matrix.toml and runs the one cargo build per host. A build
+    # tool, never a shipped binary (scripts/ci/shipped_graph.py).
+    "xtask",
 ]
 # Local-only harnesses that must not participate in the parent
 # workspace. Excluded here (rather than relying on the nested
@@ -937,3 +942,14 @@ unnested_or_patterns = "deny"
 unused_async = "deny"
 unused_self = "deny"
 zero_sized_map_values = "deny"
+
+# fips204 0.5.0 with no conditional branch on a secret coefficient under
+# `overflow-checks = true`, and with the NTT path's range hardened (the record
+# is docs/benchmarks/ca3_pq_branch_sweep_20261123.md). The fork is the tag plus
+# that fix, at the same version: every value the tag returned is unchanged.
+# `[patch]` applies only in the root manifest being built: each fuzz workspace
+# with fips204 in its lock carries this same entry, and
+# scripts/ci/check_crypto_closure.py holds that one revision in every lock
+# and every patch.
+[patch.crates-io]
+fips204 = { git = "https://github.com/Shekyl-Foundation/fips204", rev = "54b76cf71430a406f3c96ab9c80c42b0d74ce2fd" }

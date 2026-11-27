@@ -62,6 +62,8 @@ jobs:
       - name: the inventory, derived from the tree
         run: |
           python3 scripts/ci/check_fuzz_inventory.py --selftest
+          python3 scripts/ci/fuzz_coverage.py --selftest
+          python3 scripts/ci/fuzz_run.py --selftest
           python3 scripts/ci/check_fuzz_inventory.py
       - name: the coverage floors, one per target, each moved only with its run
         # Against HEAD^1 (the base, in a pull request's merge commit): the
@@ -80,12 +82,13 @@ jobs:
           # environment string (check_fuzz_inventory.py's `--matrix`).
           changed_file=$(mktemp)
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            base="${{ github.event.pull_request.base.sha }}"
             head="${{ github.sha }}"
+            base=$(python3 scripts/ci/change_scope.py --pr-base "$head" "${{ github.event.pull_request.head.sha }}")
             out=$(mktemp)
             if GITHUB_OUTPUT="$out" python3 scripts/ci/change_scope.py --base "$base" --head "$head"; then
               rust_tests=$(sed -n 's/^rust_tests=//p' "$out")
-              git diff --name-only "$base" "$head" > "$changed_file"
+              # No base: the classifier said `all`, which reads no path.
+              [ -z "$base" ] || git diff --name-only "$base" "$head" > "$changed_file"
             else
               rust_tests=all
             fi

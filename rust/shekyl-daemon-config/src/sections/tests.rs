@@ -1014,3 +1014,43 @@ fn a_windows_start_refuses_service_until_rt_w14() {
         "{d:?}"
     );
 }
+
+/// A wallet binary writes no log file unless `log-file` names one (Rick,
+/// 2026-11-23), at the same filter either way, and a named file takes the
+/// `log-size-max` budget. Red edit: fall back to a default path when
+/// `log-file` is unset, and the first assertion fails.
+#[test]
+fn a_log_file_is_written_only_when_named() {
+    use crate::resolve::resolve;
+    let resolved = |list: &[&str]| {
+        let cli = shekyl_options::read_cli(&TABLE, list.iter().map(std::ffi::OsString::from))
+            .expect("the arguments");
+        resolve(&TABLE, Network::Mainnet, cli, Vec::new()).expect("resolved")
+    };
+    let unnamed = crate::logging_to_named_file(&resolved(&[
+        "--log-level",
+        "info",
+        "--log-category",
+        "wallet=debug",
+    ]))
+    .expect("the rows");
+    assert!(unnamed.file_sink.is_none(), "no file unless one is named");
+    assert!(unnamed.directive.as_str().starts_with("info,"));
+    assert!(unnamed
+        .directive
+        .as_str()
+        .contains("shekyl_wallet_rpc=debug"));
+
+    let log_file = abs("/var/log/shekyl/wallet.log");
+    let named = crate::logging_to_named_file(&resolved(&[
+        "--log-file",
+        &log_file,
+        "--log-size-max",
+        "8MiB",
+    ]))
+    .expect("the rows");
+    let sink = named.file_sink.expect("the named file");
+    assert_eq!(sink.filename_prefix, "wallet.log");
+    assert_eq!(sink.retained_bytes, Some(8 << 20));
+    assert_eq!(named.directive.as_str(), "warn");
+}

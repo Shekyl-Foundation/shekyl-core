@@ -6,7 +6,7 @@ rust-version.workspace = true
 license = "BSD-3-Clause"
 description = "Shekyl engine core: orchestrator and transaction builders for stake, unstake, and claim operations"
 # Build script reads `config/consensus_constants.json` (the same JSON
-# the C++ generator at `cmake/generate_consensus_constants.py` reads)
+# every crate's generated constants come from)
 # and emits a Rust constants module. Closes the C++/Rust drift class
 # that produced Bug 3 of the 2026-05-05 FFI constant-drift audit;
 # see `docs/audit_trail/2026-05-ffi-constant-drift-audit.md`.
@@ -278,6 +278,10 @@ shekyl-noise = { path = "../shekyl-noise" }
 # network id derivation. Both are workspace crates already in the graph.
 shekyl-levin = { path = "../shekyl-levin" }
 shekyl-p2p-transport = { path = "../shekyl-p2p-transport" }
+# The regtest harness makes a spawned daemon's data directory the way the
+# daemon does (owner-only on Unix), which the daemon requires of an existing
+# one (`config.data-dir.exposed`).
+shekyl-os-account = { path = "../shekyl-os-account", features = ["test-fixture"] }
 # Self dev-dep (the scanner crate's own bench idiom): enables `test-helpers`
 # for this crate's integration tests, so `tests/sp_r0_arm1_fire.rs` compiles
 # the DQ-F fire harness into the lib-under-test on a plain `cargo test`

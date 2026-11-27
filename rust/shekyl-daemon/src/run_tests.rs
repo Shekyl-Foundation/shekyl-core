@@ -45,7 +45,7 @@ fn args(list: &[&str]) -> Vec<OsString> {
 
 #[test]
 fn a_refusal_exits_with_two_and_help_and_version_with_zero() {
-    let d = tempfile::tempdir().unwrap();
+    let d = shekyl_os_account::test_fixture::tempdir().unwrap();
     assert_eq!(
         start(&args(&["--bogus"]), &platform(d.path())),
         EXIT_REFUSED
@@ -69,7 +69,7 @@ fn a_refusal_exits_with_two_and_help_and_version_with_zero() {
 /// let either reach the node.
 #[test]
 fn mine_on_without_an_address_and_too_many_threads_both_exit_two() {
-    let d = tempfile::tempdir().unwrap();
+    let d = shekyl_os_account::test_fixture::tempdir().unwrap();
     assert_eq!(
         start(
             &args(&["--network", "regtest", "--mine", "on"]),
@@ -101,7 +101,7 @@ fn mine_on_without_an_address_and_too_many_threads_both_exit_two() {
 /// A bare word is refused before the load, the lock, or any socket.
 #[test]
 fn a_bare_word_is_refused_before_the_daemon_starts() {
-    let d = tempfile::tempdir().unwrap();
+    let d = shekyl_os_account::test_fixture::tempdir().unwrap();
     assert_eq!(start(&args(&["status"]), &platform(d.path())), EXIT_REFUSED);
     assert!(!d.path().join(".shekyl").exists(), "nothing was created");
 }
@@ -148,7 +148,7 @@ fn a_stop_request_runs_the_one_stop_path() {
     let _serial = SERIAL
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let d = tempfile::tempdir().unwrap();
+    let d = shekyl_os_account::test_fixture::tempdir().unwrap();
     let data = d.path().join("data");
     let log = d.path().join("shekyld.log");
     let (config, node) = offline_node(d.path(), &data, &log);
@@ -191,7 +191,7 @@ fn a_daemon_start_locks_marks_logs_announces_runs_and_stops_on_request() {
     let _serial = SERIAL
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let d = tempfile::tempdir().unwrap();
+    let d = shekyl_os_account::test_fixture::tempdir().unwrap();
     let data = d.path().join("data");
     let log = d.path().join("logs").join("shekyld-regtest.log");
     // Offline: the subject is the lock, the marker, the log and the

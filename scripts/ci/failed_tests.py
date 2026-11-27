@@ -5,11 +5,9 @@
 # BSD-3-Clause
 """The tests a CI job failed, read from its log.
 
-Two readers name the failing tests to a human: the dev-red reporter
-(`report-dev-red.yml`, one issue per red job on `dev`) and the merge-ready
-re-test's reporter (`merge-ready-retest.yml`, a comment on the pull request
-the re-test failed). Both read the job's log through the API, so one parser
-serves every workflow, whatever ran its tests:
+The dev-red reporter (`report-dev-red.yml`, one issue per red job on `dev`)
+names the failing tests to a human from the job's log, read through the
+API. One parser serves every workflow, whatever ran its tests:
 
   - nextest: the final status lines after its `Summary [` line,
     `[TRY n ]FAIL [time] (k/n) <binary> <test>` (also TIMEOUT, SIG*, ABORT,

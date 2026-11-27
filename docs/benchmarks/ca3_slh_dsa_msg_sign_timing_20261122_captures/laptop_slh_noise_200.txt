@@ -1,0 +1,17 @@
+CA-3 SLH-DSA-SHA2-192s message signature (fips205 0.5.0) signing timing (the shipped entry, derivation included), inputs prepared before the loop
+arch=x86_64 os=windows mode=slh-dsa-noise samples_per_comparison=200 calibration=20 crops=100 inputs=NOT-REGISTERED
+pass: |t| < 4.5 on fixed-a-vs-fixed-b; null comparisons: |t| < 4.5; control: |t| > 10; fixed-vs-varied is information (ruled 2026-11-21)
+  check entries=220 returned=220 verified=220 verdict=as-intended
+  quantile=1 class0=566703100 class1=566777800 diff=-74700
+  quantile=5 class0=567311100 class1=567773900 diff=-462800
+  quantile=10 class0=568576300 class1=568270000 diff=306300
+  quantile=25 class0=571942200 class1=570610500 diff=1331700
+  quantile=50 class0=578350600 class1=577515900 diff=834700
+  quantile=75 class0=581498900 class1=580971700 diff=527200
+  quantile=90 class0=586071500 class1=591492600 diff=-5421100
+  quantile=95 class0=594021600 class1=599909600 diff=-5888000
+  quantile=99 class0=640405400 class1=631007600 diff=9397800
+  crop=raw n0=94 n1=106 mean0=578589337.2 mean1=579529828.3 diff=-940491.1 t=-0.47
+  max_at_crop=2 cutoff=575191600 n0=38 n1=41 diff=811392.1 t=1.43
+null=fixed-a-vs-fixed-a max_abs_t=1.43 median_ns=579204300 raw_sd_ns=14328563 n0=94 n1=106 verdict=no-evidence
+noise-calibration sigma_ns=14328563 delta_ns=9611892 (delta = 15 * sigma * sqrt(2/1000))

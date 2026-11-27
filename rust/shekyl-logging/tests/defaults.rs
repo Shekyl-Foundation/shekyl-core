@@ -16,22 +16,18 @@ use tracing::Level;
 fn config_default_is_stderr_only_info() {
     let cfg = Config::default();
     assert!(cfg.file_sink.is_none());
-    assert_eq!(cfg.fallback_default, Level::INFO);
+    assert_eq!(cfg.directive.as_str(), "info");
 }
 
 #[test]
 fn config_stderr_only_has_no_file_sink() {
     let cfg = Config::stderr_only(Level::WARN);
     assert!(cfg.file_sink.is_none());
-    assert_eq!(cfg.fallback_default, Level::WARN);
+    assert_eq!(cfg.directive.as_str(), "warn");
 }
 
 #[test]
 fn double_init_returns_already_initialized() {
-    // Remove SHEKYL_LOG so the fallback path is the one under test.
-    // SAFETY: integration tests get their own process.
-    unsafe { std::env::remove_var(shekyl_logging::SHEKYL_LOG_ENV) };
-
     let _guard = match init(Config::stderr_only(Level::WARN)) {
         Ok(g) => g,
         Err(e) => panic!("first init should succeed: {e:?}"),

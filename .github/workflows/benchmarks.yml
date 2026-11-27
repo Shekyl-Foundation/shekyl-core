@@ -139,7 +139,8 @@ jobs:
         run: |
           set -u
           python3 scripts/ci/change_scope.py \
-            --base "${{ github.event.pull_request.base.sha }}" --head "${{ github.sha }}" \
+            --base "$(python3 scripts/ci/change_scope.py --pr-base "${{ github.sha }}" "${{ github.event.pull_request.head.sha }}")" \
+            --head "${{ github.sha }}" \
             || printf '%s\n' bench_rows=all >> "$GITHUB_OUTPUT"
 
   capture-pr:

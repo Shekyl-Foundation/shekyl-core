@@ -55,21 +55,18 @@ The C4 → C10 commit sequence per §8.1:
 
 ## Build prerequisites
 
-The harness links statically against `librandomx.a` produced by
-`external/randomx-v2`'s `ExternalProject_Add` (gated on
-`-DBUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS=ON` at CMake configure time
-per §5.4.1). The `randomx-v2-sys` build script discovers the
+The harness links statically against the `librandomx.a` that
+`scripts/build_randomx_v2_ref.sh` builds from `external/randomx-v2`
+(§5.4.1). The `randomx-v2-sys` build script discovers the
 install prefix via the `RANDOMX_V2_INSTALL_DIR` environment variable.
 
 ```bash
 # From the repository root:
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
-    -DBUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS=ON
-cmake --build build --target shekyl_randomx_v2
+scripts/build_randomx_v2_ref.sh "$PWD/build/randomx-v2" "$PWD/build/randomx-v2-install"
 
 # Then build the harness:
-export RANDOMX_V2_INSTALL_DIR="$(pwd)/build/external/randomx-v2-install"
-cargo build --bin shekyl-randomx-differential
+export RANDOMX_V2_INSTALL_DIR="$PWD/build/randomx-v2-install"
+(cd rust && cargo build --bin shekyl-randomx-differential)
 ```
 
 When `RANDOMX_V2_INSTALL_DIR` is unset, `randomx-v2-sys`'s `build.rs`

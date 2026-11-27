@@ -5,7 +5,7 @@
 
 //! The owner-only seed file (**WP-D8**, WP-B3).
 //!
-//! `shekyl-cli create --seed-out` writes the one-time seed backup to a file
+//! `shekyl-cli wallet create --mnemonic-file` writes the one-time seed backup to a file
 //! that, on Unix, is opened `O_CREAT | O_EXCL` at `0600`. That mode is the
 //! difference between a seed readable by one account and one readable by
 //! every account on the box, so the Windows half sets the equivalent **at

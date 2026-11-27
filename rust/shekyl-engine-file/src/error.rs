@@ -175,6 +175,18 @@ pub enum WalletFileError {
     #[error("unsupported capability-mode discriminant {0:#04x} in keys file")]
     UnknownCapability(u8),
 
+    /// A solo open or create met a group wallet's keys capability (`0x04`,
+    /// R-30). A group wallet is its own wallet files and its own handle,
+    /// [`crate::GroupWalletFile`]; no solo path reads its member file as a
+    /// seed.
+    #[error("this keys file is a group wallet's, which a solo wallet cannot open")]
+    GroupWalletKeysFile,
+
+    /// [`crate::GroupWalletFile::open`] met a keys file that is not a group
+    /// wallet's.
+    #[error("this keys file is not a group wallet's")]
+    NotAGroupWalletKeysFile,
+
     /// `save_as` was asked to relocate the wallet pair across a
     /// filesystem boundary. `rename(2)` is atomic only within a single
     /// filesystem; cross-fs moves would have to fall back to copy +

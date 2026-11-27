@@ -11,18 +11,19 @@ use std::num::NonZeroU64;
 
 use curve25519_dalek::edwards::CompressedEdwardsY;
 use curve25519_dalek::EdwardsPoint;
-use shekyl_address::{Network, PaymentAddress, ShekylAddress};
+use shekyl_address::{MultisigAddressPayload, Network, PaymentAddress, ShekylAddress};
 use shekyl_bulletproofs::Bulletproof;
 use shekyl_crypto_pq::account::AllKeysBlob;
 use shekyl_crypto_pq::derivation::derive_pqc_public_key;
 use shekyl_crypto_pq::handle::derive_output_handle;
 use shekyl_crypto_pq::label::sentinel_plaintext;
 use shekyl_crypto_pq::TxKey;
+use shekyl_network::NetworkId;
 use shekyl_tx_builder::outputs::{BuildSpendError, BuiltSpend, Payee, Recipient, RecipientKeys};
 use shekyl_tx_builder::{
     phase1_payload_hashes, sign_pqc_auths, sign_transaction as tx_sign_proofs,
     tx_prefix_hash_from_parts, InternalSignFault, LeafEntry, OutputInfo, PqcAuth, SignFault,
-    SignedProofs, SpendInput, WireEncodeInput,
+    SignedProofs, SpendInput, TxBuilderError, WireEncodeInput,
 };
 use shekyl_units::AtomicUnits;
 
@@ -57,6 +58,25 @@ impl DerivedScalars {
     fn change_spend_pk(&self) -> [u8; 32] {
         self.spend_public.compress().to_bytes()
     }
+}
+
+/// The transaction builder's refusal as the key engine reports it: the inner
+/// text (a prover's or encoder's message) stays in the local log, and the
+/// fault that leaves is the variant, bounded.
+fn builder_refused(err: &TxBuilderError) -> KeyEngineError {
+    tracing::debug!(error = %err, "the transaction builder refused the signing pass");
+    KeyEngineError::Sign(err.fault())
+}
+
+/// The PQC authorization of an assembled send: one payload hash and one
+/// signature per spend. A refusal is the builder's own fault.
+pub(super) fn sign_spend_auths(
+    wire: &WireEncodeInput,
+    network: &shekyl_network::NetworkId,
+    spend_inputs: &[SpendInput],
+) -> Result<Vec<PqcAuth>, KeyEngineError> {
+    let payload_hashes = phase1_payload_hashes(wire, network).map_err(|e| builder_refused(&e))?;
+    sign_pqc_auths(&payload_hashes, spend_inputs).map_err(|e| builder_refused(&e))
 }
 
 /// Assemble the transfer-shaped [`WireEncodeInput`] shared by the ordinary
@@ -110,6 +130,11 @@ pub(super) fn assemble_transfer_wire(
             detail: "assemble_transfer_wire: pqc_pubkeys length must equal key_images length",
         });
     }
+    // The cached key images and the slots' keys are what the daemon will read:
+    // held here to what the signer's membership self-verify proved against.
+    signed
+        .hold_spend_layout(&key_images, pqc_pubkeys)
+        .map_err(|e| builder_refused(&e))?;
 
     let bulletproof =
         Bulletproof::read_plus(&mut signed.bulletproof_plus.as_slice()).map_err(|_| {
@@ -137,7 +162,7 @@ pub(super) fn assemble_transfer_wire(
             .iter()
             .map(|pk| PqcAuth {
                 auth_version: shekyl_tx_builder::PQC_AUTH_VERSION,
-                scheme: shekyl_tx_builder::PqcScheme::Single,
+                scheme: shekyl_tx_builder::SPEND_SLOT_SCHEME,
                 signature: Vec::new(),
                 public_key: pk.clone(),
             })
@@ -163,7 +188,7 @@ fn decode_recipient(address: &str, network: Network) -> Result<ShekylAddress, Ke
 fn recipient_keys(
     destination: &TxDestination,
     network: Network,
-) -> Result<RecipientKeys<'_>, KeyEngineError> {
+) -> Result<PaymentKeys<'_>, KeyEngineError> {
     let (spend_key, view_key, ml_kem_ek): (_, _, Cow<'_, [u8]>) = match destination {
         TxDestination::Address(address) => {
             let decoded = decode_recipient(address, network)?;
@@ -178,12 +203,35 @@ fn recipient_keys(
             *persona.view_pk().as_canonical_bytes(),
             Cow::Borrowed(persona.ml_kem_ek().as_slice()),
         ),
+        // A group's address is its keys: the builder encapsulates to the
+        // group's KEM key and each member's (`Payee::Group`).
+        TxDestination::Group(group) => return Ok(PaymentKeys::Group(group.address())),
     };
-    RecipientKeys::from_edwards(spend_key, &view_key, ml_kem_ek).map_err(|_| {
-        KeyEngineError::Primitive {
+    RecipientKeys::from_edwards(spend_key, &view_key, ml_kem_ek)
+        .map(PaymentKeys::Single)
+        .map_err(|_| KeyEngineError::Primitive {
             detail: "recipient view key does not map to a valid X25519 point",
+        })
+}
+
+/// What one payment's output is built to: a single signer's keys, or a
+/// group's address (R-37).
+enum PaymentKeys<'a> {
+    Single(RecipientKeys<'a>),
+    Group(&'a MultisigAddressPayload),
+}
+
+impl PaymentKeys<'_> {
+    /// The payee the builder takes. A group output's label is always the
+    /// sentinel, so `label_plaintext` is a single signer's alone; the
+    /// request refuses a payment request (`rid`) for a group before any
+    /// selection.
+    fn payee<'p>(&'p self, label_plaintext: &'p [u8; 8], network: &'p NetworkId) -> Payee<'p> {
+        match self {
+            Self::Single(keys) => keys.payee(label_plaintext),
+            Self::Group(address) => Payee::Group { address, network },
         }
-    })
+    }
 }
 
 fn spend_input_from_context(
@@ -328,11 +376,12 @@ pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, 
         .collect::<Result<Vec<_>, _>>()?;
     let change_pk = derived.change_spend_pk();
     let sentinel = sentinel_plaintext();
+    let network_id = network.network_id();
     let mut recipients: Vec<Recipient<'_>> = payment_outputs
         .iter()
         .zip(&payment_keys)
         .map(|(payment, keys)| Recipient {
-            payee: keys.payee(&payment.label_plaintext),
+            payee: keys.payee(&payment.label_plaintext, &network_id),
             amount: payment.amount,
         })
         .collect();
@@ -449,12 +498,7 @@ pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, 
         AtomicUnits::from_raw(fee),
         &tree,
     )
-    .map_err(|e| {
-        // The inner text (a prover's or encoder's message) stays in the
-        // local log; the fault that leaves is the variant, bounded.
-        tracing::debug!(error = %e, "the transaction builder refused the signing pass");
-        KeyEngineError::Sign(e.fault())
-    })?;
+    .map_err(|e| builder_refused(&e))?;
 
     // The wire shape is assembled by the single shared constructor both this
     // path and the F-D2 drain route through, so the two serialize identically
@@ -474,15 +518,7 @@ pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, 
         &pqc_pubkeys,
     )?;
 
-    let payload_hashes = phase1_payload_hashes(&wire_with_proofs, &tx.network.network_id())
-        .map_err(|_| KeyEngineError::Primitive {
-            detail: "phase1 payload hash failed",
-        })?;
-
-    let pqc_auths =
-        sign_pqc_auths(&payload_hashes, &spend_inputs).map_err(|_| KeyEngineError::Primitive {
-            detail: "pqc auth signing failed",
-        })?;
+    let pqc_auths = sign_spend_auths(&wire_with_proofs, &tx.network.network_id(), &spend_inputs)?;
 
     wire_with_proofs.pqc_auths = pqc_auths.clone();
 
@@ -724,7 +760,11 @@ mod tests {
         let persona = derive_bundle(2);
         let destination = TxDestination::OwnPersona(persona.payment_destination());
         // The network is the wallet's; a persona arm reads none of it.
-        let resolved = recipient_keys(&destination, Network::Testnet).expect("resolve");
+        let PaymentKeys::Single(resolved) =
+            recipient_keys(&destination, Network::Testnet).expect("resolve")
+        else {
+            panic!("a persona resolves to a single signer's keys");
+        };
         assert_eq!(resolved.spend_key(), persona.spend_pk.as_canonical_bytes());
         assert_eq!(
             resolved.view_x25519(),
@@ -812,12 +852,14 @@ mod tests {
 
         // Build the change output exactly as `sign_tx` does.
         let constructed = construct_output(
-            &TxKey::seeded(TX_KEY),
+            TxKey::seeded(TX_KEY)
+                .output_positions(usize::try_from(OUT_IDX).unwrap() + 1)
+                .at(OUT_IDX)
+                .unwrap(),
             &keys.keys.x25519_pk,
             &keys.keys.ml_kem_ek,
             &change_pk,
             AMOUNT,
-            OUT_IDX,
         )
         .expect("construct change output");
 
@@ -908,12 +950,14 @@ mod tests {
         // by the recipient's view-derived Montgomery secret (the production
         // scanner's derivation).
         let constructed = construct_output(
-            &TxKey::seeded(TX_KEY),
+            TxKey::seeded(TX_KEY)
+                .output_positions(usize::try_from(OUT_IDX).unwrap() + 1)
+                .at(OUT_IDX)
+                .unwrap(),
             &recipient_x25519,
             &decoded.ml_kem_encap_key,
             &decoded.spend_key,
             AMOUNT,
-            OUT_IDX,
         )
         .expect("construct payment output");
         let recovered = scan_output_recover(
@@ -940,12 +984,14 @@ mod tests {
         // the RAW Edwards view-key bytes (interpreted as a Montgomery
         // u-coordinate) produces an output the recipient CANNOT recover.
         let wrong = construct_output(
-            &TxKey::seeded(TX_KEY),
+            TxKey::seeded(TX_KEY)
+                .output_positions(usize::try_from(OUT_IDX).unwrap() + 1)
+                .at(OUT_IDX)
+                .unwrap(),
             &decoded.view_key,
             &decoded.ml_kem_encap_key,
             &decoded.spend_key,
             AMOUNT,
-            OUT_IDX,
         )
         .expect("construct output to the wrong point (daemon-acceptable)");
         assert!(

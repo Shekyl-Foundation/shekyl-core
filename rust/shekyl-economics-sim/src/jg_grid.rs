@@ -55,7 +55,7 @@ use crate::window_stuffer::{
 const SPENDS: [u64; 12] = [14, 20, 25, 30, 35, 45, 60, 75, 90, 105, 120, 150];
 
 /// The inherited zone (`config/consensus_constants.json`).
-const INHERITED_ZONE: u64 = 300_000;
+pub(crate) const INHERITED_ZONE: u64 = 300_000;
 
 /// Every miner, as a share of the blocks.
 const EVERY_MINER: u64 = 100;
@@ -66,7 +66,7 @@ const RAILS_AT_ONE: u64 = 1_000_000;
 
 /// The design load, in 2-in/2-out spends a block
 /// (`DAEMON_REDB_STORE.md` §1.3a.6, ruling 1).
-const DESIGN_LOAD_SPENDS: u64 = 30;
+pub(crate) const DESIGN_LOAD_SPENDS: u64 = 30;
 
 /// The design load as ordinary transactions a block: its spends' weight
 /// over the ordinary 1-in/2-out's, rounded up, both at genesis depth and
@@ -200,16 +200,21 @@ pub(crate) fn reference_spend_weight(base: &SimParams) -> u64 {
     ) as u64
 }
 
+/// The zone of `spends` reference transactions plus the coinbase reserve.
+pub(crate) fn spend_zone_bytes(reference_weight: u64, spends: u64) -> u64 {
+    let reserve = u64::try_from(COINBASE_RESERVE).expect("the reserve fits");
+    spends * reference_weight + reserve
+}
+
 /// The zone axis, smallest first: the brief's spends at the reference
 /// weight plus the coinbase reserve, and the inherited and re-derived zones.
 pub(crate) fn zones(base: &SimParams, spends: &[u64]) -> Vec<Zone> {
     let reference = reference_spend_weight(base);
-    let reserve = u64::try_from(COINBASE_RESERVE).expect("the reserve fits");
     let mut zones: Vec<Zone> = spends
         .iter()
         .map(|&n| Zone {
             label: format!("N = {n}"),
-            bytes: n * reference + reserve,
+            bytes: spend_zone_bytes(reference, n),
         })
         .collect();
     zones.push(Zone {

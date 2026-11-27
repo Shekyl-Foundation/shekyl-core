@@ -21,7 +21,7 @@
 //!   integrity are ours (`WINDOWS_WALLET_SUPPORT.md` §8.1 — the directory's
 //!   containment has no pipe analogue, so the check is load-bearing here).
 //!   One-shot commands and the REPL both use this mode.
-//! - **Remote (`--rpc-url`):** the CLI connects to an externally managed
+//! - **Remote (`wallet-rpc-endpoint`):** the CLI connects to an externally managed
 //!   `shekyl-wallet-rpc` **server** over HTTP (or, on Unix, a `uds://` socket
 //!   path; Windows ships no local external form, and `uds://` is refused at
 //!   parse there, naming the platform).
@@ -48,7 +48,7 @@ use shekyl_wallet_rpc::{InProcessHandle, InProcessListen, Network};
 use zeroize::Zeroizing;
 
 /// Idle read/write timeout for the self-hosted / `uds://` HTTP transport.
-/// Bounds an infinite hang against an untrusted `--rpc-url uds://` server
+/// Bounds an infinite hang against an untrusted `wallet-rpc-socket-file` server
 /// that accepts the request but never replies. Applied per read/write
 /// syscall (not total), so a slow-but-progressing operation is unaffected;
 /// only a genuinely stalled socket trips it.
@@ -109,9 +109,9 @@ enum Transport {
     #[cfg(windows)]
     NamedPipe(String),
     /// HTTP(S) over TCP to an external `shekyl-wallet-rpc` server (the
-    /// `--rpc-url` target — not the node daemon; cf. `daemon::DaemonClient`),
-    /// through a ureq agent that carries the `--proxy` SOCKS config (if any) —
-    /// so a proxied `--rpc-url` is genuinely proxied, which the network-posture
+    /// `wallet-rpc-endpoint` target — not the node daemon; cf. `daemon::DaemonClient`),
+    /// through a ureq agent that carries the `daemon-socks` SOCKS config (if any) —
+    /// so a proxied `wallet-rpc-endpoint` is genuinely proxied, which the network-posture
     /// disclosure relies on.
     Http { url: String, agent: ureq::Agent },
 }
@@ -376,7 +376,7 @@ impl RpcSession {
         let transport = match parse_rpc_url(rpc_url)? {
             #[cfg(unix)]
             RpcUrlForm::Uds(path) => Transport::Uds(path),
-            // `--rpc-url` names the server; the call goes to the one path
+            // `wallet-rpc-endpoint` names the server; the call goes to the one path
             // both RPC servers take JSON-RPC at.
             RpcUrlForm::Http => Transport::Http {
                 url: format!("{}{JSON_RPC_PATH}", rpc_url.trim_end_matches('/')),
@@ -656,7 +656,7 @@ fn http_post_uds(path: &Path, payload: &[u8]) -> Result<String, RpcError> {
     })?;
     // Bound an infinite hang against an untrusted `uds://` server that accepts
     // the request but never replies (self-hosted mode is trusted; this guards
-    // the external `--rpc-url uds://` path).
+    // the external `wallet-rpc-socket-file` path).
     drop(stream.set_read_timeout(Some(UDS_IO_TIMEOUT)));
     drop(stream.set_write_timeout(Some(UDS_IO_TIMEOUT)));
     http_post_over(&mut stream, payload)
@@ -690,7 +690,7 @@ fn http_post_over<S: Read + Write>(stream: &mut S, payload: &[u8]) -> Result<Str
     String::from_utf8(body.to_vec()).map_err(|_| RpcError::Transport("non-UTF-8 HTTP body".into()))
 }
 
-/// The accepted `--rpc-url` forms.
+/// The accepted `wallet-rpc-endpoint` forms.
 ///
 /// `Uds` exists only on Unix. That is the point, not a convenience: the
 /// platform constraint used to live in the *implementation* of the transport
@@ -706,7 +706,7 @@ enum RpcUrlForm {
     Http,
 }
 
-/// Parse `--rpc-url` into an accepted form, or explain why it is rejected.
+/// Parse `wallet-rpc-endpoint` into an accepted form, or explain why it is rejected.
 ///
 /// **Single source of acceptance.** [`RpcSession::connect`] and
 /// [`is_supported_rpc_url`] both route through this, so the two cannot disagree
@@ -728,14 +728,14 @@ fn parse_rpc_url(rpc_url: &str) -> Result<RpcUrlForm, String> {
     if rpc_url.starts_with("http://") || rpc_url.starts_with("https://") {
         if shekyl_rpc_transport::network_posture::host_of(rpc_url).is_empty() {
             return Err(format!(
-                "invalid --rpc-url '{rpc_url}': missing host \
+                "invalid wallet-rpc-endpoint '{rpc_url}': missing host \
                  (expected http://host:port or https://host:port)"
             ));
         }
         return Ok(RpcUrlForm::Http);
     }
     Err(format!(
-        "invalid --rpc-url '{rpc_url}': expected {ACCEPTED_RPC_URL_FORMS}"
+        "invalid wallet-rpc-endpoint '{rpc_url}': expected {ACCEPTED_RPC_URL_FORMS}"
     ))
 }
 
@@ -745,13 +745,13 @@ const ACCEPTED_RPC_URL_FORMS: &str = "http://host:port, https://host:port, or ud
 /// What the rejection message offers, per platform.
 #[cfg(windows)]
 const ACCEPTED_RPC_URL_FORMS: &str =
-    "http://host:port or https://host:port (uds:// is Unix-only; omit --rpc-url to self-host)";
+    "http://host:port or https://host:port (uds:// is Unix-only; leave wallet-rpc-endpoint unset to self-host)";
 
 /// The `uds://` form on Unix: a non-empty socket path.
 #[cfg(unix)]
 fn uds_form(path: &str) -> Result<RpcUrlForm, String> {
     if path.is_empty() {
-        return Err("--rpc-url uds:// path must not be empty".into());
+        return Err("wallet-rpc-socket-file must not be empty".into());
     }
     Ok(RpcUrlForm::Uds(PathBuf::from(path)))
 }
@@ -767,10 +767,10 @@ fn uds_form(path: &str) -> Result<RpcUrlForm, String> {
 #[cfg(windows)]
 fn uds_form(_path: &str) -> Result<RpcUrlForm, String> {
     Err(
-        "--rpc-url uds:// is not available on Windows: a Unix domain socket has no \
-         Windows form, and Shekyl ships no other local external form there. Omit \
-         --rpc-url to self-host the wallet RPC in-process, or use http://host:port / \
-         https://host:port against an external server."
+        "wallet-rpc-socket-file is not available on Windows: a Unix domain socket has \
+         no Windows form, and Shekyl ships no other local external form there. Leave it \
+         unset to self-host the wallet RPC in-process, or name wallet-rpc-endpoint for an \
+         external server."
             .into(),
     )
 }
@@ -784,15 +784,15 @@ pub fn is_supported_rpc_url(rpc_url: &str) -> bool {
     parse_rpc_url(rpc_url).is_ok()
 }
 
-/// Build the ureq agent for the `--rpc-url` HTTP transport, applying the
-/// operator's `--proxy` SOCKS config when set. This is what makes a proxied
-/// `--rpc-url` actually route through the proxy — mirrors `daemon::DaemonClient`
-/// so both CLI HTTP paths honor `--proxy` identically.
+/// Build the ureq agent for the `wallet-rpc-endpoint` HTTP transport, applying the
+/// operator's `daemon-socks` SOCKS config when set. This is what makes a proxied
+/// `wallet-rpc-endpoint` actually route through the proxy — mirrors `daemon::DaemonClient`
+/// so both CLI HTTP paths honor `daemon-socks` identically.
 fn build_http_agent(proxy: Option<&str>) -> Result<ureq::Agent, String> {
     let mut config = ureq::Agent::config_builder();
     if let Some(proxy_addr) = proxy {
         let proxy_obj = ureq::Proxy::new(proxy_addr)
-            .map_err(|e| format!("invalid --proxy '{proxy_addr}': {e}"))?;
+            .map_err(|e| format!("invalid daemon-socks '{proxy_addr}': {e}"))?;
         config = config.proxy(Some(proxy_obj));
     }
     Ok(config.build().new_agent())
@@ -863,7 +863,7 @@ mod tests {
                 .expect("uds:// must be rejected on Windows");
             assert!(err.contains("Windows"), "{err}");
             assert!(
-                err.contains("Omit --rpc-url"),
+                err.contains("Leave it"),
                 "the rejection must say what works: {err}"
             );
         }

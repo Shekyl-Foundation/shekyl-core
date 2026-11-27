@@ -17,6 +17,7 @@ on:
           - chain-ingest-ignored
           - hasher-ignored
           - wire-ignored
+          - fips204-branch-count
           - trybuild-ignored
           - bench-full
           - producer-gate
@@ -67,6 +68,7 @@ jobs:
       chain-ingest-ignored: ${{ steps.plan.outputs['chain-ingest-ignored'] }}
       hasher-ignored: ${{ steps.plan.outputs['hasher-ignored'] }}
       wire-ignored: ${{ steps.plan.outputs['wire-ignored'] }}
+      fips204-branch-count: ${{ steps.plan.outputs['fips204-branch-count'] }}
       trybuild-ignored: ${{ steps.plan.outputs['trybuild-ignored'] }}
       bench-full: ${{ steps.plan.outputs['bench-full'] }}
     steps:
@@ -284,7 +286,9 @@ jobs:
     #           grid's nightly scopes), the steady control's pins, and the
     #           secret draw at ESR-11's timing on ESR-13's loop;
     #   reader  the per-mode reader test,
-    #           `baseline::tests::every_declared_reader_moves_its_report`.
+    #           `baseline::tests::every_declared_reader_moves_its_report`;
+    #   economies  the whole-economy table's nightly slice (§5.37): its
+    #           narration and the table derived from its own summary.
     # Each (branch, lane) leg is its own job on its own runner with its own
     # timeout, so one slow test cannot cut the others and a test that grows
     # shows in its own lane.
@@ -293,7 +297,10 @@ jobs:
     # (2026-11-22), wall seconds: the reader test 4 273 of the set's 9 007;
     # the three `--stage2` pins 1 402, 839 and 727, each on one thread; the
     # EUP-4 pair 558 and 532; ESR-10's pair 241 and 227; the J x G slice 177;
-    # ESR-11's set 31. In one job the set ran 6 111 to 8 001 s on dev over
+    # ESR-11's set 31; the economies slice 645 to 936 s on the same host
+    # (#1476). On a GitHub runner at ddf679f89c (2026-11-22) the legs ran:
+    # economies 621 s of test in 13.5 minutes of job, pins 2 967 s in 54,
+    # reader 6 731 s in 116. In one job the set ran 6 111 to 8 001 s on dev over
     # 2026-11-17 to 11-20 against 180 minutes, and main's leg (07c8abba5f)
     # passed in 10 299 s one night and was cut at 10 817 s the next on the
     # same commit. The script stamps every line of its output with the UTC
@@ -353,7 +360,7 @@ jobs:
       fail-fast: false
       # One line: the lane probe below reads `"sim_lane":"<lane>"` from the
       # checked-out copy of this file.
-      matrix: ${{ fromJSON(needs.plan.outputs['economics-sim-ignored'] || '{"include":[{"branch":"main","sim_lane":"pins"},{"branch":"main","sim_lane":"reader"},{"branch":"dev","sim_lane":"pins"},{"branch":"dev","sim_lane":"reader"}]}') }}
+      matrix: ${{ fromJSON(needs.plan.outputs['economics-sim-ignored'] || '{"include":[{"branch":"main","sim_lane":"pins"},{"branch":"main","sim_lane":"reader"},{"branch":"main","sim_lane":"economies"},{"branch":"dev","sim_lane":"pins"},{"branch":"dev","sim_lane":"reader"},{"branch":"dev","sim_lane":"economies"}]}') }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -581,6 +588,85 @@ jobs:
           BRANCH: ${{ matrix.branch }}
         run: bash scripts/ci/ignored_set_wire.sh
 
+  fips204-branch-count:
+    name: fips204-branch-count (${{ matrix.branch }})
+    needs: [plan]
+    if: ${{ !cancelled() && (!inputs.job || inputs.job == 'all' || inputs.job == 'fips204-branch-count') && needs.plan.outputs['fips204-branch-count'] != '{"include":[]}' }}
+    # fips204's coefficient helpers stay free of conditional branches in the
+    # shipped profile: one build of `ca3_pq_sign_timing` with line tables,
+    # then the count. The checker is the fork's, from the pinned revision, and
+    # the pair it is given is the one recorded for this binary.
+    #
+    # Same matrix as above. Each leg asks its own tree:
+    #   - it has the script: the leg runs;
+    #   - it has no script, but its own copy of this file names it: RED;
+    #   - neither: the revision predates the guard, and the leg ends green
+    #     with a notice and builds nothing. That ends when the guard reaches
+    #     the other branch.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs['fips204-branch-count'] || '{"include":[{"branch":"main"},{"branch":"dev"}]}') }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.sha || matrix.branch }}
+          submodules: recursive
+          # The steps below run the checked-out ref's code. It gets no
+          # credential to find in .git/config.
+          persist-credentials: false
+
+      - name: does this revision have the guard
+        id: guard
+        env:
+          BRANCH: ${{ matrix.branch }}
+        run: |
+          set -euo pipefail
+          script=scripts/ci/check_fips204_branch_counts.py
+          workflow=.github/workflows/nightly.yml
+          if [ -f "$script" ]; then
+            # A stable tree may still carry #1545's 16/4 stand-in record.
+            # Each leg builds the subject its own counter record judges.
+            if grep -q '^BRANCH_SUBJECT_COUNTS = ' "$script"; then
+              subject=fips204_branch_subject
+            else
+              subject=$(python3 "$script" --subject)
+            fi
+            case "$subject" in
+              ca3_pq_sign_timing|fips204_branch_subject) ;;
+              *) echo "::error::$BRANCH has no recognised fips204 subject"; exit 1 ;;
+            esac
+            if [ ! -f "rust/shekyl-crypto-pq/examples/$subject.rs" ]; then
+              echo "::error::$BRANCH names $subject, but its source is missing"
+              exit 1
+            fi
+            echo "subject=$subject" >> "$GITHUB_OUTPUT"
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ -f "$workflow" ] && grep -Fq "$script" "$workflow"; then
+            echo "::error::$BRANCH names $script in $workflow, but the script is missing"
+            exit 1
+          fi
+          echo "::notice title=fips204 guard not on $BRANCH::$BRANCH predates the fips204 branch-count guard. This leg ran nothing. It runs once the guard reaches $BRANCH."
+          echo "run=false" >> "$GITHUB_OUTPUT"
+
+      - name: Install Rust toolchain
+        if: steps.guard.outputs.run == 'true'
+        uses: ./.github/actions/install-rust
+
+      - name: Build the subject in the shipped profile, with line tables
+        if: steps.guard.outputs.run == 'true'
+        working-directory: rust
+        env:
+          CARGO_PROFILE_RELEASE_DEBUG: line-tables-only
+        run: cargo build --locked --release -p shekyl-crypto-pq --example ${{ steps.guard.outputs.subject }}
+
+      - name: Count the helpers' conditional branches
+        if: steps.guard.outputs.run == 'true'
+        run: python3 scripts/ci/check_fips204_branch_counts.py rust/target/release/examples/${{ steps.guard.outputs.subject }} x86_64
+
   trybuild-ignored:
     name: trybuild-ignored (${{ matrix.branch }})
     needs: [plan]
@@ -787,7 +873,7 @@ jobs:
     # by someone who already knows (ruled 2026-11-22). A job timeout leaves
     # `!cancelled()` true here (scratch probe, 2026-11-22). nightly_red.py
     # --check holds `needs` and this condition.
-    needs: [plan, proptest-exhaustive, store-ignored, economics-sim-ignored, staking-sim-ignored, chain-ingest-ignored, hasher-ignored, wire-ignored, trybuild-ignored, bench-full, bench-full-drift, producer-gate]
+    needs: [plan, proptest-exhaustive, store-ignored, economics-sim-ignored, staking-sim-ignored, chain-ingest-ignored, hasher-ignored, wire-ignored, fips204-branch-count, trybuild-ignored, bench-full, bench-full-drift, producer-gate]
     if: ${{ !cancelled() && (github.event_name == 'schedule' || inputs.report) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10  # p90 0.1 min over 22 runs; the floor
@@ -863,6 +949,13 @@ jobs:
                   'If the job stopped before running anything, the test was renamed or un-ignored: point `scripts/ci/producer_gate.sh` at it.',
                 ],
               },
+              'fips204-branch-count': {
+                title: 'nightly fips204 branch count RED',
+                lines: [
+                  'The `fips204-branch-count` job failed. It builds the example selected by that revision\'s own counter record (`ca3_pq_sign_timing` on current code), in the shipped profile with line tables, and runs `scripts/ci/check_fips204_branch_counts.py`: every conditional branch inlined from fips204\'s coefficient helpers must be a loop back-edge or the public `gamma2` test, in the recorded number.',
+                  'A branch outside those two is a finding: read it before changing anything. A toolchain bump moves the counts, and re-pins them on x86_64 and on the floor device.',
+                ],
+              },
               'wire-ignored': {
                 title: 'nightly wire ignored tests RED',
                 lines: [
@@ -881,7 +974,7 @@ jobs:
               'economics-sim-ignored': {
                 title: 'nightly economics-sim ignored tests RED',
                 lines: [
-                  'A leg of the `economics-sim-ignored` job failed. Each leg runs one lane of `scripts/ci/ignored_set_economics_sim.sh` on one branch; the leg\'s name says which. The `pins` lane runs the `#[ignore]`d narration pins of `shekyl-economics-sim` (the `--stage2` pair, ESR-10\'s, EUP-4 prep 2\'s and the J x G grid\'s nightly scopes), the steady control\'s pins and the ESR-11 timing set; the `reader` lane runs `baseline::tests::every_declared_reader_moves_its_report` (a field a mode declares as read that does not move its report fails by name).',
+                  'A leg of the `economics-sim-ignored` job failed. Each leg runs one lane of `scripts/ci/ignored_set_economics_sim.sh` on one branch; the leg\'s name says which. The `pins` lane runs the `#[ignore]`d narration pins of `shekyl-economics-sim` (the `--stage2` pair, ESR-10\'s, EUP-4 prep 2\'s and the J x G grid\'s nightly scopes), the steady control\'s pins and the ESR-11 timing set; the `reader` lane runs `baseline::tests::every_declared_reader_moves_its_report` (a field a mode declares as read that does not move its report fails by name); the `economies` lane runs `whole_economy::tests::economies_nightly_slice_matches_its_narration_and_table` (the whole-economy table\'s nightly slice: its narration and the table derived from its own summary, each against its committed copy).',
                   'If a narration drifted and the sim change is intended: record it in `ECONOMICS_SIM_PRODUCTION_REBASE.md` and regenerate with the pin\'s `regen_*` helper under `SHEKYL_PINNED_REGEN_DECISION` citing that entry; otherwise the sim drifted from its record.',
                   'If a leg timed out, its log stamps each line with the UTC time: the tests with no `... ok` line were still running. Compare with the measurements in nightly.yml\'s economics-sim-ignored comment before raising the budget.',
                   'If a leg stopped before running anything, the crate\'s ignored set changed (decide in `scripts/ci/ignored_set_economics_sim.sh` whether the new test is run, is a regeneration helper or runs on demand), or the branch names a lane its script lacks.',

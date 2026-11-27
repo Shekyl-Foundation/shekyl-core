@@ -1,7 +1,7 @@
 # Pinned toolchain — the single source of truth for the Rust *version* used by
-# `cargo build` / `fmt` / `clippy` everywhere: locally, in CI, and in the C++
-# daemon's Rust bridge (cmake/BuildRust.cmake invokes cargo with this directory
-# as its working dir). rustup honors it for every cargo invocation in rust/, so a
+# `cargo build` / `fmt` / `clippy` everywhere: locally, in CI, and in the
+# release build (`cargo xtask` runs cargo from this directory and refuses any
+# other channel). rustup honors it for every cargo invocation in rust/, so a
 # floating runner image or a developer's default toolchain can no longer cause
 # `cargo fmt --check` drift — the recurring "fighting the formatter" churn.
 #
@@ -9,12 +9,12 @@
 # the `rust-msrv-gate` CI job). We "develop on the floor": pinning to the MSRV
 # means accidental use of a newer-than-MSRV feature fails right here, not only in
 # the gate. The floor is dependency-driven (RandomX v2 `Box::new_zeroed_slice`
-# @ 1.92, redb 4.x @ 1.89) — keep it minimal; do NOT raise it without a
+# @ 1.92, redb 4.x @ 1.90) — keep it minimal; do NOT raise it without a
 # dependency that requires it.
 #
-# Channel ONLY — deliberately no `components`/`profile`. The C++ daemon build runs
-# many cargo processes in parallel (cmake -j over the BuildRust targets); if this
-# file demanded components rustup didn't already have, each parallel cargo would
+# Channel ONLY — deliberately no `components`/`profile`. CI and gitian run several
+# cargo processes on one toolchain; if this file demanded components rustup
+# didn't already have, each parallel cargo would
 # race to auto-install them into the shared ~/.rustup/downloads dir and the build
 # would die ("component download failed ... could not rename"). So CI installs this
 # exact toolchain (and its components) up front — see the Rust setup in build.yml /

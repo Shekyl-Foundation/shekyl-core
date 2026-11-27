@@ -109,15 +109,15 @@ impl Presentation {
     /// The prompt `wallet create` / `wallet restore` path shows the seed on
     /// stdout and then clears the screen. JSON owns that stdout, so the seed
     /// cannot be shown there even when a person is at the terminal. A script
-    /// cannot be asked for it either. `create --seed-out` and
-    /// `restore --seed-file` are the path that remains.
+    /// cannot be asked for it either. `--mnemonic-file` on those
+    /// words is the path that remains.
     pub fn shows_seed_on_stdout(self) -> bool {
         self.interactive() && self.human()
     }
 
     /// Where progress and explanation go, when they go anywhere.
     ///
-    /// A script prints nothing: `--script` is not a person, with or without
+    /// A script prints nothing: `script-file` is not a person, with or without
     /// `--json`. An interactive terminal prints on stdout. Interactive JSON
     /// prints on stderr, so the transcript stays one object per line and the
     /// person still sees the summary before confirming.

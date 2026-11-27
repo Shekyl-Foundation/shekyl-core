@@ -41,7 +41,6 @@ impl Write for Recorder {
 #[test]
 fn ansi_stderr_lines_carry_an_escape_byte() {
     // SAFETY: this file is its own process, and this is its only test.
-    unsafe { std::env::remove_var(shekyl_logging::SHEKYL_LOG_ENV) };
     unsafe { std::env::set_var("NO_COLOR", "1") };
 
     let written = Arc::new(Mutex::new(Vec::new()));

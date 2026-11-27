@@ -111,7 +111,7 @@ fn run_child_if_requested() {
 /// A daemon child, its directory and its port.
 struct Node {
     child: Child,
-    dir: tempfile::TempDir,
+    dir: shekyl_os_account::test_fixture::FixtureDir,
     port: u16,
 }
 
@@ -120,7 +120,7 @@ impl Node {
     /// `SIG_IGN` when `ignored` and to `SIG_DFL` otherwise. Returns once
     /// the RPC accepts a connection.
     fn start(test_name: &str, ignored: bool) -> Self {
-        let dir = tempfile::tempdir().expect("a directory");
+        let dir = shekyl_os_account::test_fixture::tempdir().expect("a directory");
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;

@@ -1,7 +1,7 @@
 # Shekyl Executables
 
 This document describes every binary produced by a Shekyl build.
-All binaries are placed in `build/release/bin/` (or `build/debug/bin/`).
+`cargo xtask build` stages them in `build/bin/`.
 
 ## Quick reference
 
@@ -10,9 +10,7 @@ All binaries are placed in `build/release/bin/` (or `build/debug/bin/`).
 | `shekyld` | Full-node daemon (P2P, consensus, RPC) |
 | `shekyl-cli` | Interactive command-line wallet (Rust) |
 | `shekyl-wallet-rpc` | Headless wallet exposed via JSON-RPC |
-| `shekyl-utils-deserialize` | Decode hex blobs to human-readable JSON |
-
-The `shekyl-utils-*` executables are only built when `BUILD_DEBUG_UTILITIES=ON`.
+| `shekyl-rpc-tunnel` | Reaches a daemon's RPC channel from another host (`docs/design/RPC_CHANNEL.md` §8) |
 
 ---
 
@@ -153,8 +151,9 @@ shekyld --data-dir /mnt/ssd/shekyl-data
 
 A Rust-native interactive CLI wallet. It is a pure JSON-RPC client of
 `shekyl-wallet-rpc` (Shape B): by default it self-hosts a wallet-RPC server
-in-process over a private, owner-only local endpoint; with `--rpc-url` it
-connects to an external one instead. The contract is
+in-process over a private, owner-only local endpoint; with
+`--wallet-rpc-endpoint` or `--wallet-rpc-socket-file` it connects to an
+external one instead. The contract is
 [`docs/api/wallet_rpc.yaml`](api/wallet_rpc.yaml); the capability ledger is
 [`docs/CLI_PARITY_MATRIX.md`](CLI_PARITY_MATRIX.md).
 
@@ -164,21 +163,29 @@ removed.
 ### Usage
 
 ```
-shekyl-cli [options]
+shekyl-cli [options] [command words]
 ```
 
-### Key options
+Options come before the command. `shekyl-cli help` lists the commands.
+
+### Options
+
+The full list, generated from the option table, is
+[`docs/generated/shekyl-cli_options.md`](generated/shekyl-cli_options.md).
+The ones most runs use:
 
 | Option | Description |
 |--------|-------------|
-| `--daemon-address <host:port\|url>` | Daemon to connect to. Default: "this computer", the node this account runs for `--network`, on its own socket or pipe; when this computer's node runs as a service, the daemon words reach its console leg (an administrator's), and a wallet session is told the service's view listener to name here. With `--rpc-url` the self-hosted wallet RPC is not started, but the REPL still queries the daemon directly. `--proxy` without an address is refused in a self-hosted run. A daemon that is not loopback is disclosed on stderr at startup (USER_GUIDE "Connecting to a daemon"; `RPC_TRANSPORT_POSTURE.md` §1) |
-| `--rpc-url <url>` | Connect to an external `shekyl-wallet-rpc` instead of self-hosting one (`http://host:port`, or `uds:///path/to.sock` on Unix). The URL names the server; calls go to its `/json_rpc` |
-| `--network <type>` | Network the self-hosted wallet server binds to: `mainnet` (default), `testnet`, `stagenet`. With `--rpc-url` that server is not started, and the flag is then read only to supply the default daemon port for the REPL's own daemon queries — so a run that names its own `--daemon-address` never consults it |
-| `--testnet` / `--stagenet` | Shorthand for `--network testnet` / `--network stagenet` — the same flags `shekyld` takes (CU-1). The prompt names the selected network |
-| `--wallet-dir <path>` | Directory for wallet files. Default: the per-network `wallets/<network>/` in the per-account root (`~/.shekyl`, or `%LOCALAPPDATA%\Shekyl` on Windows; INPUT_GRAMMAR IG-13), created on demand, so wallets on different networks never share a directory (CU-1). Ignored with `--rpc-url`. `--engine-dir` is a hidden alias (CU-2) |
-| `--wallet <name>` | Open a wallet immediately on startup. `--engine-file` is a hidden alias (CU-2) |
-| `--proxy <socks5h://host:port>` | SOCKS proxy for the daemon connections. Prefer `socks5h://`: the REPL's direct daemon queries honor the scheme, and `socks5://` resolves the hostname locally (a DNS leak, warned at startup). An `https://` daemon uses the system root store |
-| `--debug` | Show structured RPC error details on failures |
+| `--network <name>` | `mainnet` (default), `testnet`, `stagenet` or `regtest` |
+| `--daemon-endpoint <ip:port or onion:port>` | A daemon on another computer. Unset, this computer's node on `--network`, on its own socket or pipe. A daemon that is not loopback is disclosed on stderr at startup |
+| `--daemon-socks <ip:port>` | A SOCKS5 proxy for connections to another computer; it resolves names |
+| `--wallet-dir <path>` | Directory for wallet files. Default: `wallets/<network>/` in the per-account root (`~/.shekyl`, or `%LOCALAPPDATA%\Shekyl` on Windows; INPUT_GRAMMAR IG-13), created when a wallet is made |
+| `--wallet-file <path>` | Open this wallet at start: the absolute path of its `<name>.wallet` file |
+| `--wallet-password-file <path or stdin>` | The wallet password, from a file only this account can read or one line of standard input. Required when standard input is not a terminal |
+| `--wallet-rpc-endpoint <ip:port>`, `--wallet-rpc-socket-file <path>` | Use an external `shekyl-wallet-rpc` instead of hosting one |
+| `--log-level`, `--log-category`, `--log-file`, `--log-size-max` | Logging, as the daemon's. No file is written unless `--log-file` names one |
+| `--config-verify` | Check the configuration, print the effective configuration, and exit |
+| `--json`, `--script-file <path>`, `--debug` | One JSON object per command; run a file of commands; show machine error detail |
 
 ### Interactive commands
 
@@ -192,10 +199,10 @@ is [`docs/CLI_PARITY_MATRIX.md`](CLI_PARITY_MATRIX.md).
 
 | Command | Description |
 |---------|-------------|
-| `wallet create <name>` | Create a new wallet (also non-interactive: `shekyl-cli create <name> --seed-out <path>`) |
+| `wallet create <name> [--mnemonic-file <path>]` | Create a new wallet. With the flag, the seed goes to a new owner-only file instead of the screen |
 | `wallet open <name>` | Open an existing wallet |
 | `wallet close` | Close the current wallet |
-| `wallet restore <name> <seed...>` | Restore from the recovery words |
+| `wallet restore <name> [--mnemonic-file <path>] [--wallet-restore-height <n>]` | Restore from the recovery words, read from the file or asked for without echo |
 | `wallet password` | Change the wallet password |
 | `wallet refresh` | Sync with the daemon |
 | `wallet rescan [hard]` | Rebuild transaction history from the chain (`hard` accepted; same rescan) |
@@ -265,7 +272,7 @@ The retired spellings `start_mining`, `stop_mining` and `mining_status`
 do not run; each names its `mine` replacement. Does not require an open
 wallet. Requires the unrestricted RPC listener and a daemon on the same
 network as the CLI. The default daemon is loopback. A remote
-`--daemon-address` is
+`--daemon-endpoint` is
 allowed, and `mine start` reminds you that mining will run on that
 machine's CPU.
 A still-syncing daemon refuses `mine start` until it is caught up.
@@ -304,12 +311,12 @@ Offline cold signing (`describe_transfer` / `sign_transfer` /
 shekyl-cli
 
 # Open an existing testnet wallet against the testnet daemon on this
-# machine (the default daemon address and wallet directory follow the flag)
-shekyl-cli --testnet --wallet miner
+# machine (the default daemon and wallet directory follow the network)
+shekyl-cli --network testnet --wallet-file ~/.shekyl/wallets/testnet/miner.wallet
 
 # Reach a node of yours on another machine through its onion service
-shekyl-cli --proxy socks5h://127.0.0.1:9050 \
-           --daemon-address mynode.onion:11029
+shekyl-cli --daemon-socks 127.0.0.1:9050 \
+           --daemon-endpoint <56 characters>.onion:11029
 ```
 
 ---
@@ -321,30 +328,31 @@ users never start it by hand: `shekyl-cli` hosts one in-process over a
 private, owner-only local endpoint. Run it standalone for tooling that speaks
 JSON-RPC over HTTP, or to serve several wallets from one process.
 
-> The flags below are those of the Rust binary under `rust/shekyl-wallet-rpc`.
-> An earlier revision of this section described the retired C++
-> `shekyl-wallet-rpc` (`--rpc-bind-port`, `--rpc-ssl*`, `--confirm-external-bind`,
-> digest auth); none of those exist.
-
 ### Usage
 
 ```
-shekyl-wallet-rpc [--wallet-dir <dir>] [--rpc-bind <addr>] [--rpc-login <user:pass>] [options]
+shekyl-wallet-rpc [options]
 ```
 
 ### Options
 
+The full list, generated from the option table, is
+[`docs/generated/shekyl-wallet-rpc_options.md`](generated/shekyl-wallet-rpc_options.md).
+
 | Option | Description |
 |--------|-------------|
-| `--wallet-dir <dir>` | Directory of wallet files (default `.`); `create_wallet` / `open_wallet` operate here |
-| `--rpc-bind <addr>` | Listen address: a numeric `IP:PORT` (TCP; default `127.0.0.1:29500`; IPv6 as `[::1]:29500`; hostnames such as `localhost` are **not** resolved) or `uds:///path/to.sock` (Unix only; the socket's directory is this account's alone, made 0700 if it is missing and refused if group or others have any access). **Wildcard addresses (`0.0.0.0`, `::`, `[::]`) are refused** — bind a specific IP address. **A non-loopback address refuses to start without `--rpc-login`** |
-| `--rpc-login <user:pass>` | HTTP basic authentication, `NAME:PASSWORD` with **both halves non-empty** — a value without `:`, or with a blank half, is refused at startup. Required for any non-loopback `--rpc-bind` (where the server also logs that Basic travels in the clear until the TLS leg lands); omitted = auth disabled, accepted only on loopback or a UDS socket |
-| `--disable-rpc-login` | Run without authentication. Refused on a non-loopback bind, and refused together with `--rpc-login` (a contradiction, not a precedence) |
-| `--daemon-address <url>` | Daemon JSON-RPC base URL. Default: "this computer", the node this account runs for `--network`, on its own socket or pipe; a node run as a service is refused with its view listener as the address to set (`-29214`). `--proxy` without an address is refused. A daemon that is not loopback is disclosed in the log at startup, `--proxy` or not (`RPC_TRANSPORT_POSTURE.md` §1) |
-| `--proxy <socks5h://host:port>` | SOCKS5h proxy for the daemon connection; the proxy resolves the hostname |
-| `--network <mainnet\|testnet\|stagenet>` | Network every create/open binds to (default `mainnet`) |
-| `--log-file <path>` | Optional file sink for `tracing` events |
-| `--version` | Print the release version (the daemon's string, e.g. `3.1.0-alpha.11-release`) and exit |
+| `--wallet-dir <dir>` | Directory of wallet files. Default: `wallets/<network>/` in the account's root |
+| `--rpc-listen <ip:port>` | Listen address (default `127.0.0.1:29500`; IPv6 as `[::1]:29500`). Hostnames are not resolved, and a wildcard is refused. An address off this machine needs a login |
+| `--rpc-socket-file <path>` | A Unix socket in place of `rpc-listen`, in a directory that is this account's alone (made 0700 if missing). Not on Windows |
+| `rpc-username`, `rpc-password` | HTTP basic authentication, both or neither, in the configuration file only |
+| `--daemon-endpoint <ip:port or onion:port>` | The daemon. Unset, this computer's node on `--network`; a node run as a service is refused with its view listener as the value to set (`-29214`) |
+| `--daemon-socks <ip:port>` | A SOCKS5 proxy for the daemon connection; it resolves names. Required for an onion |
+| `--network <name>` | Network every create and open binds to (default `mainnet`) |
+| `--log-level`, `--log-category`, `--log-file`, `--log-size-max` | Logging, as the daemon's. No file is written unless `--log-file` names one |
+| `--config-verify` | Check the configuration, print the effective configuration, and exit |
+| `--version` | Print the release version and exit |
+
+The server prints its effective configuration at every start.
 
 ### Why the two bind refusals exist
 
@@ -362,39 +370,22 @@ my network" is not a reason to disable authentication. Design record:
 ### Examples
 
 ```bash
-# Local tooling over loopback, with authentication
+# Local tooling over loopback (the login, if any, is in the config file)
 shekyl-wallet-rpc --wallet-dir ~/wallets \
-                  --rpc-bind 127.0.0.1:29500 \
-                  --rpc-login user:password \
-                  --daemon-address http://127.0.0.1:11029
+                  --rpc-listen 127.0.0.1:29500 \
+                  --daemon-endpoint 127.0.0.1:11029
 
 # Local deployment over a Unix socket (filesystem permissions carry the
 # authorization; auth may be left disabled)
 shekyl-wallet-rpc --wallet-dir ~/wallets \
-                  --rpc-bind uds:///run/user/1000/shekyl.sock
+                  --rpc-socket-file /run/user/1000/shekyl/wallet.sock
 
-# Reachable on one specific address — authentication is mandatory here,
-# and the transport is cleartext HTTP: see RPC_TRANSPORT_POSTURE.md for
-# the remote-transport round before exposing a wallet beyond the machine
+# Reachable on one specific address: rpc-username and rpc-password must be
+# in the config file, and the transport is cleartext HTTP. See
+# RPC_TRANSPORT_POSTURE.md before exposing a wallet beyond the machine
 shekyl-wallet-rpc --wallet-dir ~/wallets \
-                  --rpc-bind 192.168.1.20:29500 \
-                  --rpc-login user:password
+                  --rpc-listen 192.168.1.20:29500
 ```
-
-## 4. Debug Utilities
-
-Built only when `BUILD_DEBUG_UTILITIES=ON` is set at CMake configure time.
-
-### `shekyl-utils-deserialize`
-
-Decodes a hex-encoded block, transaction, or `tx_extra` blob into
-human-readable JSON.
-
-```bash
-shekyl-utils-deserialize --input <hex-string>
-```
-
----
 
 ## Common options
 

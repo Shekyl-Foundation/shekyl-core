@@ -81,7 +81,7 @@ impl Responder {
     ) -> Result<Vec<u8>, CeremonyError> {
         expect_role(ctx, &[Role::Responder])?;
         let set = PreprocessSet::new(ctx, Self::others(ctx, received)?)?;
-        live.reserve(ctx.intent.hash(), &ctx.intent.intent().input_global_indices)?;
+        live.reserve(&ctx.intent)?;
         let inputs = own_keys(ctx)?
             .into_iter()
             .enumerate()

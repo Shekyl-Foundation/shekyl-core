@@ -74,7 +74,8 @@ use crate::error::WalletFileError;
 use crate::lock::KeysFileLock;
 use crate::overrides::SafetyOverrides;
 use crate::paths::{
-    keys_path_from, pending_post_path_from, pscan_state_path_from, state_path_from,
+    keys_path_from, multisig_state_path_from, pending_post_path_from, pscan_state_path_from,
+    state_path_from,
 };
 use crate::payload::{decode_payload, encode_payload, PayloadKind};
 
@@ -322,61 +323,16 @@ impl WalletFile {
     /// disk; the next open will hit the lost-`.wallet` rescan path
     /// (2i).
     pub fn create(params: &CreateParams<'_>) -> Result<Self, WalletFileError> {
-        if let Some(dir) = params
-            .base_path
-            .parent()
-            .filter(|d| !d.as_os_str().is_empty())
-        {
-            // Only absence is "missing". Any other failure to read the
-            // directory keeps its own cause, so a permission refusal is not
-            // reported as a directory to create.
-            match std::fs::metadata(dir) {
-                Ok(meta) if meta.is_dir() => {}
-                Ok(_) => return Err(io::Error::from(io::ErrorKind::NotADirectory).into()),
-                Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                    return Err(WalletFileError::DirectoryMissing {
-                        dir: dir.to_path_buf(),
-                    });
-                }
-                Err(e) => return Err(e.into()),
-            }
+        // A group wallet is its own handle (`GroupWalletFile`); refused before
+        // anything is written.
+        if !matches!(params.capability, CapabilityContent::Full { .. }) {
+            return Err(WalletFileError::GroupWalletKeysFile);
         }
+        prepare_new_wallet_path(params.base_path)?;
         let keys_path = keys_path_from(params.base_path);
         let state_path = state_path_from(params.base_path);
         let pscan_path = pscan_state_path_from(params.base_path);
         let pending_path = pending_post_path_from(params.base_path);
-
-        if keys_path.exists() {
-            return Err(WalletFileError::KeysFileAlreadyExists {
-                path: keys_path.clone(),
-            });
-        }
-
-        // A freshly created wallet must start in a consistent "never scanned as P"
-        // state. A stale `.wallet.pscan` orphaned at this base path (a prior wallet
-        // deleted here — the keys-exists guard above does not cover it) was sealed
-        // under the *old* wallet's keys, so the new wallet could never open it and
-        // `start_pscan` would refuse on the envelope seed-block mismatch. Remove it:
-        // unlike the write-once `.wallet.keys`, the P-scan state is regenerable (a
-        // re-scan rebuilds it), so clearing an unreadable orphan is the right clean
-        // slate, not a refuse-to-create. (This `create` only runs when `.wallet.keys`
-        // is absent, so any `.wallet.pscan` here is necessarily orphaned, never the
-        // current wallet's live state.)
-        match std::fs::remove_file(&pscan_path) {
-            Ok(()) => {}
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-            Err(e) => return Err(WalletFileError::Io(e)),
-        }
-        // Same clean-slate rationale for an orphaned `.wallet.pending`: it was
-        // sealed under the old wallet's keys and is unreadable by the new one.
-        // Unlike a live pending post (which is money-adjacent), an *orphan* is
-        // by construction a prior deleted wallet's residue — never this
-        // wallet's state — so removal is the consistent posture.
-        match std::fs::remove_file(&pending_path) {
-            Ok(()) => {}
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-            Err(e) => return Err(WalletFileError::Io(e)),
-        }
 
         let keys_bytes = seal_keys_file(
             params.password,
@@ -1003,7 +959,7 @@ impl WalletFile {
     }
 
     /// Capability profile of this wallet. Always [`Capability::Full`] —
-    /// the only capability (rule 23; decision log 2026-09-07) — but
+    /// the only capability of this handle (rule 23; decision log 2026-09-07) — but
     /// decoded through the typed parse boundary at open/create time so
     /// "capability was validated" stays a type-level fact.
     pub fn capability(&self) -> Capability {
@@ -1071,6 +1027,58 @@ impl WalletFile {
 /// the byte that just went through `seal_keys_file`) and `open` (which
 /// vets a byte read from disk) share one implementation, keeping the
 /// defensive-decode path auditable in a single place.
+/// Ready `base_path` for a new wallet, solo or group: its directory exists,
+/// no keys file is there, and the orphaned sibling files of a wallet deleted
+/// from this path are gone.
+fn prepare_new_wallet_path(base_path: &Path) -> Result<(), WalletFileError> {
+    if let Some(dir) = base_path.parent().filter(|d| !d.as_os_str().is_empty()) {
+        // Only absence is "missing". Any other failure to read the
+        // directory keeps its own cause, so a permission refusal is not
+        // reported as a directory to create.
+        match std::fs::metadata(dir) {
+            Ok(meta) if meta.is_dir() => {}
+            Ok(_) => return Err(io::Error::from(io::ErrorKind::NotADirectory).into()),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                return Err(WalletFileError::DirectoryMissing {
+                    dir: dir.to_path_buf(),
+                });
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+    let keys_path = keys_path_from(base_path);
+
+    if keys_path.exists() {
+        return Err(WalletFileError::KeysFileAlreadyExists { path: keys_path });
+    }
+
+    // A freshly created wallet must start with no sibling of a wallet that
+    // was deleted from this path. Those files were sealed under the old
+    // wallet's keys, so the new wallet could never open them: `.wallet.pscan`
+    // (a re-scan rebuilds it), `.wallet.pending` (a prior wallet's post, not
+    // this one's), and `.wallet.multisig` (a prior group's ceremony records).
+    // This runs only when `.wallet.keys` is absent, so each sibling here is
+    // an orphan.
+    for path in [
+        pscan_state_path_from(base_path),
+        pending_post_path_from(base_path),
+        multisig_state_path_from(base_path),
+    ] {
+        remove_orphaned_sibling(&path)?;
+    }
+    Ok(())
+}
+
+/// Delete an orphaned sibling. Absence is the clean slate; any other error
+/// is the removal's own.
+fn remove_orphaned_sibling(path: &Path) -> Result<(), WalletFileError> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(WalletFileError::Io(e)),
+    }
+}
+
 fn decode_network(v: u8) -> Result<Network, WalletFileError> {
     Network::from_code(v).ok_or(WalletFileError::UnknownNetwork(v))
 }
@@ -1160,6 +1168,12 @@ fn is_cross_device_error(e: &io::Error) -> bool {
         false
     }
 }
+
+// A group wallet's handle (R-30): a child module, for the keys-file wrapper
+// and the helpers it shares with the solo handle.
+#[path = "group_wallet_file.rs"]
+mod group_wallet_file;
+pub use group_wallet_file::{GroupCreateParams, GroupOpenOutcome, GroupWalletFile};
 
 #[cfg(test)]
 mod tests {
@@ -1995,7 +2009,7 @@ mod tests {
     }
 
     /// Capability accessor contract: a freshly created wallet exposes
-    /// `Capability::Full` (the only capability, rule 23) through the
+    /// `Capability::Full` (this handle's only capability, rule 23) through the
     /// typed accessor, alongside the other decoded-once metadata.
     #[test]
     fn handle_exposes_capability_and_network() {

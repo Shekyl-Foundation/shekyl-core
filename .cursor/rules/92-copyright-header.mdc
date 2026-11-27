@@ -1,7 +1,6 @@
 ---
 description: Copyright headers on all source files. Shekyl Foundation is the copyright holder. Never add Monero copyright to new files.
 globs:
-  - "cmake/**/*.cmake"
   - "rust/**/*.rs"
   - "src-tauri/**/*.rs"
 ---
@@ -43,7 +42,7 @@ line, no other attribution:
 // ... (BSD-3-Clause terms)
 ```
 
-```cmake
+```toml
 # Copyright (c) 2025-2026, The Shekyl Foundation
 #
 # All rights reserved.

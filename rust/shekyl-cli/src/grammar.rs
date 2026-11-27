@@ -160,9 +160,7 @@ fn parse_ready(id: CommandId, tail: Tail<'_>, args: &[&str]) -> ResolvedCommand 
         Version => bare(id, args, ResolvedCommand::Version),
         Wallet => bare(id, args, ResolvedCommand::Wallet),
         Stake => bare(id, args, ResolvedCommand::Stake),
-        WalletCreate => one_word(id, args, |name| ResolvedCommand::Create {
-            filename: name.to_string(),
-        }),
+        WalletCreate => parse_create(args),
         WalletOpen => one_word(id, args, |name| ResolvedCommand::Open {
             filename: name.to_string(),
         }),
@@ -358,7 +356,7 @@ fn host_token(word: &str) -> bool {
 
 /// `rpc client add|set <fingerprint> --ceiling <word>...` (IG-Q87): the
 /// fingerprint a hash, the ceiling one or more grant or preset keywords,
-/// the flag repeated (IG-6).
+/// the flag repeated (IG-6). Add also takes a single positional ceiling (RT-W12).
 fn parse_client_ceiling(
     id: CommandId,
     args: &[&str],
@@ -368,17 +366,18 @@ fn parse_client_ceiling(
         Ok(split) => split,
         Err(command) => return command,
     };
-    let [fingerprint] = split.positional.as_slice() else {
-        return diag(usage(id));
+    let flagged = split.values("--ceiling");
+    let (fingerprint, words) = match split.positional.as_slice() {
+        [fingerprint] if !flagged.is_empty() => (fingerprint, flagged.as_slice()),
+        [fingerprint, word] if id == CommandId::RpcClientAdd && flagged.is_empty() => {
+            (fingerprint, std::slice::from_ref(word))
+        }
+        _ => return diag(usage(id)),
     };
     let fingerprint = match parse_hash(fingerprint) {
         Ok(fingerprint) => fingerprint,
         Err(message) => return diag(message),
     };
-    let words = split.values("--ceiling");
-    if words.is_empty() {
-        return diag(usage(id));
-    }
     let mut ceiling = Vec::with_capacity(words.len());
     for word in words {
         match CeilingWord::from_name(word) {
@@ -513,14 +512,66 @@ fn parse_help(args: &[&str]) -> ResolvedCommand {
     }
 }
 
+/// `--mnemonic-file`: an absolute path (IG-6), like every path option.
+fn mnemonic_file_of(split: &Split<'_>) -> Result<Option<std::path::PathBuf>, ResolvedCommand> {
+    let Some(raw) = split.value("--mnemonic-file") else {
+        return Ok(None);
+    };
+    match shekyl_options::Kind::PATH.parse_text(raw) {
+        Ok(shekyl_options::Value::Path(path)) => Ok(Some(path)),
+        _ => Err(diag(format!(
+            "--mnemonic-file expects an absolute path, got {raw:?}"
+        ))),
+    }
+}
+
+fn parse_create(args: &[&str]) -> ResolvedCommand {
+    let split = match flags(CommandId::WalletCreate, args) {
+        Ok(split) => split,
+        Err(command) => return command,
+    };
+    let [name] = split.positional.as_slice() else {
+        return diag(usage(CommandId::WalletCreate));
+    };
+    match mnemonic_file_of(&split) {
+        Ok(mnemonic_file) => ResolvedCommand::Create {
+            filename: (*name).to_string(),
+            mnemonic_file,
+        },
+        Err(command) => command,
+    }
+}
+
+/// `wallet restore <name>`. The words come from `--mnemonic-file` or the
+/// hidden prompt, never this line (IG-Q24), so a line with more positionals
+/// is refused with the usage, which does not repeat them.
 fn parse_restore(args: &[&str]) -> ResolvedCommand {
-    if args.len() >= 2 {
-        ResolvedCommand::Restore {
-            filename: args[0].to_string(),
-            seed_words: args[1..].iter().map(|word| (*word).to_string()).collect(),
-        }
-    } else {
-        diag(usage(CommandId::WalletRestore))
+    let split = match flags(CommandId::WalletRestore, args) {
+        Ok(split) => split,
+        Err(command) => return command,
+    };
+    let [name] = split.positional.as_slice() else {
+        return diag(usage(CommandId::WalletRestore));
+    };
+    let mnemonic_file = match mnemonic_file_of(&split) {
+        Ok(path) => path,
+        Err(command) => return command,
+    };
+    let restore_height = match split.value("--wallet-restore-height") {
+        None => None,
+        Some(raw) => match raw.parse::<u64>() {
+            Ok(height) => Some(height),
+            Err(_) => {
+                return diag(format!(
+                    "--wallet-restore-height expects a block number, got {raw:?}"
+                ));
+            }
+        },
+    };
+    ResolvedCommand::Restore {
+        filename: (*name).to_string(),
+        mnemonic_file,
+        restore_height,
     }
 }
 
@@ -979,6 +1030,33 @@ fn parse_verify(tail: Tail<'_>, args: &[&str]) -> ResolvedCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_wallet_enrollment_command_sets_only_the_named_ceiling() {
+        let fingerprint = "ab".repeat(32);
+        let command = format!("rpc client add {fingerprint} wallet");
+        match parse(&command) {
+            ResolvedCommand::Enroll(Enroll::ClientAdd {
+                fingerprint: got,
+                ceiling,
+            }) => {
+                assert_eq!(got, fingerprint);
+                assert_eq!(ceiling, vec![CeilingWord::Wallet]);
+            }
+            other => panic!("expected wallet enrollment, got {other:?}"),
+        }
+        for invalid in [
+            format!("{command} --ceiling admin"),
+            format!("{command} admin"),
+            format!("rpc client add {fingerprint} unknown"),
+            format!("rpc client set {fingerprint} wallet"),
+        ] {
+            assert!(
+                !matches!(parse(&invalid), ResolvedCommand::Enroll(_)),
+                "{invalid}"
+            );
+        }
+    }
 
     /// The enrollment words (IG-Q87): a ceiling is the flag repeated
     /// (IG-6), each a grant or a preset, and at least one; the fingerprint

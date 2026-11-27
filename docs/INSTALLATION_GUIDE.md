@@ -10,9 +10,9 @@ It is intentionally Shekyl-native (binary names and commands), even where legacy
 
 - Supported platforms and practical build targets.
 - Required and optional dependencies.
-- Build flows using both top-level `Makefile` and direct CMake.
+- Build flows using `cargo xtask`, run from `rust/`.
 - Shekyl binary names and first-run verification.
-- Common pitfalls (submodules, compatibility flags, RPC safety).
+- Common pitfalls (submodules, older systems, RPC safety).
 
 ---
 
@@ -68,14 +68,14 @@ If you are starting fresh, prefer:
 The dependency matrix is maintained in `README.md` and includes:
 
 - the Rust toolchain `rust/rust-toolchain.toml` pins, with `cargo`;
-- CMake, and a C compiler for the crates whose build scripts compile C
+- a C compiler for the crates whose build scripts compile C
   (no C or C++ library is linked from the system: no Boost, OpenSSL,
   libsodium or readline).
 
 ### Rust integration behavior
 
-Every binary is Rust. `cmake/BuildRust.cmake` runs `cargo` for the
-workspace under `rust/`, so a build needs the Rust toolchain:
+Every binary is Rust. `cargo xtask`, run from `rust/`, runs `cargo` for
+the workspace, so a build needs the Rust toolchain:
 
 ```bash
 curl https://sh.rustup.rs -sSf | sh
@@ -110,7 +110,7 @@ Clone recursively to include required submodules:
 
 ```bash
 git clone --recursive <your-shekyl-repo-url>
-cd Shekyl
+cd shekyl-core
 ```
 
 If already cloned without submodules:
@@ -119,38 +119,36 @@ If already cloned without submodules:
 git submodule update --init --force
 ```
 
-Important: CMake checks submodule state and can fail if submodules are out of sync (unless you explicitly pass `-DMANUAL_SUBMODULES=1`).
-
 ---
 
 ## 5) Build on Linux/macOS
 
 ### Quick path (recommended)
 
-From repository root:
+From the repository root:
 
 ```bash
-make
+cd rust
+cargo xtask build
 ```
 
-This builds release artifacts under a `build/.../release` path (or `build/release`, depending on builddir mode).
+This builds the release binaries for this machine and stages them in
+`build/bin/`. `--out <dir>` names another directory. What cargo is given
+for each host is data in `rust/xtask/matrix.toml`.
 
-### Common build targets
+### Common commands
+
+Run from `rust/`:
 
 ```bash
-make release-all         # release + tests enabled at build time
-make release-test        # release build, then run tests
-make debug               # debug build
-make release-static      # static build
-make coverage            # debug + coverage + tests
+cargo xtask plan --native   # print the command; the version placeholders stay unfilled
+cargo build -p <crate>      # a debug build of one crate
+cargo test --workspace --exclude shekyl-randomx-differential
 ```
 
-### Explicit CMake path (equivalent control)
-
-```bash
-cmake -S . -B build -D CMAKE_BUILD_TYPE=Release -D BUILD_TESTS=ON
-cmake --build build --target all
-```
+A plain `cargo build` is for development. It carries no release identity,
+so its binaries report `3.1.0-unknown`, and it has none of the host's
+hardening flags.
 
 ---
 
@@ -160,25 +158,26 @@ Open MSYS2 MinGW shell and install toolchain + dependencies (64-bit example):
 
 ```bash
 pacman -Syu
-pacman -S mingw-w64-x86_64-toolchain make mingw-w64-x86_64-cmake
+pacman -S mingw-w64-x86_64-toolchain mingw-w64-x86_64-rustup git
 ```
 
 Then:
 
 ```bash
 git clone --recursive <your-shekyl-repo-url>
-cd Shekyl
-make release-static-win64
+cd shekyl-core
+rustup set default-host x86_64-pc-windows-gnu  # on Windows rustup otherwise picks MSVC
+rustup toolchain install "$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust/rust-toolchain.toml)" --profile minimal
+cd rust && cargo xtask build
 ```
 
 > **Shekyl is 64-bit only.** 32-bit build targets
 > (`release-static-win32`, `release-static-linux-i686`, and the
 > corresponding `depends`
 > triples) were permanently retired in v3.1.0-alpha.5 (Chore #3).
-> The C++-side configure refuses non-64-bit hosts via a top-level
-> `CMAKE_SIZEOF_VOID_P` gate, and the Rust workspace carries three
-> independent `compile_error!` tripwires against `target_pointer_width
-> != 64`. Shekyl's post-quantum primitives (ML-KEM-768 via `fips203`,
+> The release matrix lists only 64-bit hosts, and the Rust workspace
+> carries two independent `compile_error!` tripwires against
+> `target_pointer_width != 64`. Shekyl's post-quantum primitives (ML-KEM-768 via `fips203`,
 > ML-DSA-65 via `fips204`) state their constant-time guarantees
 > against native 64-bit arithmetic; on 32-bit targets the compiler
 > emits libgcc helpers (`__muldi3`, `__udivdi3`, `__ashldi3`) with no
@@ -193,42 +192,29 @@ make release-static-win64
 
 ## 7) Shekyl binary names and locations
 
-The current CMake targets produce:
+`cargo xtask build` produces:
 
-- daemon: `shekyld` (a Rust binary, `rust/shekyld`, that links the C++
-  core as a static library; `DAEMON_CONFIG_CUTOVER.md` DC-Q19)
-- CLI wallet: `shekyl-cli` (Rust)
-- wallet RPC: `shekyl-wallet-rpc` (Rust)
+- daemon: `shekyld`
+- CLI wallet: `shekyl-cli`
+- wallet RPC: `shekyl-wallet-rpc`
+- RPC tunnel: `shekyl-rpc-tunnel`
 
-All three are built from the Rust workspace by `cmake/BuildRust.cmake` as
-part of the ordinary CMake build — no separate `cargo` step is needed, and
-`cargo` is already a build prerequisite.
+They come from one `cargo` invocation over the Rust workspace, and
+`rust/xtask/matrix.toml` names each host's set.
 
-**Platform note.** The wallet binaries are produced for Unix targets
-(Linux, macOS). They are **not built for Windows** — `BuildRust.cmake`
-skips them there, so a Windows build produces `shekyld` and the
-blockchain utilities as before, and Windows release archives carry the
-daemon but no wallet.
+**Platform note.** The wallet binaries are produced for Linux, macOS and
+FreeBSD. They are **not built for Windows**: the matrix's Windows rows name
+`shekyld` and `shekyl-rpc-tunnel`, and Windows release archives carry those
+two and no wallet.
 
-That skip is no longer because the code cannot be built: as of
-2026-08-25 both `shekyl-cli` and `shekyl-wallet-rpc` compile and link for
+That is no longer because the code cannot be built: as of 2026-08-25 both
+`shekyl-cli` and `shekyl-wallet-rpc` compile and link for
 `x86_64-pc-windows-msvc`, and their end-to-end tests pass there. What is
-unverified is everything *after* compilation — the CMake cross-compile
-path, staging, `install()`, and the archive layout — so the gate stays
-until that is done deliberately rather than as a side effect. See
+unverified is everything *after* compilation, the staging and the archive
+layout, so the rows stay as they are until that is done deliberately. See
 `docs/FOLLOWUPS.md`, "Rust wallet stack: no Windows support" (WP-W5).
 
-Typical output location:
-
-- `<build_dir>/bin/`
-
-For a common release flow:
-
-- `build/release/bin/shekyld`
-- `build/release/bin/shekyl-cli`
-- `build/release/bin/shekyl-wallet-rpc`
-
-Note: some legacy or upstream docs/config examples may still use older daemon/wallet names; use Shekyl names above for this repository.
+The binaries are staged in `build/bin/`, or the directory `--out` names.
 
 ---
 
@@ -327,28 +313,13 @@ your own wallet, not a public remote node.
 
 ---
 
-## 9) Optional compatibility/build flags
+## 9) Building for older systems
 
-### Better libc compatibility across older Linux systems
-
-Use:
-
-```bash
-cmake -S . -B build -D CMAKE_BUILD_TYPE=Release -DBACKCOMPAT=ON
-cmake --build build
-```
-
-### Manual submodule override (advanced only)
-
-If you intentionally manage submodules outside CMake checks:
-
-```bash
-cmake -S . -B build -DMANUAL_SUBMODULES=1
-```
-
-### Static builds and `-fPIC`
-
-Some static dependencies may need to be rebuilt with `-fPIC` for successful static linking.
+A binary links the libc of the machine it was built on, so one built on a
+current distribution may not run on an older one. Use a release archive,
+which is built on Ubuntu 22.04, or build on the oldest system you need to
+support. `README.md`, "Cross Compiling", covers `cargo xtask dist --host
+<host>`, which builds a release host from the `depends` system.
 
 ---
 
@@ -364,7 +335,7 @@ Some static dependencies may need to be rebuilt with `-fPIC` for successful stat
 
 ## 11) Troubleshooting
 
-### CMake fails with submodule error
+### The build fails on a missing submodule
 
 Fix:
 
@@ -372,27 +343,33 @@ Fix:
 git submodule update --init --force
 ```
 
-Then rerun CMake.
+Then rerun `cargo xtask build`.
 
-### Rust components not built
+### `cargo xtask` refuses the build
 
-If configure output indicates cargo not found, install Rust/cargo and rebuild.
+It refuses a `rustc` other than the channel `rust/rust-toolchain.toml` pins,
+and settings on the build machine that would change the binaries, such as
+`RUSTFLAGS`, `CARGO_PROFILE_*` or `CARGO_BUILD_TARGET`. Install the pinned
+channel, or unset the variable its message names.
+
+### `cargo` is not found
+
+Install Rust with rustup (section 3), then rebuild.
 
 ### Missing dependencies
 
-Install packages for your distro from the dependency section in `README.md`, then clean/rebuild.
+Install packages for your distro from the dependency section in `README.md`, then rebuild.
 
-### Built binaries do not run on older Linux distro
+### Built binaries do not run on an older Linux distribution
 
-Rebuild with `-DBACKCOMPAT=ON`.
+See section 9.
 
 ---
 
 ## 12) Related docs
 
 - `README.md` (full dependency matrix and platform specifics)
-- `Makefile` (build targets)
-- `CMakeLists.txt` (build options, submodule checks, linker flags)
+- `rust/xtask/matrix.toml` (each host's binaries and everything cargo is given)
 - `shekyl-dev/docs/SEEDS_SETUP.md` (seed bootstrap model and runtime seed/peer controls)
 - `shekyl-dev/docs/SEED_NODE_DEPLOYMENT.md` (step-by-step seed node and shekyl.org caching deployment)
 - `docs/POST_QUANTUM_CRYPTOGRAPHY.md` (canonical PQC spec and reboot-only transaction format)

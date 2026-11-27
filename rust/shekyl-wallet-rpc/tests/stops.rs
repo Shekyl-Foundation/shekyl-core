@@ -46,15 +46,11 @@ const IGNORED_HOLDS: Duration = Duration::from_secs(1);
 const IGNORED_LINE: &str = "shekyl-wallet-rpc: Ctrl-C is off because the program that started \
      shekyl-wallet-rpc asked for it. Stop it with SIGTERM or the service stop.";
 
-/// A temporary directory only this account can enter. The wallet RPC binds
-/// its socket only in such a directory, and tempfile makes its directories
-/// with the umask's default mode (0755 under umask 022).
-fn owner_only_tempdir() -> tempfile::TempDir {
-    use std::os::unix::fs::PermissionsExt;
-    tempfile::Builder::new()
-        .permissions(std::fs::Permissions::from_mode(0o700))
-        .tempdir()
-        .expect("an owner-only temporary directory")
+/// A directory only this account can enter, under its home. The wallet RPC
+/// binds its socket only in such a directory, and refuses a configuration
+/// file below a directory another account can write, as the system temp is.
+fn owner_only_tempdir() -> shekyl_os_account::test_fixture::FixtureDir {
+    shekyl_os_account::test_fixture::tempdir().expect("fixture")
 }
 
 /// A short socket name: a socket path must fit `sun_path` (104 bytes on
@@ -228,10 +224,14 @@ impl Server {
         let wallets = dir.join(format!("wallets-{name}"));
         std::fs::create_dir_all(&wallets).expect("the wallet directory");
         let stderr = dir.join(format!("stderr-{name}"));
+        let config = dir.join(format!("config-{name}.toml"));
+        shekyl_os_account::private_file::write_private(&config, b"").expect("the config file");
         let mut command = Command::new(env!("CARGO_BIN_EXE_shekyl-wallet-rpc"));
         command
-            .args(["--network", "stagenet", "--disable-rpc-login"])
-            .arg(format!("--rpc-bind=uds://{}", socket.display()))
+            .args(["--network", "stagenet", "--config-file"])
+            .arg(&config)
+            .arg("--rpc-socket-file")
+            .arg(socket)
             .arg("--wallet-dir")
             .arg(&wallets)
             .stdin(Stdio::null())
@@ -429,13 +429,17 @@ fn a_killed_servers_socket_is_replaced_and_a_live_one_is_not_taken_over() {
 }
 
 /// **With umask 002, nothing but the owner can reach the socket at any
-/// point during startup** (Rick, 2026-11-21). The socket's own mode is set
-/// only after its bind, so the directory carries the startup: the server
-/// makes a missing directory 0700 whatever the umask, and it is 0700 from
-/// the first moment it exists, polled while the server starts. The control:
+/// point during startup** (Rick, 2026-11-21). The socket is 0600 from
+/// before it listens (the listeners' shared bind, Rick, 2026-11-22), so the
+/// first connect that succeeds finds it 0600; the directory stays the
+/// containment: the server makes a missing directory 0700, which this
+/// umask leaves whole, and it is 0700 from the first moment it exists, polled while the
+/// server starts. The control:
 /// a directory the child made under the same umask with mode 0777 is
-/// group-writable (0775), so the umask was live. Red edit: make the
-/// directory with `create_dir_all` (it appears 0775).
+/// group-writable (0775), so the umask was live. Red edits: make the
+/// directory with `create_dir_all` (it appears 0775), or listen before the
+/// narrowing (the first connect can find the socket 0775, as a FreeBSD run
+/// did on 2026-11-22 when the bind listened before its chmod).
 #[test]
 fn with_umask_002_only_the_owner_can_reach_the_socket_during_startup() {
     use std::os::unix::ffi::OsStrExt;
@@ -528,10 +532,9 @@ fn a_group_writable_socket_directory_is_refused_naming_it() {
     assert!(!status.success(), "a group-writable directory was used");
     let said = server.said();
     assert!(
-        said.contains(&format!(
-            "{} must be a directory only this account can enter",
-            shared.display()
-        )),
+        said.contains(&shared.display().to_string())
+            && said.contains("other accounts can enter")
+            && said.contains("the wallet RPC's socket is not bound there"),
         "the refusal names the directory: {said}"
     );
     assert!(

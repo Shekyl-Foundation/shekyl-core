@@ -1,0 +1,35 @@
+== conditions loc2-ml-dsa-sign-end at 2026-11-22T22:30:01Z
+model: Raspberry Pi 4 Model B Rev 1.2
+revision: c03112
+os: Ubuntu 26.04.1 LTS
+kernel: 7.0.0-1023-raspi
+governor: ondemand
+ntp: yes
+load: 1.02 1.11 1.08
+clock_khz: 1500000
+soc_temp_millic: 56478
+throttled: throttled=0x0
+undervoltage_alarm: 0
+total_trans: 162764
+time_in_state:
+  600000 2749586
+  700000 35261
+  800000 5442
+  900000 4581
+  1000000 8026
+  1100000 9043
+  1200000 6008
+  1300000 6430
+  1400000 4636
+  1500000 6706268
+mem_available_kb: 3308596
+top processes by cpu:
+      PID USER     %CPU     ELAPSED COMMAND
+    43950 <agent>  100       00:00 ps
+    43934 root     48.0       00:00 systemd-timedat
+    43923 <agent>  3.0       00:00 bash
+    43593 root      0.1       04:13 kworker/1:0-events
+    43759 root      0.0       02:29 kworker/2:1-events
+       59 root      0.0  1-02:29:11 kworker/u17:0-brcmf_wq/mmc1:0001:1
+    42057 root      0.0       14:53 kworker/1:1-events
+tmux: ca3loc2: 1 windows (created Sun Nov 22 17:07:41 2026);

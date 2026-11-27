@@ -296,20 +296,51 @@ pub fn pqc_leaf_commitment(
 
 pub use shekyl_curve_generators::pqc_leaf_point_valid;
 
+/// A PQC leaf and the canonical hybrid public key one keygen produced for it.
+///
+/// The leaf commits to `public_key`. A spend slot reveals those same bytes,
+/// and the membership scalar is the consensus `k` over them. The commitment's
+/// blinds are secret ([`PqcLeafCommitment`] is not `Clone`); the public key
+/// is not.
+pub struct DerivedPqcLeaf {
+    /// The leaf opening, blinds included.
+    pub commitment: PqcLeafCommitment,
+    /// Canonical hybrid public-key bytes (`derive_pqc_public_key`).
+    pub public_key: Vec<u8>,
+}
+
+/// Derive the output's PQC leaf and the public key it commits to, from one
+/// ML-DSA keygen (`PL-D3`).
+///
+/// Callers that only need the leaf use [`derive_pqc_leaf`], which drops the
+/// key. A caller that also needs the spend slot's scalar — the transaction
+/// builder's membership self-verify — uses this, so the key is not derived
+/// again.
+pub fn derive_pqc_leaf_with_key(
+    combined_ss: &[u8; 64],
+    output_index: u64,
+) -> Result<DerivedPqcLeaf, CryptoError> {
+    let public_key = crate::derivation::derive_pqc_public_key(combined_ss, output_index)?;
+    let commitment = pqc_leaf_commitment(combined_ss, output_index, &public_key).map_err(|e| {
+        CryptoError::KeyGenerationFailed(format!("PQC leaf commitment guard: {e:?}"))
+    })?;
+    Ok(DerivedPqcLeaf {
+        commitment,
+        public_key,
+    })
+}
+
 /// Derive the output's PQC leaf commitment (`CM ‖ record`, blinds, counter) from
 /// the owner's combined shared secret and output index, without returning any
 /// signing key material (`PL-D3`).
 ///
-/// Internally derives the full hybrid keypair via `derive_output_secrets` +
-/// `keygen_from_seed`, encodes the public key canonically, and zeroizes the
-/// secret key on drop.
+/// The public key that keygen produced is dropped. [`derive_pqc_leaf_with_key`]
+/// is the same derivation when the caller needs those bytes.
 pub fn derive_pqc_leaf(
     combined_ss: &[u8; 64],
     output_index: u64,
 ) -> Result<PqcLeafCommitment, CryptoError> {
-    let pk_bytes = crate::derivation::derive_pqc_public_key(combined_ss, output_index)?;
-    pqc_leaf_commitment(combined_ss, output_index, &pk_bytes)
-        .map_err(|e| CryptoError::KeyGenerationFailed(format!("PQC leaf commitment guard: {e:?}")))
+    derive_pqc_leaf_with_key(combined_ss, output_index).map(|derived| derived.commitment)
 }
 
 #[cfg(test)]
@@ -322,6 +353,20 @@ mod tests {
     // an implicit table↔point pin on the real path (the explicit pin lives in
     // shekyl-curve-generators' frozen-point tests).
     use shekyl_curve_generators::{PQC_LEAF_COMMITMENT_G_K, PQC_LEAF_COMMITMENT_J};
+
+    #[test]
+    fn derive_pqc_leaf_with_key_is_the_leaf_and_its_public_key() {
+        let ss = [0xab; 64];
+        let opened = derive_pqc_leaf_with_key(&ss, 7).unwrap();
+        let leaf = derive_pqc_leaf(&ss, 7).unwrap();
+        let public_key = derive_pqc_public_key(&ss, 7).unwrap();
+        assert_eq!(opened.commitment.point, leaf.point);
+        assert_eq!(opened.commitment.blind, leaf.blind);
+        assert_eq!(opened.commitment.record, leaf.record);
+        assert_eq!(opened.commitment.record_blind, leaf.record_blind);
+        assert_eq!(opened.commitment.counter, leaf.counter);
+        assert_eq!(opened.public_key, public_key);
+    }
 
     #[test]
     fn derivation_deterministic() {

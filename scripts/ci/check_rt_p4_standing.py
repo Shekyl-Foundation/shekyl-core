@@ -14,16 +14,21 @@ Sources:
 2. `rust/Cargo.lock`: the decapsulation closure of `fips203`.
 3. `rust/Cargo.toml`: `[profile.release]`, the recognised keys only.
 4. `rust/.cargo/config.toml`: each target's `rustflags`.
-5. `cmake/BuildRust.cmake`: cargo invocations, `-C` tokens, environment.
-   Every binary, the daemon included, is one `cargo build --locked` in
-   this file (`shekyl_rust_bins`); the flags and environment it hands
-   cargo are tokens in the same file, read the same way. (Until
-   2026-11-05 the daemon's run was Corrosion's, which added one linker
-   rustflag of its own from a pinned submodule; both are gone.)
+5. `rust/xtask/matrix.toml`: every cargo invocation of a release build,
+   its arguments, its environment and every `-C` in it. `cargo xtask`
+   builds every binary, the daemon included, as one `cargo build
+   --locked` per host from this file. What the xtask appends is
+   `PlanFlag::word` in `plan.rs` (`--target`, `-p`, `--features`), and
+   every process it runs is in `spawn.rs`. A flag literal anywhere else,
+   a `Command` outside `spawn.rs`, or an environment name written as a
+   literal is unrecognised. The file's refused list must keep every
+   build-machine codegen variable: the xtask refuses to build while one
+   is set, which a build machine's RUSTFLAGS was outside of before.
 6. `contrib/gitian/gitian-*.yml`: the toolchain each release build
-   installs. A descriptor builds through make. A cargo or rustc
-   command, a `RUSTUP_*` variable, or a `+` toolchain selector is
-   unrecognised. `.cargo` on `PATH` and make's `-C` are the build.
+   installs. A descriptor builds through `cargo xtask dist`, on the lines
+   `GITIAN_XTASK` spells. Any other cargo or rustc command, a
+   `RUSTUP_*` variable, or a `+` toolchain selector is unrecognised.
+   `.cargo` on `PATH` and make's `-C` are the build.
 
 Three findings. An unrecognised key is not by itself a re-run. Drift
 is only a recognised setting that changed. The two meet when one edit
@@ -54,12 +59,17 @@ from pathlib import Path
 import sys
 import tomllib
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import check_measurement_spans  # noqa: E402
+import release_matrix  # noqa: E402
+
 ATTESTATION = "docs/benchmarks/rt_p4_attestation.toml"
 TOOLCHAIN = "rust/rust-toolchain.toml"
 LOCK = "rust/Cargo.lock"
 MANIFEST = "rust/Cargo.toml"
 CARGO_CONFIG = "rust/.cargo/config.toml"
-BUILD_RUST = "cmake/BuildRust.cmake"
+MATRIX = "rust/xtask/matrix.toml"
+XTASK_SRC = "rust/xtask/src"
 GITIAN_GLOB = "contrib/gitian/gitian-*.yml"
 HARNESS = "rust/shekyl-rpc-channel/examples/rt_p4_decaps_timing.rs"
 
@@ -76,11 +86,11 @@ PROFILE_KEYS = frozenset({
 # the static C runtime on MSVC (rust/.cargo/config.toml).
 KNOWN_RUSTFLAGS = frozenset({"target-feature=+crt-static"})
 
-# What cmake/BuildRust.cmake gives cargo, each read at its use.
-# Compilers and flags for the C compiled inside crates, the cross linker,
-# the macOS deployment floor and SDK, and (cross builds only) a target's
-# RUSTFLAGS, which the `-C` check holds to `link-arg=`. The bare names are
-# the ones it clears.
+# What the release matrix gives cargo, by name, with a host's triple
+# written `<T>`. Compilers and flags for the C compiled inside crates, the
+# cross linker, the macOS deployment floor and SDK, and (cross builds only)
+# a target's RUSTFLAGS, which the `-C` check holds to `link-arg=`. The bare
+# names are the ones every build empties.
 KNOWN_BUILD_ENV = frozenset({
     "AR", "AR_<T>", "CC", "CC_<T>", "CFLAGS", "CFLAGS_<T>", "CXX",
     "CXXFLAGS", "LDFLAGS", "NM", "RANLIB", "CARGO_TARGET_<T>_LINKER",
@@ -93,23 +103,69 @@ KNOWN_BUILD_ENV = frozenset({
     "SHEKYL_VERSION_FULL", "SHEKYL_RELEASE_NAME", "SHEKYL_VERSION_IS_RELEASE",
     "CARGO_TARGET_<T>_RUSTFLAGS", "MACOSX_DEPLOYMENT_TARGET", "SDKROOT",
 })
-KNOWN_BUILD_FLAGS = frozenset({
-    "--features", "--locked", "--release", "--sysroot", "--target",
-    "--target-dir",
+# rust/.cargo/config.toml's one alias, `cargo xtask`.
+KNOWN_XTASK_ALIAS = "run --locked --quiet --package xtask --"
+# `[build] cargo_args`: after `build --locked`, the only flags a release
+# invocation may carry. `--target` and the `-p` binaries come from each
+# host's row.
+KNOWN_CARGO_FLAGS = frozenset({"--locked", "--release"})
+# The build-machine codegen settings the xtask refuses by name. The file's
+# refused list must keep each.
+REQUIRED_REFUSALS = (
+    "RUSTFLAGS",
+    "CARGO_ENCODED_RUSTFLAGS",
+    "CARGO_BUILD_RUSTFLAGS",
+    "CARGO_TARGET_*_RUSTFLAGS",
+    "CARGO_PROFILE_*",
+    "CARGO_BUILD_TARGET",
+)
+# The words `PlanFlag::word` returns. A new variant is named here in the
+# same change that adds it.
+PLAN_FLAGS = frozenset({"--target", "-p", "--features"})
+# Arguments of the rustc and git probes in spawn.rs. Not cargo flags.
+PROBE_FLAGS = frozenset({"-vV", "--version", "--short=9", "--git-dir", "-l", "--points-at"})
+# `cargo xtask`'s own command line, parsed in main.rs. The measurement
+# flag's spelling belongs to check_measurement_spans: this file names the
+# option by that constant, so the letters are not a release build passing it.
+XTASK_FLAGS = frozenset({
+    "--host",
+    "--out",
+    "--version-override",
+    "--native",
+    check_measurement_spans.FLAG,
 })
-# After `build --locked`, the only tokens a cargo invocation may carry.
-CARGO_TAIL = frozenset({
-    "${RUST_BUILD_FLAG}",
-    "${RUST_TARGET_FLAG}",
-    "${_shekyl_rust_bin_pkg_args}",
-    # Empty, or `--features <measurement features>` under
-    # SHEKYL_MEASUREMENT_SPANS, which scripts/ci/check_measurement_spans.py
-    # keeps off every release path; a feature selects code, not codegen.
-    "${_shekyl_rust_bin_features}",
-})
-CARGO_END = frozenset({
-    "WORKING_DIRECTORY", "DEPENDS", "COMMENT", "VERBATIM", ")", "COMMAND", "OUTPUT",
-})
+# The release suffix version.rs strips and appends. Not a flag cargo sees.
+VERSION_MARKS = frozenset({"-release"})
+# Flag-shaped string literals each xtask source may contain, outside tests.
+# A file with none is an empty set. A source this table does not name is
+# unrecognised the moment it carries a flag or a process.
+XTASK_FLAG_FAMILIES = {
+    "plan.rs": PLAN_FLAGS,
+    "spawn.rs": PROBE_FLAGS,
+    "main.rs": XTASK_FLAGS,
+    "version.rs": VERSION_MARKS,
+    "matrix.rs": frozenset(),
+}
+XTASK_REQUIRED = ("plan.rs", "spawn.rs", "main.rs", "version.rs")
+# `Command::new(...)` in spawn.rs. `program` is the plan's cargo, once.
+SPAWN_PROGRAMS = {'"rustc"', '"git"', "program"}
+CARGO_HANDOFF = "fn cargo(root: &Path, plan: &Plan)"
+# A string literal that is one flag: it starts with `-` and contains no
+# space, so a sentence that mentions a flag is not one.
+FLAG_LITERAL = re.compile(r'"(-[^"\\\s]+)"')
+PLAN_WORD = re.compile(r"fn word\(self\)[^{]*\{([\s\S]*?)\n    \}")
+ENV_LITERAL = re.compile(r'\.env(?:s|_remove|_clear)?\(\s*"')
+ARGS_MUTATION = re.compile(r"\bargs\s*\.\s*(?:push|extend|insert)\b")
+# The lines a descriptor runs the xtask on: the build, the host's Rust
+# target and the archive's version. Neither of the last two compiles the
+# shipped code.
+GITIAN_XTASK = re.compile(
+    r"^\s*(?:"
+    r"\(cd \.\./rust && cargo xtask dist --host \$\{i\} --out \.\./build/bin\)"
+    r'|triple=\$\(cd rust && cargo xtask triple --host "\$host"\)'
+    r"|version=\$\(cd rust && cargo xtask archive-version\)"
+    r")\s*$"
+)
 
 # The decapsulation image is the lock-file closure of fips203 with three
 # cuts. Each cut is a crate that is not object code on the measured path
@@ -134,7 +190,7 @@ KNOWN_RUSTUP_INIT = frozenset({"-y", "--profile", "minimal", "--default-toolchai
 # rustc command, a rustup/cargo/rustc environment variable, or a `+`
 # toolchain selector would reach the compiler another way. `.cargo` is the
 # toolchain directory on PATH; make's `-C` changes directory. Neither is a
-# compiler invocation, so neither is a signal here. The cmake scan holds
+# compiler invocation, so neither is a signal here. The matrix scan holds
 # every rustc `-C` to `link-arg=`.
 GITIAN_FORBIDDEN = re.compile(
     r"\b(?:RUSTFLAGS|RUSTDOCFLAGS|RUSTUP_[A-Z0-9_]+|CARGO_[A-Z0-9_]+|RUSTC[A-Z_]*)\b"
@@ -154,17 +210,7 @@ CRATE_FIELDS = frozenset({"version", "checksum"})
 UNMEASURED_FIELDS = frozenset({"target", "reason"})
 ATTESTATION_KEYS = frozenset({"run", "crates", "unmeasured"})
 
-ENV_NAME = re.compile(r"^([A-Z][A-Z0-9_]*(?:\$\{[^}]+\}[A-Z0-9_]*)*)=")
-FLAG_NAME = re.compile(r"^(--[a-z][a-z0-9-]*)")
 SELECTOR = re.compile(r"^\+(?:nightly|stable|beta|\d+\.\d+(?:\.\d+)?)$")
-PACKAGE_ARG = re.compile(r"^shekyl-[a-z0-9-]+$|^\$\{[^}]+\}$")
-# A CMake bracket comment (`#[[ ... ]]`, or with `=` between the brackets)
-# hides every token inside it from a line-comment strip. `#` `[` followed
-# by anything else is an ordinary token: `#[cfg(test)]` in a comment is
-# not one of these. When one is present the scan cannot see the cargo
-# invocations, so the file is unreadable (rule 47) rather than a finding
-# list that would hide whatever the brackets contain.
-CMAKE_BRACKET_COMMENT = re.compile(r"#\[=*\[")
 
 
 class Unreadable(Exception):
@@ -325,7 +371,12 @@ def read_cargo_config(text: str) -> tuple[dict[str, list[str] | None], list[str]
     values are omitted from the list that is compared.
     """
     data = tomllib.loads(text)
-    problems = [f"{CARGO_CONFIG}: table [{key}]" for key in data if key != "target"]
+    problems = [f"{CARGO_CONFIG}: table [{key}]" for key in data if key not in ("target", "alias")]
+    # One alias: `cargo xtask`, which runs the release build tool. It names
+    # how the xtask itself is run, never a flag of the release build.
+    for name, value in data.get("alias", {}).items():
+        if (name, value) != ("xtask", KNOWN_XTASK_ALIAS):
+            problems.append(f"{CARGO_CONFIG}: [alias] {name} = {value!r}")
     rustflags: dict[str, list[str] | None] = {}
     for triple, table in data.get("target", {}).items():
         if triple.startswith("cfg("):
@@ -349,149 +400,142 @@ def read_cargo_config(text: str) -> tuple[dict[str, list[str] | None], list[str]
     return rustflags, problems
 
 
-def strip_cmake_comments(text: str) -> str:
-    """CMake `#` comments, leaving quoted strings intact."""
-    out = []
-    index = 0
-    length = len(text)
-    while index < length:
-        if text[index] == '"':
-            end = index + 1
-            while end < length and text[end] != '"':
-                end += 2 if text[end] == "\\" and end + 1 < length else 1
-            out.append(text[index:end + 1] if end < length else text[index:])
-            index = end + 1 if end < length else length
-            continue
-        if text[index] == "#":
-            while index < length and text[index] != "\n":
-                index += 1
-            continue
-        out.append(text[index])
-        index += 1
-    return "".join(out)
+def _normalise_env(name: str, triple: str) -> str:
+    """A variable's name with the host's triple, in either spelling, as <T>."""
+    lower = triple.replace("-", "_")
+    return name.replace(lower.upper(), "<T>").replace(lower, "<T>")
 
 
-def cmake_tokens(code: str) -> list[tuple[str, bool]]:
-    """`(text, quoted)` tokens. A quoted `${CARGO_EXECUTABLE}` is a mention."""
-    tokens: list[tuple[str, bool]] = []
-    index = 0
-    length = len(code)
-    while index < length:
-        char = code[index]
-        if char in " \t\r\n":
-            index += 1
-            continue
-        if char == '"':
-            end = index + 1
-            buf: list[str] = []
-            while end < length and code[end] != '"':
-                if code[end] == "\\" and end + 1 < length:
-                    buf.append(code[end + 1])
-                    end += 2
-                    continue
-                buf.append(code[end])
-                end += 1
-            tokens.extend((word, True) for word in "".join(buf).split())
-            index = end + 1 if end < length else length
-            continue
-        if char in "()":
-            tokens.append((char, False))
-            index += 1
-            continue
-        end = index
-        while end < length and code[end] not in " \t\r\n\"()":
-            end += 1
-        tokens.append((code[index:end], False))
-        index = end
-    return tokens
-
-
-def _normalise_env(name: str) -> str:
-    return re.sub(r"\$\{[^}]+\}", "<T>", name)
-
-
-def invocation_problems(tokens: list[tuple[str, bool]], start: int) -> list[str]:
-    rest = []
-    for tok, _quoted in tokens[start + 1:]:
-        if tok in CARGO_END:
-            break
-        rest.append(tok)
-    if rest[:2] != ["build", "--locked"]:
-        return [f"{BUILD_RUST}: cargo invocation is not build --locked"]
+def _rustflag_problems(value: str) -> list[str]:
+    """Every rustflag that is not `-C link-arg=…`."""
     problems = []
-    index = 2
-    while index < len(rest):
-        tok = rest[index]
-        if tok in CARGO_TAIL:
-            index += 1
-            continue
-        if (
-            tok == "-p"
-            and index + 1 < len(rest)
-            and PACKAGE_ARG.fullmatch(rest[index + 1])
-        ):
+    tokens = value.split()
+    index = 0
+    while index < len(tokens):
+        tok = tokens[index]
+        if tok == "-C":
+            following = tokens[index + 1] if index + 1 < len(tokens) else ""
+            if not following.startswith("link-arg="):
+                problems.append(f"{MATRIX}: -C {following}")
             index += 2
             continue
-        problems.append(f"{BUILD_RUST}: cargo argument {tok}")
+        if tok.startswith("-C"):
+            if not tok[2:].startswith("link-arg="):
+                problems.append(f"{MATRIX}: -C {tok[2:]}")
+        elif tok.startswith("-Z"):
+            problems.append(f"{MATRIX}: an unstable flag or a profile set by environment")
+        else:
+            problems.append(f"{MATRIX}: rustflag {tok}")
         index += 1
     return problems
 
 
-def read_build_rust(text: str) -> list[str]:
-    """Unrecognised codegen tokens. Zero cargo invocations is unreadable.
-
-    `-C` is a token: the next token, or the same token's suffix, must
-    start with `link-arg=`. An environment write is a `NAME=` token,
-    quoted or not, or `set(ENV{NAME}`. Both must name `KNOWN_BUILD_ENV`.
-    """
-    if CMAKE_BRACKET_COMMENT.search(text):
-        raise Unreadable(
-            f"{BUILD_RUST}: bracket comment; the cargo invocations cannot be read"
-        )
-    tokens = cmake_tokens(strip_cmake_comments(text))
+def read_matrix(text: str) -> list[str]:
+    """Unrecognised settings in the release matrix. A matrix the strict
+    reading refuses, or one with no invocation, is unreadable."""
+    try:
+        matrix = release_matrix.parse(text)
+    except release_matrix.MatrixError as error:
+        raise Unreadable(f"{MATRIX}: {error}") from None
+    if not matrix.invocations:
+        raise Unreadable(f"{MATRIX} holds no cargo invocation")
     problems = []
-    invocations = 0
-    for index, (tok, quoted) in enumerate(tokens):
-        if tok == "${CARGO_EXECUTABLE}" and not quoted:
-            invocations += 1
-            problems.extend(invocation_problems(tokens, index))
-        if tok == "-C":
-            value = tokens[index + 1][0] if index + 1 < len(tokens) else ""
-            if not value.startswith("link-arg="):
-                problems.append(f"{BUILD_RUST}: -C {value}")
-        elif tok.startswith("-C") and not tok[2:].startswith("link-arg="):
-            problems.append(f"{BUILD_RUST}: -C {tok[2:]}")
-        flag = FLAG_NAME.match(tok)
-        if flag and flag.group(1) not in KNOWN_BUILD_FLAGS:
-            problems.append(f"{BUILD_RUST}: flag {flag.group(1)}")
-        env = ENV_NAME.match(tok)
-        if env:
-            name = _normalise_env(env.group(1))
-            if name not in KNOWN_BUILD_ENV:
-                problems.append(f"{BUILD_RUST}: environment {name}")
-        if tok == "set" and not quoted:
-            written = _env_write(tokens, index)
-            if written:
-                problems.append(f"{BUILD_RUST}: environment {written}")
-        if tok.startswith("-Z"):
-            problems.append(f"{BUILD_RUST}: an unstable flag or a profile set by environment")
-        if "CARGO_ENCODED_RUSTFLAGS" in tok or "CARGO_PROFILE_" in tok:
-            problems.append(f"{BUILD_RUST}: an unstable flag or a profile set by environment")
+    args = list(matrix.raw["build"]["cargo_args"])
+    if args[:2] != ["build", "--locked"]:
+        problems.append(f"{MATRIX}: cargo invocation is not build --locked")
+    for tok in args:
         if SELECTOR.fullmatch(tok):
-            problems.append(f"{BUILD_RUST}: toolchain selector {tok}")
-    if invocations == 0:
-        raise Unreadable(f"{BUILD_RUST} invokes no cargo")
+            problems.append(f"{MATRIX}: toolchain selector {tok}")
+        elif tok.startswith("-Z"):
+            problems.append(f"{MATRIX}: an unstable flag or a profile set by environment")
+        elif tok.startswith("-") and tok not in KNOWN_CARGO_FLAGS:
+            problems.append(f"{MATRIX}: cargo argument {tok}")
+    for invocation in matrix.invocations:
+        for name, value in invocation.env:
+            normal = _normalise_env(name, invocation.triple)
+            if "CARGO_ENCODED_RUSTFLAGS" in name or "CARGO_PROFILE_" in name:
+                problems.append(f"{MATRIX}: an unstable flag or a profile set by environment")
+            elif normal not in KNOWN_BUILD_ENV:
+                problems.append(f"{MATRIX}: environment {normal}")
+            if normal.endswith("_RUSTFLAGS"):
+                problems += _rustflag_problems(value)
+    for required in REQUIRED_REFUSALS:
+        if required not in matrix.refused:
+            problems.append(f"{MATRIX}: the refused list no longer holds {required}")
     return sorted(set(problems))
 
 
-def _env_write(tokens: list[tuple[str, bool]], index: int) -> str | None:
-    """The name of a `set(ENV{NAME}` write that is not a known variable."""
-    if index + 2 >= len(tokens) or tokens[index + 1][0] != "(":
-        return None
-    match = re.fullmatch(r"ENV\{([A-Za-z_][A-Za-z0-9_]*)\}", tokens[index + 2][0])
-    if match and match.group(1) not in KNOWN_BUILD_ENV:
-        return match.group(1)
-    return None
+def _production_source(text: str) -> str:
+    """The file above its tests. A `#[cfg(test)]` module is not the build."""
+    return re.split(r"#\[cfg\(test\)\]", text, maxsplit=1)[0]
+
+
+def _flag_literals(text: str) -> set[str]:
+    return set(FLAG_LITERAL.findall(text))
+
+
+def read_xtask(sources: dict[str, str]) -> list[str]:
+    """Flags and processes in the xtask that this file has no account of.
+
+    The plan's cargo flags live in `PlanFlag::word`. The probes live in
+    `spawn.rs`. `cargo` is handed the plan and nothing else, exactly once.
+    A missing plan, a missing spawn, or no cargo handoff is unreadable
+    (rule 47): the check would otherwise pass because it found nothing.
+    """
+    files = {
+        Path(path).name: (path, _production_source(text))
+        for path, text in sources.items()
+    }
+    missing = [name for name in XTASK_REQUIRED if name not in files]
+    if missing:
+        raise Unreadable(f"{XTASK_SRC} is missing {', '.join(missing)}")
+    plan_path, plan = files["plan.rs"]
+    spawn_path, spawn = files["spawn.rs"]
+    word = PLAN_WORD.search(plan)
+    if word is None:
+        raise Unreadable(f"{plan_path}: no PlanFlag::word")
+    if CARGO_HANDOFF not in spawn:
+        raise Unreadable(f"{spawn_path}: cargo() does not take exactly the plan")
+    spawns = re.findall(r"Command::new\(([^)]*)\)", spawn)
+    cargo_runs = spawns.count("program")
+    if cargo_runs != 1:
+        raise Unreadable(f"{XTASK_SRC} runs cargo {cargo_runs} times, not once")
+    if '"rustc"' not in spawns or '"git"' not in spawns:
+        raise Unreadable(f"{spawn_path}: the rustc and git probes are missing")
+
+    problems = []
+    words = _flag_literals(word.group(1))
+    if words != PLAN_FLAGS:
+        problems.append(
+            f"{plan_path}: PlanFlag::word has {sorted(words)}, not {sorted(PLAN_FLAGS)}"
+        )
+    outside = _flag_literals(plan[: word.start()] + plan[word.end() :])
+    problems += [
+        f"{plan_path}: flag {flag} outside PlanFlag::word" for flag in sorted(outside)
+    ]
+    for name, (path, code) in sorted(files.items()):
+        if name != "plan.rs":
+            found = _flag_literals(code)
+            expected = XTASK_FLAG_FAMILIES.get(name)
+            if expected is None:
+                if found or "Command::new" in code:
+                    problems.append(f"{path}: not a source the xtask gate knows")
+            elif found != expected:
+                problems.append(
+                    f"{path}: flags {sorted(found)} are not {sorted(expected)}"
+                )
+        if name != "spawn.rs" and "Command::new" in code:
+            problems.append(f"{path}: Command::new outside spawn.rs")
+        if name != "plan.rs" and ARGS_MUTATION.search(code):
+            problems.append(f"{path}: changes the plan's arguments")
+        if ENV_LITERAL.search(code):
+            problems.append(f"{path}: an environment name is a literal")
+    problems += [
+        f"{spawn_path}: process Command::new({arg})"
+        for arg in spawns
+        if arg not in SPAWN_PROGRAMS
+    ]
+    return problems
 
 
 def read_gitian(name: str, text: str, channel: str) -> tuple[list[str], list[str]]:
@@ -500,6 +544,8 @@ def read_gitian(name: str, text: str, channel: str) -> tuple[list[str], list[str
     lines = [line for line in text.splitlines() if not line.lstrip().startswith("#")]
     installs = 0
     for line in lines:
+        if GITIAN_XTASK.fullmatch(line):
+            continue
         match = GITIAN_FORBIDDEN.search(line)
         if match:
             problems.append(f"{name}: {match.group(0).strip()}")
@@ -713,7 +759,8 @@ def check(
     unrecognised += problems
     rustflags, problems = read_cargo_config(texts[CARGO_CONFIG])
     unrecognised += problems
-    unrecognised += read_build_rust(texts[BUILD_RUST])
+    unrecognised += read_matrix(texts[MATRIX])
+    unrecognised += read_xtask({path: text for path, text in texts.items() if path.startswith(XTASK_SRC)})
     if not gitian:
         raise Unreadable(f"no gitian descriptors match {GITIAN_GLOB}")
     differs: list[str] = []
@@ -789,11 +836,13 @@ def named_paths(run: dict) -> list[str]:
 
 def read_tree(root: Path) -> tuple[dict[str, str], dict[str, str], dict[str, bytes]]:
     texts = {}
-    for path in (ATTESTATION, TOOLCHAIN, LOCK, MANIFEST, CARGO_CONFIG, BUILD_RUST):
+    for path in (ATTESTATION, TOOLCHAIN, LOCK, MANIFEST, CARGO_CONFIG, MATRIX):
         file = root / path
         if not file.is_file():
             raise Unreadable(f"{path} is missing")
         texts[path] = file.read_text()
+    for source in sorted((root / XTASK_SRC).glob("*.rs")):
+        texts[str(source.relative_to(root))] = source.read_text()
     gitian = {str(path.relative_to(root)): path.read_text() for path in sorted(root.glob(GITIAN_GLOB))}
     attestation = tomllib.loads(texts[ATTESTATION])
     present = {
@@ -918,18 +967,99 @@ rustflags = ["-C", "target-feature=+crt-static"]
 [target.aarch64-pc-windows-msvc]
 rustflags = ["-C", "target-feature=+crt-static"]
 """
-SELFTEST_BUILD = (
-    'set(RUST_BUILD_FLAG "--release")\n'
-    '# a comment with --anything and -C opt-level=3 is ignored\n'
-    'list(APPEND _rust_env_clear "CARGO_TARGET_${_upper_triple}_LINKER=${CMAKE_C_COMPILER}")\n'
-    'string(APPEND _rust_link_args " -C link-arg=${_flag}")\n'
-    '${CARGO_EXECUTABLE} build --locked ${RUST_BUILD_FLAG} ${RUST_TARGET_FLAG}\n'
+SELFTEST_MATRIX = """
+[build]
+toolchain_file = "rust/rust-toolchain.toml"
+cargo_args = ["build", "--locked", "--release"]
+target_dir = "rust/target"
+profile_dir = "release"
+env = [["CC", ""], ["CARGO_TARGET_DIR", "{target_dir}"]]
+unset = ["CARGO"]
+refused = ["RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CARGO_BUILD_RUSTFLAGS", "CARGO_TARGET_*_RUSTFLAGS", "CARGO_PROFILE_*", "CARGO_BUILD_TARGET"]
+refused_values = [["CARGO_INCREMENTAL", "1"]]
+
+[version]
+default = "3.1.0"
+release_name = "Shekyl NG"
+
+[measurement]
+features = ["a/measure"]
+warning = "w"
+
+[[host]]
+name = "x86_64-w64-mingw32"
+triple = "x86_64-pc-windows-gnu"
+binaries = ["shekyld"]
+
+[host.dist]
+target = true
+env = [
+    ["CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER", "{cc}"],
+    ["CFLAGS_x86_64_pc_windows_gnu", "-fPIC"],
+    ["CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUSTFLAGS", "-C link-arg=-fPIC -C link-arg=-l:libssp.a"],
+]
+binary_mode = "inherit"
+files = []
+"""
+SELFTEST_PLAN = """
+impl PlanFlag {
+    pub const fn word(self) -> &'static str {
+        match self {
+            Self::Target => "--target",
+            Self::Package => "-p",
+            Self::Features => "--features",
+        }
+    }
+}
+fn plan() {
+    args.push(PlanFlag::Target.word().to_owned());
+}
+"""
+SELFTEST_SPAWN = """
+pub fn cargo(root: &Path, plan: &Plan) -> Result<(), String> {
+    let mut command = Command::new(program);
+    command.args(args).current_dir(root.join("rust"));
+    command.env_remove(&name);
+    command.env(LIBRARY_PATH, cleaned);
+    command.env_remove(LIBRARY_PATH);
+    command.env(name, value);
+}
+fn rustc_verbose() {
+    Command::new("rustc")
+        .arg("-vV");
+}
+fn rustc_version() {
+    Command::new("rustc")
+        .arg("--version");
+}
+fn git_command() {
+    let mut git = Command::new("git");
+    let _ = ["rev-parse", "--short=9", "HEAD"];
+    let _ = ["tag", "-l", "--points-at", "HEAD"];
+    let _ = ["rev-parse", "--git-dir"];
+}
+#[cfg(test)]
+mod tests { fn t() { Command::new("anything").arg("-C"); } }
+"""
+SELFTEST_MAIN = "".join(
+    f'"{flag}"\n'
+    for flag in (
+        "--host",
+        "--out",
+        "--version-override",
+        check_measurement_spans.FLAG,
+        "--native",
+    )
 )
+SELFTEST_VERSION = """
+fn mark(tag: &str) { tag.strip_suffix("-release"); }
+"""
 SELFTEST_GITIAN = (
     "  sh /tmp/rustup-init.sh -y --profile minimal --default-toolchain 1.94.0\n"
     '  export PATH="$HOME/.cargo/bin:$PATH"\n'
     "  rustup target add x86_64-pc-windows-gnu\n"
     "  make ${MAKEOPTS} -C ${BASEPREFIX} HOST=x\n"
+    "    (cd ../rust && cargo xtask dist --host ${i} --out ../build/bin)\n"
 )
 SELFTEST_CRATES = """
 [crates.cpufeatures]
@@ -1018,7 +1148,11 @@ def selftest() -> int:
         LOCK: SELFTEST_LOCK,
         MANIFEST: SELFTEST_MANIFEST,
         CARGO_CONFIG: SELFTEST_CONFIG,
-        BUILD_RUST: SELFTEST_BUILD,
+        MATRIX: SELFTEST_MATRIX,
+        f"{XTASK_SRC}/plan.rs": SELFTEST_PLAN,
+        f"{XTASK_SRC}/spawn.rs": SELFTEST_SPAWN,
+        f"{XTASK_SRC}/main.rs": SELFTEST_MAIN,
+        f"{XTASK_SRC}/version.rs": SELFTEST_VERSION,
     }
     gitian = {"gitian-win.yml": SELFTEST_GITIAN}
     files = {"r.md": b"", "r2.md": b"", "cmp.txt": b"the comparison\n"}
@@ -1050,20 +1184,29 @@ def selftest() -> int:
         ("rustflag removed", (CARGO_CONFIG, '"-C", "target-feature=+crt-static"', ""), "drift", "rustflags: attested"),
         ("rustflag unknown added", (CARGO_CONFIG, '"-C", "target-feature=+crt-static"', '"-C", "target-feature=+crt-static", "-C", "target-cpu=native"'), "unrecognised", "rustflag -C target-cpu=native"),
         ("config unknown table", (CARGO_CONFIG, "[target.", "[build]\njobs = 1\n[target."), "unrecognised", "table [build]"),
+        ("config alias", (CARGO_CONFIG, "[target.", "[alias]\nb = \"build --config profile.release.lto=true\"\n[target."), "unrecognised", "[alias] b"),
         ("config cfg target", (CARGO_CONFIG, "[target.x86_64-pc-windows-msvc]", "[target.'cfg(windows)']\nrustflags = [\"-C\", \"target-feature=+crt-static\"]\n[target.x86_64-pc-windows-msvc]"), "unrecognised", "cfg(windows)"),
         ("crate entry loses its checksum", (ATTESTATION, 'checksum = "chk-fips203"\n', ""), "invalid", "crates.fips203 no checksum"),
         ("unknown attestation key", (ATTESTATION, "[[unmeasured]]", "note = true\n[[unmeasured]]"), "invalid", "unknown key note"),
         ("unmeasured row removed", (ATTESTATION, '[[unmeasured]]\ntarget = "aarch64-pc-windows-msvc"\nreason = "no aarch64 Windows run"\n\n', ""), "invalid", "neither a run nor an unmeasured target"),
         ("unmeasured target is stale", (ATTESTATION, '"aarch64-pc-windows-msvc"', '"riscv64-unknown-linux-gnu"'), "invalid", "carries no rustflags"),
-        ("build rust codegen -C", (BUILD_RUST, "link-arg=${_flag}", "opt-level=3"), "unrecognised", "-C opt-level=3"),
-        ("build rust split -C", (BUILD_RUST, "${CARGO_EXECUTABLE}", 'set(X "-C" "target-cpu=native")\n${CARGO_EXECUTABLE}'), "unrecognised", "-C target-cpu=native"),
-        ("build rust env", (BUILD_RUST, "CARGO_TARGET_${_upper_triple}_LINKER", "RUSTFLAGS"), "unrecognised", "environment RUSTFLAGS"),
-        ("build rust unquoted env", (BUILD_RUST, "${CARGO_EXECUTABLE}", "list(APPEND _rust_env_clear RUSTFLAGS=-g)\n${CARGO_EXECUTABLE}"), "unrecognised", "environment RUSTFLAGS"),
-        ("build rust set ENV", (BUILD_RUST, "${CARGO_EXECUTABLE}", 'set(ENV{CARGO_INCREMENTAL} "0")\n${CARGO_EXECUTABLE}'), "unrecognised", "environment CARGO_INCREMENTAL"),
-        ("build rust flag", (BUILD_RUST, "--locked", "--locked --config profile.release.lto=true"), "unrecognised", "flag --config"),
-        ("build rust -Z", (BUILD_RUST, "--locked", "--locked -Zbuild-std"), "unrecognised", "unstable flag"),
-        ("build rust toolchain selector", (BUILD_RUST, "${CARGO_EXECUTABLE} build", "${CARGO_EXECUTABLE} +1.95.0 build"), "unrecognised", "toolchain selector +1.95.0"),
-        ("build rust subcommand", (BUILD_RUST, "${CARGO_EXECUTABLE} build --locked", "${CARGO_EXECUTABLE} rustc --"), "unrecognised", "not build --locked"),
+        ("matrix codegen -C", (MATRIX, "-C link-arg=-fPIC", "-C opt-level=3"), "unrecognised", "-C opt-level=3"),
+        ("matrix joined -C", (MATRIX, "-C link-arg=-fPIC", "-Ctarget-cpu=native"), "unrecognised", "-C target-cpu=native"),
+        ("matrix bare rustflag", (MATRIX, "-C link-arg=-fPIC", "--cfg x"), "unrecognised", "rustflag --cfg"),
+        ("matrix env", (MATRIX, '"CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER"', '"RUSTFLAGS"'), "unrecognised", "environment RUSTFLAGS"),
+        ("matrix env incremental", (MATRIX, '["CC", ""]', '["CC", ""], ["CARGO_INCREMENTAL", "0"]'), "unrecognised", "environment CARGO_INCREMENTAL"),
+        ("matrix encoded rustflags", (MATRIX, '["CC", ""]', '["CC", ""], ["CARGO_ENCODED_RUSTFLAGS", "x"]'), "unrecognised", "unstable flag"),
+        ("matrix flag", (MATRIX, '"--release"]', '"--release", "--config", "profile.release.lto=true"]'), "unrecognised", "cargo argument --config"),
+        ("matrix -Z", (MATRIX, '"--release"]', '"--release", "-Zbuild-std"]'), "unrecognised", "unstable flag"),
+        ("matrix toolchain selector", (MATRIX, '["build", "--locked"', '["+1.95.0", "build", "--locked"'), "unrecognised", "toolchain selector +1.95.0"),
+        ("matrix subcommand", (MATRIX, '["build", "--locked"', '["rustc", "--locked"'), "unrecognised", "not build --locked"),
+        ("matrix refusal dropped", (MATRIX, '"RUSTFLAGS", "CARGO_ENCODED', '"CARGO_ENCODED'), "unrecognised", "no longer holds RUSTFLAGS"),
+        ("xtask sets a variable", (f"{XTASK_SRC}/spawn.rs", "command.env(name, value);", 'command.env(name, value);\n    command.env("RUSTFLAGS", "-C opt-level=3");'), "unrecognised", "environment name is a literal"),
+        ("xtask adds an argument", (f"{XTASK_SRC}/spawn.rs", 'command.args(args).current_dir(root.join("rust"));', 'command.args(args).current_dir(root.join("rust")).arg("--config");'), "unrecognised", "--config"),
+        ("plan flag outside its enum", (f"{XTASK_SRC}/plan.rs", "args.push(PlanFlag::Target.word().to_owned());", 'args.push("--config".to_owned());'), "unrecognised", "outside PlanFlag::word"),
+        ("plan flag vocabulary changes", (f"{XTASK_SRC}/plan.rs", 'Self::Features => "--features",', 'Self::Features => "--features",\n            Self::Config => "--config",'), "unrecognised", "--config"),
+        ("a command outside spawn", (f"{XTASK_SRC}/main.rs", '"--native"\n', '"--native"\nCommand::new("make");\n'), "unrecognised", "Command::new outside spawn.rs"),
+        ("a test spawn counted as production", (f"{XTASK_SRC}/spawn.rs", "#[cfg(test)]\n", ""), "unrecognised", "anything"),
         ("unknown basis", (ATTESTATION, 'basis = "timing"', 'basis = "vibes"'), "invalid", "unknown basis 'vibes'"),
         ("timing entry, no basis", (ATTESTATION, 'basis = "timing"\n', ""), "invalid", "unknown basis None"),
         ("unknown run key", (ATTESTATION, 'device = "floor"\n', 'device = "floor"\nlto = true\n'), "invalid", "unknown key lto"),
@@ -1134,6 +1277,7 @@ def selftest() -> int:
         ("gitian RUSTFLAGS", SELFTEST_GITIAN + '  export RUSTFLAGS="-C target-cpu=native"\n', "unrecognised", "RUSTFLAGS"),
         ("gitian RUSTUP_TOOLCHAIN", SELFTEST_GITIAN + "  export RUSTUP_TOOLCHAIN=1.95.0\n", "unrecognised", "RUSTUP_TOOLCHAIN"),
         ("gitian cargo command", SELFTEST_GITIAN + "  cargo build --release --config profile.release.opt-level=0\n", "unrecognised", "cargo"),
+        ("gitian xtask with a flag", SELFTEST_GITIAN.replace("--out ../build/bin)", "--out ../build/bin --extra)"), "unrecognised", "cargo"),
         ("gitian rustup option", SELFTEST_GITIAN.replace("--profile minimal", "--profile default"), "unrecognised", "rustup-init default"),
         ("gitian rustup command", SELFTEST_GITIAN + "  rustup default nightly\n", "unrecognised", "rustup default nightly"),
         ("gitian rustc command", SELFTEST_GITIAN + "  rustc -C opt-level=3\n", "unrecognised", "rustc"),
@@ -1156,14 +1300,19 @@ def selftest() -> int:
         if "no crate closure" not in str(error):
             print(f"selftest: an empty crate closure raised {error}", file=sys.stderr)
             failures += 1
-    try:
-        run(BUILD_RUST, "${CARGO_EXECUTABLE}", "#[[\n${CARGO_EXECUTABLE}")
-        print("selftest: a bracket comment was readable", file=sys.stderr)
-        failures += 1
-    except Unreadable as error:
-        if "bracket comment" not in str(error):
-            print(f"selftest: a bracket comment raised {error}", file=sys.stderr)
+    for name, edit_path, old, new, phrase in [
+        ("a matrix key nothing reads", MATRIX, "[build]\n", "[build]\nlto = true\n", "not a key"),
+        ("an xtask that runs no cargo", f"{XTASK_SRC}/spawn.rs", "let mut command = Command::new(program);", "", "runs cargo 0 times"),
+        ("an xtask with no plan flags", f"{XTASK_SRC}/plan.rs", "fn word", "fn spell", "no PlanFlag::word"),
+    ]:
+        try:
+            run(edit_path, old, new)
+            print(f"selftest: {name} was readable", file=sys.stderr)
             failures += 1
+        except Unreadable as error:
+            if phrase not in str(error):
+                print(f"selftest: {name} raised {error}", file=sys.stderr)
+                failures += 1
     # Replacing a known flag drops it from the snapshot and adds an unknown
     # one. Those are two facts: the recognised rustflags drifted, and the
     # new flag is unrecognised. An unknown flag added beside a known one
@@ -1200,7 +1349,7 @@ def selftest() -> int:
         + 1  # a missing target does not abort the other run
         + 2  # a missing evidence file
         + 1  # an empty crate closure is unreadable
-        + 1  # a bracket comment is unreadable
+        + 3  # an unread matrix key, no cargo run, and no PlanFlag::word are unreadable
         + 1  # replacing a known rustflag is unrecognised and drift
         + 1  # a drift says what to run
     )

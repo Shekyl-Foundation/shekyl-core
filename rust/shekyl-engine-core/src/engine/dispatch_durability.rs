@@ -54,7 +54,7 @@
 use std::collections::HashSet;
 
 use shekyl_engine_file::Durability;
-use shekyl_engine_state::{SendInputRef, SendRecipient, SendRecord, TxSecretKey, WalletLedger};
+use shekyl_engine_state::{JournalRecipient, SendInputRef, SendRecord, TxSecretKey, WalletLedger};
 use shekyl_types::TxHash;
 
 use super::bond_assembly::{LoadedSeal, PBoundBytes};
@@ -439,8 +439,9 @@ pub(crate) struct DispatchRecord {
     pub retained: TxSecretKey,
     /// Realized fee of the built transaction, in atomic units.
     pub fee: u64,
-    /// Realized recipients, in transaction order.
-    pub recipients: Vec<SendRecipient>,
+    /// Realized recipients, in transaction order. A group carries its
+    /// address; the journal stores it and writes the fingerprint.
+    pub recipients: Vec<JournalRecipient>,
     /// Dispatched input set the F14 lock re-derives from.
     pub inputs: Vec<SendInputRef>,
     /// Signed transaction bytes about to leave.

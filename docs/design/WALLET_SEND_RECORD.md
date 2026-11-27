@@ -210,7 +210,10 @@ only, never the read path.
     listener (`shekyl-wallet-rpc/src/server.rs` `ListenAddr`), not only
     the 0600-UDS spawn path. A `stake_in` row has no address to project:
     it records `SendDestination::OwnPersonaFunding`, and a projection of
-    it names that kind, never a persona key;
+    it names that kind, never a persona key. A payment to a multisig
+    group records `SendDestination::Group`, the group address's
+    fingerprint, and the block stores the group's address once beside
+    the rows (R-37); a projection names the fingerprint;
   - **process memory** (rules 35/36): zeroize discipline, no `Debug`
     that renders addresses, no path into error strings (the
     WI-RPC-2a precedent that stopped internal errors echoing paths);
@@ -272,6 +275,15 @@ only, never the read path.
   state. The destination is the address the user sent to, or for a
   `stake_in` the kind `OwnPersonaFunding` (send-journal block version 5):
   a persona has no address, and the row never holds a persona's keys.
+  For a multisig group (block version 7, R-37) it is the group address's
+  fingerprint: a group's address is a file of four kilobytes and more,
+  so the block stores each paid group's address once, keyed by that
+  fingerprint; undoing the last row that pays a group drops it. The
+  ledger's load check `group-payees-stored` refuses a row whose group is
+  not stored, and a stored address that does not parse or hashes to
+  another fingerprint. A group
+  payee is then as complete as a solo one: the wallet shows who was
+  paid and holds what an outbound proof for the payment needs.
   Settled by C1's envelope frame, not by the §1 table: inside the
   sealed container that already holds the seed and commits to
   `tx_notes`, there is no coherent policy that admits the seed and

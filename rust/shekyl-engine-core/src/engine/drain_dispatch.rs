@@ -203,6 +203,18 @@ pub(crate) enum DrainRequestError {
 }
 
 impl DrainRequestError {
+    /// The signer's own fault, on either road an assembly refusal takes.
+    pub(crate) const fn sign_fault(&self) -> Option<shekyl_tx_builder::SignFault> {
+        match self {
+            Self::Stake(stake) | Self::Drain(DrainOrchestrationError::Stake(stake)) => {
+                stake.sign_fault()
+            }
+            _ => None,
+        }
+    }
+}
+
+impl DrainRequestError {
     /// A fail-closed **local** sealed-state read refusal, context named.
     fn state(context: &'static str, detail: impl std::fmt::Display) -> Self {
         Self::State {
