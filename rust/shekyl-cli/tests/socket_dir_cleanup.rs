@@ -56,7 +56,7 @@ fn a_cli_that_ends_at_its_input_leaves_no_socket_directory() {
             .collect()
     };
 
-    let config = common::empty_config();
+    let config = common::offline_channel_config();
     let mut child = Command::new(env!("CARGO_BIN_EXE_shekyl-cli"))
         .arg("--config-file")
         .arg(config.path())
@@ -156,7 +156,7 @@ fn a_cli_whose_output_is_closed_closes_its_wallet_and_leaves_no_socket_directory
     use std::os::unix::fs::MetadataExt as _;
 
     let scratch = tempfile::tempdir().expect("tempdir");
-    let config = common::empty_config();
+    let config = common::offline_channel_config();
     let runtime = scratch.path().join("runtime");
     std::fs::create_dir(&runtime).expect("runtime dir");
     let password = password_file(scratch.path());
@@ -267,7 +267,7 @@ fn a_directory_without_a_held_lock_is_removed_at_the_next_start() {
     use std::os::unix::fs::OpenOptionsExt as _;
 
     let scratch = tempfile::tempdir().expect("tempdir");
-    let config = common::empty_config();
+    let config = common::offline_channel_config();
     let runtime = scratch.path().join("runtime");
     std::fs::create_dir(&runtime).expect("runtime dir");
     // Spawn 1 and 3, not 0: the CLI's own server is `<its pid>-0`, and the
@@ -316,7 +316,7 @@ fn a_directory_whose_lock_is_held_is_left_in_place() {
     use std::os::unix::fs::OpenOptionsExt as _;
 
     let scratch = tempfile::tempdir().expect("tempdir");
-    let config = common::empty_config();
+    let config = common::offline_channel_config();
     let runtime = scratch.path().join("runtime");
     std::fs::create_dir(&runtime).expect("runtime dir");
     let mut ended = Command::new("true").spawn().expect("run true");

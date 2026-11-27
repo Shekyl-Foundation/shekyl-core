@@ -28,7 +28,7 @@ use shekyl_rpc_grants::GrantSet;
 use shekyl_rpc_transport::channel::{
     bundle_from_bytes, ChannelDaemon, ChannelFault, ChannelTarget, Leg,
 };
-use shekyl_rpc_transport::local::{LocalFault, LocalTarget};
+use shekyl_rpc_transport::local::{LocalFault, LocalTarget, CALL_WITHIN};
 use shekyl_rpc_transport::JsonRpcError;
 use shekyl_wallet_rpc::Network;
 
@@ -87,7 +87,9 @@ impl NodeLeg {
     /// [`LegError`].
     pub(crate) fn call<M: RpcMethod>(&self, request: &M::Request) -> Result<M::Reply, LegError> {
         match self {
-            Self::Owner(target) => target.call::<M>(request).map_err(LegError::Owner),
+            Self::Owner(target) => target
+                .call::<M>(request, CALL_WITHIN)
+                .map_err(LegError::Owner),
             Self::Channel(channel) => channel.call::<M>(request).map_err(LegError::Channel),
         }
     }
@@ -99,26 +101,6 @@ impl NodeLeg {
     /// [`LegError`]'s text.
     pub(crate) fn call_text<M: RpcMethod>(&self, request: &M::Request) -> Result<M::Reply, String> {
         self.call::<M>(request).map_err(|error| error.to_string())
-    }
-
-    /// One JSON-RPC call by name, its result decoded as `Reply`.
-    ///
-    /// # Errors
-    ///
-    /// [`LegError`].
-    pub(crate) fn json_rpc<Req, Reply>(
-        &self,
-        method: &str,
-        request: &Req,
-    ) -> Result<Reply, LegError>
-    where
-        Req: serde::Serialize,
-        Reply: serde::de::DeserializeOwned,
-    {
-        match self {
-            Self::Owner(target) => target.json_rpc(method, request).map_err(LegError::Owner),
-            Self::Channel(channel) => channel.json_rpc(method, request).map_err(LegError::Channel),
-        }
     }
 }
 
@@ -154,7 +136,7 @@ fn service_console(network: Network, request: GrantSet) -> Result<Option<NodeLeg
         .ok_or_else(|| CONSOLE_KEY_FAILURE.to_owned())?;
     let leg = console_leg_of(&place)?;
     let target = ChannelTarget::new(network.network_id(), daemon, console, leg);
-    ChannelDaemon::connect(&target, request)
+    ChannelDaemon::connect(&target, request, CALL_WITHIN)
         .map(|channel| Some(NodeLeg::Channel(channel)))
         .map_err(|fault| fault.to_string())
 }

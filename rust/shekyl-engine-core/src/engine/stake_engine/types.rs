@@ -688,6 +688,11 @@ pub(crate) enum StakeEngineError {
     )]
     RngDegeneracy,
 
+    /// The daemon named its own remedy while the bond was being read.
+    /// Nothing was persisted.
+    #[error("{0}")]
+    Daemon(shekyl_rpc_client::DaemonFault),
+
     /// The [`PersonaHandle`] and [`PersistedBondTicket`](crate::engine::stake_persist::PersistedBondTicket) passed to [`PlanBondPost`](crate::engine::stake_engine::persona::PlanBondPost)
     /// name different persona slots. A ticket witnesses the durable persist for a
     /// *specific* slot; it cannot authorize a bond operation for any other slot.

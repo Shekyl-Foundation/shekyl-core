@@ -75,6 +75,7 @@ shekyl-os-account = { path = "../shekyl-os-account" }
 shekyl-win-sec = { path = "../shekyl-win-sec" }
 
 [dev-dependencies]
+shekyl-rpc-transport = { path = "../shekyl-rpc-transport", features = ["test-override"] }
 tokio = { version = "1", features = ["full", "test-util"] }
 # The receive-row projection tests build a real `TransferDetails` through
 # the scanner's `test-utils` constructor (same edge shekyl-engine-state's

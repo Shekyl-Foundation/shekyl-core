@@ -375,23 +375,10 @@ whether `option_set` changes it while the daemon runs.
 <!-- development rows, live on the named networks only and not in --help: dev-sync (regtest); dev-relay-cover (testnet, stagenet, regtest); dev-rpc (regtest); dev-difficulty (regtest); dev-pow-seed-epoch-blocks (regtest); dev-pow-seed-epoch-lag (regtest); dev-settlement-epoch-blocks (regtest); dev-archival-reorg-depth (regtest) -->
 <!-- shekyld-options: end -->
 
-The daemon's RPC takes no login and no TLS: inbound RPC is plaintext, on
-loopback only. A machine of yours elsewhere reaches it through a Tor onion
-service you run in front of that loopback RPC (see "Connecting to a daemon").
-Do not publish this RPC through a reverse proxy. The proxy would hand the
-plaintext, with no login, to whoever can reach it.
-Wallet-RPC has login and TLS options for its own listener.
-
-The authenticated channel (`docs/design/RPC_CHANNEL.md` §1) is not what
-`shekyld` serves today. When the channel is served, run it where no path
-can read the connection's opening: on this machine, the local socket;
-between your machines, a tunnel that ends on the daemon's host, such as
-host-to-host WireGuard, or an onion service whose forward to the daemon
-stays on that host. Any other path is your choice and is strongly
-discouraged. An observer who can read an opening can replay it and keep
-the node busy refusing new ones. That denial of service belongs to the
-future channel. It is not a property of today's loopback RPC, and
-`shekyld` does not detect which path you chose.
+Wallets on another machine use the authenticated listener configured with
+`rpc-listen`. The owner socket is the default for a wallet running under the
+node's account. Keep the plaintext admin and view listeners on loopback.
+The wallet RPC server also accepts only local listeners.
 
 **Background operation**
 
@@ -551,31 +538,32 @@ directory.
 
 ### Connecting to a daemon
 
-By default the wallet connects to a daemon on this machine, at the RPC
-port for the selected network (`127.0.0.1:11029` on mainnet; `--network`
-picks the matching port automatically). If no daemon is
-answering there, the wallet says so when it starts and names the command
-that would fix it (`shekyld --network testnet`, and the port it answers on).
+Use a daemon you operate. Without `--daemon-endpoint`, the wallet looks for
+your account's node on its owner socket or pipe. A system service publishes
+a loopback channel endpoint and its public bundle for local wallets.
 
-`shekyld` serves RPC on loopback only, so a node of yours on another
-machine is reached through a Tor onion service you run in front of its
-loopback RPC (see "Wallet through Tor" below), over a SOCKS proxy:
+To connect two machines, enable `rpc-listen` on the node. Export its public
+bundle with `shekyl-cli rpc bundle show` on the node and transfer the output
+to the wallet over a trusted path. Supply that file and the channel endpoint
+to the wallet. For example, with an onion forwarded to the node's listener:
 
 ```bash
 ./shekyl-cli --wallet-file ~/.shekyl/wallets/mainnet/mywallet.wallet \
     --daemon-socks 127.0.0.1:9050 \
+    --daemon-bundle-file ~/.shekyl/my-node.bundle \
     --daemon-endpoint <onion-address>:11029
 ```
 
-Shekyl RPC is operator-to-operator: there is no recommended configuration
-in which the wallet talks to a daemon someone else controls, and `shekyld`
-does not advertise itself as a public node. A `--daemon-endpoint` that is
-not loopback is said out loud when the wallet starts — whoever operates
-that daemon sees which blocks the wallet requests and what it broadcasts,
-and no proxy or encryption changes that. The warning reads the same for
-your own node: it states what a daemon is told, not who you are talking
-to. Without `--daemon-socks`, a non-loopback address additionally warns that the
-connection itself is visible on the network path.
+For a LAN connection, use the node's IP and channel port. The first channel
+use creates an owner-only key for this OS account and shows its fingerprint.
+On the node, run `shekyl-cli rpc client add <fingerprint> wallet` on the
+same network, then reopen the wallet connection. The daemon uses the
+enrolled permissions for the connection and checks every RPC call. You can set `rpc-key-file`
+to select an existing account key. Two wallets may use the same node and
+account key. The node sees their chain requests and signed submissions.
+
+Each wallet manages its staking persona's Tor service and peer circuits.
+The daemon endpoint and its optional SOCKS proxy configure wallet-to-node RPC.
 
 ### Understanding Bech32m addresses
 
@@ -767,12 +755,8 @@ timing and funding footguns that matter for your privacy.
   transaction itself once each reward epoch settles. Very small rewards are
   held until enough accumulate to be worth the network fee, and a wallet that
   was closed for a while claims its backlog shortly after you reopen it.
-  Automatic claiming currently requires the wallet's daemon to be on the same
-  machine (a loopback address). If your wallet points at a remote daemon —
-  even one you run yourself — rewards are not claimed automatically yet; they
-  are held, and the wallet raises an operator alarm rather than claiming over
-  the remote connection. Remote-daemon claiming arrives with remote-daemon
-  support as a whole.
+  The wallet submits signed claims to its configured node over the owner
+  socket or an enrolled channel. The persona exchanges shards over its own Tor circuits.
 - **Principal stays liquid.** You can release collateral by releasing, subject
   to a release cooldown. There is no fixed lock height to wait out.
 
@@ -863,7 +847,7 @@ the thread count; you do not pass an address.
 `mine` does not require an open wallet. It does require a leg that holds
 the mining grant and a daemon on the same network as the CLI. The silent
 default is this computer's node, reached on its own socket (or, for a node
-run as a service, its console leg, an administrator's). A remote `--daemon-endpoint` is
+run as a service, its enrolled loopback channel). A remote `--daemon-endpoint` is
 allowed: `mine start` reminds you that mining will run on that machine's
 CPU, then continues.
 If the daemon is still syncing, `mine start` refuses — the daemon will not
@@ -1016,6 +1000,7 @@ endpoint it forwards to:
 
 ```bash
 ./shekyl-cli --wallet-file ~/.shekyl/wallets/mainnet/mywallet.wallet \
+    --daemon-bundle-file ~/.shekyl/my-node.bundle \
     --daemon-socks 127.0.0.1:9050 \
     --daemon-endpoint <onion-address>:11029
 ```
@@ -1114,7 +1099,7 @@ process. The contract is `docs/api/wallet_rpc.yaml`; the flag reference is
 ./shekyl-wallet-rpc \
     --wallet-dir /path/to/wallets \
     --rpc-listen 127.0.0.1:29500 \
-    --daemon-endpoint 127.0.0.1:11029
+    --daemon-bundle-file ~/.shekyl/my-node.bundle --daemon-endpoint 127.0.0.1:11029
 ```
 
 Login names and passwords live in the configuration file
@@ -1127,22 +1112,17 @@ The full list is [`docs/generated/shekyl-wallet-rpc_options.md`](generated/sheky
 | Option | Description |
 |--------|-------------|
 | `--wallet-dir <path>` | Directory of wallet files; `create_wallet` / `open_wallet` work here |
-| `--rpc-listen <addr>` | A numeric `IP:PORT` (default `127.0.0.1:29500`; IPv6 as `[::1]:29500`; hostnames are not resolved). Wildcard addresses (`0.0.0.0`, `::`, `[::]`) are **refused**. An address off this machine needs a login |
+| `--rpc-listen <addr>` | A numeric `IP:PORT` (default `127.0.0.1:29500`; IPv6 as `[::1]:29500`; hostnames are not resolved). Wildcard addresses (`0.0.0.0`, `::`, `[::]`) are **refused**. Only loopback addresses are accepted |
 | `--rpc-socket-file <path>` | A Unix socket in place of `rpc-listen`. Its directory must be yours alone: it is made 0700 if missing, and one that group or others can enter is refused |
-| `rpc-username`, `rpc-password` | HTTP basic auth, set together in the configuration file only. Mandatory off loopback; on loopback or a socket they may be left out |
+| `rpc-username`, `rpc-password` | HTTP basic auth, set together in the configuration file only. Optional on local connections |
 | `--daemon-endpoint <ip:port or onion:port>` | Your node's RPC address. Unset, this computer's node on `--network`. A daemon that is not loopback is disclosed at startup, through a proxy or not (see "Connecting to a daemon" above) |
+| `--daemon-bundle-file <path>` | Public bundle exported by the named node |
+| `--rpc-key-file <path>` | Use this owner-only account key for enrollment |
 | `--daemon-socks <ip:port>` | Route the daemon connection through a SOCKS5 proxy, which resolves names |
 | `--network <name>` | `mainnet` (default), `testnet`, `stagenet` or `regtest` |
 | `--config-verify` | Check the configuration as a start would, print the effective configuration, and exit |
 
-**Three things the server will refuse, on purpose.** Binding `0.0.0.0` or
-`::` binds every interface your machine has *and every one it gains later*
-(a VPN, a hotspot, a container bridge), so the server asks you to name the
-one interface you mean. And it will not serve without authentication on any
-address other than loopback: a wallet RPC the network can reach honours
-every request, spends included. **The network being yours is not what
-provides the security** — the TV, the smart plug and a guest's phone are on
-your home network too. And it answers only requests whose `Content-Type` is
+The wallet RPC accepts local connections only. To reach it from another machine, forward the local listener through your own encrypted transport, such as SSH or WireGuard. On the local listener it answers only requests whose `Content-Type` is
 `application/json` (anything else gets HTTP 415): that is what stops a web
 page in your browser from driving the wallet on `127.0.0.1` — every real
 client sends it anyway — and, when you run without a login, it answers

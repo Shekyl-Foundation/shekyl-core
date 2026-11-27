@@ -1095,7 +1095,7 @@ use tempfile::TempDir;
 /// wallet's daemon target (`first_stake`'s fill): paths under test refuse
 /// before anything reads it.
 pub(crate) fn dummy_node() -> shekyl_rpc_transport::DaemonTarget {
-    shekyl_rpc_transport::DaemonTarget::address("http://127.0.0.1:1")
+    shekyl_rpc_transport::DaemonTarget::fixture_address("http://127.0.0.1:1")
 }
 
 /// A `DaemonClient` that never connects: paths under test short-circuit

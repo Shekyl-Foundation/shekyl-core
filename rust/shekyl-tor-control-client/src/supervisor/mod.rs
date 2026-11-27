@@ -25,9 +25,9 @@ mod view;
 pub use crate::control::{NetworkView, Reported};
 pub use core::{
     Action, Core, Counted, DialTally, DirectoryAnswer, DirectoryFetch, DirectoryPlan,
-    DirectoryReport, Exclusion, Input, Launch, LaunchDirectory, ManagedRunning, OnionPath,
-    OpenUploads, PathReading, Policy, RoundTally, Step, TorCensus, CHECK_LONGEST, CHECK_SPACING,
-    DESCRIPTOR_LIFETIME, READING_WAIT, REPLY_BOUND,
+    DirectoryReport, Exclusion, GuardFault, Input, Launch, LaunchDirectory, ManagedRunning,
+    OnionPath, OpenUploads, PathReading, Policy, RoundTally, Step, TorCensus, CHECK_LONGEST,
+    CHECK_SPACING, DESCRIPTOR_LIFETIME, READING_WAIT, REPLY_BOUND,
 };
 pub use events::{
     clock_evidence_of, directory_content_input_of, directory_input_of, input_of, round_inputs,

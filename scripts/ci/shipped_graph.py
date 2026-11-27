@@ -114,6 +114,9 @@ NOT_SHIPPED: dict[str, str] = {
     "production economics crates",
     "shekyl-harness-spender": "test support: the wallet-side spender (CHAIN_FORGE.md §11.1)",
     "shekyl-harness-wallet": "test support: the fixture miner wallet (CHAIN_FORGE.md §11.1)",
+    "shekyl-p-transport": "per-persona SOCKS client for a daemon read. RT-W12 carries "
+    "chain reads on the operator's channel, so no shipped binary links it; the "
+    "circuit-isolation measurement still uses it",
     "shekyl-p-loopback": "dev-only loopback between the P serve endpoint and fetch client; "
     "SF-D4 keeps it out of both shipped graphs",
     "shekyl-p2p-harness": "the P2P conformance harness: scripted peer, seam host, comparator",

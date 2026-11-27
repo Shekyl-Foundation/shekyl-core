@@ -9,7 +9,7 @@
 | `wallet-file` | absolute path | — | both | no | The wallet to open at start, as the absolute path of its <name>.wallet file. Its folder is the wallet directory. Not with wallet-rpc-endpoint or wallet-rpc-socket-file: that server's wallets are on its computer, so use `wallet open <name>`. |
 | `daemon-endpoint` | IP endpoint or v3 onion with a port | — | both | no | The daemon on another computer: an IP address and a port, or an onion and a port (reached through daemon-socks). Unset is this computer's node. |
 | `daemon-bundle-file` | absolute path | — | both | no | The node's public bundle, as `rpc bundle show` prints it on that node. Set, the enrollment words reach the node at daemon-endpoint over the channel, and daemon-endpoint is required. |
-| `rpc-key-file` | absolute path | this account's root and rpc-shekyl-cli-<network>.key | both | no | This client's channel key, readable by this account alone. |
+| `rpc-key-file` | absolute path | this account's root and rpc-client.key | both | no | This client's channel key, readable by this account alone. |
 | `wallet-rpc-endpoint` | IP endpoint or v3 onion with a port | — | both | no | An external shekyl-wallet-rpc to use instead of hosting one: an IP address and a port, or an onion and a port (reached through daemon-socks). |
 | `wallet-rpc-socket-file` | absolute path | — | both | no | An external shekyl-wallet-rpc's Unix socket, in place of wallet-rpc-endpoint. Not on Windows. |
 | `daemon-socks` | IP endpoint (`address:port`) | — | both | no | A SOCKS5 proxy for the connections to another computer; the proxy resolves names. Required for an onion. |

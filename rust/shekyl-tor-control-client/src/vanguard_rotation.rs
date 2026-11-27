@@ -49,16 +49,30 @@
 //!
 //! # Two kinds of fault
 //!
-//! [`VanguardsError`] ends an incarnation; [`VanguardsWarning`] does not. The
-//! line between them is whether the **live** posture is still right: a control
-//! failure or an unfillable set leaves the pinned set and our state at odds, so
-//! the incarnation cannot be trusted to keep serving — but a state file that
-//! cannot be read or written leaves tor bootstrapped, SOCKS listening and the
-//! correct set pinned, degrading only *restart survival*. Reporting the second
-//! kind by tearing tor down would trade a conditional future privacy loss for a
-//! certain present liveness loss, recurring every incarnation for as long as the
-//! disk stays broken. So it alarms and keeps serving, and the alarm clears itself
-//! on the next successful persist.
+//! [`VanguardsError`] means no set was confirmed by this pass, and no
+//! [`VanguardsActive`] witness is minted; [`VanguardsWarning`] rides beside a
+//! confirmed set. The line between them is whether the **live** posture is
+//! right: a control failure, a refusal or an unfillable set leaves the set this
+//! pass meant to pin unconfirmed, so no onion may be published on it — but a
+//! state file that cannot be read or written leaves tor bootstrapped, SOCKS
+//! listening and the correct set pinned, degrading only *restart survival*.
+//! Reporting the second kind by tearing tor down would trade a conditional
+//! future privacy loss for a certain present liveness loss, recurring every
+//! incarnation for as long as the disk stays broken. So it alarms and keeps
+//! serving, and the alarm clears itself on the next successful persist.
+//!
+//! What a host does after an error is the host's remedy, by its kind: the
+//! daemon's is `TOR_SUPERVISOR.md` §4.4's guard-pinning row; the wallet's old
+//! supervisor ends the incarnation on any of them.
+//!
+//! # Time
+//!
+//! A guard's expiry is wall time, on purpose: a lifetime is the network's
+//! clock, and a guard that expired while the machine slept is replaced at the
+//! wake. A host's timers count awake time on Linux and macOS, so each host
+//! asks [`VanguardManager::due`] after a wake, and a host that sleeps on a
+//! timer sleeps no longer than [`VanguardManager::wait`]. The manager never
+//! reads the clock itself: every call takes the wall time it judges against.
 //!
 //! # Ownership
 //!
@@ -67,19 +81,27 @@
 //! `service` stays a thin policy loop rather than growing feature branches.
 
 use std::collections::HashSet;
+use std::future::IntoFuture;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use kameo::error::SendError;
-use tokio::sync::oneshot;
 
-use shekyl_os_account::private_file::{self, Access, CommitError, Journal, StagedWrite};
-use shekyl_tor_control_client::awake;
-use shekyl_tor_control_client::control::consensus::{parse_ns_all, ConsensusRelay, ConsensusView};
-use shekyl_tor_control_client::control::vanguards::{
+use crate::awake;
+use crate::control::consensus::{parse_ns_all, ConsensusRelay, ConsensusView};
+use crate::control::vanguards::{
     HsLayerPins, RelayFingerprint, NUM_LAYER2_GUARDS, NUM_LAYER3_GUARDS,
 };
-use shekyl_tor_control_client::control::{Command, ControlError, TorControlClient};
+use crate::control::{Command, ControlError, TorControlClient};
+use shekyl_os_account::private_file::{self, Access, CommitError, Journal, StagedWrite};
+
+/// The longest a host that sleeps on a timer waits before it asks
+/// [`VanguardManager::due`] again ([`VanguardManager::wait`]). Its timer
+/// counts no time across a sleep on Linux and macOS, so an expiry the sleep
+/// carried past is replaced within this much awake time of the wake. A minute
+/// is nothing against a layer-3 lifetime of at least an hour, and the check is
+/// one comparison.
+pub const WALL_RECHECK: Duration = Duration::from_secs(60);
 
 /// L2 lifetime bounds (spec): uniform over [30, 60] days.
 const L2_LIFETIME_MIN: Duration = Duration::from_secs(30 * 86_400);
@@ -97,8 +119,8 @@ const L3_LIFETIME_MAX: Duration = Duration::from_secs(48 * 3_600);
 /// tor's built-in lite adds one, which the spec is explicit costs longer
 /// paths and higher latency — a non-serving instance should not pay that.
 ///
-/// This is the *derived* knob, not the configured one: callers choose a
-/// [`ServingPosture`](crate::service::ServingPosture), which implies the mode.
+/// This is the *derived* knob, not the configured one: the wallet's callers
+/// choose a serving posture, which implies the mode.
 /// That is what keeps the one forbidden pairing — a serving persona on
 /// lite-only guard protection, silently weaker with no feedback channel, against
 /// an adversary whose success is invisible to the operator — from existing to be
@@ -119,7 +141,7 @@ pub enum VanguardsMode {
 ///
 /// Mintable only by the confirmed-`SETCONF` path inside [`VanguardManager`].
 /// This is the crate's established sealed-witness pattern
-/// ([`VerifiedTorBinary`](shekyl_tor_control_client::binary::VerifiedTorBinary)): the guarantee
+/// ([`VerifiedTorBinary`](crate::binary::VerifiedTorBinary)): the guarantee
 /// is structural rather than a convention the serving daemon must remember.
 ///
 /// **It carries the actor it was confirmed on, and publication consumes it.**
@@ -134,8 +156,8 @@ pub enum VanguardsMode {
 ///
 /// **No test bypass exists yet, on purpose.** The obvious sibling would be a
 /// loud `unchecked_for_test` mirroring
-/// [`VerifiedTorBinary`](shekyl_tor_control_client::binary::VerifiedTorBinary)'s, and one should
-/// land the day a test drives `crate::onion_service::publish_onion`
+/// [`VerifiedTorBinary`](crate::binary::VerifiedTorBinary)'s, and one should
+/// land the day a test drives the wallet's `publish_onion`
 /// directly. Today no test does — the supervisor path mints the witness for
 /// real — so adding the escape hatch now would put an unused hole in a
 /// security gate, which is the kind of debt this codebase deletes rather than
@@ -153,18 +175,18 @@ impl VanguardsActive {
     }
 
     /// The actor this witness authorizes publication on.
-    pub(crate) fn actor(&self) -> &kameo::actor::ActorRef<TorControlClient> {
+    pub fn actor(&self) -> &kameo::actor::ActorRef<TorControlClient> {
         &self.actor
     }
 }
 
 // ── Errors ─────────────────────────────────────────────────────────────────
 
-/// Why applying vanguards aborted.
+/// Why applying vanguards aborted. The host's stop is not one: a host that
+/// stops mid-apply drops the pass, and the manager keeps the state it held,
+/// since nothing is committed before the `SETCONF` is confirmed.
 #[derive(Debug)]
 pub enum VanguardsAbort {
-    /// The caller asked the service to stop mid-apply.
-    Shutdown,
     /// The control actor died — an incarnation death, not a vanguards fault.
     ActorGone,
     /// The apply itself failed.
@@ -176,8 +198,15 @@ pub enum VanguardsAbort {
 pub enum VanguardsError {
     /// The control channel failed (or the reply timed out).
     Control(ControlError),
-    /// Tor refused the `SETCONF` / `GETINFO` with a non-250 status.
-    Rejected {
+    /// Tor refused `GETINFO ns/all` with a non-250 status: it holds no
+    /// consensus to read the set from.
+    ConsensusRefused {
+        /// The status tor returned.
+        status: u16,
+    },
+    /// Tor refused the `SETCONF` of the pins with a non-250 status. The pinned
+    /// Tor should accept these options, so this is a defect to report.
+    PinsRefused {
         /// The status tor returned.
         status: u16,
     },
@@ -189,7 +218,10 @@ impl std::fmt::Display for VanguardsError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Control(e) => write!(f, "vanguards control failure: {e}"),
-            Self::Rejected { status } => write!(f, "tor refused SETCONF with status {status}"),
+            Self::ConsensusRefused { status } => {
+                write!(f, "tor refused GETINFO ns/all with status {status}")
+            }
+            Self::PinsRefused { status } => write!(f, "tor refused SETCONF with status {status}"),
             Self::Rotation(e) => write!(f, "vanguard set could not be built: {e}"),
         }
     }
@@ -893,7 +925,7 @@ fn uniform_between(
 // ── Manager (supervisor-facing orchestration) ──────────────────────────────
 
 /// Supervisor-scoped owner of vanguard mode, in-memory rotation state, and
-/// the on-disk path. Constructed once per [`crate::service::WalletTorControl`] and
+/// the on-disk path. Constructed once per supervisor and
 /// passed into every incarnation — never re-created on restart.
 pub struct VanguardManager {
     mode: VanguardsMode,
@@ -946,41 +978,74 @@ impl VanguardManager {
         matches!(self.mode, VanguardsMode::Managed)
     }
 
-    /// Sleep duration until the earliest per-node expiry. `None` when Off or
-    /// when no state has been established yet (the hold-loop arm stays inert).
+    /// The earliest per-node expiry, in wall time. `None` when Off or when no
+    /// state has been established yet.
     #[must_use]
-    pub fn next_deadline(&self) -> Option<Duration> {
+    pub fn next_expiry(&self) -> Option<SystemTime> {
         if !self.is_managed() {
             return None;
         }
-        let at = self.state.as_ref()?.next_expiry()?;
+        self.state.as_ref()?.next_expiry()
+    }
+
+    /// Whether a node has expired at the wall time `now`: the check a host
+    /// makes after a wake, when its own timer may have slept through the
+    /// expiry. `false` when Off or when no state is held yet.
+    #[must_use]
+    pub fn due(&self, now: SystemTime) -> bool {
+        self.next_expiry().is_some_and(|at| at <= now)
+    }
+
+    /// How long a host that sleeps on a timer may wait before it asks
+    /// [`Self::due`] again: the wall time left to the earliest expiry, and
+    /// never more than [`WALL_RECHECK`]. That bound is what catches an expiry
+    /// a sleep carried past, where the timer counted no time. `None` when Off
+    /// or when no state is held yet.
+    #[must_use]
+    pub fn wait(&self, now: SystemTime) -> Option<Duration> {
+        let at = self.next_expiry()?;
         Some(
-            at.duration_since(SystemTime::now())
-                .unwrap_or(Duration::ZERO),
+            at.duration_since(now)
+                .unwrap_or(Duration::ZERO)
+                .min(WALL_RECHECK),
         )
     }
 
-    /// Bring this incarnation's vanguards up: fetch consensus, restore (or
-    /// select fresh), expire anything the clock aged out, `SETCONF`, persist.
-    ///
-    /// Returns `None` when mode is [`VanguardsMode::Off`]. On Managed, mints
-    /// the sealed [`VanguardsActive`] witness after a confirmed `SETCONF`.
+    /// Pin this managed set: fetch consensus, restore or select, expire,
+    /// repair, `SETCONF`, persist. Always a witness or a fault. The caller
+    /// loaded the manager [`VanguardsMode::Managed`].
     ///
     /// # Errors
     ///
-    /// [`VanguardsAbort`] on shutdown, actor death, timeout, refusal, or an
+    /// [`VanguardsAbort`] on actor death, timeout, refusal, or an
+    /// unfillable set.
+    pub async fn pin(
+        &mut self,
+        actor: &kameo::actor::ActorRef<TorControlClient>,
+        reply_deadline: Duration,
+        now: SystemTime,
+    ) -> Result<VanguardsActive, VanguardsAbort> {
+        self.pin_set(actor, reply_deadline, now).await
+    }
+
+    /// Bring this incarnation's vanguards up: [`Self::pin`] when the mode is
+    /// [`VanguardsMode::Managed`]. Returns `None` when the mode is
+    /// [`VanguardsMode::Off`], which mints no witness.
+    ///
+    /// # Errors
+    ///
+    /// [`VanguardsAbort`] on actor death, timeout, refusal, or an
     /// unfillable set.
     pub async fn establish(
         &mut self,
         actor: &kameo::actor::ActorRef<TorControlClient>,
         reply_deadline: Duration,
-        shutdown: &mut oneshot::Receiver<()>,
+        now: SystemTime,
     ) -> Result<Option<VanguardsActive>, VanguardsAbort> {
         if !self.is_managed() {
             return Ok(None);
         }
-        let witness = self.pin_set(actor, reply_deadline, shutdown).await?;
-        Ok(Some(witness))
+        self.pin(actor, reply_deadline, now).await.map(Some)
     }
 
     /// Mid-life reconcile: repair relays that left the consensus **and**
@@ -992,25 +1057,25 @@ impl VanguardManager {
     ///
     /// # Errors
     ///
-    /// [`VanguardsAbort`] when the control round trip or the draw itself fails —
-    /// then the pinned set and our state genuinely disagree, so the incarnation
-    /// cannot be trusted to keep serving. A persist failure is **not** in that
-    /// class: it leaves the live set correct, so it is reported as a
+    /// [`VanguardsAbort`] when the control round trip or the draw itself fails:
+    /// the set due for rotation was not replaced, and what the host does next
+    /// is its remedy for that kind. A persist failure is **not** in that class:
+    /// it leaves the live set correct, so it is reported as a
     /// [`VanguardsWarning`] instead of tearing a working tor down.
     pub async fn reconcile(
         &mut self,
         actor: &kameo::actor::ActorRef<TorControlClient>,
         reply_deadline: Duration,
-        shutdown: &mut oneshot::Receiver<()>,
+        now: SystemTime,
     ) -> Result<(), VanguardsAbort> {
         if !self.is_managed() || self.state.is_none() {
             return Ok(());
         }
-        let _witness = self.pin_set(actor, reply_deadline, shutdown).await?;
+        let _witness = self.pin(actor, reply_deadline, now).await?;
         Ok(())
     }
 
-    /// Shared pin pipeline used by both establish and mid-life reconcile:
+    /// Shared pin pipeline used by [`Self::pin`]:
     /// consensus → restore-or-fresh → expire → repair → SETCONF → commit memory
     /// → persist.
     ///
@@ -1037,12 +1102,11 @@ impl VanguardManager {
         &mut self,
         actor: &kameo::actor::ActorRef<TorControlClient>,
         reply_deadline: Duration,
-        shutdown: &mut oneshot::Receiver<()>,
+        now: SystemTime,
     ) -> Result<VanguardsActive, VanguardsAbort> {
-        let consensus = fetch_consensus(actor, reply_deadline, shutdown).await?;
+        let consensus = fetch_consensus(actor, reply_deadline).await?;
 
         let mut rng = OsVanguardRng;
-        let now = SystemTime::now();
         let rotation_failed =
             |e: RotationError| VanguardsAbort::Failed(VanguardsError::Rotation(e));
 
@@ -1069,7 +1133,7 @@ impl VanguardManager {
             .restore(&consensus, &mut rng)
             .map_err(rotation_failed)?;
 
-        let witness = apply_pins(actor, &state, reply_deadline, shutdown).await?;
+        let witness = apply_pins(actor, &state, reply_deadline).await?;
 
         // Commit memory first so a same-process retry after persist failure
         // reuses this set rather than selecting fresh.
@@ -1098,14 +1162,18 @@ impl VanguardManager {
 async fn fetch_consensus(
     actor: &kameo::actor::ActorRef<TorControlClient>,
     reply_deadline: Duration,
-    shutdown: &mut oneshot::Receiver<()>,
 ) -> Result<ConsensusView, VanguardsAbort> {
-    let reply = tokio::select! {
-        _ = &mut *shutdown => return Err(VanguardsAbort::Shutdown),
-        () = awake::sleep(reply_deadline) => {
-            return Err(VanguardsAbort::Failed(VanguardsError::Control(ControlError::Timeout)));
-        }
-        r = actor.ask(Command::GetInfo(vec!["ns/all".to_owned()])) => r,
+    let Ok(reply) = awake::timeout(
+        reply_deadline,
+        actor
+            .ask(Command::GetInfo(vec!["ns/all".to_owned()]))
+            .into_future(),
+    )
+    .await
+    else {
+        return Err(VanguardsAbort::Failed(VanguardsError::Control(
+            ControlError::Timeout,
+        )));
     };
     match reply {
         Ok(reply) if reply.status() == 250 => {
@@ -1125,7 +1193,7 @@ async fn fetch_consensus(
             }
             Ok(view)
         }
-        Ok(reply) => Err(VanguardsAbort::Failed(VanguardsError::Rejected {
+        Ok(reply) => Err(VanguardsAbort::Failed(VanguardsError::ConsensusRefused {
             status: reply.status(),
         })),
         Err(SendError::HandlerError(e)) => Err(VanguardsAbort::Failed(VanguardsError::Control(e))),
@@ -1138,7 +1206,6 @@ async fn apply_pins(
     actor: &kameo::actor::ActorRef<TorControlClient>,
     state: &RotationState,
     reply_deadline: Duration,
-    shutdown: &mut oneshot::Receiver<()>,
 ) -> Result<VanguardsActive, VanguardsAbort> {
     let pins = state.to_pins().ok_or_else(|| {
         VanguardsAbort::Failed(VanguardsError::Rotation(RotationError::TooFewEligible {
@@ -1146,16 +1213,19 @@ async fn apply_pins(
             needed: NUM_LAYER2_GUARDS + NUM_LAYER3_GUARDS,
         }))
     })?;
-    let reply = tokio::select! {
-        _ = &mut *shutdown => return Err(VanguardsAbort::Shutdown),
-        () = awake::sleep(reply_deadline) => {
-            return Err(VanguardsAbort::Failed(VanguardsError::Control(ControlError::Timeout)));
-        }
-        r = actor.ask(Command::SetConf(pins)) => r,
+    let Ok(reply) = awake::timeout(
+        reply_deadline,
+        actor.ask(Command::SetConf(pins)).into_future(),
+    )
+    .await
+    else {
+        return Err(VanguardsAbort::Failed(VanguardsError::Control(
+            ControlError::Timeout,
+        )));
     };
     match reply {
         Ok(reply) if reply.status() == 250 => Ok(VanguardsActive::confirmed(actor.clone())),
-        Ok(reply) => Err(VanguardsAbort::Failed(VanguardsError::Rejected {
+        Ok(reply) => Err(VanguardsAbort::Failed(VanguardsError::PinsRefused {
             status: reply.status(),
         })),
         Err(SendError::HandlerError(e)) => Err(VanguardsAbort::Failed(VanguardsError::Control(e))),
@@ -1533,7 +1603,9 @@ L3 $BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB 2\n";
         let dir = tempfile::tempdir().unwrap();
         let mgr = VanguardManager::load(VanguardsMode::Off, dir.path());
         assert!(!mgr.is_managed());
-        assert!(mgr.next_deadline().is_none());
+        assert!(mgr.next_expiry().is_none());
+        assert!(mgr.wait(t0()).is_none());
+        assert!(!mgr.due(t0()));
     }
 
     #[test]
@@ -1708,7 +1780,7 @@ L3 $BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB 2\n";
         std::fs::write(&path, "L2 $AA 1\n").unwrap();
         let mgr = VanguardManager::load(VanguardsMode::Managed, dir.path());
         assert!(mgr.is_managed());
-        assert!(mgr.next_deadline().is_none());
+        assert!(mgr.next_expiry().is_none());
         assert!(matches!(
             mgr.warning(),
             Some(VanguardsWarning::StateUnusable(_))
@@ -1719,7 +1791,7 @@ L3 $BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB 2\n";
         save_state(&path, &state).unwrap();
         let mgr = VanguardManager::load(VanguardsMode::Managed, dir.path());
         assert!(mgr.is_managed());
-        assert!(mgr.next_deadline().is_some());
+        assert!(mgr.next_expiry().is_some());
         assert_eq!(mgr.warning(), None, "a clean load carries no warning");
     }
 
@@ -1728,5 +1800,212 @@ L3 $BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB 2\n";
         let a = RotationState::select_fresh(&pool(20), t0(), &mut SeededRng(42)).unwrap();
         let b = RotationState::select_fresh(&pool(20), t0(), &mut SeededRng(42)).unwrap();
         assert_eq!(a, b);
+    }
+
+    // ── The pipeline against a scripted Tor ────────────────────────────────
+
+    /// How a scripted Tor answers the two asks the pipeline makes.
+    #[derive(Clone, Copy)]
+    struct Script {
+        /// The status `GETINFO ns/all` is answered with; 250 carries the
+        /// consensus.
+        consensus: u16,
+        /// The status the `SETCONF` of the pins is answered with.
+        pins: u16,
+    }
+
+    const ANSWERS: Script = Script {
+        consensus: 250,
+        pins: 250,
+    };
+
+    /// Long enough for a reply over an in-memory pipe on a loaded runner.
+    const STEP: Duration = Duration::from_secs(10);
+
+    /// A control actor over an in-memory pipe whose far end answers as
+    /// `script` says, with thirty eligible relays in its consensus. Every
+    /// `SETCONF` line it receives is recorded.
+    fn scripted_tor(
+        script: Script,
+    ) -> (
+        kameo::actor::ActorRef<TorControlClient>,
+        std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    ) {
+        use kameo::actor::Spawn;
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+
+        use crate::control::consensus::ns_all_entry;
+        use crate::control::{BootstrapReadiness, EventSink, TorControlClientConfig, TorLaunch};
+
+        let consensus: String = (1..=30u8)
+            .map(|b| ns_all_entry([b; 20], 1000).replace('\n', "\r\n"))
+            .collect();
+        let pins = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded = std::sync::Arc::clone(&pins);
+        let (ours, theirs) = tokio::io::duplex(1 << 20);
+        tokio::spawn(async move {
+            let (read, mut write) = tokio::io::split(theirs);
+            let mut lines = tokio::io::BufReader::new(read).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                let reply = if line.starts_with("GETINFO ns/all") {
+                    if script.consensus == 250 {
+                        format!("250+ns/all=\r\n{consensus}.\r\n250 OK\r\n")
+                    } else {
+                        format!("{} GETINFO key not available\r\n", script.consensus)
+                    }
+                } else if line.starts_with("SETCONF") {
+                    recorded.lock().expect("the record").push(line);
+                    format!("{} Unacceptable option value\r\n", script.pins)
+                        .replace("250 Unacceptable option value", "250 OK")
+                } else {
+                    "250 OK\r\n".to_owned()
+                };
+                if write.write_all(reply.as_bytes()).await.is_err() {
+                    return;
+                }
+            }
+        });
+        let (read, write) = tokio::io::split(ours);
+        let (events, _received) = EventSink::bounded();
+        let (readiness, _ready) = BootstrapReadiness::new();
+        let actor = TorControlClient::spawn(TorControlClientConfig {
+            launch: TorLaunch::Connected {
+                read: Box::pin(read),
+                write: Box::pin(write),
+            },
+            events,
+            readiness,
+        });
+        (actor, pins)
+    }
+
+    /// A save that fails after a confirmed pin is a warning, not an end: the
+    /// witness is minted, the set is held in memory, and the next pass pins
+    /// that same set rather than drawing a new one. The state's path is a
+    /// non-empty directory, which no rename replaces on any platform. Red
+    /// edit: return the save's error from `pin_set` (as an abort), and the
+    /// first pass fails.
+    #[tokio::test]
+    async fn a_save_that_fails_after_a_confirmed_pin_is_a_warning_and_keeps_the_set() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = state_path(dir.path());
+        std::fs::create_dir(&path).unwrap();
+        std::fs::write(path.join("occupied"), b"").unwrap();
+        let (actor, pins) = scripted_tor(ANSWERS);
+        let mut manager = VanguardManager::load(VanguardsMode::Managed, dir.path());
+
+        let witness = manager
+            .establish(&actor, STEP, t0())
+            .await
+            .expect("a confirmed pin is not failed by its save");
+        assert!(witness.is_some(), "a confirmed pin mints the witness");
+        assert!(
+            matches!(
+                manager.warning(),
+                Some(VanguardsWarning::StateUnpersisted(_))
+            ),
+            "the failed save is said: {:?}",
+            manager.warning()
+        );
+        assert!(manager.next_expiry().is_some(), "the set is held in memory");
+
+        manager
+            .establish(&actor, STEP, t0())
+            .await
+            .expect("the second pass pins too");
+        let sent = pins.lock().expect("the record").clone();
+        assert_eq!(sent.len(), 2);
+        assert_eq!(
+            sent[0], sent[1],
+            "the held set is pinned again, not drawn afresh"
+        );
+    }
+
+    /// Tor refusing the pins mints no witness and commits nothing: a first
+    /// pass leaves no set, so the next one draws as a first pass does. Red
+    /// edit: commit the state to memory before `apply_pins`, and the manager
+    /// holds a set Tor never took.
+    #[tokio::test]
+    async fn a_refused_pin_mints_no_witness_and_commits_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let (actor, pins) = scripted_tor(Script {
+            pins: 552,
+            ..ANSWERS
+        });
+        let mut manager = VanguardManager::load(VanguardsMode::Managed, dir.path());
+
+        let refused = manager.establish(&actor, STEP, t0()).await;
+        assert!(
+            matches!(
+                refused,
+                Err(VanguardsAbort::Failed(VanguardsError::PinsRefused {
+                    status: 552
+                }))
+            ),
+            "{refused:?}"
+        );
+        assert_eq!(
+            pins.lock().expect("the record").len(),
+            1,
+            "one SETCONF asked"
+        );
+        assert!(manager.next_expiry().is_none(), "nothing was committed");
+        assert!(!state_path(dir.path()).exists(), "nothing was saved");
+    }
+
+    /// Tor refusing the consensus read is its own kind: no set can be drawn,
+    /// and no `SETCONF` is sent. Red edit: fold it into `PinsRefused`, and a
+    /// host takes a Tor with no consensus yet for a defect to report.
+    #[tokio::test]
+    async fn a_refused_consensus_read_is_not_a_refused_pin() {
+        let dir = tempfile::tempdir().unwrap();
+        let (actor, pins) = scripted_tor(Script {
+            consensus: 551,
+            ..ANSWERS
+        });
+        let mut manager = VanguardManager::load(VanguardsMode::Managed, dir.path());
+
+        let refused = manager.establish(&actor, STEP, t0()).await;
+        assert!(
+            matches!(
+                refused,
+                Err(VanguardsAbort::Failed(VanguardsError::ConsensusRefused {
+                    status: 551
+                }))
+            ),
+            "{refused:?}"
+        );
+        assert!(pins.lock().expect("the record").is_empty(), "no SETCONF");
+    }
+
+    /// An expiry a sleep carried past is due at the wake. The wall moves to
+    /// the expiry and no timer runs, which is a sleep as a Linux or macOS
+    /// timer sees it. A host that sleeps on a timer is never told to wait
+    /// longer than [`WALL_RECHECK`], so it asks again within that much awake
+    /// time. Red edit: drop the bound from `wait`, and the first wait is the
+    /// whole lifetime.
+    #[test]
+    fn an_expiry_a_sleep_carried_past_is_due_at_the_wake() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = RotationState::select_fresh(&pool(30), t0(), &mut SeededRng(9)).unwrap();
+        save_state(&state_path(dir.path()), &state).unwrap();
+        let manager = VanguardManager::load(VanguardsMode::Managed, dir.path());
+        let expiry = manager.next_expiry().expect("a held set expires");
+
+        assert!(!manager.due(t0()), "nothing has expired at the draw");
+        let wait = manager.wait(t0()).expect("a held set has a wait");
+        assert!(
+            wait <= WALL_RECHECK,
+            "a host's timer is never asked to cover a sleep: {wait:?}"
+        );
+        assert!(
+            expiry.duration_since(t0()).unwrap() > WALL_RECHECK,
+            "the lifetime is longer than the bound, or this proves nothing"
+        );
+
+        // The machine slept through the expiry: the wall is past it.
+        let woke = expiry + Duration::from_secs(1);
+        assert!(manager.due(woke), "the expired guard is due at the wake");
+        assert_eq!(manager.wait(woke), Some(Duration::ZERO));
     }
 }
