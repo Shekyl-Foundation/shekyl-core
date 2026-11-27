@@ -1,10 +1,13 @@
 # Bond-post delay — what it decorrelates: Round 0
 
 **Status:** RULED IN PART — Round 0 posed 2026-10-15; **BD-Q1, BD-Q2, BD-Q3
-and BD-Q5 ruled 2026-10-16** (Rick). **BD-Q4, the window, is open**, with
-the inputs it needs first (§3). No code in this PR; the implementation
-slice (BD-Q2, BD-Q3, the BD-Q5 deletion) is next and does not wait for
-BD-Q4 ([`26-sub-pr-design-discipline`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)).
+and BD-Q5 ruled 2026-10-16** (Rick); **how a plan ends ruled 2026-11-26**
+(§3.6). **BD-Q4, the window, is open**, with the inputs it needs first
+(§3), and so is **the plan's maximum wait** (§3.6), which Rick names. The
+implementation slice (BD-Q2, BD-Q3, §3.6, the BD-Q5 deletion) is built
+against the window and the maximum as named constants and does not wait
+for either ([`26-sub-pr-design-discipline`](../../.cursor/rules/26-sub-pr-design-discipline.mdc));
+§5 says where each part landed.
 
 **Ground:** `shekyl-core` `dev` at `0419e6780` (the #1082 merge, after
 the wallet-RPC round, #1079, merged ruled). Every `file:line` below was
@@ -370,6 +373,129 @@ build at that reference, or a posture the plan cannot carry. The
 precedents above say none applies; a test that assembles from a reloaded
 plan after a restart settles it.
 
+### §3.6 How a plan ends — RULED 2026-11-26
+
+Rick's rulings, 2026-11-26. They settle the persisted record's shape, so
+the slice could start.
+
+**The rule everything follows from.** A persona sees at most two
+transactions with the principal: one funding and one drain. So a plan that
+ends without a bond ends the persona: its funding is drained back to the
+principal, and staking again is a new process (a new persona, a new
+funding, a new delay draw). Nothing is ever re-staked from an old funding.
+
+**While a plan waits.**
+
+- Temporary problems (daemon unreachable or syncing; scan, tree or ledger
+  behind): retried every tick, no limit.
+- A fee above the funding: retried every tick, up to the maximum below.
+  `in_flight` shows the reason.
+- A post may be signed and sent after the 600-block window. The window
+  bounds when a post comes due, not when it lands.
+
+**How a plan ends.** Each ending has its own outcome value and sentence.
+
+1. Signed and sent: as BD-Q3 has it (the end date ends it, Rule 2).
+2. Funding spent elsewhere: ends at once, `spent_elsewhere`.
+3. Withdrawn by the owner: allowed at any time before the post is signed,
+   including while it waits past its due block; refused once it is signed
+   (`withdrawn`).
+4. The shards can no longer be bonded: ends at once (`unbondable`).
+5. Maximum wait reached: a plan still blocked by a limited reason when the
+   maximum passes ends (`waited_out`).
+
+Endings 2–5 do the same thing: the plan is dropped and the persona's
+funding is drained to the principal.
+
+**Which fill failures are which** (asked by the ruling; **the slice's
+proposal**, `bond_due.rs` `DueBlock`, awaiting Rick):
+
+| At due | Class | Why |
+| --- | --- | --- |
+| the node has discarded the shard's bodies (`Discarded`) | ending 4, at once | the recovery fetch that would bring them back is not built, so nothing the wallet can do recovers them |
+| the wallet's daemon is not this computer's node (`LocalNodeRequired`) | limited | recovers when the owner switches back |
+| the node's reply does not match the scanned chain (`DaemonMismatch`) | limited | a reorg or a bad node; either can clear |
+| the body store could not write (`StoreFailed`) | limited | a full disk can be freed |
+| a market plan's named shard is not final (`NotFinal`) | limited | it can become final |
+| node unreachable or syncing; scan, tree or ledger behind | temporary | each clears by itself |
+| any other assembly failure | limited (`AssemblyFailed`) | logged with its cause; a plan that can never be assembled ends and its funds return |
+
+**The maximum** is measured from the plan's due block and derived from
+what the wait is for, outlasting a fee spike. **Awaiting Rick's figure.**
+The candidates he asked for:
+
+- **The fee floor's own median window**: the floor is
+  `F = R·C·w_ref/M²` (`shekyl-economics` `fee/relay.rs`), and `M` is the
+  long-term effective median over `BLOCK_WEIGHT_LONG_TERM_WINDOW` =
+  100 000 blocks (about 139 days at 120 s; `shekyl-economics`
+  `params.rs:44`, from `config/consensus_constants.json`
+  `block_weight_long_term_window_blocks`). `M` is floored at the full
+  reward zone, so it can only fall back toward the zone, slowly.
+- **The floor's fast input**, for comparison: `R`, the release multiplier,
+  is clamped to `[0.8, 1.3]` and read over `TX_VOLUME_WINDOW` = 720 blocks
+  (`params.rs:70`). A volume-driven rise of the floor is therefore at most
+  about 1.6× and washes out over 720 blocks.
+- **One window**: 600 blocks, moving with BD-Q4.
+
+The slice reads one window through the named constant `PLAN_MAX_WAIT`
+(`engine/bond_plan.rs`) until Rick names the figure. 94 is not used: it is
+a signed proof's lifetime, and a plan holds no proof.
+
+**Ending with a drain.** One persisted state, not two steps: the record
+moves from plan to "ended, drain owed" (`EndedPlan`) in one confirmed
+save, and stays until the drain is done, so a crash between dropping the
+plan and sending the drain never leaves a funded persona with no record.
+The drain retries without a maximum; a fee above the funding waits for the
+fee to fall, because nothing else can return these funds. The persona is
+treated as retired for the drain: no exit reserve, a sweep to zero (a
+persona that never bonded owes no exit). Its slot is never reused: once
+its funding is drained it is retired the way a released persona is (the
+actor wipe behind the funded gate, then the durable retired record), and
+only then is the ended record dropped. No draw is kept: there is no second
+plan for a funding.
+
+**Proposed by the slice, not yet ruled** (each built as stated, each Rick's
+to confirm or change):
+
+- **A spent-elsewhere remainder is drained.** The ruling says ending 2 has
+  nothing to drain; a partly spent multi-output funding would leave some.
+  The slice drains whatever is left, and a fully spent one drains nothing
+  and retires at once.
+- **The fill classification** in the table above, with
+  `AssemblyFailed` (any assembly failure the wallet cannot name) counted as
+  **limited**, so a plan that can never be assembled ends at its maximum.
+- **`unstake` is the owner's withdrawal verb**: it withdraws a plan and
+  answers "confirming" (`-29515`) for a signed post; the wallet RPC's
+  `UnstakeResult` gains `WITHDRAWN` (contract 0.26.0).
+- **`start_pscan` takes the wallet's node** (a paired GUI change), because
+  the fill at due reads the wallet's own node and the scan task had none.
+- **A post signed but never sent** (a crash between its seal and its send)
+  whose re-sign stays blocked for a limited reason ends at the maximum
+  wait from the due it was signed at, as its plan would have; it was never
+  sent, so no bond can land from it.
+- **An owed drain blocks a new stake** wallet-wide: `first_stake` refuses as
+  in flight while an ended plan's drain is owed, so the next persona's
+  funding never overlaps the last one's drain.
+- **The market posture can be planned** (`PlannedPosture::Market`), and
+  `fill_market` is in production builds, so the emission walk's market-bond
+  fixture keeps running; the production request still refuses the market
+  posture until shard assignment exists.
+- **Absence is a spend only once scanned**: a record's funding counts as
+  spent elsewhere, and an ended persona as drained, only once the sealed
+  scan has covered the block its funding sits in (`funded_through`), so a
+  rescan never ends a plan or retires a funded persona.
+- **An ending deactivates its persona at once**, and **a retired slot leaves
+  the live staking record in the same session** (as the open-time
+  reconcile does), so staking again takes a new persona without a reopen.
+
+**Privacy dependency on PR A.** The automatic drain's timing is safe only
+if a drain is indistinguishable from an ordinary transfer. It is not yet:
+every `P`-lane spend pays the fee over the `P`-lane weight ceiling
+(`p_lane_floor_fee`), which marks it. PR A (the fee on each transaction's
+own weight, `CEN_I4_INPUT_CAP_DERIVATION.md`'s P-lane fee ruling,
+2026-11-23) removes that mark. This slice lands ahead of PR A, so until PR
+A lands an ended plan's drain is recognisable by its fee.
+
 ### BD-Q4 — How wide is the window? — OPEN
 
 **Open.** The `600` sentinel holds until this is ruled. The window is
@@ -621,6 +747,42 @@ object from a window ("uniform from funding").
 The exit, claim and drain changes of the WR-Q3 amendment are the
 wallet-RPC slice's (`WALLET_RPC_STAKING_OUTCOMES.md` WR-Q4).
 
+**Where it landed** (paths under `rust/shekyl-engine-core/src/engine/`
+unless named):
+
+- **The records** (`shekyl-engine-state` `pending_post_block`, version 15):
+  `PendingBondPlan` (posture, draw, request count, reservation, wait
+  reason); `EndedPlan` (ended, drain owed); `PendingBondPost` without
+  `bond_post_offset_blocks` and `anchor_t0`, with `posture` and the `due`
+  it was signed at; the checked transitions `seal_plan`, `sign_plan`,
+  `resign_post`, `end_plan`, `withdraw_plan`, `drop_retired_plans`; the
+  outcomes `Withdrawn`, `Unbondable`, `WaitedOut`.
+- **The request** (`bond_orchestrator.rs` `Engine::first_stake` →
+  `seal_bond_plan`): preflight sweep, fill, durable bond record, the
+  actor's one draw (`stake_engine/persona.rs` `PlanBondPost`), the plan
+  sealed with no bytes.
+- **The due** (`bond_plan.rs` `plan_due`): BD-Q2's anchor over the
+  reserved funding, recomputed each tick on the daemon-claimed count
+  clock; `PLAN_MAX_WAIT`; the canonical reference for a tip.
+- **Signing at due** (`pscan/dispatch.rs`, the driver decides when;
+  `bond_orchestrator.rs` `sign_bond_at_due`, the engine does it): fill,
+  live fee, sweep at the canonical reference with the plan's own
+  reservation available to it, `AssembleBond` (which no longer draws),
+  checked seal, then the driver marks and sends it in the same tick. A
+  post never sent whose reference has aged is re-signed first (Rule 1). The
+  scan task holds the wallet's own node for the fill (`start_pscan` takes
+  it).
+- **The endings and the drain** (`pscan/dispatch.rs`, `pscan/task.rs`,
+  `drain_orchestrator.rs` `NoExitOwed`, `pscan/seal_basis.rs`
+  `owes_no_exit`): one send per tick, the drain only on a tick that sends
+  no post; the retirement through `RetirementWitness::from_ended_plan`.
+- **The owner's withdrawal** (`unstake_facade.rs`): `unstake` withdraws a
+  plan and refuses a signed post; the wallet RPC's `UnstakeResult` gains
+  `WITHDRAWN` (contract 0.26.0).
+- **The reason** (`staking_outcomes.rs` `InFlightState::Planned`): a plan is
+  `pending` on the wire, with its wait as the entry's `reason`.
+- **The BD-Q5 deletion** (`stake_timing.rs`, `mod.rs`).
+
 **Its tests:**
 
 
@@ -671,15 +833,17 @@ built. Each carry below is recorded in both documents (rule 26 A5);
   + MAX_AGE`, written at assembly, one `reference_height` per record (the
   shared v13 field): under Rule 1 a sent record has one version. A planned
   stake has no reference until it is signed at due, so it cannot expire
-  before then. Two cases need WR-Q3's rule:
-  - **A plan that cannot be signed at due**: funding spent elsewhere, or a
-    posture refused. It needs an outcome (WR-Q2) and a release.
-  - **Withdrawing a plan by dropping the record.** No byte of it was ever
-    sent, so no bond can land later. That removes both objections WR-Q3
-    makes to freeing the inputs ("removes the pending record while a bond
-    can still land") and to cancelling by spending (a fee and an on-chain
-    linkage event). Whether the owner may withdraw a plan is WR-Q3's to
-    rule.
+  before then. Two cases needed WR-Q3's rule, and both are **ruled
+  2026-11-26** (§3.6):
+  - **A plan that cannot be signed at due** ends at once when its funding
+    is spent elsewhere or its shards can no longer be bonded, and at its
+    maximum wait when a limited reason (a fee above its funding) persists;
+    each has its own outcome, and its persona's funding is drained.
+  - **Withdrawing a plan** is allowed at any time before it is signed, by
+    dropping the record into an ended plan whose drain is owed. No byte of
+    it was ever sent, so no bond can land later; that removes both
+    objections WR-Q3 makes to freeing the inputs and to cancelling by
+    spending. The owner's verb is `unstake`.
 - **The WR-Q3 amendment (Rule 2), recorded in both documents.** No daemon
   verdict releases a submitted record of any kind; every submitted record
   ends at its end date. While a record that saw a terminal verdict can

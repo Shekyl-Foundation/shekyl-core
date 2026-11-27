@@ -27,9 +27,10 @@ use super::types::*;
 // ---------------------------------------------------------------------------
 
 /// Assemble the **full, broadcast-ready** JoinMarket bond transaction inside
-/// the actor (`ARCHIVAL_BOND_WI2_ASSEMBLY.md` §3.3) — the production superset
-/// of [`PlanBondPost`](crate::engine::stake_engine::persona::PlanBondPost) (which constructs the vin only and remains for the composition
-/// KAT).
+/// the actor (`ARCHIVAL_BOND_WI2_ASSEMBLY.md` §3.3), at the plan's due block
+/// (`ARCHIVAL_BOND_POST_DELAY.md` BD-Q3). The request's half is
+/// [`PlanBondPost`](crate::engine::stake_engine::persona::PlanBondPost),
+/// which draws the delay and builds nothing.
 ///
 /// Carries the same handle + ticket typed contracts as [`PlanBondPost`](crate::engine::stake_engine::persona::PlanBondPost), plus the
 /// **public** funding contexts the Engine-side orchestrator selected (§3.2)
@@ -37,11 +38,6 @@ use super::types::*;
 /// spend secrets are **not** in the message — they are re-derived from each
 /// record's `(ciphertext, index)` inside the handler
 /// ([`derive_p_source_secrets_bundle`](crate::engine::stake_engine::helpers::derive_p_source_secrets_bundle), rule 36).
-///
-/// The reply pairs the minted [`PBoundBytes`] with the bond-post placement
-/// offset from this request's entry-gap draw — the same seam discipline as
-/// [`BondPostPlacement`](crate::engine::stake_engine::persona::BondPostPlacement): the caller that receives the constructed vin receives
-/// where to place them.
 ///
 /// Lint-visible, deliberately: the wired Engine orchestrator consumes this, so
 /// no suppression applies. Go-live still needs SP-R0/2d-1 pruning **and** the
@@ -67,20 +63,17 @@ pub(crate) struct AssembleBond {
 }
 
 /// Reply of [`AssembleBond`]: the persona-bound wire bytes (minted at the
-/// single P-1 site, [`finalize_bond_tx`](crate::engine::bond_assembly::finalize_bond_tx)), the placement offset, and the
-/// funding gindexes for the caller's reservation record (§3.5). Secrets never
-/// cross the boundary.
+/// single P-1 site, [`finalize_bond_tx`](crate::engine::bond_assembly::finalize_bond_tx))
+/// and the funding gindexes for the caller's reservation record (§3.5).
+/// Secrets never cross the boundary. No placement: the plan holds the delay
+/// it drew at the request, and this reply is built at the due block.
 ///
 /// Lint-visible, deliberately: reply type of the wired orchestrator, so no
 /// suppression applies. Same dual go-live gate as [`AssembleBond`].
-// rule-21: (a) SP-R0 arm #1 pruning DONE 2026-07-18 (logic-discharged); retires with (b) the RPC stake entry (#332). The placement carrier is the bare `bond_post_offset_blocks` (the entry-seam plan/order-coin was retired in the GF-7 coin retirement).
 #[derive(Debug)]
 pub(crate) struct AssembledBondPost {
     /// The fully-signed, wire-encoded bond transaction, persona-bound.
     pub bound_tx: PBoundBytes,
-    /// Blocks from the private-intent anchor `t0` to the bond-post broadcast —
-    /// the drawn entry-gap spread (a [`BlockCount`], height-semantics C4).
-    pub bond_post_offset_blocks: BlockCount,
     /// The spent funding records' gindexes — the §3.5 reservation set.
     pub funding_gindexes: Vec<shekyl_types::GlobalOutputIndex>,
 }
@@ -93,11 +86,10 @@ impl Message<AssembleBond> for StakeEngine {
         msg: AssembleBond,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        // ── Steps 1–5: the shared bond-handler prologue (identical typed
-        // contracts + guarded draw as `PlanBondPost`); see
-        // `validate_and_draw_bond_offset`. ──────────────────────────────────
-        let (handle_slot, bond_post_offset_blocks) =
-            self.validate_and_draw_bond_offset(&msg.handle, msg.ticket.p_slot())?;
+        // ── Steps 1–2: the shared typed contracts (handle + ticket). No
+        // draw: the plan drew its delay once, at the request, and assembly
+        // at the due block never re-draws (BD-Q2). ─────────────────────────
+        let handle_slot = self.validate_bond_handle(&msg.handle, msg.ticket.p_slot())?;
 
         // ── Step 6: borrow the held bundle (never crosses the boundary) ──
         let keys = self
@@ -191,7 +183,6 @@ impl Message<AssembleBond> for StakeEngine {
 
         Ok(AssembledBondPost {
             bound_tx: assembled.bound_tx,
-            bond_post_offset_blocks,
             funding_gindexes: assembled.funding_gindexes,
         })
     }

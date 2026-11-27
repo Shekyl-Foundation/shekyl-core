@@ -3,38 +3,35 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! WI-2 Engine-side `assemble_bond_post` orchestrator
-//! (`ARCHIVAL_BOND_WI2_ASSEMBLY.md` §3.3).
-//!
-//! Public half only: pending gate, daemon-claimed-tip `anchor_t0`, anchored
-//! [`ReferenceBlock`], funding sweep, curve-tree paths, `AssembleBond` ask,
-//! persist-before-return via an independently constructed
-//! [`PendingPostStore`]. Secrets stay
-//! inside the stake actor (rule 36).
+//! The stake's two halves (`ARCHIVAL_BOND_WI2_ASSEMBLY.md` §3.3,
+//! `ARCHIVAL_BOND_POST_DELAY.md` BD-Q2, BD-Q3): the request seals a plan
+//! (funding reserved, delay drawn, nothing signed), and the due block signs
+//! it (fill, live fee, sweep at a fresh canonical reference, curve-tree
+//! paths, `AssembleBond` ask, checked seal via an independently constructed
+//! [`PendingPostStore`]). Secrets stay inside the stake actor (rule 36).
 
 use std::sync::Arc;
 
 use super::local_ledger::LocalLedger;
-use shekyl_archival_retention::{bond_floor, HoldingsDescriptor, HoldingsKind, ShardSet};
+use shekyl_archival_retention::{
+    bond_floor, HoldingsDescriptor, HoldingsKind, ShardSet, ShardSetError,
+};
 use shekyl_curve_tree::{
-    select_reference_height, should_reanchor, AssembleInput, BlockHash, CurveTreeRoot,
-    ReferenceBlock,
+    select_reference_height, should_reanchor, BlockHash, CurveTreeRoot, ReferenceBlock,
 };
 use shekyl_engine_file::WalletFile;
-use shekyl_engine_state::pending_post_block::{PendingBondPost, PendingPostState, SealAdmission};
+use shekyl_engine_state::pending_post_block::{PendingBondPlan, PlannedPosture, SealAdmission};
+use shekyl_engine_state::PendingPostBlock;
 use shekyl_rpc_transport::DaemonTarget;
-use shekyl_tx_builder::{LeafEntry, TreeContext};
-use shekyl_types::{BlockHeight, PSlot};
+use shekyl_types::{BlockHeight, GlobalOutputIndex, PSlot};
 use shekyl_units::AtomicUnits;
 use tokio::sync::RwLock;
 
-use shekyl_curve_tree::ClientError;
-
 use super::bond_assembly::{
-    sweep_funding_outputs, BondAssemblyError, FundingInputContext, FundingSelection,
-    SpentRecordsDurablyPruned, SweepOverflowPolicy,
+    sweep_funding_outputs, BondAssemblyError, FundingSelection, SpentRecordsDurablyPruned,
+    SweepOverflowPolicy,
 };
-use super::curve_tree_actor::{CurveTreeHandle, CurveTreeHandleError};
+use super::curve_tree_actor::CurveTreeHandle;
 use super::fee_policy::{CeilingViolation, FeeEstimatorError, ValidatedFeeEstimates};
 use super::fee_snapshot::map_daemon_engine_fee_error;
 use super::pending_post_gate::{ForegroundSession, UserPendingPost};
@@ -438,35 +435,50 @@ pub enum FirstStakeError {
     Fill(CompleteTreeFillError),
 }
 
+/// What a sealed plan reports back to the stake entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PlannedStake {
+    /// How many funding outputs the plan reserved.
+    pub(crate) swept_inputs: usize,
+}
+
+/// The holdings a planned posture posts at its due block: the one
+/// conversion from a persisted posture into a [`HoldingsDescriptor`].
+///
+/// # Errors
+///
+/// [`ShardSetError`] when a market plan's shard list is no longer a valid
+/// set (a corrupt record; the request built it from a valid one).
+pub(crate) fn planned_holdings(
+    posture: &PlannedPosture,
+) -> Result<HoldingsDescriptor, ShardSetError> {
+    Ok(match posture {
+        PlannedPosture::SupportCompleteTree => HoldingsDescriptor {
+            kind: HoldingsKind::CompleteTree,
+            shard_ids: ShardSet::empty(),
+        },
+        PlannedPosture::Market { shard_ids } => HoldingsDescriptor {
+            kind: HoldingsKind::ShardSetCompact,
+            shard_ids: ShardSet::new(shard_ids.clone())?,
+        },
+    })
+}
+
 impl StakePosture {
-    /// The holdings this posture posts — the only conversion from an
-    /// intent into a [`HoldingsKind`] in the tree. The caller names a
-    /// posture and never a kind or a shard set (D-3; the §9.1
-    /// no-select-all property).
-    ///
-    /// [`StakePosture::Market`] refuses rather than posting an empty
-    /// `ShardSetCompact`, which consensus rejects at JoinMarket anyway
-    /// (`bond_post.rs`, floor-zero protection) — so the alternative to
-    /// this refusal is not a smaller bond, it is an invalid one.
-    ///
-    /// [`StakePosture::SupportCompleteTree`] is the whole-corpus
-    /// backstop: `CompleteTree` carries no shard list by wire rule
-    /// (`BondPostError::CompleteTreeWithShardIds`), so the empty set
-    /// here is the obligation's *encoding*, not its size.
-    pub(crate) fn holdings(self) -> Result<HoldingsDescriptor, FirstStakeError> {
+    /// The posture as the plan persists it. [`Self::Market`] refuses here,
+    /// before anything is written: market staking assigns shards, and shard
+    /// assignment is not built.
+    pub(crate) fn planned(self) -> Result<PlannedPosture, FirstStakeError> {
         match self {
             Self::Market => Err(FirstStakeError::NoShardsAvailable),
-            Self::SupportCompleteTree => Ok(HoldingsDescriptor {
-                kind: HoldingsKind::CompleteTree,
-                shard_ids: ShardSet::empty(),
-            }),
+            Self::SupportCompleteTree => Ok(PlannedPosture::SupportCompleteTree),
         }
     }
 }
 
-use super::holdings_fill::{CompleteTreeFillError, FilledHoldings};
+use super::holdings_fill::CompleteTreeFillError;
 use super::signer::EngineSignerKind;
-use super::stake_engine::{AssembledBondPost, PersonaHandle, StakeEngineError};
+use super::stake_engine::{PersonaHandle, StakeEngineError};
 use super::stake_persist::PersistedBondTicket;
 use super::traits::{DaemonEngine, EconomicsEngine, LedgerEngine, PendingTxEngine, RefreshEngine};
 use super::Engine;
@@ -524,34 +536,32 @@ where
     P: PendingTxEngine,
     Self: Send + Sync,
 {
-    /// Engine-side WI-2 assemble orchestrator (`ARCHIVAL_BOND_WI2_ASSEMBLY.md`
-    /// §3.3 steps 1–6).
+    /// Seal the stake's plan at the request (`ARCHIVAL_BOND_POST_DELAY.md`
+    /// BD-Q2, BD-Q3): the funding sweep reserves the persona's funding, the
+    /// actor draws the delay once, and the plan is sealed with no bytes. The
+    /// post is assembled, proved and signed at its due block by
+    /// [`Self::sign_bond_at_due`]; nothing is emitted at the request.
     ///
     /// The SP-R0 witness precondition is **discharged** (arm #1, 2026-07-18):
     /// [`SpentRecordsDurablyPruned::arm1_watch_pruning_live`] is the sole
-    /// production mint, so there is **no compile block left on this path** —
-    /// go-live is gated only by the #332 staker-activation entry that wires
-    /// this orchestrator (nothing else guards it; activation sequencing must
-    /// be handled there, not assumed from a witness gap). Tests pass
-    /// `SpentRecordsDurablyPruned::for_test`. This carries no suppression —
-    /// it is reached from wired code; go-live retires with the RPC stake entry
-    /// (`docs/FOLLOWUPS.md`).
-    pub(crate) async fn assemble_bond_post(
+    /// production mint. Tests pass `SpentRecordsDurablyPruned::for_test`.
+    #[allow(clippy::too_many_arguments)] // the request's whole input: handle, ticket, posture, fee, witness
+    pub(crate) async fn seal_bond_plan(
         self_arc: Arc<RwLock<Self>>,
         handle: PersonaHandle,
         ticket: PersistedBondTicket,
-        holdings: FilledHoldings,
+        posture: PlannedPosture,
         fee: AtomicUnits,
         pruning_landed: &SpentRecordsDurablyPruned,
-    ) -> Result<AssembledBondPost, StakeEngineError> {
+    ) -> Result<PlannedStake, StakeEngineError> {
         let p_slot = handle.p_slot();
 
-        // Brief read: clone the spawn inputs the assemble path needs.
+        // Brief read: clone the spawn inputs the plan needs.
         let (daemon, stake, curve_tree, pending_gate, chain_tip, tip_hash_at) = {
             let g = self_arc.read().await;
             let stake = g
                 .stake_handle()
-                .ok_or_else(|| BondAssemblyError::build("assemble", "no stake engine"))?;
+                .ok_or_else(|| BondAssemblyError::build("plan", "no stake engine"))?;
             let snap = g.ledger.snapshot();
             let chain_tip = g.ledger.synced_height();
             let tip_hash_at = move |h: BlockHeight| snap.block_hash_at(h);
@@ -564,191 +574,101 @@ where
                 tip_hash_at,
             )
         };
-
-        // F-1: independent store over the cloned lock (no Engine-held store).
         let store = pending_post_store_for_engine(self_arc.clone(), pending_gate);
+        let persona = stake.persona_canonical_id(p_slot).await?;
 
-        // §3.3 / §3.5: one live post per persona. This early read is an
-        // optimistic fast-fail only — it keys on `p_slot` (the sole identity
-        // available before assembly; 1:1 with the persona canonical id, which
-        // is not derivable until the tx is bound below). The *authoritative*
-        // one-post-per-persona serialization is `seal_post` under the write
-        // lock (see the final seal), which rejects atomically by persona even
-        // if two same-persona assembles race past this gate. Reopening
-        // criterion (rule 21): if the RPC entry ever admits concurrent
-        // same-persona requests whose wasted proof work becomes a concern,
-        // add a per-`p_slot` in-flight reservation held from here to the seal.
+        // One stake per persona. This early read is an optimistic fast-fail
+        // only; the authoritative serialization is `seal_plan` under the
+        // write lock, which refuses atomically by persona.
         let already = store
-            .read(|block| block.posts().iter().any(|p| p.p_slot == p_slot))
+            .read(|block| block.has_live_post_for(&persona))
             .await
             .map_err(|e| BondAssemblyError::build("pending-post read", e))?;
         if already {
             return Err(BondAssemblyError::PendingPostExists.into());
         }
 
-        // (i) Named daemon-claimed-tip clock for anchor_t0 (never synced/ingested).
-        let anchor_t0 = daemon_claimed_tip(&daemon)
+        // The request's count on the daemon-claimed clock: the due is never
+        // before it (BD-Q2, elapsed time counts).
+        let requested_at = daemon_claimed_tip(&daemon)
             .await
             .map_err(|e| BondAssemblyError::build("daemon claimed tip", e))?;
 
-        // (ii) The authoritative funding sweep — the SAME body the W1
-        // preflight ran (`sweep_bond_funding`), re-run at this path's own
-        // fresh reference/state so the persist→assemble window cannot ride
-        // stale inputs.
-        let (selection, reference, snapshot_generation) = Self::sweep_bond_funding(
+        // The authoritative funding sweep — the SAME body the W1 preflight
+        // ran — selects what the plan reserves. Its reference is only the
+        // sweep's maturity bar; the post is proved against a fresh one at due.
+        let holdings = planned_holdings(&posture)
+            .map_err(|e| BondAssemblyError::build("planned holdings", format!("{e:?}")))?;
+        let (selection, _reference, snapshot_generation) = Self::sweep_bond_funding(
             self_arc.clone(),
             &store,
             &curve_tree,
             chain_tip,
             tip_hash_at,
             p_slot,
-            holdings.descriptor(),
+            &holdings,
             fee,
             pruning_landed,
+            &[],
         )
         .await?;
-        // SA-R1-c (GF4b-2, owned by the activation round): the common-case
-        // bond consumes exactly ONE structured funding input; the on-chain
-        // input count is self-privacy, so multi-tranche is a consciously
-        // LOGGED exception, never a silent one (and never a consensus
-        // refusal — legitimate multi-input bonds exist).
-        if selection.records.len() > 1 {
-            tracing::warn!(
-                swept_inputs = selection.records.len(),
-                "multi-input bond post: the common case is one structured stake_in \
-                 output; this post reveals its funding-input count on-chain (GF4b-2 \
-                 / SA-R1-c consciously-logged exception)"
-            );
-        }
-        // `FundingSelection` is non-empty by construction (the sweep refuses a
-        // zero-record consume), so `selection.records` carries ≥1 record and
-        // the post spends at least one input — this holds even for a
-        // degenerate `floor == 0`, which is why the guarantee lives in the
-        // sweep rather than an assumed `floor > 0` here.
 
-        let assemble_inputs: Vec<AssembleInput> = selection
+        // The delay, drawn once (BD-Q2). A refused seal discards it with the
+        // plan; an existing plan is never re-drawn.
+        let draw = stake.plan_bond_post(handle, ticket).await?;
+
+        let funding_gindexes: Vec<_> = selection.records.iter().map(|r| r.gindex).collect();
+        let funded_through = selection
             .records
             .iter()
-            .map(crate::engine::ownership::p_assemble_input)
-            .collect();
-
-        // The height the post is proved against: its end date (WR-Q3).
-        let reference_height = reference.height;
-        let paths = curve_tree
-            .assemble_tx(reference, assemble_inputs)
-            .await
-            .map_err(|e| match e {
-                // The one retryable path-assembly refusal, kept typed across
-                // the boundary (a rendered `Build.detail` would force retry
-                // policy into substring-matching the error text).
-                CurveTreeHandleError::Client(ClientError::OutputNotDrained { gindex, .. }) => {
-                    BondAssemblyError::OutputNotYetDrained {
-                        gindex: gindex.to_raw(),
-                    }
-                }
-                other => BondAssemblyError::build("assemble_tx", format!("{other:?}")),
-            })?;
-        // One path per input asked for, in that order, all to one tree: the
-        // batch's own properties (R-26), so the records zip with its paths.
-        let tree = paths.tree();
-        let tree_ctx = TreeContext {
-            reference_block: tree.reference_block,
-            tree_root: tree.tree_root,
-            tree_depth: tree.tree_depth,
-        };
-
-        let funding: Vec<FundingInputContext> = selection
-            .records
-            .into_iter()
-            .zip(paths.into_paths().map(|(_, path)| path.into_parts()))
-            .map(|(record, path)| FundingInputContext {
-                record,
-                leaf_chunk: path
-                    .leaf_chunk
-                    .iter()
-                    .map(|cl| LeafEntry {
-                        output_key: cl.output_key.to_bytes(),
-                        key_image_gen: cl.key_image_gen,
-                        commitment: cl.commitment.to_bytes(),
-                        cm_x: cl.cm_x,
-                    })
-                    .collect(),
-                c1_layers: path.c1_layers,
-                c2_layers: path.c2_layers,
-            })
-            .collect();
-
-        let assembled = stake
-            .assemble_bond(handle, ticket, holdings, funding, tree_ctx, fee.to_raw())
-            .await?;
-
-        // Persist-before-return (§3.3 step 6 / pin P-2).
-        let sealed = PendingBondPost {
+            .map(|r| r.height)
+            .max()
+            .unwrap_or(BlockHeight::ZERO);
+        let swept_inputs = funding_gindexes.len();
+        let plan = PendingBondPlan {
             p_slot,
-            persona: *assembled.bound_tx.persona(),
-            tx_bytes: assembled.bound_tx.bytes().to_vec(),
-            bond_post_offset_blocks: assembled.bond_post_offset_blocks,
-            anchor_t0,
-            funding_gindexes: assembled.funding_gindexes.clone(),
-            state: PendingPostState::Pending,
-            reference_height,
-            terminal: None,
+            persona,
+            posture,
+            draw,
+            requested_at,
+            funding_gindexes,
+            funded_through,
+            wait: None,
         };
-        let persona = sealed.persona;
         let (admission, durability) = store
             .seal_reporting(
                 |block| {
-                    // Seal-time reservation re-check under the write lock — the
-                    // drain seam's guard, which this path was missing. The
-                    // `reserved` snapshot read before assembly is stale: a
-                    // same-persona claim or drain assembled concurrently may have
-                    // reserved one of these funding inputs since, and persona
-                    // dedup alone does not see a cross-kind gindex collision.
-                    //
-                    // It matters beyond the doomed record it avoids.
-                    // `PendingPostBlock::remove_settled` retires a claim or drain
-                    // when the inputs it reserved leave the live funding set, and
-                    // reads that absence as proof THAT record's transaction
-                    // confirmed. The inference holds only while one record can
-                    // reserve a given gindex: if a post and a drain share an input,
-                    // the post confirming spends it and retires the drain too —
-                    // reopening a lane whose transaction never landed. This post is
-                    // not itself retired that way (its evidence is the pscan's own
-                    // bond-post match), but it can falsify someone else's, so the
-                    // guard belongs here as much as on the paths it protects.
-                    let admission = block.seal_post(sealed, snapshot_generation);
+                    // Seal-time reservation re-check under the write lock (see
+                    // `classify_seal`): a claim or drain assembled concurrently
+                    // may have reserved one of these inputs since the sweep.
+                    let admission = block.seal_plan(plan, snapshot_generation);
                     (admission == SealAdmission::Admit, admission)
                 },
-                move |block| block.remove_post(&persona).is_some(),
+                move |block| block.remove_plan(&persona).is_some(),
             )
             .await
             .map_err(|e| match e {
-                // The seal's save failed: nothing was sent, and the stake
-                // answers the save's cause (Rick, 2026-11-19).
                 super::pscan::pending_store::SealError::NotSaved(cause) => {
                     BondAssemblyError::SealNotSaved(cause)
                 }
                 super::pscan::pending_store::SealError::Store(e) => {
-                    BondAssemblyError::build("pending-post seal", e)
+                    BondAssemblyError::build("pending-plan seal", e)
                 }
             })?;
         match admission {
             SealAdmission::Admit => {}
             SealAdmission::PersonaLive => return Err(BondAssemblyError::PendingPostExists.into()),
-            // Same remedy — retry against a fresh snapshot — so both map to the
-            // one retryable refusal, whose message names every cause.
             SealAdmission::InputRaced | SealAdmission::Stale => {
                 return Err(BondAssemblyError::InputRaced.into())
             }
         }
-        // A seal whose save was not confirmed was removed under the seal's
-        // own guard (`seal_reporting`), so the dispatch driver never selects
-        // bytes whose record a power loss could take; the stake answers with
-        // the save's own code (Rick, 2026-11-19).
+        // A plan whose save was not confirmed was removed under the seal's own
+        // guard (`seal_reporting`); the stake answers with the save's own code
+        // (Rick, 2026-11-19).
         super::dispatch_durability::require_confirmed(durability)
             .map_err(BondAssemblyError::SealNotSaved)?;
 
-        Ok(assembled)
+        Ok(PlannedStake { swept_inputs })
     }
 
     /// The one funding-sweep body (SA-R1-b): sealed funding records +
@@ -756,12 +676,13 @@ where
     /// [`BondAssemblyError::BondFloorZero`] typed refusal) + anchored
     /// reference + [`sweep_funding_outputs`]. Both the W1 preflight
     /// ([`Engine::first_stake`], pre-durable) and the authoritative
-    /// assemble sweep ([`Engine::assemble_bond_post`], post-durable) call
+    /// plan's sweep ([`Engine::seal_bond_plan`], post-durable) and the sweep at
+    /// due ([`Engine::sign_bond_at_due`]) call
     /// **this** function, so the two can never drift — the preflight's
     /// W1-clean promise ("assemble cannot refuse on funding after preflight
     /// passed, absent a state change") is exactly their equality.
     #[allow(clippy::too_many_arguments)] // the sweep's full input surface, shared by two call sites
-    async fn sweep_bond_funding(
+    pub(crate) async fn sweep_bond_funding(
         self_arc: Arc<RwLock<Self>>,
         store: &PendingPostStore<WalletFilePendingSealStore<S, D, L, E, R, P>>,
         curve_tree: &CurveTreeHandle,
@@ -771,6 +692,7 @@ where
         holdings: &HoldingsDescriptor,
         fee: AtomicUnits,
         pruning_landed: &SpentRecordsDurablyPruned,
+        own: &[GlobalOutputIndex],
     ) -> Result<(FundingSelection, ReferenceBlock, u64), BondAssemblyError> {
         // Anchored ReferenceBlock via the ordinary procedure (WI-2 F-6).
         let reference = anchored_reference_block(curve_tree, chain_tip, tip_hash_at).await?;
@@ -790,7 +712,12 @@ where
                 SealBasisError::PScan(e) => BondAssemblyError::build("pscan state load", e),
             })?;
         let snapshot_generation = basis.generation();
-        let reserved = basis.reserved().clone();
+        // The stake's own reservation (its plan or never-sent post) is its to
+        // spend at due; every other record's still excludes.
+        let mut reserved = basis.reserved().clone();
+        for g in own {
+            reserved.remove(g);
+        }
         let funding_records = basis
             .into_pscan()
             .map(|s| s.funding_outputs().to_vec())
@@ -932,7 +859,7 @@ where
         // first-stake); a durable slot with NEITHER is the W2 phantom —
         // resume, and only at a recorded bonded slot.
         let pending_exists = store
-            .read(|block| !block.posts().is_empty())
+            .read(PendingPostBlock::has_stake_in_flight)
             .await
             .map_err(|e| FirstStakeError::State(format!("pending read: {e}")))?;
         if pending_exists {
@@ -998,9 +925,11 @@ where
         // post in flight should hear `BondInFlight`, not "no shards
         // available" (rule 82's misdiagnosis guard). Everything below is
         // either a daemon round trip, a funding sweep, or durable — so a
-        // refused posture costs none of it. The conversion itself lives
-        // on [`StakePosture::holdings`].
-        let holdings = posture.holdings()?;
+        // refused posture costs none of it. The conversions live on
+        // [`StakePosture::planned`] and [`planned_holdings`].
+        let planned = posture.planned()?;
+        let holdings = planned_holdings(&planned)
+            .map_err(|e| FirstStakeError::State(format!("planned holdings: {e:?}")))?;
         // The bond fee is derived from the daemon's live estimate over the
         // bond size ceiling (the seam the WI-2 addendum reserved for this
         // entry — overpaying is a miner transfer, never a conservation
@@ -1029,18 +958,20 @@ where
             &holdings,
             fee,
             &witness,
+            &[],
         )
         .await
         .map(drop)
         .map_err(|e| preflight_error(&e))?;
 
-        // Fill first, then post (WSS-Q4, WSS-Q15): the persona body store
-        // holds every shard this bond owes before anything durable is
-        // written. After the preflight sweep, so an underfunded persona hears
-        // that before a fill runs; before the durable point, so a fill
-        // refusal leaves a non-staker (W1-clean).
-        let filled = Self::fill_complete_tree(self_arc.clone(), node, holdings)
+        // Fill at the request too (WSS-Q4, WSS-Q15): the shards final now
+        // are in the persona body store before anything durable is written,
+        // so a wallet whose node cannot fill hears it here, W1-clean, and not
+        // only when the plan comes due. The fill at due adds the shards that
+        // close while the plan waits.
+        Self::fill_complete_tree(self_arc.clone(), node, holdings)
             .await
+            .map(drop)
             .map_err(FirstStakeError::Fill)?;
 
         // The durable point (W1 above it, W2 below it). Re-entrant for the
@@ -1056,16 +987,16 @@ where
             .await
             .map_err(|e| FirstStakeError::Engine(engine_failure_detail(&e)))?;
         // Post-durable failures render through the amount-free sanitizer:
-        // the assemble path re-runs the funding sweep, and its refusals
-        // must not leak the persona figures the preflight arm withholds.
-        let assembled =
-            Self::assemble_bond_post(self_arc.clone(), handle, ticket, filled, fee, &witness)
+        // the plan re-runs the funding sweep, and its refusals must not leak
+        // the persona figures the preflight arm withholds.
+        let planned =
+            Self::seal_bond_plan(self_arc.clone(), handle, ticket, planned, fee, &witness)
                 .await
                 .map_err(post_assembly_failure)?;
 
         Ok(FirstStakeOutcome {
             p_slot: slot.to_raw(),
-            swept_inputs: assembled.funding_gindexes.len(),
+            swept_inputs: planned.swept_inputs,
             resumed,
         })
     }

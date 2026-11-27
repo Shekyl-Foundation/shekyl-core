@@ -79,20 +79,22 @@ use shekyl_types::BlockHeight;
 /// The posture is the conversion: Market has nothing to post until
 /// assignment exists, Foundation is CompleteTree with the empty-set
 /// *encoding*. These are the two facts `first_stake` must not re-derive
-/// inline — they live on [`StakePosture::holdings`].
+/// inline — they live on [`StakePosture::planned`].
 #[test]
 fn market_posture_has_no_holdings_until_assignment_exists() {
     assert!(matches!(
-        StakePosture::Market.holdings(),
+        StakePosture::Market.planned(),
         Err(FirstStakeError::NoShardsAvailable)
     ));
 }
 
 #[test]
 fn foundation_posture_is_complete_tree_with_the_empty_encoding() {
-    let holdings = StakePosture::SupportCompleteTree
-        .holdings()
+    let planned = StakePosture::SupportCompleteTree
+        .planned()
         .expect("foundation posts");
+    let holdings =
+        super::planned_holdings(&planned).expect("a complete tree has no shard list to refuse");
     assert_eq!(
         holdings.kind,
         shekyl_archival_retention::HoldingsKind::CompleteTree

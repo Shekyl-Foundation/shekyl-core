@@ -71,11 +71,14 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use shekyl_engine_state::PendingPostBlock;
+use shekyl_rpc_transport::DaemonTarget;
+use shekyl_types::{ChainCount, PCanonicalId, PSlot};
 
 use super::block_source::DaemonBlockSource;
 use super::cadence::FixedRateSchedule;
 use super::dispatch::{
-    BondBroadcast, DispatchConfig, DispatchDriver, PendingPostStore, PendingSealStore,
+    BondBroadcast, BondPlanSigner, DispatchConfig, DispatchDriver, PendingPostStore,
+    PendingSealStore, PlanAttempt,
 };
 use super::pending_store::OpenCover;
 use super::task::{run_pscan_task, PScanConfig, PScanStore};
@@ -534,6 +537,77 @@ where
     WalletFilePendingSealStore { engine }.load().await
 }
 
+/// The production [`BondPlanSigner`]: signs a due stake and drains an ended
+/// persona through the engine (`ARCHIVAL_BOND_POST_DELAY.md` BD-Q3). It holds
+/// the wallet's own node target because signing at due fills the shards the
+/// bond owes from that node (WSS-Q4), the same node the request filled from.
+#[allow(clippy::type_complexity)] // the same engine-arc shape as `WalletFilePendingSealStore`
+struct LocalBondSigner<S, D, L, E, R, P>
+where
+    S: EngineSignerKind,
+    D: DaemonEngine,
+    L: LedgerEngine,
+    E: EconomicsEngine,
+    R: RefreshEngine,
+    P: PendingTxEngine,
+{
+    engine: Arc<RwLock<Engine<S, D, L, E, R, P, WalletFile>>>,
+    node: DaemonTarget,
+}
+
+impl<S, D, L, E, R, P> BondPlanSigner for LocalBondSigner<S, D, L, E, R, P>
+where
+    S: EngineSignerKind + Send + Sync + 'static,
+    D: DaemonEngine,
+    L: LedgerEngine,
+    E: EconomicsEngine,
+    R: RefreshEngine,
+    P: PendingTxEngine,
+    Engine<S, D, L, E, R, P, WalletFile>: Send + Sync,
+{
+    fn sign_at_due(
+        &self,
+        persona: PCanonicalId,
+        tip: ChainCount,
+    ) -> impl std::future::Future<Output = PlanAttempt> + Send {
+        let engine = self.engine.clone();
+        let node = self.node.clone();
+        async move { Engine::sign_bond_at_due(engine, &node, persona, tip).await }
+    }
+
+    fn drain_ended(
+        &self,
+        p_slot: PSlot,
+        persona: PCanonicalId,
+    ) -> impl std::future::Future<Output = ()> + Send {
+        let engine = self.engine.clone();
+        async move { Engine::drain_ended_persona(engine, p_slot, persona).await }
+    }
+
+    fn persona_ended(&self, p_slot: PSlot) -> impl std::future::Future<Output = ()> + Send {
+        let engine = self.engine.clone();
+        async move {
+            let stake = { engine.read().await.stake_handle() };
+            if let Some(stake) = stake {
+                if let Err(error) = stake.deactivate_ended_persona(p_slot).await {
+                    tracing::warn!(%error, "staking: an ended persona could not be deactivated");
+                }
+            }
+        }
+    }
+
+    fn slot_retired(&self, p_slot: PSlot) -> impl std::future::Future<Output = ()> + Send {
+        let engine = self.engine.clone();
+        async move {
+            engine
+                .read()
+                .await
+                .ledger
+                .retire_bonded_slot(p_slot.index());
+        }
+    }
+}
+
 /// The production [`BondBroadcast`]: routes every dispatch through the
 /// [`BroadcastSubmitter::local`] pre-bound ① construction (which is itself
 /// the `for_posture` posture→submitter choke point) and its
@@ -606,13 +680,14 @@ where
     /// wiring failure.
     pub async fn start_pscan_if_staker(
         self_arc: Arc<RwLock<Self>>,
+        node: &DaemonTarget,
     ) -> Result<Option<PScanHandle>, PScanStartError> {
         if self_arc.read().await.stake_handle().is_none() {
             return Ok(None);
         }
         // Benign TOCTOU: the stake engine is set at open and never unset during a
         // session, so a re-check inside `start_pscan` can only agree.
-        Self::start_pscan(self_arc).await.map(Some)
+        Self::start_pscan(self_arc, node).await.map(Some)
     }
 
     /// Spawn the driving P-scan task at production settings and return a
@@ -635,8 +710,17 @@ where
     /// - [`PScanStartError::LoadFailed`] if a sealed state cannot be loaded.
     /// - [`PScanStartError::StateFileVersionUnsupported`] if the `.wallet.pscan`
     ///   seal's own schema word is not this build's.
-    pub async fn start_pscan(self_arc: Arc<RwLock<Self>>) -> Result<PScanHandle, PScanStartError> {
-        Self::start_pscan_with(self_arc, PScanConfig::production(), DEFAULT_PSCAN_CADENCE).await
+    pub async fn start_pscan(
+        self_arc: Arc<RwLock<Self>>,
+        node: &DaemonTarget,
+    ) -> Result<PScanHandle, PScanStartError> {
+        Self::start_pscan_with(
+            self_arc,
+            node,
+            PScanConfig::production(),
+            DEFAULT_PSCAN_CADENCE,
+        )
+        .await
     }
 
     /// Spawn the driving P-scan task with explicit `config` + `cadence` — the
@@ -677,11 +761,13 @@ where
     /// All per-sweep failures are recoverable and logged by the loop, not here.
     pub(crate) async fn start_pscan_with(
         self_arc: Arc<RwLock<Self>>,
+        node: &DaemonTarget,
         config: PScanConfig,
         cadence: Duration,
     ) -> Result<PScanHandle, PScanStartError> {
         Self::spawn_pscan(
             self_arc,
+            node,
             config,
             cadence,
             #[cfg(all(test, feature = "gf7-hooks"))]
@@ -706,10 +792,12 @@ where
     #[cfg(all(test, feature = "gf7-hooks"))]
     pub(crate) async fn start_pscan_sealing_run(
         self_arc: Arc<RwLock<Self>>,
+        node: &DaemonTarget,
         overrides: SealingRunOverrides,
     ) -> Result<PScanHandle, PScanStartError> {
         Self::spawn_pscan(
             self_arc,
+            node,
             PScanConfig::production(),
             DEFAULT_PSCAN_CADENCE,
             Some(overrides),
@@ -723,6 +811,7 @@ where
     /// requirement) rather than a parallel copy that could drift.
     async fn spawn_pscan(
         self_arc: Arc<RwLock<Self>>,
+        node: &DaemonTarget,
         config: PScanConfig,
         cadence: Duration,
         #[cfg(all(test, feature = "gf7-hooks"))] sealing: Option<SealingRunOverrides>,
@@ -827,7 +916,13 @@ where
             ),
         }
 
-        let dispatch_config = DispatchConfig::production(cadence);
+        // The driver's anchor depth is the scan's own horizon (BD-Q2: a
+        // funding output is sweepable once the sealed scan covers its block),
+        // so the two read one number.
+        let dispatch_config = DispatchConfig {
+            reorg_depth: config.reorg_depth,
+            ..DispatchConfig::production(cadence)
+        };
         // Sealing-run injection (§19.8.1): split the overrides into the config
         // (positive control only) and the recording observer. `None` — every
         // production start and every graded sealing row — leaves both exactly
@@ -841,7 +936,17 @@ where
             None => (dispatch_config, None),
         };
 
-        let dispatch = DispatchDriver::new(pending_seal, broadcast, dispatch_config, pending_gate);
+        let signer = LocalBondSigner {
+            engine: self_arc.clone(),
+            node: node.clone(),
+        };
+        let dispatch = DispatchDriver::new(
+            pending_seal,
+            broadcast,
+            signer,
+            dispatch_config,
+            pending_gate,
+        );
         #[cfg(all(test, feature = "gf7-hooks"))]
         let dispatch = match sealing_observer {
             Some(observer) => {

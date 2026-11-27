@@ -69,6 +69,28 @@ pub enum OutcomeKind {
     /// outputs, so this is a wallet bug or a compromised key. The unspent
     /// rest was returned.
     SpentElsewhere,
+    /// The owner withdrew a planned stake before it was signed (v15).
+    /// Nothing was sent; the persona's funding is drained to the principal.
+    Withdrawn,
+    /// A planned stake's shards could no longer be bonded: the wallet's node
+    /// had discarded their bodies (v15). Nothing was sent; the persona's
+    /// funding is drained to the principal.
+    Unbondable,
+    /// A planned stake could still not be signed when its maximum wait from
+    /// its due block passed (v15). Nothing was sent; the persona's funding
+    /// is drained to the principal.
+    WaitedOut,
+}
+
+impl From<super::PlanEnding> for OutcomeKind {
+    fn from(ending: super::PlanEnding) -> Self {
+        match ending {
+            super::PlanEnding::SpentElsewhere => Self::SpentElsewhere,
+            super::PlanEnding::Withdrawn => Self::Withdrawn,
+            super::PlanEnding::Unbondable => Self::Unbondable,
+            super::PlanEnding::WaitedOut => Self::WaitedOut,
+        }
+    }
 }
 
 /// The durable last outcome for one `(kind, persona)` (WR-Q2).
@@ -562,8 +584,9 @@ mod tests {
             p_slot: PSlot::from_raw(0),
             persona: PCanonicalId::from_bytes([persona_byte; 32]),
             tx_bytes: vec![0xAB; 16],
-            bond_post_offset_blocks: BlockCount::from_raw(12),
-            anchor_t0: ChainCount::from_raw(1_000),
+            posture: PlannedPosture::SupportCompleteTree,
+            due: ChainCount::from_raw(1_000),
+            funded_through: BlockHeight::from_raw(1_000),
             funding_gindexes: gindexes(funding),
             state: PendingPostState::Pending,
             reference_height: TEST_REFERENCE,

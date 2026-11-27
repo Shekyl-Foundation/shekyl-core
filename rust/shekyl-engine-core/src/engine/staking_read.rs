@@ -264,10 +264,14 @@ pub(crate) fn staked_balance_from_records(
             // and must not be re-counted here — key on the raw match set, not
             // the live set, so a bond that confirmed *and* is already
             // releasing is excluded from pending too.
+            // A plan (not yet signed) will bond the same floor at its due
+            // block, so it is pending principal too.
             let count = block
                 .posts()
                 .iter()
-                .filter(|post| !confirmed_bonds.contains(&post.persona))
+                .map(|post| post.persona)
+                .chain(block.plans().iter().map(|plan| plan.persona))
+                .filter(|persona| !confirmed_bonds.contains(persona))
                 .count();
             principal_for_bond_count(count)?
         }
@@ -520,7 +524,7 @@ mod tests {
         BondPostRecord, PFundingOutputRecord, RetiredPersonaRecord,
     };
     use shekyl_engine_state::{PendingBondPost, PendingPostState};
-    use shekyl_types::{BlockCount, PCanonicalId, SettlementEpoch};
+    use shekyl_types::{PCanonicalId, SettlementEpoch};
 
     fn persona(b: u8) -> PCanonicalId {
         PCanonicalId::from_bytes([b; 32])
@@ -585,8 +589,9 @@ mod tests {
             p_slot: PSlot::from_raw(0),
             persona: persona(id),
             tx_bytes: vec![0xAB; 4],
-            bond_post_offset_blocks: BlockCount::ZERO,
-            anchor_t0: ChainCount::from_raw(1),
+            posture: shekyl_engine_state::PlannedPosture::SupportCompleteTree,
+            due: ChainCount::from_raw(1),
+            funded_through: shekyl_types::BlockHeight::from_raw(0),
             funding_gindexes: Vec::new(),
             state: PendingPostState::Pending,
             reference_height: shekyl_types::BlockHeight::from_raw(1_000_000),

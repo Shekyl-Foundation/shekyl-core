@@ -4483,6 +4483,7 @@ async fn pscan_until(
 
     let handle = super::Engine::start_pscan_with(
         arc.clone(),
+        &super::test_support::node_never_reached(),
         PScanConfig {
             reorg_depth: BlockCount::from_raw(PSCAN_TEST_REORG_DEPTH),
             batch_blocks: PSCAN_SEAL_BATCH,
@@ -4779,22 +4780,41 @@ async fn stake_persona_to_confirmed_bond(
 /// pending post and dispatch it through the audited posture→submitter
 /// choke point. The verdict is returned, not judged, so one body serves
 /// the confirmed-bond fixture and the FND-20 tripwire.
-async fn stake_persona_and_submit_bond(
+/// What `plan_persona_stake` hands back: the staker wallet with its persona
+/// funded and discovered, and its stake **planned** (BD-Q3: funding reserved,
+/// delay drawn, nothing signed or sent).
+struct PlannedPersonaStake {
+    /// The staker wallet engine.
+    arc: Arc<RwLock<super::Engine<super::SoloSigner>>>,
+    /// The wallet's backing tempdir — an RAII guard.
+    tmp: tempfile::TempDir,
+    /// The principal's mining/funding address.
+    principal: String,
+    /// The sealed P-scan state path.
+    pscan_seal: std::path::PathBuf,
+    /// How many pre-post funding records the discovery scan found.
+    pre_post_discovered: usize,
+    /// The planned stake's persona.
+    plan_persona: shekyl_types::PCanonicalId,
+}
+
+/// Fund, discover and plan a persona's stake through the production entry,
+/// stopping where the request stops: a sealed plan, nothing signed.
+async fn plan_persona_stake(
     daemon: &RegtestDaemon,
     seed: &[u8; shekyl_crypto_pq::account::SEED_BYTES],
     slot_raw: u32,
     funding_cushion: u64,
     stake_entry: FixtureStake,
     wallet: Option<StakerWallet>,
-) -> SubmittedBondPost {
-    use super::bond_assembly::{BondAssemblyError, PBoundBytes, SpentRecordsDurablyPruned};
+) -> PlannedPersonaStake {
+    use super::bond_assembly::{BondAssemblyError, SpentRecordsDurablyPruned};
     use super::bond_orchestrator::p_lane_weight_ceiling_bytes;
     use super::bond_orchestrator::FirstStakeError;
     use super::holdings_fill::{CompleteTreeFillError, MarketFillError};
     use super::pscan::start::pending_post_store_for_engine;
     use super::stake_engine::{PSlot, StakeEngineError};
     use super::traits::DaemonEngine;
-    use super::transaction_submitter::BroadcastSubmitter;
     use shekyl_archival_retention::{bond_floor, HoldingsDescriptor, HoldingsKind, ShardSet};
     use shekyl_units::AtomicUnits;
 
@@ -4989,21 +5009,25 @@ async fn stake_persona_and_submit_bond(
                     let ticket = g.persist_bond_record(slot).expect("persist bond record");
                     (handle, ticket)
                 };
-                match super::Engine::assemble_bond_post(
+                // The fill above is the request's; the plan is signed below.
+                drop(filled);
+                let market = shekyl_engine_state::PlannedPosture::Market {
+                    shard_ids: holdings.shard_ids.as_slice().to_vec(),
+                };
+                match super::Engine::seal_bond_plan(
                     arc.clone(),
                     handle,
                     ticket,
-                    filled,
+                    market,
                     fee,
                     &SpentRecordsDurablyPruned::for_test(),
                 )
                 .await
                 {
-                    Ok(a) => {
+                    Ok(planned) => {
                         eprintln!(
-                            "assembled market bond post: {} B, {} funding input(s)",
-                            a.bound_tx.bytes().len(),
-                            a.funding_gindexes.len(),
+                            "planned the market bond: {} funding input(s) reserved",
+                            planned.swept_inputs,
                         );
                         sealed = true;
                         break;
@@ -5042,10 +5066,87 @@ async fn stake_persona_and_submit_bond(
             }
             assert!(
                 sealed,
-                "the market bond post must assemble once the funding is reference-spendable"
+                "the market bond's plan must seal once the funding is reference-spendable"
             );
         }
     }
+
+    let plan_persona = {
+        let pending_gate = { arc.read().await.pending_gate.clone() };
+        pending_post_store_for_engine(arc.clone(), pending_gate)
+            .read(|block| block.plans().first().map(|p| p.persona))
+            .await
+            .expect("pending-post read")
+            .expect("the stake sealed exactly one plan")
+    };
+    PlannedPersonaStake {
+        arc,
+        tmp,
+        principal,
+        pscan_seal,
+        pre_post_discovered,
+        plan_persona,
+    }
+}
+
+async fn stake_persona_and_submit_bond(
+    daemon: &RegtestDaemon,
+    seed: &[u8; shekyl_crypto_pq::account::SEED_BYTES],
+    slot_raw: u32,
+    funding_cushion: u64,
+    stake_entry: FixtureStake,
+    wallet: Option<StakerWallet>,
+) -> SubmittedBondPost {
+    use super::bond_assembly::PBoundBytes;
+    use super::pscan::start::pending_post_store_for_engine;
+    use super::transaction_submitter::BroadcastSubmitter;
+
+    const MINE_BATCH_BLOCKS: u64 = 10;
+    const MAX_MINE_BATCHES: usize = 24;
+
+    let PlannedPersonaStake {
+        arc,
+        tmp,
+        principal,
+        pscan_seal,
+        pre_post_discovered,
+        plan_persona,
+    } = plan_persona_stake(daemon, seed, slot_raw, funding_cushion, stake_entry, wallet).await;
+
+    // Sign the plan as the dispatch driver does at its due block
+    // (`ARCHIVAL_BOND_POST_DELAY.md` BD-Q3), through the production
+    // `sign_bond_at_due`, without waiting out the drawn delay: the delay's
+    // law has its own tests, and this harness proves the chain-facing
+    // contract. A wallet behind the claimed tip waits, as the driver does.
+    let mut signed = false;
+    for _ in 0..MAX_MINE_BATCHES {
+        let daemon_client = { arc.read().await.daemon().clone() };
+        let tip = super::pscan::block_source::daemon_claimed_tip(&daemon_client)
+            .await
+            .expect("claimed tip");
+        match super::Engine::sign_bond_at_due(arc.clone(), &daemon.target(), plan_persona, tip)
+            .await
+        {
+            super::pscan::dispatch::PlanAttempt::Signed => {
+                signed = true;
+                break;
+            }
+            super::pscan::dispatch::PlanAttempt::Wait(wait) if !wait.is_limited() => {
+                eprintln!("the plan waits ({wait:?}); refreshing");
+                refresh(&arc).await;
+            }
+            super::pscan::dispatch::PlanAttempt::Wait(
+                shekyl_engine_state::PlanWait::FeeAboveFunding,
+            ) => {
+                eprintln!("the plan's funding is short of the live fee; mining more");
+                daemon.generate_blocks(MINE_BATCH_BLOCKS).await;
+                refresh(&arc).await;
+            }
+            super::pscan::dispatch::PlanAttempt::Raced => refresh(&arc).await,
+            other => daemon.panic_with_log("sign the plan at due", format!("{other:?}")),
+        }
+    }
+    assert!(signed, "the plan must sign once the wallet has caught up");
 
     // Re-lift the sealed pending post (SA-DQ-5: `first_stake` never
     // broadcasts) and dispatch through the audited posture→submitter choke
@@ -5087,6 +5188,270 @@ async fn stake_persona_and_submit_bond(
         pre_post_discovered,
         verdict,
     }
+}
+
+/// The live pending block, read through the engine's own store.
+async fn pending_block(
+    arc: &Arc<RwLock<super::Engine<super::SoloSigner>>>,
+) -> shekyl_engine_state::PendingPostBlock {
+    let pending_gate = { arc.read().await.pending_gate.clone() };
+    super::pscan::start::pending_post_store_for_engine(arc.clone(), pending_gate)
+        .read(Clone::clone)
+        .await
+        .expect("pending-post read")
+}
+
+/// Start the production P-scan task, with its dispatch driver, against the
+/// wallet's own node, at the shallow test horizon. The driver signs a due
+/// plan, sends it, ends a plan and drains an ended persona exactly as in
+/// production; only the horizon and the cadence are the test's.
+async fn start_driving_pscan(
+    arc: &Arc<RwLock<super::Engine<super::SoloSigner>>>,
+    daemon: &RegtestDaemon,
+) -> super::pscan::start::PScanHandle {
+    use super::pscan::task::PScanConfig;
+    super::Engine::start_pscan_with(
+        arc.clone(),
+        &daemon.target(),
+        PScanConfig {
+            reorg_depth: BlockCount::from_raw(PSCAN_TEST_REORG_DEPTH),
+            batch_blocks: PSCAN_SEAL_BATCH,
+        },
+        Duration::from_millis(150),
+    )
+    .await
+    .expect("start pscan")
+}
+
+/// The FOLLOWUPS falsifier of the bond-post delay round
+/// (`ARCHIVAL_BOND_POST_DELAY.md` §5), on the real pathway: the stake is
+/// planned through the production entry, the production scan task's driver
+/// signs it at its due block through the engine and sends it in the same
+/// tick, its first send carries reference age 6, and the bond lands and is
+/// matched by the wallet's own scan. Nothing in the path is scripted.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "slow lane (run_live_daemon_gates.sh ARMED_SLOW): requires SHEKYLD_BIN; a plan signed at due by the real driver"]
+async fn e2e_a_plan_signed_at_its_due_block_lands_at_reference_age_six() {
+    use super::pscan::start::load_pscan_state_for_engine;
+
+    const SLOT: u32 = 0;
+    const FUNDING_CUSHION: u64 = 200_000_000;
+    let seed = [0x47u8; shekyl_crypto_pq::account::SEED_BYTES];
+    let daemon = RegtestDaemon::start_for_seed(&seed).await;
+    let planned = plan_persona_stake(
+        &daemon,
+        &seed,
+        SLOT,
+        FUNDING_CUSHION,
+        FixtureStake::FirstStake,
+        None,
+    )
+    .await;
+    let arc = planned.arc.clone();
+    let persona = planned.plan_persona;
+    let pscan = start_driving_pscan(&arc, &daemon).await;
+
+    // Mine toward the due block a few blocks at a time, letting the wallet
+    // catch up and the driver tick between batches, until the driver has
+    // signed and sent the post.
+    let mut first_send = None;
+    for _ in 0..200 {
+        let block = pending_block(&arc).await;
+        if let Some(post) = block.posts().iter().find(|p| p.persona == persona) {
+            if let shekyl_engine_state::PendingPostState::Dispatched { at, .. } = post.state {
+                first_send = Some((at, post.reference_height));
+                break;
+            }
+        }
+        daemon.generate_blocks(4).await;
+        refresh(&arc).await;
+        tokio::time::sleep(Duration::from_millis(1_500)).await;
+    }
+    let (at, reference) = first_send.expect("the driver signs and sends the plan at its due block");
+    // A signed post refuses withdrawal (ruled 2026-11-26).
+    match super::stake_facade::StakeFacade::unstake(arc.clone(), &daemon.target()).await {
+        Err(super::unstake_facade::UnstakeError::BondConfirming) => {}
+        other => panic!("a signed stake must refuse withdrawal as confirming, got {other:?}"),
+    }
+    let claimed_tip = at.tip().expect("a sent post was judged against a tip");
+    assert_eq!(
+        claimed_tip
+            .checked_sub(reference)
+            .map(shekyl_types::BlockCount::to_raw),
+        Some(shekyl_curve_tree::reference::REF_ANCHOR_AGE.to_raw()),
+        "the first send carries reference age 6"
+    );
+
+    // It lands: mined, past the scan horizon, and matched by the wallet's
+    // own scan, which then retires the record.
+    let mut landed = false;
+    for _ in 0..60 {
+        daemon.generate_blocks(2).await;
+        refresh(&arc).await;
+        tokio::time::sleep(Duration::from_millis(1_000)).await;
+        let matched = load_pscan_state_for_engine(arc.clone())
+            .await
+            .expect("pscan seal")
+            .is_some_and(|s| {
+                s.bond_post_matches()
+                    .iter()
+                    .any(|m| m.p_canonical_id == persona)
+            });
+        if matched && pending_block(&arc).await.posts().is_empty() {
+            landed = true;
+            break;
+        }
+    }
+    pscan.shutdown().await;
+    assert!(landed, "the post signed at due lands and is matched");
+}
+
+/// A withdrawn plan on the real pathway: `unstake` withdraws the planned
+/// stake, the production driver sends the drain that empties the persona to
+/// the principal (a sweep to zero, no exit reserve), the drain lands, and the
+/// persona is retired the way a released one is (a durable retired record).
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "slow lane (run_live_daemon_gates.sh ARMED_SLOW): requires SHEKYLD_BIN; a withdrawn plan drained and retired"]
+async fn e2e_a_withdrawn_plan_is_drained_to_the_principal_and_retired() {
+    use super::pscan::start::load_pscan_state_for_engine;
+    use super::stake_facade::StakeFacade;
+    use super::unstake_facade::UnstakeOutcome;
+
+    const SLOT: u32 = 0;
+    const FUNDING_CUSHION: u64 = 200_000_000;
+    let seed = [0x48u8; shekyl_crypto_pq::account::SEED_BYTES];
+    let daemon = RegtestDaemon::start_for_seed(&seed).await;
+    let planned = plan_persona_stake(
+        &daemon,
+        &seed,
+        SLOT,
+        FUNDING_CUSHION,
+        FixtureStake::FirstStake,
+        None,
+    )
+    .await;
+    // The tempdir owns the wallet's files: it lives to the end of the test.
+    let PlannedPersonaStake {
+        arc,
+        tmp: _wallet_dir,
+        plan_persona: persona,
+        ..
+    } = planned;
+
+    let outcome = StakeFacade::unstake(arc.clone(), &daemon.target())
+        .await
+        .expect("a planned stake is withdrawn");
+    assert_eq!(outcome, UnstakeOutcome::Withdrawn);
+    let block = pending_block(&arc).await;
+    assert!(block.plans().is_empty() && block.reserved_gindexes().is_empty());
+    assert!(block.has_ended_plan_for(&persona), "its drain is owed");
+
+    // A crash between the ending's save and the drain: the wallet closes
+    // here and reopens. The ended plan keeps its slot through the open-time
+    // reconcile, so the persona's keys are there to sign its drain.
+    let arc = reopen_staker(arc, &daemon).await;
+    assert!(
+        pending_block(&arc).await.has_ended_plan_for(&persona),
+        "the drain owed survives the reopen"
+    );
+
+    let pscan = start_driving_pscan(&arc, &daemon).await;
+    let mut retired = false;
+    let mut drains_seen = 0usize;
+    for _ in 0..120 {
+        let block = pending_block(&arc).await;
+        if block.has_live_drain_for(&persona) {
+            drains_seen = drains_seen.max(1);
+        }
+        let state = load_pscan_state_for_engine(arc.clone())
+            .await
+            .expect("pscan seal");
+        if state.as_ref().is_some_and(|s| {
+            s.retired_records()
+                .iter()
+                .any(|r| r.p_canonical_id == persona)
+        }) && !block.has_ended_plan_for(&persona)
+        {
+            retired = true;
+            break;
+        }
+        daemon.generate_blocks(2).await;
+        refresh(&arc).await;
+        tokio::time::sleep(Duration::from_millis(1_000)).await;
+    }
+    pscan.shutdown().await;
+    assert_eq!(drains_seen, 1, "one drain to the principal");
+    assert!(
+        retired,
+        "the drained persona is retired and its record dropped"
+    );
+
+    // Staking again is a new persona, in this session and after a reopen:
+    // the retired slot is out of the live record and the cursor is past it,
+    // so the entry gets past its slot guards (no resume of the old slot, no
+    // stake in flight) and refuses only for want of funding.
+    let next = {
+        let g = arc.read().await;
+        let staking = g.ledger.read().ledger.staking.clone();
+        assert!(
+            !staking.bonded_slots.contains(&SLOT),
+            "the retired slot left the record"
+        );
+        staking.monotone_current_slot_from_record()
+    };
+    assert!(next > SLOT, "the cursor is past the retired slot");
+    let target = daemon.target();
+    match super::Engine::first_stake(
+        arc.clone(),
+        &target,
+        next,
+        super::StakePosture::SupportCompleteTree,
+    )
+    .await
+    {
+        Err(super::bond_orchestrator::FirstStakeError::Funding(_)) => {}
+        other => panic!("a new stake in this session refuses only for funding, got {other:?}"),
+    }
+    let arc = reopen_staker(arc, &daemon).await;
+    match super::Engine::first_stake(
+        arc.clone(),
+        &target,
+        next,
+        super::StakePosture::SupportCompleteTree,
+    )
+    .await
+    {
+        Err(super::bond_orchestrator::FirstStakeError::Funding(_)) => {}
+        other => panic!("a new stake after a reopen refuses only for funding, got {other:?}"),
+    }
+}
+
+/// Close a staker wallet the harness opened and open it again, as
+/// `staker_wallet` does: a staker's reopen spawns its stake engine and runs
+/// the open-time staking reconcile.
+async fn reopen_staker(
+    arc: Arc<RwLock<super::Engine<super::SoloSigner>>>,
+    daemon: &RegtestDaemon,
+) -> Arc<RwLock<super::Engine<super::SoloSigner>>> {
+    let creds = super::lifecycle::Credentials::password_only(b"pr4-staker");
+    let base_path = arc.read().await.persistence().base_path().to_path_buf();
+    let engine = Arc::try_unwrap(arc)
+        .unwrap_or_else(|_| panic!("the harness holds the only engine handle"))
+        .into_inner();
+    engine.close(&creds).await.expect("close the staker wallet");
+    let rpc = HttpRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port))
+        .await
+        .expect("wallet rpc (reopen)");
+    let opened = super::Engine::<super::SoloSigner>::open_full(
+        &base_path,
+        &creds,
+        shekyl_address::Network::Regtest,
+        super::DaemonClient::verifying(rpc, regtest_expectation()),
+        shekyl_engine_file::SafetyOverrides::none(),
+    )
+    .expect("reopen the staker wallet")
+    .into_wallet();
+    Arc::new(RwLock::new(opened))
 }
 
 /// PR-4 staker harness (`EMISSION_CLAIM_BUILDER.md` §8 PR-4): a staker wallet
@@ -6527,7 +6892,10 @@ async fn e2e_unstake_collect_retire_composed_arc() {
     let (UnstakeOutcome::Broadcast { tx_hash: exit_hash }
     | UnstakeOutcome::AlreadyInChain {
         tx_hash: exit_hash, ..
-    }) = posted;
+    }) = posted
+    else {
+        panic!("a bonded persona's unstake posts an exit, never a withdrawal: {posted:?}");
+    };
     eprintln!("unstake POSTED via the product facade: {exit_hash:?}");
 
     // The one-live-exit lane, observed through the public verb: a second

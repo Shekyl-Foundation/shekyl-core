@@ -27,7 +27,7 @@ use std::collections::BTreeSet;
 
 use shekyl_engine_state::pending_post_block::SealAdmission;
 use shekyl_engine_state::{PendingBondPost, PendingDrain, PendingEmissionClaim, PendingRelease};
-use shekyl_types::{BlockCount, GlobalOutputIndex, PCanonicalId, PSlot};
+use shekyl_types::{GlobalOutputIndex, PCanonicalId, PSlot};
 
 const REFERENCE: BlockHeight = BlockHeight::from_raw(5_000);
 const END: BlockHeight = BlockHeight::from_raw(5_100);
@@ -45,8 +45,9 @@ fn post(b: u8, g: &[u64]) -> PendingBondPost {
         p_slot: PSlot::from_raw(u32::from(b)),
         persona: persona(b),
         tx_bytes: vec![b],
-        bond_post_offset_blocks: BlockCount::from_raw(0),
-        anchor_t0: ChainCount::from_raw(4_990),
+        posture: shekyl_engine_state::PlannedPosture::SupportCompleteTree,
+        due: ChainCount::from_raw(4_990),
+        funded_through: shekyl_types::BlockHeight::from_raw(0),
         funding_gindexes: gindexes(g),
         state: PendingPostState::Pending,
         reference_height: REFERENCE,

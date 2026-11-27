@@ -263,4 +263,14 @@ pub(crate) trait LedgerEngine: Send + Sync + 'static {
     /// persona is active this session. Same class-**a** synchronous-read
     /// semantics as [`Self::synced_height`].
     fn bonded_slots(&self) -> Vec<u32>;
+
+    /// Retire `slot` from the live staking record this session, the way the
+    /// open-time reconcile does for a durably retired persona (SP-R0 arm #2):
+    /// the cursor is burned past it first, then it leaves `bonded_slots`, and
+    /// staking turns off when no bonded slot is left. Called once the slot's
+    /// retired record is durable in the persona scan's seal (a plan that
+    /// ended without a bond, `ARCHIVAL_BOND_POST_DELAY.md` §3.6), so the next
+    /// save writes what that record already proves, and staking again in the
+    /// same session takes a new persona, never this one.
+    fn retire_bonded_slot(&self, slot: u32);
 }

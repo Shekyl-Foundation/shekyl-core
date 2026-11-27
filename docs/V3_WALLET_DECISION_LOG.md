@@ -7607,3 +7607,43 @@ pattern, while deterministic selection gives every wallet the same shapes.
 **Reopens.** The coin-selection knobs, only on a named user job the
 wallet's own selection does not cover. A per-wallet setting, only as
 sealed state (rule 42), never as an advisory file.
+
+## 2026-11-26 — A stake is signed at its due block; how a plan ends
+
+**Decision** (Rick, 2026-10-16 for BD-Q1–Q3 and BD-Q5; 2026-11-26 for how a
+plan ends; `ARCHIVAL_BOND_POST_DELAY.md` §3, §3.6).
+
+- **The request plans; the due block signs.** The stake request reserves the
+  persona's funding, draws the delay once and seals a plan with no bytes.
+  The delay is measured from the first block the funding can be bonded
+  (BD-Q2). At the due block the dispatch driver has the engine fill,
+  quote, sign at the canonical reference and seal, and sends in the same
+  tick, so the first send carries reference age 6.
+- **A persona sees one funding and one drain.** A plan that ends without a
+  bond ends its persona: its funding is drained to the principal, its slot is
+  retired and never reused, and staking again is a new persona with a new
+  funding and a new draw.
+- **Endings:** signed and sent (the end date ends it); spent elsewhere; withdrawn
+  by the owner before it is signed; shards that can no longer be bonded; the
+  maximum wait from the due block. Each has its own outcome.
+- **The maximum** is measured from the due block and derived from outlasting
+  a fee spike; Rick names the figure (the floor's median window, 100 000
+  blocks, or one draw window). 94 is not used.
+- **The drain owed is one persisted state**, written in the same save that
+  ends the plan, and retried without a maximum.
+- **Proposed by the slice, awaiting Rick** (`ARCHIVAL_BOND_POST_DELAY.md`
+  §3.6 lists them): draining a spent-elsewhere remainder; the fill-failure
+  classes, with an unnamed assembly failure limited; `unstake` as the
+  withdrawal verb; `start_pscan` taking the wallet's node; a never-sent post
+  ending at the maximum; an owed drain blocking a new stake; the market
+  posture plannable; absence counted only once scanned; an ending
+  deactivating its persona and retiring its slot in the same session.
+
+**Why.** Signing at the request leaked the request time through the
+reference age and sent most posts after they could land. A persona that
+re-staked from an old funding would be a second link to the principal.
+
+**Recorded dependency.** The automatic drain's timing is safe only once a
+drain looks like an ordinary transfer; PR A (the fee on each transaction's
+own weight) removes the P-lane ceiling fee that marks it today.
+

@@ -499,7 +499,11 @@ fn funds_sentence(entry: &InFlightEntry) -> Option<String> {
 fn in_flight_state_line(entry: &InFlightEntry) -> String {
     let kind = kind_word(&entry.kind);
     match (entry.state.as_str(), entry.dispatched_at_height.0) {
-        ("pending", _) => format!("{kind}: waiting to be sent"),
+        // A stake that is due and waiting says why (BD-Q3).
+        ("pending", _) => match entry.reason.0.as_deref() {
+            Some(reason) => format!("{kind}: waiting to be sent. {reason}"),
+            None => format!("{kind}: waiting to be sent"),
+        },
         ("dispatched", Some(h)) => format!(
             "{kind}: sent at block {h}, {} attempt{}",
             entry.attempts,
@@ -589,6 +593,8 @@ pub fn cmd_unstake(rpc: &RpcSession, presentation: &Presentation, yes: bool) -> 
     presentation.say("for good, and staking again later means posting a whole new bond.");
     presentation.say("The released funds return to your staking balance first; collect");
     presentation.say("them to this wallet afterwards with \"stake collect\".");
+    presentation.say("If your stake has not been sent yet, this withdraws it instead:");
+    presentation.say("nothing is posted, and its funds come back to this wallet by themselves.");
 
     super::confirm_money(presentation, "Post the release?", "stake release", yes)?;
 
@@ -605,20 +611,22 @@ pub fn cmd_unstake(rpc: &RpcSession, presentation: &Presentation, yes: bool) -> 
 
 pub(crate) fn show_release(val: &Value) {
     match serde_json::from_value::<UnstakeResult>(val.clone()) {
-        Ok(result) => match result.verdict {
-            DrainVerdictView::Broadcast => {
-                crate::out_line!("Release posted: {}", result.tx_hash);
+        Ok(result) => match result {
+            UnstakeResult::Broadcast { tx_hash } => {
+                crate::out_line!("Release posted: {tx_hash}");
                 crate::out_line!("When the network confirms it, run \"stake collect\" to move");
                 crate::out_line!("the released funds back into this wallet's balance.");
             }
-            DrainVerdictView::AlreadyInChain => {
-                crate::out_line!(
-                    "An identical release is already confirmed: {}",
-                    result.tx_hash
-                );
+            UnstakeResult::AlreadyInChain { tx_hash, .. } => {
+                crate::out_line!("An identical release is already confirmed: {tx_hash}");
                 crate::out_line!("Run \"stake collect\" to move the released funds back into");
                 crate::out_line!("this wallet's balance (it may take a moment for the wallet's");
                 crate::out_line!("own scan to observe the confirmation).");
+            }
+            UnstakeResult::Withdrawn => {
+                crate::out_line!("Your stake had not been sent yet, so it was withdrawn.");
+                crate::out_line!("Nothing was posted. Its funds come back to this wallet by");
+                crate::out_line!("themselves; \"stake info\" shows them on the way.");
             }
         },
         Err(_) => {
@@ -871,6 +879,16 @@ mod tests {
         assert_eq!(
             in_flight_line(&entry("some_later_state", None, None)),
             "return: some_later_state"
+        );
+        let mut due = entry("pending", None, None);
+        due.reason = Some(
+            "Your stake is due, but network fees are above what its funds can pay.".to_owned(),
+        )
+        .into();
+        let waiting = in_flight_line(&due);
+        assert!(
+            waiting.contains("waiting to be sent") && waiting.contains("network fees"),
+            "a due stake's reason is shown: {waiting}"
         );
         assert_eq!(kind_word("exit"), "release");
         assert_eq!(kind_word("stake"), "stake");

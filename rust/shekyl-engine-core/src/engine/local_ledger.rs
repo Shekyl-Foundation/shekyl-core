@@ -373,6 +373,19 @@ impl LedgerEngine for LocalLedger {
     fn bonded_slots(&self) -> Vec<u32> {
         self.read().ledger.staking.bonded_slots.clone()
     }
+
+    fn retire_bonded_slot(&self, slot: u32) {
+        let mut guard = self.write();
+        let staking = &mut guard.ledger.staking;
+        // Burn first: once the slot leaves `bonded_slots` the cursor can no
+        // longer see it (`reconcile_staking_at_open`'s order).
+        staking.p_slot = staking.monotone_current_slot(Some(slot));
+        staking.bonded_slots.retain(|s| *s != slot);
+        staking.bond_sightings.remove(&slot);
+        if staking.bonded_slots.is_empty() {
+            staking.staking_enabled = false;
+        }
+    }
 }
 
 impl<L: LedgerEngine> LedgerEngine for std::sync::Arc<L> {
@@ -396,5 +409,9 @@ impl<L: LedgerEngine> LedgerEngine for std::sync::Arc<L> {
 
     fn bonded_slots(&self) -> Vec<u32> {
         (**self).bonded_slots()
+    }
+
+    fn retire_bonded_slot(&self, slot: u32) {
+        (**self).retire_bonded_slot(slot);
     }
 }

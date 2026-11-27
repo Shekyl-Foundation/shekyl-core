@@ -27,7 +27,7 @@
 //! envelope committed by one atomic file write; the reservation is derived,
 //! never stored, so no torn seal-vs-reservation state is representable.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -37,9 +37,10 @@ use shekyl_engine_state::pending_post_block::{end_date, EndedRelease, RecordKind
 pub(crate) use super::end_date::{terminal_cause, REFERENCE_MAX_AGE};
 use shekyl_engine_state::{PendingBondPost, PendingPostState};
 use shekyl_standoff::draw::bounded_uniform;
-use shekyl_types::{BlockCount, BlockHeight, ChainCount, PCanonicalId};
+use shekyl_types::{BlockCount, BlockHeight, ChainCount, GlobalOutputIndex, PCanonicalId};
 use tokio_util::sync::CancellationToken;
 
+use crate::engine::bond_plan::{canonical_reference, FundingPlace};
 use crate::engine::pending_post_gate::{Coverage, PendingPostGate};
 use crate::engine::stake_timing::OsRngGapAdapter;
 
@@ -52,6 +53,10 @@ use crate::engine::transaction_submitter::{BroadcastSubmitError, SubmitSuccess, 
 // The sealed-block store and its locked write path live in
 // `pscan/pending_store.rs`; the driver is one of its writers.
 pub(crate) use super::pending_store::{PendingPostStore, PendingSealStore};
+// The plan half of the tick (BD-Q3): the signing seam, what to sign, the
+// endings decided from the scan's evidence.
+use super::plan_tick::{plan_pass, report_plan_endings, sign_due, PlanPass};
+pub(crate) use super::plan_tick::{BondPlanSigner, PlanAttempt, TickOutcome};
 
 // ---------------------------------------------------------------------------
 // The broadcast seam
@@ -123,6 +128,8 @@ pub(crate) struct DispatchConfig {
     /// decorrelating the send from the sweep's tick phase. Production is
     /// the sweep cadence; `Duration::ZERO` disables the sleep (tests).
     pub dispersal_bound: Duration,
+    /// The persona scan's finality depth: a plan's anchor term (BD-Q2).
+    pub reorg_depth: BlockCount,
 }
 
 impl DispatchConfig {
@@ -133,6 +140,9 @@ impl DispatchConfig {
         Self {
             alarm_horizon_blocks: BlockCount::from_raw(DISPATCH_ALARM_HORIZON_BLOCKS),
             dispersal_bound: tick_interval,
+            reorg_depth: BlockCount::from_raw(
+                shekyl_archival_retention::effective_archival_reorg_depth_blocks(),
+            ),
         }
     }
 }
@@ -158,21 +168,15 @@ pub(crate) enum DispatchError {
 // Selection (pure — gates 1 and 2)
 // ---------------------------------------------------------------------------
 
-/// The pure due-count arithmetic (§3.1): `due = anchor_t0 +
-/// bond_post_offset_blocks` on the dispatch count clock. Saturating: a
-/// plan whose offset overflows the count space can only push due *later*
-/// (monotone noise), never wrap to "due immediately". The offset's type
-/// is pinned on [`PendingBondPost::bond_post_offset_blocks`].
-fn due_count(post: &PendingBondPost) -> ChainCount {
-    post.anchor_t0.saturating_add(post.bond_post_offset_blocks)
-}
-
-/// Select the single post to dispatch this tick, or `None` (§3.2 part 2).
+/// Select the single signed post to send this tick, or `None` (§3.2 part 2).
 ///
-/// Candidates are live posts whose due count has arrived at `tip`, that saw
-/// no terminal verdict, and whose transaction can still land:
+/// Candidates are live signed posts that saw no terminal verdict and whose
+/// transaction can still land:
 ///
-/// - [`PendingPostState::Pending`] — the first dispatch;
+/// - [`PendingPostState::Pending`] — the first send, only while its reference
+///   is the canonical one for `tip` (BD-Q3 Rule 1: the first send carries
+///   reference age 6); one whose reference aged is re-signed first, never
+///   sent stale;
 /// - [`PendingPostState::Dispatched`] — the byte-identical resubmit probe,
 ///   unless the persona is **held** (a success-equivalent verdict was
 ///   observed this session; the record is awaiting pscan confirmation and
@@ -185,25 +189,25 @@ fn due_count(post: &PendingBondPost) -> ChainCount {
 /// reference: the send would waste traffic and show one origin re-offering
 /// dead bytes. The scan's own frontier, not the tip, decides the release.
 ///
-/// Ordering: lowest due count; ties broken by lowest `anchor_t0`, then
-/// persona id — pinned so a catch-up backlog replays deterministically. The
-/// posts left behind wait for subsequent ticks (one-per-tick: co-launching a
-/// backlog links the wallet's personas by simultaneity).
+/// Ordering: lowest reference height, then persona id — pinned so a backlog
+/// replays deterministically. The posts left behind wait for subsequent
+/// ticks (one-per-tick: co-launching a backlog links the wallet's personas
+/// by simultaneity).
 fn select_dispatch_candidate<'a>(
     posts: &'a [PendingBondPost],
     tip: ChainCount,
     held: &BTreeSet<PCanonicalId>,
 ) -> Option<&'a PendingBondPost> {
+    let canonical = canonical_reference(tip);
     posts
         .iter()
-        .filter(|p| due_count(p) <= tip)
         .filter(|p| p.terminal.is_none())
         .filter(|p| tip.next_height() <= end_date(p.reference_height, REFERENCE_MAX_AGE))
         .filter(|p| match p.state {
-            PendingPostState::Pending => true,
+            PendingPostState::Pending => Some(p.reference_height) == canonical,
             PendingPostState::Dispatched { .. } => !held.contains(&p.persona),
         })
-        .min_by_key(|p| (due_count(p), p.anchor_t0, p.persona))
+        .min_by_key(|p| (p.reference_height, p.persona))
 }
 
 // ---------------------------------------------------------------------------
@@ -243,6 +247,11 @@ pub(crate) struct TickEvidence<'a> {
     /// record's end date: every block that could include the record is then
     /// scanned, so a record that landed has already been retired above.
     pub(crate) scanned_through: Option<BlockHeight>,
+    /// Where each output of `live_funding` sits: a plan's due (BD-Q2) and an
+    /// ended plan's drained check read it.
+    pub(crate) funding: &'a BTreeMap<GlobalOutputIndex, FundingPlace>,
+    /// Personas the sealed scan has durably retired.
+    pub(crate) retired: &'a BTreeSet<PCanonicalId>,
 }
 
 /// The sweep-facing seam for the end-of-sweep dispatch tick: the driving
@@ -257,7 +266,7 @@ pub(crate) trait DispatchTick: Send + 'static {
         tip: ChainCount,
         evidence: TickEvidence<'_>,
         cancel: &CancellationToken,
-    ) -> impl std::future::Future<Output = Result<(), DispatchError>> + Send;
+    ) -> impl std::future::Future<Output = Result<TickOutcome, DispatchError>> + Send;
 }
 
 /// The no-dispatch no-op — for pscan loop tests that exercise the scan and
@@ -268,8 +277,8 @@ impl DispatchTick for () {
         _tip: ChainCount,
         _evidence: TickEvidence<'_>,
         _cancel: &CancellationToken,
-    ) -> Result<(), DispatchError> {
-        Ok(())
+    ) -> Result<TickOutcome, DispatchError> {
+        Ok(TickOutcome::default())
     }
 }
 
@@ -284,8 +293,14 @@ struct TickPlan {
     reservation_alarms: Vec<(ReservationKind, PCanonicalId, ChainCount)>,
     /// Records released at their end date this tick, with their outcomes.
     ended: EndedRelease,
-    /// The post sealed as `Dispatched` this tick (a clone of the sealed
-    /// record) and its post-transition attempt count.
+    /// What the plan half decided ([`PlanPass`]).
+    plans: PlanPass,
+}
+
+/// What the second locked pass decided: the post marked `Dispatched` this
+/// tick (a clone of the sealed record) and its attempt count, and whether
+/// the seal it was marked in is covered.
+struct MarkPlan {
     dispatched: Option<(PendingBondPost, u32)>,
 }
 
@@ -328,9 +343,12 @@ impl ReservationKind {
 /// The block-timed dispatch driver. Owned by the pscan task; [`Self::on_tick`]
 /// runs at the end of every sweep tick against the tip the sweep already
 /// fetched (§3.1 — no new network read, no separate timer task).
-pub(crate) struct DispatchDriver<S, T> {
+pub(crate) struct DispatchDriver<S, T, G> {
     store: PendingPostStore<S>,
     broadcast: T,
+    /// The engine-side signing seam: signs a due stake, drains an ended
+    /// persona, retires its slot.
+    signer: G,
     config: DispatchConfig,
     /// Personas whose last submit this session returned a success-equivalent
     /// verdict (`Accepted` / `AlreadyInPool` / `AlreadyInChain`): the bytes
@@ -352,20 +370,23 @@ pub(crate) struct DispatchDriver<S, T> {
     observer: Box<dyn BroadcastTimelineObserver>,
 }
 
-impl<S: PendingSealStore, T: BondBroadcast> DispatchDriver<S, T> {
-    /// Build the driver over the sealed-block store and the broadcast seam.
+impl<S: PendingSealStore, T: BondBroadcast, G: BondPlanSigner> DispatchDriver<S, T, G> {
+    /// Build the driver over the sealed-block store, the broadcast seam and
+    /// the signing seam.
     /// `gate` is the engine-held, per-wallet pending-post gate (see
     /// [`PendingPostStore`]): the driver's store and the WI-2 assemble path
     /// share its one lock so their two write cadences cannot race.
     pub(crate) fn new(
         seal: S,
         broadcast: T,
+        signer: G,
         config: DispatchConfig,
         gate: Arc<PendingPostGate>,
     ) -> Self {
         Self {
             store: PendingPostStore::new(seal, gate),
             broadcast,
+            signer,
             config,
             held_this_session: BTreeSet::new(),
             alarmed_reservations: BTreeSet::new(),
@@ -401,7 +422,9 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchDriver<S, T> {
     }
 }
 
-impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T> {
+impl<S: PendingSealStore, T: BondBroadcast, G: BondPlanSigner> DispatchTick
+    for DispatchDriver<S, T, G>
+{
     /// Run one dispatch tick (§3.2–§3.6), at the end of a pscan sweep.
     ///
     /// `tip` is the sweep's own `tip_height()` read. Clock trust (R2-1):
@@ -435,17 +458,17 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
         tip: ChainCount,
         evidence: TickEvidence<'_>,
         cancel: &CancellationToken,
-    ) -> Result<(), DispatchError> {
+    ) -> Result<TickOutcome, DispatchError> {
         // -- Phase 1: one locked read-modify-seal pass ----------------------
         // Retire + alarm-scan + select + mark, sealed as ONE write (the
         // retire's byte-prune + reservation release and the dispatch
         // transition land in the same atomic seal — R2-2/R2-4 single-blob
         // discipline). Session sets are read inside, mutated after (the
         // closure is sync; the sets are this driver's own fields).
-        let held = &self.held_this_session;
         let reservation_alarmed = &self.alarmed_reservations;
         let horizon = self.config.alarm_horizon_blocks;
-        let (plan, covered) = self
+        let at = tip.tip().unwrap_or(BlockHeight::from_raw(0));
+        let (plan, _covered) = self
             .store
             .mutate_covering(|block, coverage| {
                 let mut changed = false;
@@ -514,25 +537,16 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
                     })
                     .collect();
 
-                // Select + mark (§3.2 part 2 / §3.3 step 2): at most one,
-                // deterministic order, sealed as `Dispatched` BEFORE any
-                // send. Only from a seal a save confirmed in this process
-                // covers (Rick, 2026-11-19): an uncovered seal's records
-                // are neither marked nor sent, so a volume that cannot
-                // confirm a save does not spend one per tick on them.
-                let candidate = (coverage == Coverage::Covered)
-                    .then(|| select_dispatch_candidate(block.posts(), tip, held))
-                    .flatten()
-                    .map(|p| p.persona);
-                let dispatched = candidate.map(|persona| {
-                    // `mark_dispatched` returns the transitioned post from the
-                    // same lookup it mutates — no second scan to re-find it.
-                    let (attempts, post) = block
-                        .mark_dispatched(&persona, tip)
-                        .expect("selected candidate is a live post by construction");
-                    changed = true;
-                    (post.clone(), attempts)
-                });
+                // The plan half (BD-Q3); signing only from a covered seal.
+                let (plans_changed, plans) = plan_pass(
+                    block,
+                    &evidence,
+                    coverage == Coverage::Covered,
+                    self.config.reorg_depth,
+                    tip,
+                    at,
+                );
+                changed |= plans_changed;
 
                 (
                     changed,
@@ -541,7 +555,7 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
                         settled,
                         reservation_alarms,
                         ended,
-                        dispatched,
+                        plans,
                     },
                 )
             })
@@ -637,9 +651,48 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
             }
         }
 
-        // -- Phase 3: the single dispatch (dispersal → emit → send) ---------
-        let Some((post, attempts)) = plan.dispatched else {
-            return Ok(());
+        report_plan_endings(&self.signer, &plan.plans).await;
+        let tick_outcome = TickOutcome {
+            retire: plan.plans.drained.clone(),
+        };
+
+        // -- Phase 3: sign a due stake (outside the pending lock) -------------
+        if let Some(target) = plan.plans.sign {
+            sign_due(&self.store, &self.signer, target, tip, at, cancel).await?;
+        }
+
+        // -- Phase 4: select + mark (§3.2 part 2 / §3.3 step 2) ---------------
+        // At most one, deterministic order, sealed as `Dispatched` BEFORE any
+        // send, and only from a covered seal (Rick, 2026-11-19): an uncovered
+        // seal's records are neither marked nor sent. A post signed in phase 3
+        // is selected here, so it goes out in the tick it was signed in.
+        let held = &self.held_this_session;
+        let (mark, covered) = self
+            .store
+            .mutate_covering(|block, coverage| {
+                let candidate = (coverage == Coverage::Covered)
+                    .then(|| select_dispatch_candidate(block.posts(), tip, held))
+                    .flatten()
+                    .map(|p| p.persona);
+                let dispatched = candidate.map(|persona| {
+                    // `mark_dispatched` returns the transitioned post from the
+                    // same lookup it mutates — no second scan to re-find it.
+                    let (attempts, post) = block
+                        .mark_dispatched(&persona, tip)
+                        .expect("selected candidate is a live post by construction");
+                    (post.clone(), attempts)
+                });
+                (dispatched.is_some(), MarkPlan { dispatched })
+            })
+            .await
+            .map_err(|e| DispatchError::Store(Box::new(e)))?;
+
+        // -- Phase 5: the single send; an owed drain only on a tick with no post
+        let Some((post, attempts)) = mark.dispatched else {
+            if let Some((p_slot, persona)) = plan.plans.drain_owed {
+                self.signer.drain_ended(p_slot, persona).await;
+            }
+            return Ok(tick_outcome);
         };
         // The mark's own save uncovered the seal: it was not confirmed, so
         // the record a power loss could take is not sent. It stays
@@ -651,7 +704,7 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
                 "bond-post dispatch: the pending records' save is not confirmed; nothing \
                  was sent, and the post goes out once a save of them confirms"
             );
-            return Ok(());
+            return Ok(tick_outcome);
         };
 
         // Send-time dispersal (§3.2 part 3): an independently drawn uniform
@@ -664,7 +717,7 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
             let delay_ms = bounded_uniform(&mut OsRngGapAdapter, bound_ms - 1);
             tokio::select! {
                 biased;
-                () = cancel.cancelled() => return Ok(()),
+                () = cancel.cancelled() => return Ok(tick_outcome),
                 () = tokio::time::sleep(Duration::from_millis(delay_ms)) => {}
             }
         }
@@ -689,7 +742,7 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
             ))
             .await;
 
-        // -- Phase 4: outcome handling (§3.4) --------------------------------
+        // -- Phase 6: outcome handling (§3.4) --------------------------------
         match outcome {
             // Accepted / F31 in-pool: network-exposed, not settled. Hold
             // further resubmits; the pscan's own observation retires it.
@@ -788,7 +841,7 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
                 );
             }
         }
-        Ok(())
+        Ok(tick_outcome)
     }
 }
 

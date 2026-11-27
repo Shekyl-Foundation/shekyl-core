@@ -433,6 +433,7 @@ async fn one_run(
             tokio::time::sleep(Duration::from_millis(stagger_ms)).await;
             Engine::<SoloSigner>::start_pscan_sealing_run(
                 arc_for_start,
+                &crate::engine::test_support::node_never_reached(),
                 SealingRunOverrides {
                     observer: Box::new(observer),
                     dispatch_config: dispatch_override,

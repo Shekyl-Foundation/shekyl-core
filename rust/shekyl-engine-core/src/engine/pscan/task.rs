@@ -436,7 +436,26 @@ where
     // reorg depth for every kind's evidence.
     let live_funding: BTreeSet<shekyl_types::GlobalOutputIndex> =
         accrual.funding_outputs().iter().map(|f| f.gindex).collect();
-    dispatch
+    let funding_places: std::collections::BTreeMap<_, _> = accrual
+        .funding_outputs()
+        .iter()
+        .map(|f| {
+            (
+                f.gindex,
+                crate::engine::bond_plan::FundingPlace {
+                    p_slot: f.p_slot,
+                    height: f.height,
+                    spendable_height: f.spendable_height,
+                },
+            )
+        })
+        .collect();
+    let retired: BTreeSet<PCanonicalId> = accrual
+        .retired_records()
+        .iter()
+        .map(|r| r.p_canonical_id)
+        .collect();
+    let outcome = dispatch
         .on_tick(
             claimed,
             TickEvidence {
@@ -445,10 +464,69 @@ where
                 // `next_height` is the first unscanned height (half-open
                 // ranges), so the last covered block is one below it.
                 scanned_through: accrual.next_height().checked_sub_count(BlockCount::ONE),
+                funding: &funding_places,
+                retired: &retired,
             },
             cancel,
         )
         .await?;
+    retire_ended_personas(stake, store, accrual, &outcome.retire).await?;
+    Ok(())
+}
+
+/// Retire every ended persona the tick handed back (`ARCHIVAL_BOND_POST_DELAY.md`
+/// BD-Q3 as ruled 2026-11-26: the slot of a persona whose plan ended without a
+/// bond is retired the way a released one is, once its funding is drained).
+/// The same two steps as a released persona: the actor wipe behind the funded
+/// gate, then the durable retired record, sealed — and only then does the
+/// next tick drop the pending record (it reads the retired set).
+///
+/// A persona that never bonded has no claim window and no release epoch, so
+/// its record's `release_epoch` and `retired_epoch` are both the finalized
+/// epoch at retirement.
+async fn retire_ended_personas<S: PScanStore>(
+    stake: &StakeEngineHandle,
+    store: &S,
+    accrual: &mut PScanAccrual,
+    ended: &[shekyl_engine_state::EndedPlan],
+) -> Result<(), PScanTaskError> {
+    if ended.is_empty() {
+        return Ok(());
+    }
+    let funded_slots = std::sync::Arc::new(FundedSlots::from_slots(
+        accrual.funding_outputs().iter().map(|f| f.p_slot),
+    ));
+    let epoch = accrual
+        .settled_epoch()
+        .unwrap_or(SettlementEpoch::from_raw(0));
+    let mut retired_any = false;
+    for plan in ended {
+        match stake
+            .retire_bonded_persona(
+                RetirementWitness::from_ended_plan(plan),
+                std::sync::Arc::clone(&funded_slots),
+            )
+            .await?
+        {
+            RetireOutcome::Retired { slot } => {
+                retired_any |= accrual.retire_persona(plan.persona, slot, epoch, epoch);
+            }
+            // `NotHeld`: wiped in an earlier session whose seal never landed;
+            // the slot is still recorded, so the persona re-derives at the next
+            // open and the retirement re-fires through the arm above.
+            // `Skipped*`: not safe yet (still funded, or active); the next tick
+            // re-offers it.
+            RetireOutcome::NotHeld
+            | RetireOutcome::SkippedActive { .. }
+            | RetireOutcome::SkippedFunded { .. } => {}
+        }
+    }
+    if retired_any {
+        store
+            .save(&accrual.to_state())
+            .await
+            .map_err(|e| PScanTaskError::Store(Box::new(e)))?;
+    }
     Ok(())
 }
 

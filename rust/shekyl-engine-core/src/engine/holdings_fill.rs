@@ -84,13 +84,6 @@ impl FilledHoldings {
     pub(crate) fn descriptor(&self) -> &HoldingsDescriptor {
         &self.0
     }
-
-    /// Test-only mint, for stake-engine unit tests that drive the vin
-    /// builders without a body store. Never a production mint.
-    #[cfg(test)]
-    pub(crate) fn for_test(holdings: HoldingsDescriptor) -> Self {
-        Self(holdings)
-    }
 }
 
 /// A fill failure shared by both postures. Nothing was posted; any shard
@@ -176,12 +169,12 @@ pub enum CompleteTreeFillError {
 /// Why a market fill did not complete. Only the market path reaches these;
 /// a `CompleteTree` fill never names a shard.
 ///
-/// Test-built with `Engine::fill_market`: the market posture refuses
-/// before any fill (`FirstStakeError::NoShardsAvailable`) until shard
-/// selection exists (`COMPLETETREE_ACTIVATION.md` §10 item 1), whose entry
-/// is this function's production caller. The emission walk's market-bond
-/// fixture fills through it today.
-#[cfg(test)]
+/// Reached through `Engine::fill_market`, which signing a market plan at its
+/// due block calls (`ARCHIVAL_BOND_POST_DELAY.md` BD-Q3). The request
+/// refuses the market posture (`FirstStakeError::NoShardsAvailable`) until
+/// shard selection exists (`COMPLETETREE_ACTIVATION.md` §10 item 1), so no
+/// production request plans one yet; the emission walk's market-bond fixture
+/// plans and fills through it.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum MarketFillError {
     /// The scan has not reached a named shard's close, and it is behind the
@@ -343,7 +336,7 @@ where
     /// # Panics
     ///
     /// If `holdings` is not `CompleteTree` holdings: the caller converts a
-    /// posture once ([`StakePosture::holdings`](super::StakePosture)) and
+    /// posture once ([`planned_holdings`](super::bond_orchestrator::planned_holdings)) and
     /// hands that conversion here, so another kind is this crate's bug.
     ///
     /// # Errors
@@ -382,7 +375,6 @@ where
     /// # Errors
     ///
     /// [`MarketFillError`]; nothing is posted on any of them.
-    #[cfg(test)]
     pub(crate) async fn fill_market(
         self_arc: Arc<RwLock<Self>>,
         daemon: &DaemonTarget,
