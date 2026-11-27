@@ -21,11 +21,13 @@
 # `shekyl_daemon_config::load_default_file_unread` (or builds its
 # configuration with `after_file`, which opens no file).
 #
-# The subject is what `check_owner_socket_launchers.py`'s finder matches:
-# adjacent `--network regtest` argv tokens and the binary's name, outside
-# comments. Its REQUIRED launchers are this gate's too, with the in-process
-# starts that gate leaves out; this gate's own NOT_A_SPAWN names the files
-# that match and have no file step at all.
+# The subject is every source file with adjacent `--network regtest` argv
+# tokens outside comments (`check_armed_lever_launchers.py`'s SPAWN), the
+# binary named or not: a bench that holds the binary in a variable launches
+# as surely as one that spells `shekyld`. The owner-socket gate's REQUIRED
+# launchers are this gate's too, with the ones that gate cannot see; this
+# gate's own NOT_A_SPAWN names the files that match and have no file step
+# that could open the machine's default.
 #
 # What it does not see: it judges a file, not a spawn, so a file with one
 # launcher that chooses its file and another that does not passes; and it
@@ -48,23 +50,30 @@ sys.path.insert(0, SCRIPTS)
 import check_armed_lever_launchers as L  # noqa: E402
 import check_owner_socket_launchers as S  # noqa: E402
 
-# The owner-socket gate's launchers, and the in-process starts it leaves
-# out because they serve no socket: they must choose their file too.
+GATE_REL = "scripts/ci/check_launcher_config_file.py"
+
+# The owner-socket gate's launchers, the in-process starts it leaves out
+# because they serve no socket, and the launchers it cannot see because
+# they never spell the binary: each must choose its file.
 REQUIRED = S.REQUIRED + (
     "rust/shekyl-daemon/src/run_tests.rs",
     "rust/shekyl-daemon/src/verify.rs",
     "rust/shekyl-daemon/tests/config_file.rs",
+    "scripts/bench/drs_regtest.py",
 )
 
 # Files that match the shape and have no file step: no daemon starts, and no
 # loader runs that could open the default file.
 NOT_A_SPAWN = {
     "scripts/ci/check_armed_lever_launchers.py": "a gate; its fixtures are the patterns it matches",
-    "scripts/ci/check_launcher_config_file.py": "this gate; its fixtures are the patterns it matches",
+    "scripts/ci/check_owner_socket_launchers.py": "a gate; its fixtures are the patterns it matches",
     "scripts/bench/test_drs_bench.py": "tests drs_bench's argv and artifact logic; spawns nothing",
     "rust/shekyl-daemon-config/src/announce.rs": "builds a configuration from parsed rows; no file step",
     "rust/shekyl-daemon-config/src/owner_socket.rs": "the socket plan's own tests; no file step",
     "rust/shekyl-daemon-config/src/sections/tests.rs": "builds configurations from parsed rows; no file step",
+    "rust/shekyl-daemon-config/src/resolve.rs": "resolves parsed rows in its tests; no file step",
+    "rust/shekyl-rpc-tunnel/src/config.rs": "the tunnel's own loader, under a test platform's root; starts no daemon",
+    "scripts/bench/drs_fixture.py": "an artifact fixture's recorded argv; spawns nothing",
 }
 
 # A spawned binary names its file; an in-process daemon loads with the
@@ -77,18 +86,37 @@ def chooses_the_file(text, suffix):
     return any(token in stripped for token in CHOSEN)
 
 
+def is_launcher(text, suffix):
+    if not L.may_launch(text):
+        return False
+    return L.SPAWN.search(L.code(text, suffix)) is not None
+
+
+def find_launchers(root):
+    found = {}
+    for path in L.iter_files(root, L.SOURCE_SUFFIXES):
+        relative = L.rel(root, path)
+        if relative == GATE_REL or relative in NOT_A_SPAWN:
+            continue
+        text = L.read(path)
+        suffix = os.path.splitext(path)[1]
+        if is_launcher(text, suffix):
+            found[relative] = (text, suffix)
+    return found
+
+
 def problems_of(found, required):
     problems = []
     if not found:
-        problems.append("no regtest shekyld launcher found")
+        problems.append("no regtest launcher found")
     for path in required:
         if path not in found:
-            problems.append(f"subject absent: {path} is not a regtest shekyld launcher")
+            problems.append(f"subject absent: {path} is not a regtest launcher")
     for path in sorted(found):
         text, suffix = found[path]
         if not chooses_the_file(text, suffix):
             problems.append(
-                f"{path}: starts a regtest shekyld that reads the machine's "
+                f"{path}: starts a regtest daemon that reads the machine's "
                 "default configuration file (pass --config-file <path> or "
                 "--config-file none; in process, load_default_file_unread)"
             )
@@ -102,7 +130,7 @@ def selftest():
             "a spawn that names no file is refused",
             {"a.py": '["shekyld", "--network", "regtest"] + owner_socket.argv("a")'},
             ("a.py",),
-            ["a.py: starts a regtest shekyld that reads"],
+            ["a.py: starts a regtest daemon that reads"],
         ),
         (
             "a spawn that passes none passes",
@@ -129,19 +157,25 @@ def selftest():
             "an in-process daemon through the production entry is refused",
             {"a.rs": 'let a = ["shekyld", "--network", "regtest"];\nrun::main(&a, &p);\n'},
             ("a.rs",),
-            ["a.rs: starts a regtest shekyld that reads"],
+            ["a.rs: starts a regtest daemon that reads"],
         ),
         (
             "a flag only in a comment does not count",
             {"a.rs": 'let b = "shekyld"; cmd.args(["--network", "regtest"]); // --config-file none'},
             ("a.rs",),
-            ["a.rs: starts a regtest shekyld that reads"],
+            ["a.rs: starts a regtest daemon that reads"],
+        ),
+        (
+            "a launcher that holds the binary in a variable is read too",
+            {"a.py": 'argv = [self.daemon, "--network", "regtest", "--data-dir", d]'},
+            ("a.py",),
+            ["a.py: starts a regtest daemon that reads"],
         ),
         (
             "an empty subject is refused",
             {},
             (),
-            ["no regtest shekyld launcher found"],
+            ["no regtest launcher found"],
         ),
         (
             "a required launcher that went away is named",
@@ -155,7 +189,7 @@ def selftest():
             for name, text in files.items():
                 with open(os.path.join(tmp, name), "w", encoding="utf-8") as fh:
                     fh.write(text)
-            problems = problems_of(S.find_launchers(tmp, NOT_A_SPAWN), required)
+            problems = problems_of(find_launchers(tmp), required)
         ok = (not problems) if not expect else len(problems) == len(expect) and all(
             any(e in p for p in problems) for e in expect
         )
@@ -167,7 +201,7 @@ def selftest():
 def main(argv):
     if "--selftest" in argv:
         return selftest()
-    found = S.find_launchers(ROOT, NOT_A_SPAWN)
+    found = find_launchers(ROOT)
     problems = problems_of(found, REQUIRED)
     for path in NOT_A_SPAWN:
         if not os.path.exists(os.path.join(ROOT, path)):
@@ -175,7 +209,7 @@ def main(argv):
     if problems:
         L.report(problems)
         return 1
-    print(f"config file: {len(found)} regtest shekyld launcher(s) choose their configuration file")
+    print(f"config file: {len(found)} regtest launcher(s) choose their configuration file")
     return 0
 
 

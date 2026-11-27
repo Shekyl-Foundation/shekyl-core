@@ -99,7 +99,10 @@ class Session:
         self.prefix = None
 
     def spawn(self, tag, data_dir, extra, p2p, rpc, offline=False):
-        common = ["--network", "regtest", "--dev-difficulty", "1", "--p2p-local",
+        # `--config-file none`: the default file is the machine's
+        # (`/etc/shekyl`), where a host's own regtest node keeps its settings.
+        common = ["--network", "regtest", "--config-file", "none",
+                  "--dev-difficulty", "1", "--p2p-local",
                   "--tor", "off", "--log-level", "info"]
         net = ["--clearnet", "off"] if offline else ["--clearnet-listen", f"127.0.0.1:{p2p}"]
         argv = [self.daemon] + common + ["--data-dir", data_dir] + net + [
