@@ -37,11 +37,6 @@ cells are `shekyl-verify-cost`'s `relay_admission_verify` bench.
 | `block_weight_full_reward_zone_bytes` | the block verify at the zone's fill |
 | `fcmp_max_inputs_per_tx` | the verify cost by input count, through the derived cap |
 | `fcmp_max_tree_depth` | the verify cost past depth 7, through the derived maximum (14) |
-| `spec_verify_cost_modal_cell` | the door's masks-and-proof term at the modal cell, after `PL-D3` |
-| `pi4_hybrid_sig_1in_ms` | `pqc_per_input` at one input |
-| `pi4_hybrid_sig_8in_ms` | `pqc_per_input` at eight inputs |
-| `pi4_range_proof_lone_1in_2out_ms` | the lone range proof at 1-in/2-out, on the constant-time opening |
-| `pi4_range_proof_lone_8in_2out_ms` | the lone range proof at 8-in/2-out, on the constant-time opening |
 | `pi4_aes_bytes_per_sec` | software AES-128-CTR throughput (the device has no AES instructions) |
 
 ## 2. The serve path (`BA-T5`)

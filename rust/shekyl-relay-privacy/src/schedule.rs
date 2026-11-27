@@ -546,13 +546,13 @@ pub const PROPAGATION_FALSE_FAIL_ONE_IN: u64 = 100;
 /// the daemon whether a transaction is still in flight rather than time it. The
 /// worst-zone global is the interim precisely because it needs no machinery and
 /// is the cheapest thing to remove. Do not make it per-zone, and do not grow it
-/// — the reasoning lives in §89.6, not here. It follows the timer: the
-/// embargo floor (Rick, 2026-11-22) moved every quantile by the longest
-/// transit's 57 s, and this pin with them, from 2 352 s.
+/// — the reasoning lives in §89.6, not here. It follows the timer, so a
+/// move of the embargo floor (Rick, 2026-11-22) or of a verification-cost
+/// cell moves this pin with it.
 ///
 /// Cost of the interim, stated: a clearnet send reports failure at ~39 minutes
 /// rather than ~15.
-pub const ADOPTED_PROPAGATION_TIMEOUT_SECS: u32 = 2_409;
+pub const ADOPTED_PROPAGATION_TIMEOUT_SECS: u32 = 2_411;
 
 /* `ADOPTED_FORWARD_DELAY_MEAN_SECS` and `ForwardDelay` were here, and Q12-U2
 deleted them with `relay_method::forward`.

@@ -428,22 +428,23 @@ impl DandelionParams {
     }
 
     /// The parameter set production ships — [`Self::inherited`] with the
-    /// `hop` input derived from measured provenance (§80, §85.3, §72.2).
+    /// `hop` input derived from measured provenance (§80, §72.2; the floor
+    /// session of `CEN_I4_INPUT_CAP_DERIVATION.md` `ICD-R5`).
     ///
     /// # What moved, and what deliberately did not
     ///
     /// **`time_between_hop_ms` is derived through
     /// [`crate::verify_cost::adopted_hop_ms`]** — the spec machine's modal
     /// verification cell (the pool door's sequence at 1 input, genesis tree:
-    /// 144.31 ms on the Pi 4), its node crypto (0.96 ms), and the labelled
-    /// 50 ms transit assumption: 195 ms, where the inherited set restates
+    /// 147.99 ms on the Pi 4), its node crypto (0.96 ms), and the labelled
+    /// 50 ms transit assumption: 199 ms, where the inherited set restates
     /// `175`. The inherited number was never pure transit (§71.3 — a ~80 ms
     /// Monero-era verification figure plus one ocean crossing); our
     /// verification is larger, so the clearnet embargo draw's mean is 194 s
     /// against the inherited set's 190 s. (A longer measured transit takes a
     /// longer hop — see [`Self::adopted_for_transit_ms`]. The wallet
     /// failed-send wait is the longest measured transit's quantile, floor
-    /// included, currently 2409 s —
+    /// included, currently 2411 s —
     /// `ADOPTED_PROPAGATION_TIMEOUT_SECS` — and is a deletion target per
     /// §89.6.)
     ///
@@ -468,15 +469,15 @@ impl DandelionParams {
     /// Embargo timers still use the **modal shape** (1 input, genesis
     /// tree) for each zone's hop. §83.1 prices the choice: the modal embargo
     /// is effectively constant across the whole depth range (~3 s of drift),
-    /// while the tail rows are where per-shape derivation pays. Per-shape
-    /// consumption is the next RP cut and is blocked on recovering the full
-    /// 48-cell surface (`docs/FOLLOWUPS.md`).
+    /// while the tail rows are where per-shape derivation pays. Every legal
+    /// shape is now priced on the floor device (`ICD-R5`), so per-shape
+    /// consumption, the next RP cut, has its surface (`docs/FOLLOWUPS.md`).
     ///
     /// # Panics
     ///
-    /// Panics if the modal genesis cell is unpopulated — a build-breaking
-    /// contradiction, since [`crate::verify_cost::SPEC_VERIFY_COST`] pins it
-    /// and the test suite asserts it.
+    /// Panics if the table refuses the modal genesis shape — a build-breaking
+    /// contradiction, since [`crate::verify_cost::SPEC_VERIFY_COST`] prices
+    /// every legal shape and the test suite asserts it.
     #[must_use]
     pub fn adopted() -> Self {
         Self::adopted_for_transit_ms(crate::verify_cost::ADOPTED_TRANSIT)
@@ -495,7 +496,7 @@ impl DandelionParams {
             crate::verify_cost::GENESIS_TREE_DEPTH,
             transit,
         )
-        .expect("the modal genesis cell is a pinned §85.3 measurement");
+        .expect("the modal genesis cell is a floor measurement");
         Self {
             time_between_hop_ms: hop,
             ..Self::inherited()
@@ -880,8 +881,8 @@ mod tests {
     #[test]
     fn the_embargo_floor_counts_the_covered_stem_and_the_return_hops() {
         for (transit, hops_ms) in [
-            (crate::verify_cost::ADOPTED_TRANSIT, 2_535_u64),
-            (crate::verify_cost::ANON_ZONE_TRANSIT, 23_010),
+            (crate::verify_cost::ADOPTED_TRANSIT, 2_587_u64),
+            (crate::verify_cost::ANON_ZONE_TRANSIT, 23_062),
         ] {
             let p = DandelionParams::adopted_for_transit_ms(transit);
             assert_eq!(
@@ -947,7 +948,7 @@ mod tests {
 
     /// The adopted set differs from the inherited one in the `hop` input
     /// alone: the Pi modal cell's door sequence plus the stated transit
-    /// assumption is 195 ms against the inherited 175 (§72.2). Every other
+    /// assumption is 199 ms against the inherited 175 (§72.2). Every other
     /// field is the inherited value. If the hop assertion fails, a table cell
     /// or the transit assumption moved — a legitimate act, but one that
     /// re-derives the embargo (the §80.2 price list moves with it) and owes a
@@ -955,7 +956,7 @@ mod tests {
     #[test]
     fn adopted_params_differ_from_inherited_only_in_the_hop() {
         let adopted = DandelionParams::adopted();
-        assert_eq!(adopted.time_between_hop_ms.ms(), 195);
+        assert_eq!(adopted.time_between_hop_ms.ms(), 199);
         assert_eq!(DandelionParams::inherited().time_between_hop_ms.ms(), 175);
         assert_eq!(
             DandelionParams {
@@ -975,7 +976,7 @@ mod tests {
         );
         assert_eq!(
             DandelionParams::adopted().time_between_hop_ms.ms(),
-            195,
+            199,
             "the clearnet hop moved off its derived value (§88, §72.2)"
         );
         // The adopted hop carries the clearnet transit's basis: an assumption.
@@ -994,7 +995,7 @@ mod tests {
         let anon = DandelionParams::adopted_for_transit_ms(crate::verify_cost::ANON_ZONE_TRANSIT);
         // *Records-was:* §89.2 keyed this hop on `RelayZone::Tor`. The live
         // input is that connector's measured transit.
-        assert_eq!(anon.time_between_hop_ms.ms(), 1_770);
+        assert_eq!(anon.time_between_hop_ms.ms(), 1_774);
         assert!(
             anon.time_between_hop_ms.ms() > DandelionParams::adopted().time_between_hop_ms.ms(),
             "the anonymity hop must exceed clearnet's: a rendezvous path is six \

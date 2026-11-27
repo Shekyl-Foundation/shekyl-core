@@ -1,0 +1,2401 @@
+# CEN-I4 floor session — the pool door's verification terms at every embargo cell (ICD-R5)
+# captured_utc=20261127T144430Z (relay bench 14:44:30Z to 17:48:35Z; terms bench 17:48:35Z to 17:52:51Z)
+# host=<floor-device>  kernel=7.0.0-1023-raspi aarch64 (a newer kernel was installed and awaiting a reboot; the running kernel is the one ICD-R5 names)
+# device_row: Raspberry Pi 4 Model B Rev 1.4, Cortex-A72 x4 at 1.8 GHz maximum, 8 GB, Ubuntu 26.04.1 LTS, USB3 SSD (CEN_I4_INPUT_CAP_DERIVATION.md ICD-R5)
+# git_rev=4354a1cf1d2ce74cdf6e3599aa2a8a547c9c4133
+# rustc=rustc 1.94.0 (4a4ef493e 2026-03-02)
+# RUSTFLAGS=<unset>
+# governor=ondemand on all four cores (ICD-R5's configuration)
+# one_session_one_binary: every cell below and both terms come from this one build at git_rev, in one session with the node stopped (ICD-R5)
+# node: shekyld stopped 14:44:00Z to 17:52:51Z; no apt, unattended-upgrade or fwupdmgr process at the start
+# load_before: loadavg 0.18 0.22 0.17
+# logins_during_bench: none (the journal shows only the hourly root cron session at :17)
+# thermal: 188 one-minute samples over the bench, 49.7 to 58.9 C, against the 80 C soft-throttle; sampled core clocks 1.5 to 1.8 GHz (ondemand, one busy core)
+# relay bench: cargo bench --locked -p shekyl-verify-cost --bench relay_admission_verify -- --noplot  (all 172 cells: d1, d2, d2spread, d3proj..d7proj at n_in = 1..=N(d), n_out = 2)
+# terms bench: cargo bench --locked -p shekyl-verify-cost --bench block_connect_verify -- --noplot 'block_connect_terms/(pqc_per_input|bp_lone)/in(1|22)_out2_'
+# reading: criterion's point estimate is the middle figure of each time: line. A "change:" line compares with the previous criterion run on the same device (earlier passes of this session at f262a953c0 and 80cfbef22f), not with any published value.
+# --- relay bench output ---
+    Finished `bench` profile [optimized] target(s) in 0.73s
+     Running benches/relay_admission_verify.rs (target/release/deps/relay_admission_verify-37f6cfa73d9076de)
+Gnuplot not found, using plotters backend
+Benchmarking relay_admission_verify/d1_in1_out2
+Benchmarking relay_admission_verify/d1_in1_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 6.7s or enable flat sampling.
+Benchmarking relay_admission_verify/d1_in1_out2: Collecting 10 samples in estimated 6.6740 s (55 iterations)
+Benchmarking relay_admission_verify/d1_in1_out2: Analyzing
+relay_admission_verify/d1_in1_out2
+                        time:   [121.63 ms 121.73 ms 121.82 ms]
+                        thrpt:  [8.2088  elem/s 8.2149  elem/s 8.2217  elem/s]
+                 change:
+                        time:   [-0.0522% +0.0286% +0.1013%] (p = 0.51 > 0.05)
+                        thrpt:  [-0.1012% -0.0286% +0.0522%]
+                        No change in performance detected.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking relay_admission_verify/d1_in2_out2
+Benchmarking relay_admission_verify/d1_in2_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 8.0s or enable flat sampling.
+Benchmarking relay_admission_verify/d1_in2_out2: Collecting 10 samples in estimated 7.9571 s (55 iterations)
+Benchmarking relay_admission_verify/d1_in2_out2: Analyzing
+relay_admission_verify/d1_in2_out2
+                        time:   [145.09 ms 145.14 ms 145.19 ms]
+                        thrpt:  [13.775  elem/s 13.780  elem/s 13.785  elem/s]
+                 change:
+                        time:   [+0.4687% +0.5726% +0.6561%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.6518% -0.5693% -0.4665%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d1_in3_out2
+Benchmarking relay_admission_verify/d1_in3_out2: Warming up for 3.0000 s
+Benchmarking relay_admission_verify/d1_in3_out2: Collecting 10 samples in estimated 5.8612 s (30 iterations)
+Benchmarking relay_admission_verify/d1_in3_out2: Analyzing
+relay_admission_verify/d1_in3_out2
+                        time:   [195.83 ms 195.96 ms 196.12 ms]
+                        thrpt:  [15.297  elem/s 15.309  elem/s 15.319  elem/s]
+                 change:
+                        time:   [-2.6748% -1.0747% +0.2476%] (p = 0.22 > 0.05)
+                        thrpt:  [-0.2470% +1.0864% +2.7483%]
+                        No change in performance detected.
+Benchmarking relay_admission_verify/d1_in4_out2
+Benchmarking relay_admission_verify/d1_in4_out2: Warming up for 3.0000 s
+Benchmarking relay_admission_verify/d1_in4_out2: Collecting 10 samples in estimated 6.4539 s (30 iterations)
+Benchmarking relay_admission_verify/d1_in4_out2: Analyzing
+relay_admission_verify/d1_in4_out2
+                        time:   [215.55 ms 215.67 ms 215.81 ms]
+                        thrpt:  [18.535  elem/s 18.547  elem/s 18.557  elem/s]
+                 change:
+                        time:   [+0.2420% +0.3414% +0.4413%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.4393% -0.3402% -0.2415%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d1_in5_out2
+Benchmarking relay_admission_verify/d1_in5_out2: Warming up for 3.0000 s
+Benchmarking relay_admission_verify/d1_in5_out2: Collecting 10 samples in estimated 6.0196 s (20 iterations)
+Benchmarking relay_admission_verify/d1_in5_out2: Analyzing
+relay_admission_verify/d1_in5_out2
+                        time:   [301.51 ms 301.71 ms 301.94 ms]
+                        thrpt:  [16.559  elem/s 16.572  elem/s 16.583  elem/s]
+                 change:
+                        time:   [+0.2340% +0.3377% +0.4395%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.4376% -0.3365% -0.2335%]
+                        Change within noise threshold.
+Found 3 outliers among 10 measurements (30.00%)
+  1 (10.00%) low severe
+  2 (20.00%) high severe
+Benchmarking relay_admission_verify/d1_in6_out2
+Benchmarking relay_admission_verify/d1_in6_out2: Warming up for 3.0000 s
+Benchmarking relay_admission_verify/d1_in6_out2: Collecting 10 samples in estimated 6.4033 s (20 iterations)
+Benchmarking relay_admission_verify/d1_in6_out2: Analyzing
+relay_admission_verify/d1_in6_out2
+                        time:   [320.87 ms 321.10 ms 321.34 ms]
+                        thrpt:  [18.672  elem/s 18.686  elem/s 18.699  elem/s]
+                 change:
+                        time:   [-0.0022% +0.4705% +0.7588%] (p = 0.04 < 0.05)
+                        thrpt:  [-0.7531% -0.4683% +0.0022%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking relay_admission_verify/d1_in7_out2
+Benchmarking relay_admission_verify/d1_in7_out2: Warming up for 3.0000 s
+Benchmarking relay_admission_verify/d1_in7_out2: Collecting 10 samples in estimated 6.7892 s (20 iterations)
+Benchmarking relay_admission_verify/d1_in7_out2: Analyzing
+relay_admission_verify/d1_in7_out2
+                        time:   [340.01 ms 340.22 ms 340.43 ms]
+                        thrpt:  [20.562  elem/s 20.575  elem/s 20.588  elem/s]
+                 change:
+                        time:   [+0.3157% +0.3981% +0.4774%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.4752% -0.3965% -0.3147%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d1_in8_out2
+Benchmarking relay_admission_verify/d1_in8_out2: Warming up for 3.0000 s
+Benchmarking relay_admission_verify/d1_in8_out2: Collecting 10 samples in estimated 7.1669 s (20 iterations)
+Benchmarking relay_admission_verify/d1_in8_out2: Analyzing
+relay_admission_verify/d1_in8_out2
+                        time:   [359.03 ms 359.10 ms 359.17 ms]
+                        thrpt:  [22.274  elem/s 22.278  elem/s 22.282  elem/s]
+                 change:
+                        time:   [+0.5165% +0.5644% +0.6139%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.6101% -0.5612% -0.5139%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d1_in9_out2
+Benchmarking relay_admission_verify/d1_in9_out2: Warming up for 3.0000 s
+Benchmarking relay_admission_verify/d1_in9_out2: Collecting 10 samples in estimated 7.5575 s (20 iterations)
+Benchmarking relay_admission_verify/d1_in9_out2: Analyzing
+relay_admission_verify/d1_in9_out2
+                        time:   [378.51 ms 378.71 ms 378.91 ms]
+                        thrpt:  [23.752  elem/s 23.765  elem/s 23.778  elem/s]
+                 change:
+                        time:   [+0.5883% +0.6913% +0.7854%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.7793% -0.6866% -0.5849%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d1_in10_out2
+Benchmarking relay_admission_verify/d1_in10_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 5.4s.
+Benchmarking relay_admission_verify/d1_in10_out2: Collecting 10 samples in estimated 5.3560 s (10 iterations)
+Benchmarking relay_admission_verify/d1_in10_out2: Analyzing
+relay_admission_verify/d1_in10_out2
+                        time:   [536.03 ms 536.31 ms 536.58 ms]
+                        thrpt:  [18.637  elem/s 18.646  elem/s 18.656  elem/s]
+                 change:
+                        time:   [+0.6007% +0.7074% +0.7971%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.7908% -0.7024% -0.5972%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d1_in11_out2
+Benchmarking relay_admission_verify/d1_in11_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 5.5s.
+Benchmarking relay_admission_verify/d1_in11_out2: Collecting 10 samples in estimated 5.5360 s (10 iterations)
+Benchmarking relay_admission_verify/d1_in11_out2: Analyzing
+relay_admission_verify/d1_in11_out2
+                        time:   [554.27 ms 554.48 ms 554.68 ms]
+                        thrpt:  [19.831  elem/s 19.839  elem/s 19.846  elem/s]
+                 change:
+                        time:   [+0.5045% +0.5783% +0.6574%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.6531% -0.5750% -0.5020%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d1_in12_out2
+Benchmarking relay_admission_verify/d1_in12_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 5.7s.
+Benchmarking relay_admission_verify/d1_in12_out2: Collecting 10 samples in estimated 5.7150 s (10 iterations)
+Benchmarking relay_admission_verify/d1_in12_out2: Analyzing
+relay_admission_verify/d1_in12_out2
+                        time:   [572.12 ms 572.50 ms 572.91 ms]
+                        thrpt:  [20.946  elem/s 20.961  elem/s 20.974  elem/s]
+                 change:
+                        time:   [+0.1719% +0.3111% +0.4358%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.4339% -0.3102% -0.1716%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking relay_admission_verify/d1_in13_out2
+Benchmarking relay_admission_verify/d1_in13_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 5.9s.
+Benchmarking relay_admission_verify/d1_in13_out2: Collecting 10 samples in estimated 5.9152 s (10 iterations)
+Benchmarking relay_admission_verify/d1_in13_out2: Analyzing
+relay_admission_verify/d1_in13_out2
+                        time:   [591.87 ms 592.26 ms 592.72 ms]
+                        thrpt:  [21.933  elem/s 21.950  elem/s 21.964  elem/s]
+                 change:
+                        time:   [+0.5747% +0.7189% +0.8418%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.8348% -0.7138% -0.5714%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking relay_admission_verify/d1_in14_out2
+Benchmarking relay_admission_verify/d1_in14_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 6.1s.
+Benchmarking relay_admission_verify/d1_in14_out2: Collecting 10 samples in estimated 6.1013 s (10 iterations)
+Benchmarking relay_admission_verify/d1_in14_out2: Analyzing
+relay_admission_verify/d1_in14_out2
+                        time:   [610.41 ms 610.79 ms 611.22 ms]
+                        thrpt:  [22.905  elem/s 22.921  elem/s 22.936  elem/s]
+                 change:
+                        time:   [+0.7113% +0.8034% +0.8938%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.8859% -0.7970% -0.7063%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d1_in15_out2
+Benchmarking relay_admission_verify/d1_in15_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 6.3s.
+Benchmarking relay_admission_verify/d1_in15_out2: Collecting 10 samples in estimated 6.2788 s (10 iterations)
+Benchmarking relay_admission_verify/d1_in15_out2: Analyzing
+relay_admission_verify/d1_in15_out2
+                        time:   [628.91 ms 629.11 ms 629.33 ms]
+                        thrpt:  [23.835  elem/s 23.843  elem/s 23.851  elem/s]
+                 change:
+                        time:   [+0.4499% +0.5751% +0.6770%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.6724% -0.5718% -0.4479%]
+                        Change within noise threshold.
+Found 2 outliers among 10 measurements (20.00%)
+  1 (10.00%) low mild
+  1 (10.00%) high mild
+Benchmarking relay_admission_verify/d1_in16_out2
+Benchmarking relay_admission_verify/d1_in16_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 6.5s.
+Benchmarking relay_admission_verify/d1_in16_out2: Collecting 10 samples in estimated 6.4691 s (10 iterations)
+Benchmarking relay_admission_verify/d1_in16_out2: Analyzing
+relay_admission_verify/d1_in16_out2
+                        time:   [647.62 ms 648.10 ms 648.64 ms]
+                        thrpt:  [24.667  elem/s 24.687  elem/s 24.706  elem/s]
+                 change:
+                        time:   [+0.4647% +0.6930% +0.8566%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.8493% -0.6882% -0.4625%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking relay_admission_verify/d1_in17_out2
+Benchmarking relay_admission_verify/d1_in17_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 6.7s.
+Benchmarking relay_admission_verify/d1_in17_out2: Collecting 10 samples in estimated 6.6587 s (10 iterations)
+Benchmarking relay_admission_verify/d1_in17_out2: Analyzing
+relay_admission_verify/d1_in17_out2
+                        time:   [666.65 ms 666.94 ms 667.27 ms]
+                        thrpt:  [25.477  elem/s 25.490  elem/s 25.501  elem/s]
+                 change:
+                        time:   [+0.6269% +0.6876% +0.7502%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.7446% -0.6829% -0.6230%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d1_in18_out2
+Benchmarking relay_admission_verify/d1_in18_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 6.8s.
+Benchmarking relay_admission_verify/d1_in18_out2: Collecting 10 samples in estimated 6.8414 s (10 iterations)
+Benchmarking relay_admission_verify/d1_in18_out2: Analyzing
+relay_admission_verify/d1_in18_out2
+                        time:   [683.92 ms 684.17 ms 684.41 ms]
+                        thrpt:  [26.300  elem/s 26.309  elem/s 26.319  elem/s]
+                 change:
+                        time:   [+0.3716% +0.4456% +0.5135%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.5109% -0.4436% -0.3702%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d1_in19_out2
+Benchmarking relay_admission_verify/d1_in19_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 9.8s.
+Benchmarking relay_admission_verify/d1_in19_out2: Collecting 10 samples in estimated 9.8009 s (10 iterations)
+Benchmarking relay_admission_verify/d1_in19_out2: Analyzing
+relay_admission_verify/d1_in19_out2
+                        time:   [983.30 ms 983.92 ms 984.60 ms]
+                        thrpt:  [19.297  elem/s 19.311  elem/s 19.323  elem/s]
+                 change:
+                        time:   [+0.6313% +0.7244% +0.8138%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.8073% -0.7192% -0.6273%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d1_in20_out2
+Benchmarking relay_admission_verify/d1_in20_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 10.0s.
+Benchmarking relay_admission_verify/d1_in20_out2: Collecting 10 samples in estimated 9.9858 s (10 iterations)
+Benchmarking relay_admission_verify/d1_in20_out2: Analyzing
+relay_admission_verify/d1_in20_out2
+                        time:   [999.99 ms 1.0009 s 1.0020 s]
+                        thrpt:  [19.959  elem/s 19.981  elem/s 20.000  elem/s]
+                 change:
+                        time:   [+0.5864% +0.7110% +0.8322%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.8254% -0.7060% -0.5830%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking relay_admission_verify/d1_in21_out2
+Benchmarking relay_admission_verify/d1_in21_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 10.2s.
+Benchmarking relay_admission_verify/d1_in21_out2: Collecting 10 samples in estimated 10.152 s (10 iterations)
+Benchmarking relay_admission_verify/d1_in21_out2: Analyzing
+relay_admission_verify/d1_in21_out2
+                        time:   [1.0181 s 1.0187 s 1.0192 s]
+                        thrpt:  [20.604  elem/s 20.615  elem/s 20.626  elem/s]
+                 change:
+                        time:   [+0.5938% +0.6630% +0.7325%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.7272% -0.6586% -0.5903%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d1_in22_out2
+Benchmarking relay_admission_verify/d1_in22_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 10.4s.
+Benchmarking relay_admission_verify/d1_in22_out2: Collecting 10 samples in estimated 10.363 s (10 iterations)
+Benchmarking relay_admission_verify/d1_in22_out2: Analyzing
+relay_admission_verify/d1_in22_out2
+                        time:   [1.0383 s 1.0388 s 1.0392 s]
+                        thrpt:  [21.169  elem/s 21.179  elem/s 21.189  elem/s]
+                 change:
+                        time:   [+0.5514% +0.6543% +0.7549%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.7493% -0.6501% -0.5484%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d2_in1_out2
+Benchmarking relay_admission_verify/d2_in1_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 7.0s or enable flat sampling.
+Benchmarking relay_admission_verify/d2_in1_out2: Collecting 10 samples in estimated 6.9929 s (55 iterations)
+Benchmarking relay_admission_verify/d2_in1_out2: Analyzing
+relay_admission_verify/d2_in1_out2
+                        time:   [127.55 ms 127.68 ms 127.81 ms]
+                        thrpt:  [7.8242  elem/s 7.8322  elem/s 7.8398  elem/s]
+                 change:
+                        time:   [+0.0942% +0.1921% +0.2843%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.2835% -0.1917% -0.0941%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking relay_admission_verify/d2_in2_out2
+Benchmarking relay_admission_verify/d2_in2_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 8.5s or enable flat sampling.
+Benchmarking relay_admission_verify/d2_in2_out2: Collecting 10 samples in estimated 8.5048 s (55 iterations)
+Benchmarking relay_admission_verify/d2_in2_out2: Analyzing
+relay_admission_verify/d2_in2_out2
+                        time:   [155.05 ms 155.16 ms 155.28 ms]
+                        thrpt:  [12.880  elem/s 12.890  elem/s 12.899  elem/s]
+                 change:
+                        time:   [+0.3006% +0.3661% +0.4294%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.4276% -0.3648% -0.2997%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking relay_admission_verify/d2_in3_out2
+Benchmarking relay_admission_verify/d2_in3_out2: Warming up for 3.0000 s
+Benchmarking relay_admission_verify/d2_in3_out2: Collecting 10 samples in estimated 6.3283 s (30 iterations)
+Benchmarking relay_admission_verify/d2_in3_out2: Analyzing
+relay_admission_verify/d2_in3_out2
+                        time:   [211.40 ms 211.50 ms 211.61 ms]
+                        thrpt:  [14.177  elem/s 14.184  elem/s 14.191  elem/s]
+                 change:
+                        time:   [+0.3953% +0.5473% +0.6781%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.6735% -0.5444% -0.3938%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d2_in4_out2
+Benchmarking relay_admission_verify/d2_in4_out2: Warming up for 3.0000 s
+Benchmarking relay_admission_verify/d2_in4_out2: Collecting 10 samples in estimated 7.0268 s (30 iterations)
+Benchmarking relay_admission_verify/d2_in4_out2: Analyzing
+relay_admission_verify/d2_in4_out2
+                        time:   [234.70 ms 234.78 ms 234.87 ms]
+                        thrpt:  [17.030  elem/s 17.037  elem/s 17.043  elem/s]
+                 change:
+                        time:   [+0.3360% +0.4132% +0.4913%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.4889% -0.4115% -0.3349%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking relay_admission_verify/d2_in5_out2
+Benchmarking relay_admission_verify/d2_in5_out2: Warming up for 3.0000 s
+Benchmarking relay_admission_verify/d2_in5_out2: Collecting 10 samples in estimated 6.9484 s (20 iterations)
+Benchmarking relay_admission_verify/d2_in5_out2: Analyzing
+relay_admission_verify/d2_in5_out2
+                        time:   [348.13 ms 348.32 ms 348.51 ms]
+                        thrpt:  [14.347  elem/s 14.355  elem/s 14.362  elem/s]
+                 change:
+                        time:   [+0.2265% +0.3669% +0.4892%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.4868% -0.3656% -0.2260%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d2_in6_out2
+Benchmarking relay_admission_verify/d2_in6_out2: Warming up for 3.0000 s
+Benchmarking relay_admission_verify/d2_in6_out2: Collecting 10 samples in estimated 7.4011 s (20 iterations)
+Benchmarking relay_admission_verify/d2_in6_out2: Analyzing
+relay_admission_verify/d2_in6_out2
+                        time:   [370.68 ms 370.83 ms 370.97 ms]
+                        thrpt:  [16.174  elem/s 16.180  elem/s 16.186  elem/s]
+                 change:
+                        time:   [+0.3969% +0.4785% +0.5545%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.5514% -0.4762% -0.3954%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d2_in7_out2
+Benchmarking relay_admission_verify/d2_in7_out2: Warming up for 3.0000 s
+Benchmarking relay_admission_verify/d2_in7_out2: Collecting 10 samples in estimated 7.8819 s (20 iterations)
+Benchmarking relay_admission_verify/d2_in7_out2: Analyzing
+relay_admission_verify/d2_in7_out2
+                        time:   [394.53 ms 394.69 ms 394.84 ms]
+                        thrpt:  [17.729  elem/s 17.736  elem/s 17.743  elem/s]
+                 change:
+                        time:   [+0.7712% +0.9017% +1.0108%] (p = 0.00 < 0.05)
+                        thrpt:  [-1.0007% -0.8936% -0.7653%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d2_in8_out2
+Benchmarking relay_admission_verify/d2_in8_out2: Warming up for 3.0000 s
+Benchmarking relay_admission_verify/d2_in8_out2: Collecting 10 samples in estimated 8.2810 s (20 iterations)
+Benchmarking relay_admission_verify/d2_in8_out2: Analyzing
+relay_admission_verify/d2_in8_out2
+                        time:   [414.95 ms 415.31 ms 415.74 ms]
+                        thrpt:  [19.243  elem/s 19.263  elem/s 19.280  elem/s]
+                 change:
+                        time:   [+0.3560% +0.4616% +0.5842%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.5809% -0.4595% -0.3547%]
+                        Change within noise threshold.
+Found 2 outliers among 10 measurements (20.00%)
+  2 (20.00%) high mild
+Benchmarking relay_admission_verify/d2_in9_out2
+Benchmarking relay_admission_verify/d2_in9_out2: Warming up for 3.0000 s
+Benchmarking relay_admission_verify/d2_in9_out2: Collecting 10 samples in estimated 9.6207 s (20 iterations)
+Benchmarking relay_admission_verify/d2_in9_out2: Analyzing
+relay_admission_verify/d2_in9_out2
+                        time:   [480.41 ms 480.56 ms 480.72 ms]
+                        thrpt:  [18.722  elem/s 18.728  elem/s 18.734  elem/s]
+                 change:
+                        time:   [+0.6314% +0.6809% +0.7279%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.7226% -0.6763% -0.6275%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d2_in10_out2
+Benchmarking relay_admission_verify/d2_in10_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 6.4s.
+Benchmarking relay_admission_verify/d2_in10_out2: Collecting 10 samples in estimated 6.4098 s (10 iterations)
+Benchmarking relay_admission_verify/d2_in10_out2: Analyzing
+relay_admission_verify/d2_in10_out2
+                        time:   [643.12 ms 644.44 ms 646.75 ms]
+                        thrpt:  [15.462  elem/s 15.517  elem/s 15.549  elem/s]
+                 change:
+                        time:   [+0.5816% +0.8056% +1.1814%] (p = 0.00 < 0.05)
+                        thrpt:  [-1.1677% -0.7992% -0.5782%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking relay_admission_verify/d2_in11_out2
+Benchmarking relay_admission_verify/d2_in11_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 6.6s.
+Benchmarking relay_admission_verify/d2_in11_out2: Collecting 10 samples in estimated 6.6401 s (10 iterations)
+Benchmarking relay_admission_verify/d2_in11_out2: Analyzing
+relay_admission_verify/d2_in11_out2
+                        time:   [665.08 ms 665.41 ms 665.76 ms]
+                        thrpt:  [16.523  elem/s 16.531  elem/s 16.539  elem/s]
+                 change:
+                        time:   [+0.4662% +0.5549% +0.6338%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.6298% -0.5518% -0.4641%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d2_in12_out2
+Benchmarking relay_admission_verify/d2_in12_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 6.8s.
+Benchmarking relay_admission_verify/d2_in12_out2: Collecting 10 samples in estimated 6.8440 s (10 iterations)
+Benchmarking relay_admission_verify/d2_in12_out2: Analyzing
+relay_admission_verify/d2_in12_out2
+                        time:   [686.57 ms 686.75 ms 686.96 ms]
+                        thrpt:  [17.468  elem/s 17.474  elem/s 17.478  elem/s]
+                 change:
+                        time:   [+0.1388% +0.2247% +0.3079%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.3070% -0.2242% -0.1386%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d2_in13_out2
+Benchmarking relay_admission_verify/d2_in13_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 7.1s.
+Benchmarking relay_admission_verify/d2_in13_out2: Collecting 10 samples in estimated 7.0826 s (10 iterations)
+Benchmarking relay_admission_verify/d2_in13_out2: Analyzing
+relay_admission_verify/d2_in13_out2
+                        time:   [708.44 ms 711.51 ms 717.30 ms]
+                        thrpt:  [18.123  elem/s 18.271  elem/s 18.350  elem/s]
+                 change:
+                        time:   [+0.2974% +0.8674% +1.7909%] (p = 0.03 < 0.05)
+                        thrpt:  [-1.7594% -0.8600% -0.2965%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking relay_admission_verify/d2_in14_out2
+Benchmarking relay_admission_verify/d2_in14_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 7.3s.
+Benchmarking relay_admission_verify/d2_in14_out2: Collecting 10 samples in estimated 7.2977 s (10 iterations)
+Benchmarking relay_admission_verify/d2_in14_out2: Analyzing
+relay_admission_verify/d2_in14_out2
+                        time:   [731.54 ms 732.10 ms 732.65 ms]
+                        thrpt:  [19.109  elem/s 19.123  elem/s 19.138  elem/s]
+                 change:
+                        time:   [+0.6775% +0.7555% +0.8461%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.8390% -0.7499% -0.6729%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d2_in15_out2
+Benchmarking relay_admission_verify/d2_in15_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 7.5s.
+Benchmarking relay_admission_verify/d2_in15_out2: Collecting 10 samples in estimated 7.5226 s (10 iterations)
+Benchmarking relay_admission_verify/d2_in15_out2: Analyzing
+relay_admission_verify/d2_in15_out2
+                        time:   [753.44 ms 754.13 ms 755.02 ms]
+                        thrpt:  [19.867  elem/s 19.890  elem/s 19.909  elem/s]
+                 change:
+                        time:   [+0.4835% +0.6058% +0.7412%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.7357% -0.6022% -0.4812%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking relay_admission_verify/d2_in16_out2
+Benchmarking relay_admission_verify/d2_in16_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 7.8s.
+Benchmarking relay_admission_verify/d2_in16_out2: Collecting 10 samples in estimated 7.7572 s (10 iterations)
+Benchmarking relay_admission_verify/d2_in16_out2: Analyzing
+relay_admission_verify/d2_in16_out2
+                        time:   [775.26 ms 775.64 ms 776.03 ms]
+                        thrpt:  [20.618  elem/s 20.628  elem/s 20.638  elem/s]
+                 change:
+                        time:   [+0.4690% +0.5570% +0.6459%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.6417% -0.5539% -0.4668%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d2_in17_out2
+Benchmarking relay_admission_verify/d2_in17_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 8.9s.
+Benchmarking relay_admission_verify/d2_in17_out2: Collecting 10 samples in estimated 8.8616 s (10 iterations)
+Benchmarking relay_admission_verify/d2_in17_out2: Analyzing
+relay_admission_verify/d2_in17_out2
+                        time:   [889.33 ms 889.86 ms 890.33 ms]
+                        thrpt:  [19.094  elem/s 19.104  elem/s 19.115  elem/s]
+                 change:
+                        time:   [+0.0631% +0.5437% +0.8369%] (p = 0.03 < 0.05)
+                        thrpt:  [-0.8299% -0.5408% -0.0631%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) low mild
+Benchmarking relay_admission_verify/d2_in18_out2
+Benchmarking relay_admission_verify/d2_in18_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 9.1s.
+Benchmarking relay_admission_verify/d2_in18_out2: Collecting 10 samples in estimated 9.0910 s (10 iterations)
+Benchmarking relay_admission_verify/d2_in18_out2: Analyzing
+relay_admission_verify/d2_in18_out2
+                        time:   [911.54 ms 912.04 ms 912.79 ms]
+                        thrpt:  [19.720  elem/s 19.736  elem/s 19.747  elem/s]
+                 change:
+                        time:   [-1.2238% -0.0463% +0.8281%] (p = 0.94 > 0.05)
+                        thrpt:  [-0.8212% +0.0463% +1.2389%]
+                        No change in performance detected.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking relay_admission_verify/d2_in19_out2
+Benchmarking relay_admission_verify/d2_in19_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 12.2s.
+Benchmarking relay_admission_verify/d2_in19_out2: Collecting 10 samples in estimated 12.170 s (10 iterations)
+Benchmarking relay_admission_verify/d2_in19_out2: Analyzing
+relay_admission_verify/d2_in19_out2
+                        time:   [1.2208 s 1.2213 s 1.2218 s]
+                        thrpt:  [15.551  elem/s 15.557  elem/s 15.564  elem/s]
+                 change:
+                        time:   [+0.2830% +0.5120% +0.6734%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.6689% -0.5094% -0.2822%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) low mild
+Benchmarking relay_admission_verify/d2_in20_out2
+Benchmarking relay_admission_verify/d2_in20_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 12.4s.
+Benchmarking relay_admission_verify/d2_in20_out2: Collecting 10 samples in estimated 12.393 s (10 iterations)
+Benchmarking relay_admission_verify/d2_in20_out2: Analyzing
+relay_admission_verify/d2_in20_out2
+                        time:   [1.2427 s 1.2435 s 1.2444 s]
+                        thrpt:  [16.072  elem/s 16.083  elem/s 16.094  elem/s]
+                 change:
+                        time:   [+0.7134% +0.8163% +0.9116%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.9034% -0.8097% -0.7084%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d2_in21_out2
+Benchmarking relay_admission_verify/d2_in21_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 12.6s.
+Benchmarking relay_admission_verify/d2_in21_out2: Collecting 10 samples in estimated 12.589 s (10 iterations)
+Benchmarking relay_admission_verify/d2_in21_out2: Analyzing
+relay_admission_verify/d2_in21_out2
+                        time:   [1.2632 s 1.2640 s 1.2651 s]
+                        thrpt:  [16.600  elem/s 16.614  elem/s 16.625  elem/s]
+                 change:
+                        time:   [+0.6805% +0.7555% +0.8446%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.8375% -0.7499% -0.6759%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking relay_admission_verify/d2_in22_out2
+Benchmarking relay_admission_verify/d2_in22_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 12.8s.
+Benchmarking relay_admission_verify/d2_in22_out2: Collecting 10 samples in estimated 12.837 s (10 iterations)
+Benchmarking relay_admission_verify/d2_in22_out2: Analyzing
+relay_admission_verify/d2_in22_out2
+                        time:   [1.2870 s 1.2874 s 1.2879 s]
+                        thrpt:  [17.082  elem/s 17.088  elem/s 17.094  elem/s]
+                 change:
+                        time:   [+0.6202% +0.7136% +0.7940%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.7877% -0.7086% -0.6164%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d2spread_in1_out2
+Benchmarking relay_admission_verify/d2spread_in1_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 7.0s or enable flat sampling.
+Benchmarking relay_admission_verify/d2spread_in1_out2: Collecting 10 samples in estimated 7.0223 s (55 iterations)
+Benchmarking relay_admission_verify/d2spread_in1_out2: Analyzing
+relay_admission_verify/d2spread_in1_out2
+                        time:   [128.01 ms 128.06 ms 128.14 ms]
+                        thrpt:  [7.8038  elem/s 7.8089  elem/s 7.8121  elem/s]
+                 change:
+                        time:   [+0.4623% +0.8227% +1.4119%] (p = 0.00 < 0.05)
+                        thrpt:  [-1.3922% -0.8160% -0.4602%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking relay_admission_verify/d2spread_in2_out2
+Benchmarking relay_admission_verify/d2spread_in2_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 8.5s or enable flat sampling.
+Benchmarking relay_admission_verify/d2spread_in2_out2: Collecting 10 samples in estimated 8.4875 s (55 iterations)
+Benchmarking relay_admission_verify/d2spread_in2_out2: Analyzing
+relay_admission_verify/d2spread_in2_out2
+                        time:   [154.96 ms 155.05 ms 155.14 ms]
+                        thrpt:  [12.891  elem/s 12.899  elem/s 12.907  elem/s]
+                 change:
+                        time:   [+0.2478% +0.3485% +0.4471%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.4451% -0.3473% -0.2472%]
+                        Change within noise threshold.
+Found 3 outliers among 10 measurements (30.00%)
+  1 (10.00%) low mild
+  2 (20.00%) high severe
+Benchmarking relay_admission_verify/d2spread_in3_out2
+Benchmarking relay_admission_verify/d2spread_in3_out2: Warming up for 3.0000 s
+Benchmarking relay_admission_verify/d2spread_in3_out2: Collecting 10 samples in estimated 6.3037 s (30 iterations)
+Benchmarking relay_admission_verify/d2spread_in3_out2: Analyzing
+relay_admission_verify/d2spread_in3_out2
+                        time:   [210.74 ms 210.92 ms 211.17 ms]
+                        thrpt:  [14.206  elem/s 14.224  elem/s 14.236  elem/s]
+                 change:
+                        time:   [+0.3533% +0.4862% +0.6215%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.6177% -0.4838% -0.3520%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking relay_admission_verify/d2spread_in4_out2
+Benchmarking relay_admission_verify/d2spread_in4_out2: Warming up for 3.0000 s
+Benchmarking relay_admission_verify/d2spread_in4_out2: Collecting 10 samples in estimated 7.0344 s (30 iterations)
+Benchmarking relay_admission_verify/d2spread_in4_out2: Analyzing
+relay_admission_verify/d2spread_in4_out2
+                        time:   [235.03 ms 235.10 ms 235.17 ms]
+                        thrpt:  [17.009  elem/s 17.014  elem/s 17.019  elem/s]
+                 change:
+                        time:   [+0.4139% +0.5287% +0.6271%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.6232% -0.5259% -0.4122%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d2spread_in5_out2
+Benchmarking relay_admission_verify/d2spread_in5_out2: Warming up for 3.0000 s
+Benchmarking relay_admission_verify/d2spread_in5_out2: Collecting 10 samples in estimated 6.9556 s (20 iterations)
+Benchmarking relay_admission_verify/d2spread_in5_out2: Analyzing
+relay_admission_verify/d2spread_in5_out2
+                        time:   [348.36 ms 348.50 ms 348.66 ms]
+                        thrpt:  [14.341  elem/s 14.347  elem/s 14.353  elem/s]
+                 change:
+                        time:   [+0.3998% +0.5011% +0.6078%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.6041% -0.4986% -0.3982%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking relay_admission_verify/d2spread_in6_out2
+Benchmarking relay_admission_verify/d2spread_in6_out2: Warming up for 3.0000 s
+Benchmarking relay_admission_verify/d2spread_in6_out2: Collecting 10 samples in estimated 7.4012 s (20 iterations)
+Benchmarking relay_admission_verify/d2spread_in6_out2: Analyzing
+relay_admission_verify/d2spread_in6_out2
+                        time:   [370.66 ms 370.87 ms 371.10 ms]
+                        thrpt:  [16.168  elem/s 16.178  elem/s 16.187  elem/s]
+                 change:
+                        time:   [+0.5286% +0.6164% +0.7038%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.6989% -0.6127% -0.5259%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d2spread_in7_out2
+Benchmarking relay_admission_verify/d2spread_in7_out2: Warming up for 3.0000 s
+Benchmarking relay_admission_verify/d2spread_in7_out2: Collecting 10 samples in estimated 7.8554 s (20 iterations)
+Benchmarking relay_admission_verify/d2spread_in7_out2: Analyzing
+relay_admission_verify/d2spread_in7_out2
+                        time:   [393.84 ms 394.04 ms 394.25 ms]
+                        thrpt:  [17.755  elem/s 17.765  elem/s 17.774  elem/s]
+                 change:
+                        time:   [+0.3796% +0.5781% +0.7225%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.7173% -0.5748% -0.3782%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d2spread_in8_out2
+Benchmarking relay_admission_verify/d2spread_in8_out2: Warming up for 3.0000 s
+Benchmarking relay_admission_verify/d2spread_in8_out2: Collecting 10 samples in estimated 8.2861 s (20 iterations)
+Benchmarking relay_admission_verify/d2spread_in8_out2: Analyzing
+relay_admission_verify/d2spread_in8_out2
+                        time:   [414.95 ms 415.51 ms 416.37 ms]
+                        thrpt:  [19.214  elem/s 19.254  elem/s 19.279  elem/s]
+                 change:
+                        time:   [+0.4012% +0.5466% +0.7773%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.7713% -0.5436% -0.3996%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking relay_admission_verify/d2spread_in9_out2
+Benchmarking relay_admission_verify/d2spread_in9_out2: Warming up for 3.0000 s
+Benchmarking relay_admission_verify/d2spread_in9_out2: Collecting 10 samples in estimated 9.5843 s (20 iterations)
+Benchmarking relay_admission_verify/d2spread_in9_out2: Analyzing
+relay_admission_verify/d2spread_in9_out2
+                        time:   [480.37 ms 480.59 ms 480.86 ms]
+                        thrpt:  [18.717  elem/s 18.727  elem/s 18.736  elem/s]
+                 change:
+                        time:   [+0.3919% +0.4620% +0.5320%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.5292% -0.4599% -0.3903%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking relay_admission_verify/d2spread_in10_out2
+Benchmarking relay_admission_verify/d2spread_in10_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 6.4s.
+Benchmarking relay_admission_verify/d2spread_in10_out2: Collecting 10 samples in estimated 6.4241 s (10 iterations)
+Benchmarking relay_admission_verify/d2spread_in10_out2: Analyzing
+relay_admission_verify/d2spread_in10_out2
+                        time:   [643.86 ms 644.14 ms 644.42 ms]
+                        thrpt:  [15.518  elem/s 15.525  elem/s 15.531  elem/s]
+                 change:
+                        time:   [+0.3445% +0.5186% +0.6680%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.6636% -0.5159% -0.3433%]
+                        Change within noise threshold.
+Found 2 outliers among 10 measurements (20.00%)
+  1 (10.00%) low severe
+  1 (10.00%) high mild
+Benchmarking relay_admission_verify/d2spread_in11_out2
+Benchmarking relay_admission_verify/d2spread_in11_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 6.6s.
+Benchmarking relay_admission_verify/d2spread_in11_out2: Collecting 10 samples in estimated 6.6460 s (10 iterations)
+Benchmarking relay_admission_verify/d2spread_in11_out2: Analyzing
+relay_admission_verify/d2spread_in11_out2
+                        time:   [666.12 ms 666.64 ms 667.24 ms]
+                        thrpt:  [16.486  elem/s 16.501  elem/s 16.513  elem/s]
+                 change:
+                        time:   [+0.5725% +0.7219% +0.8614%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.8541% -0.7167% -0.5692%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d2spread_in12_out2
+Benchmarking relay_admission_verify/d2spread_in12_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 6.9s.
+Benchmarking relay_admission_verify/d2spread_in12_out2: Collecting 10 samples in estimated 6.8959 s (10 iterations)
+Benchmarking relay_admission_verify/d2spread_in12_out2: Analyzing
+relay_admission_verify/d2spread_in12_out2
+                        time:   [688.03 ms 688.27 ms 688.52 ms]
+                        thrpt:  [17.429  elem/s 17.435  elem/s 17.441  elem/s]
+                 change:
+                        time:   [+0.7558% +0.8430% +0.9251%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.9166% -0.8360% -0.7501%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d2spread_in13_out2
+Benchmarking relay_admission_verify/d2spread_in13_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 7.1s.
+Benchmarking relay_admission_verify/d2spread_in13_out2: Collecting 10 samples in estimated 7.0887 s (10 iterations)
+Benchmarking relay_admission_verify/d2spread_in13_out2: Analyzing
+relay_admission_verify/d2spread_in13_out2
+                        time:   [708.36 ms 709.04 ms 710.09 ms]
+                        thrpt:  [18.307  elem/s 18.335  elem/s 18.352  elem/s]
+                 change:
+                        time:   [+0.5106% +0.6482% +0.8167%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.8101% -0.6440% -0.5080%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking relay_admission_verify/d2spread_in14_out2
+Benchmarking relay_admission_verify/d2spread_in14_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 7.3s.
+Benchmarking relay_admission_verify/d2spread_in14_out2: Collecting 10 samples in estimated 7.3073 s (10 iterations)
+Benchmarking relay_admission_verify/d2spread_in14_out2: Analyzing
+relay_admission_verify/d2spread_in14_out2
+                        time:   [732.13 ms 732.96 ms 734.16 ms]
+                        thrpt:  [19.069  elem/s 19.101  elem/s 19.122  elem/s]
+                 change:
+                        time:   [+0.5044% +0.7177% +0.9327%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.9241% -0.7126% -0.5018%]
+                        Change within noise threshold.
+Found 2 outliers among 10 measurements (20.00%)
+  1 (10.00%) high mild
+  1 (10.00%) high severe
+Benchmarking relay_admission_verify/d2spread_in15_out2
+Benchmarking relay_admission_verify/d2spread_in15_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 7.5s.
+Benchmarking relay_admission_verify/d2spread_in15_out2: Collecting 10 samples in estimated 7.5191 s (10 iterations)
+Benchmarking relay_admission_verify/d2spread_in15_out2: Analyzing
+relay_admission_verify/d2spread_in15_out2
+                        time:   [753.82 ms 754.28 ms 754.78 ms]
+                        thrpt:  [19.873  elem/s 19.886  elem/s 19.899  elem/s]
+                 change:
+                        time:   [+0.5669% +0.6474% +0.7275%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.7223% -0.6432% -0.5637%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking relay_admission_verify/d2spread_in16_out2
+Benchmarking relay_admission_verify/d2spread_in16_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 7.7s.
+Benchmarking relay_admission_verify/d2spread_in16_out2: Collecting 10 samples in estimated 7.7498 s (10 iterations)
+Benchmarking relay_admission_verify/d2spread_in16_out2: Analyzing
+relay_admission_verify/d2spread_in16_out2
+                        time:   [776.38 ms 777.07 ms 778.09 ms]
+                        thrpt:  [20.563  elem/s 20.590  elem/s 20.608  elem/s]
+                 change:
+                        time:   [+0.9323% +1.0545% +1.1976%] (p = 0.00 < 0.05)
+                        thrpt:  [-1.1834% -1.0435% -0.9237%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking relay_admission_verify/d2spread_in17_out2
+Benchmarking relay_admission_verify/d2spread_in17_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 8.9s.
+Benchmarking relay_admission_verify/d2spread_in17_out2: Collecting 10 samples in estimated 8.8800 s (10 iterations)
+Benchmarking relay_admission_verify/d2spread_in17_out2: Analyzing
+relay_admission_verify/d2spread_in17_out2
+                        time:   [890.01 ms 890.37 ms 890.75 ms]
+                        thrpt:  [19.085  elem/s 19.093  elem/s 19.101  elem/s]
+                 change:
+                        time:   [+0.5963% +0.6613% +0.7288%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.7235% -0.6570% -0.5927%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d2spread_in18_out2
+Benchmarking relay_admission_verify/d2spread_in18_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 9.1s.
+Benchmarking relay_admission_verify/d2spread_in18_out2: Collecting 10 samples in estimated 9.0919 s (10 iterations)
+Benchmarking relay_admission_verify/d2spread_in18_out2: Analyzing
+relay_admission_verify/d2spread_in18_out2
+                        time:   [911.29 ms 911.71 ms 912.16 ms]
+                        thrpt:  [19.733  elem/s 19.743  elem/s 19.752  elem/s]
+                 change:
+                        time:   [+0.7675% +0.9220% +1.0387%] (p = 0.00 < 0.05)
+                        thrpt:  [-1.0280% -0.9136% -0.7617%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d2spread_in19_out2
+Benchmarking relay_admission_verify/d2spread_in19_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 12.2s.
+Benchmarking relay_admission_verify/d2spread_in19_out2: Collecting 10 samples in estimated 12.172 s (10 iterations)
+Benchmarking relay_admission_verify/d2spread_in19_out2: Analyzing
+relay_admission_verify/d2spread_in19_out2
+                        time:   [1.2208 s 1.2212 s 1.2216 s]
+                        thrpt:  [15.553  elem/s 15.558  elem/s 15.563  elem/s]
+                 change:
+                        time:   [+0.5805% +0.6423% +0.6977%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.6929% -0.6382% -0.5771%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d2spread_in20_out2
+Benchmarking relay_admission_verify/d2spread_in20_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 12.4s.
+Benchmarking relay_admission_verify/d2spread_in20_out2: Collecting 10 samples in estimated 12.381 s (10 iterations)
+Benchmarking relay_admission_verify/d2spread_in20_out2: Analyzing
+relay_admission_verify/d2spread_in20_out2
+                        time:   [1.2415 s 1.2429 s 1.2446 s]
+                        thrpt:  [16.069  elem/s 16.091  elem/s 16.109  elem/s]
+                 change:
+                        time:   [+0.4211% +0.5365% +0.6865%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.6818% -0.5336% -0.4194%]
+                        Change within noise threshold.
+Found 3 outliers among 10 measurements (30.00%)
+  1 (10.00%) low mild
+  1 (10.00%) high mild
+  1 (10.00%) high severe
+Benchmarking relay_admission_verify/d2spread_in21_out2
+Benchmarking relay_admission_verify/d2spread_in21_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 12.6s.
+Benchmarking relay_admission_verify/d2spread_in21_out2: Collecting 10 samples in estimated 12.590 s (10 iterations)
+Benchmarking relay_admission_verify/d2spread_in21_out2: Analyzing
+relay_admission_verify/d2spread_in21_out2
+                        time:   [1.2631 s 1.2634 s 1.2638 s]
+                        thrpt:  [16.617  elem/s 16.622  elem/s 16.626  elem/s]
+                 change:
+                        time:   [+0.2390% +0.3121% +0.3867%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.3852% -0.3111% -0.2384%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d2spread_in22_out2
+Benchmarking relay_admission_verify/d2spread_in22_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 12.9s.
+Benchmarking relay_admission_verify/d2spread_in22_out2: Collecting 10 samples in estimated 12.866 s (10 iterations)
+Benchmarking relay_admission_verify/d2spread_in22_out2: Analyzing
+relay_admission_verify/d2spread_in22_out2
+                        time:   [1.2903 s 1.2911 s 1.2920 s]
+                        thrpt:  [17.028  elem/s 17.039  elem/s 17.051  elem/s]
+                 change:
+                        time:   [+0.4963% +0.5793% +0.6591%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.6548% -0.5760% -0.4938%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d3proj_in1_out2
+Benchmarking relay_admission_verify/d3proj_in1_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 7.2s or enable flat sampling.
+Benchmarking relay_admission_verify/d3proj_in1_out2: Collecting 10 samples in estimated 7.2129 s (55 iterations)
+Benchmarking relay_admission_verify/d3proj_in1_out2: Analyzing
+relay_admission_verify/d3proj_in1_out2
+                        time:   [131.58 ms 131.63 ms 131.65 ms]
+                        thrpt:  [7.5957  elem/s 7.5971  elem/s 7.5997  elem/s]
+                 change:
+                        time:   [+0.1643% +0.2711% +0.3589%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.3576% -0.2703% -0.1640%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d3proj_in2_out2
+Benchmarking relay_admission_verify/d3proj_in2_out2: Warming up for 3.0000 s
+Benchmarking relay_admission_verify/d3proj_in2_out2: Collecting 10 samples in estimated 5.7598 s (30 iterations)
+Benchmarking relay_admission_verify/d3proj_in2_out2: Analyzing
+relay_admission_verify/d3proj_in2_out2
+                        time:   [192.44 ms 192.62 ms 192.84 ms]
+                        thrpt:  [10.371  elem/s 10.383  elem/s 10.393  elem/s]
+                 change:
+                        time:   [-0.0566% +0.0903% +0.2272%] (p = 0.27 > 0.05)
+                        thrpt:  [-0.2267% -0.0902% +0.0566%]
+                        No change in performance detected.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking relay_admission_verify/d3proj_in3_out2
+Benchmarking relay_admission_verify/d3proj_in3_out2: Warming up for 3.0000 s
+Benchmarking relay_admission_verify/d3proj_in3_out2: Collecting 10 samples in estimated 6.5835 s (30 iterations)
+Benchmarking relay_admission_verify/d3proj_in3_out2: Analyzing
+relay_admission_verify/d3proj_in3_out2
+                        time:   [219.87 ms 219.94 ms 220.02 ms]
+                        thrpt:  [13.635  elem/s 13.640  elem/s 13.645  elem/s]
+                 change:
+                        time:   [-0.5492% -0.1992% +0.0216%] (p = 0.26 > 0.05)
+                        thrpt:  [-0.0216% +0.1996% +0.5523%]
+                        No change in performance detected.
+Benchmarking relay_admission_verify/d3proj_in4_out2
+Benchmarking relay_admission_verify/d3proj_in4_out2: Warming up for 3.0000 s
+Benchmarking relay_admission_verify/d3proj_in4_out2: Collecting 10 samples in estimated 6.2663 s (20 iterations)
+Benchmarking relay_admission_verify/d3proj_in4_out2: Analyzing
+relay_admission_verify/d3proj_in4_out2
+                        time:   [314.16 ms 314.50 ms 315.05 ms]
+                        thrpt:  [12.696  elem/s 12.719  elem/s 12.733  elem/s]
+                 change:
+                        time:   [+0.2728% +0.4005% +0.6077%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.6040% -0.3989% -0.2721%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking relay_admission_verify/d3proj_in5_out2
+Benchmarking relay_admission_verify/d3proj_in5_out2: Warming up for 3.0000 s
+Benchmarking relay_admission_verify/d3proj_in5_out2: Collecting 10 samples in estimated 7.2596 s (20 iterations)
+Benchmarking relay_admission_verify/d3proj_in5_out2: Analyzing
+relay_admission_verify/d3proj_in5_out2
+                        time:   [363.60 ms 363.83 ms 364.08 ms]
+                        thrpt:  [13.733  elem/s 13.742  elem/s 13.751  elem/s]
+                 change:
+                        time:   [-0.0338% +0.1636% +0.3162%] (p = 0.10 > 0.05)
+                        thrpt:  [-0.3152% -0.1634% +0.0338%]
+                        No change in performance detected.
+Benchmarking relay_admission_verify/d3proj_in6_out2
+Benchmarking relay_admission_verify/d3proj_in6_out2: Warming up for 3.0000 s
+Benchmarking relay_admission_verify/d3proj_in6_out2: Collecting 10 samples in estimated 7.7570 s (20 iterations)
+Benchmarking relay_admission_verify/d3proj_in6_out2: Analyzing
+relay_admission_verify/d3proj_in6_out2
+                        time:   [388.81 ms 389.03 ms 389.26 ms]
+                        thrpt:  [15.414  elem/s 15.423  elem/s 15.432  elem/s]
+                 change:
+                        time:   [+0.1700% +0.2397% +0.3169%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.3159% -0.2392% -0.1697%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d3proj_in7_out2
+Benchmarking relay_admission_verify/d3proj_in7_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 5.6s.
+Benchmarking relay_admission_verify/d3proj_in7_out2: Collecting 10 samples in estimated 5.5566 s (10 iterations)
+Benchmarking relay_admission_verify/d3proj_in7_out2: Analyzing
+relay_admission_verify/d3proj_in7_out2
+                        time:   [557.60 ms 558.04 ms 558.52 ms]
+                        thrpt:  [12.533  elem/s 12.544  elem/s 12.554  elem/s]
+                 change:
+                        time:   [-0.9438% -0.0509% +0.6319%] (p = 0.92 > 0.05)
+                        thrpt:  [-0.6280% +0.0509% +0.9528%]
+                        No change in performance detected.
+Benchmarking relay_admission_verify/d3proj_in8_out2
+Benchmarking relay_admission_verify/d3proj_in8_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 5.8s.
+Benchmarking relay_admission_verify/d3proj_in8_out2: Collecting 10 samples in estimated 5.8015 s (10 iterations)
+Benchmarking relay_admission_verify/d3proj_in8_out2: Analyzing
+relay_admission_verify/d3proj_in8_out2
+                        time:   [581.28 ms 581.66 ms 582.06 ms]
+                        thrpt:  [13.744  elem/s 13.754  elem/s 13.763  elem/s]
+                 change:
+                        time:   [+0.2117% +0.3307% +0.4490%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.4470% -0.3297% -0.2113%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d3proj_in9_out2
+Benchmarking relay_admission_verify/d3proj_in9_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 6.5s.
+Benchmarking relay_admission_verify/d3proj_in9_out2: Collecting 10 samples in estimated 6.4808 s (10 iterations)
+Benchmarking relay_admission_verify/d3proj_in9_out2: Analyzing
+relay_admission_verify/d3proj_in9_out2
+                        time:   [649.54 ms 650.26 ms 651.33 ms]
+                        thrpt:  [13.818  elem/s 13.841  elem/s 13.856  elem/s]
+                 change:
+                        time:   [+0.6639% +0.7995% +0.9826%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.9730% -0.7932% -0.6595%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking relay_admission_verify/d3proj_in10_out2
+Benchmarking relay_admission_verify/d3proj_in10_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 6.7s.
+Benchmarking relay_admission_verify/d3proj_in10_out2: Collecting 10 samples in estimated 6.7279 s (10 iterations)
+Benchmarking relay_admission_verify/d3proj_in10_out2: Analyzing
+relay_admission_verify/d3proj_in10_out2
+                        time:   [674.13 ms 674.38 ms 674.61 ms]
+                        thrpt:  [14.823  elem/s 14.828  elem/s 14.834  elem/s]
+                 change:
+                        time:   [+0.2452% +0.3652% +0.4740%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.4718% -0.3638% -0.2446%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d3proj_in11_out2
+Benchmarking relay_admission_verify/d3proj_in11_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 7.0s.
+Benchmarking relay_admission_verify/d3proj_in11_out2: Collecting 10 samples in estimated 6.9660 s (10 iterations)
+Benchmarking relay_admission_verify/d3proj_in11_out2: Analyzing
+relay_admission_verify/d3proj_in11_out2
+                        time:   [697.32 ms 697.80 ms 698.29 ms]
+                        thrpt:  [15.753  elem/s 15.764  elem/s 15.775  elem/s]
+                 change:
+                        time:   [+0.2831% +0.3919% +0.4896%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.4872% -0.3903% -0.2823%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d3proj_in12_out2
+Benchmarking relay_admission_verify/d3proj_in12_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 7.2s.
+Benchmarking relay_admission_verify/d3proj_in12_out2: Collecting 10 samples in estimated 7.2427 s (10 iterations)
+Benchmarking relay_admission_verify/d3proj_in12_out2: Analyzing
+relay_admission_verify/d3proj_in12_out2
+                        time:   [725.08 ms 725.74 ms 726.59 ms]
+                        thrpt:  [16.516  elem/s 16.535  elem/s 16.550  elem/s]
+                 change:
+                        time:   [+0.1350% +0.4245% +0.6479%] (p = 0.01 < 0.05)
+                        thrpt:  [-0.6437% -0.4227% -0.1348%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking relay_admission_verify/d3proj_in13_out2
+Benchmarking relay_admission_verify/d3proj_in13_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 10.3s.
+Benchmarking relay_admission_verify/d3proj_in13_out2: Collecting 10 samples in estimated 10.332 s (10 iterations)
+Benchmarking relay_admission_verify/d3proj_in13_out2: Analyzing
+relay_admission_verify/d3proj_in13_out2
+                        time:   [1.0357 s 1.0364 s 1.0372 s]
+                        thrpt:  [12.533  elem/s 12.543  elem/s 12.552  elem/s]
+                 change:
+                        time:   [+0.2641% +0.3664% +0.4678%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.4656% -0.3650% -0.2634%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d3proj_in14_out2
+Benchmarking relay_admission_verify/d3proj_in14_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 10.6s.
+Benchmarking relay_admission_verify/d3proj_in14_out2: Collecting 10 samples in estimated 10.584 s (10 iterations)
+Benchmarking relay_admission_verify/d3proj_in14_out2: Analyzing
+relay_admission_verify/d3proj_in14_out2
+                        time:   [1.0603 s 1.0611 s 1.0625 s]
+                        thrpt:  [13.177  elem/s 13.193  elem/s 13.204  elem/s]
+                 change:
+                        time:   [+0.0680% +0.1706% +0.3096%] (p = 0.01 < 0.05)
+                        thrpt:  [-0.3086% -0.1703% -0.0679%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking relay_admission_verify/d3proj_in15_out2
+Benchmarking relay_admission_verify/d3proj_in15_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 10.9s.
+Benchmarking relay_admission_verify/d3proj_in15_out2: Collecting 10 samples in estimated 10.853 s (10 iterations)
+Benchmarking relay_admission_verify/d3proj_in15_out2: Analyzing
+relay_admission_verify/d3proj_in15_out2
+                        time:   [1.0874 s 1.0877 s 1.0881 s]
+                        thrpt:  [13.786  elem/s 13.790  elem/s 13.795  elem/s]
+                 change:
+                        time:   [+0.3968% +0.4777% +0.5674%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.5642% -0.4755% -0.3952%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d3proj_in16_out2
+Benchmarking relay_admission_verify/d3proj_in16_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 11.1s.
+Benchmarking relay_admission_verify/d3proj_in16_out2: Collecting 10 samples in estimated 11.086 s (10 iterations)
+Benchmarking relay_admission_verify/d3proj_in16_out2: Analyzing
+relay_admission_verify/d3proj_in16_out2
+                        time:   [1.1118 s 1.1123 s 1.1128 s]
+                        thrpt:  [14.378  elem/s 14.385  elem/s 14.391  elem/s]
+                 change:
+                        time:   [+0.3604% +0.4327% +0.5097%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.5072% -0.4308% -0.3592%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d3proj_in17_out2
+Benchmarking relay_admission_verify/d3proj_in17_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 12.3s.
+Benchmarking relay_admission_verify/d3proj_in17_out2: Collecting 10 samples in estimated 12.334 s (10 iterations)
+Benchmarking relay_admission_verify/d3proj_in17_out2: Analyzing
+relay_admission_verify/d3proj_in17_out2
+                        time:   [1.2270 s 1.2282 s 1.2295 s]
+                        thrpt:  [13.827  elem/s 13.842  elem/s 13.855  elem/s]
+                 change:
+                        time:   [+0.3724% +0.4921% +0.6139%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.6101% -0.4897% -0.3710%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d3proj_in18_out2
+Benchmarking relay_admission_verify/d3proj_in18_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 12.5s.
+Benchmarking relay_admission_verify/d3proj_in18_out2: Collecting 10 samples in estimated 12.480 s (10 iterations)
+Benchmarking relay_admission_verify/d3proj_in18_out2: Analyzing
+relay_admission_verify/d3proj_in18_out2
+                        time:   [1.2522 s 1.2532 s 1.2546 s]
+                        thrpt:  [14.347  elem/s 14.363  elem/s 14.374  elem/s]
+                 change:
+                        time:   [+0.2862% +0.4043% +0.5339%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.5311% -0.4027% -0.2853%]
+                        Change within noise threshold.
+Found 2 outliers among 10 measurements (20.00%)
+  1 (10.00%) low mild
+  1 (10.00%) high severe
+Benchmarking relay_admission_verify/d3proj_in19_out2
+Benchmarking relay_admission_verify/d3proj_in19_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 12.7s.
+Benchmarking relay_admission_verify/d3proj_in19_out2: Collecting 10 samples in estimated 12.738 s (10 iterations)
+Benchmarking relay_admission_verify/d3proj_in19_out2: Analyzing
+relay_admission_verify/d3proj_in19_out2
+                        time:   [1.2788 s 1.2802 s 1.2820 s]
+                        thrpt:  [14.821  elem/s 14.841  elem/s 14.858  elem/s]
+                 change:
+                        time:   [+0.2213% +0.3628% +0.5251%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.5223% -0.3615% -0.2208%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking relay_admission_verify/d3proj_in20_out2
+Benchmarking relay_admission_verify/d3proj_in20_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 13.0s.
+Benchmarking relay_admission_verify/d3proj_in20_out2: Collecting 10 samples in estimated 13.013 s (10 iterations)
+Benchmarking relay_admission_verify/d3proj_in20_out2: Analyzing
+relay_admission_verify/d3proj_in20_out2
+                        time:   [1.3040 s 1.3048 s 1.3056 s]
+                        thrpt:  [15.319  elem/s 15.329  elem/s 15.337  elem/s]
+                 change:
+                        time:   [+0.5814% +0.6934% +0.7976%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.7913% -0.6886% -0.5780%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d3proj_in21_out2
+Benchmarking relay_admission_verify/d3proj_in21_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 13.3s.
+Benchmarking relay_admission_verify/d3proj_in21_out2: Collecting 10 samples in estimated 13.260 s (10 iterations)
+Benchmarking relay_admission_verify/d3proj_in21_out2: Analyzing
+relay_admission_verify/d3proj_in21_out2
+                        time:   [1.3298 s 1.3303 s 1.3308 s]
+                        thrpt:  [15.780  elem/s 15.786  elem/s 15.791  elem/s]
+                 change:
+                        time:   [+0.6842% +0.7615% +0.8402%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.8332% -0.7558% -0.6796%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d3proj_in22_out2
+Benchmarking relay_admission_verify/d3proj_in22_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 13.5s.
+Benchmarking relay_admission_verify/d3proj_in22_out2: Collecting 10 samples in estimated 13.515 s (10 iterations)
+Benchmarking relay_admission_verify/d3proj_in22_out2: Analyzing
+relay_admission_verify/d3proj_in22_out2
+                        time:   [1.3546 s 1.3553 s 1.3561 s]
+                        thrpt:  [16.223  elem/s 16.232  elem/s 16.241  elem/s]
+                 change:
+                        time:   [+0.5648% +0.6849% +0.7909%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.7847% -0.6803% -0.5616%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d4proj_in1_out2
+Benchmarking relay_admission_verify/d4proj_in1_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 7.5s or enable flat sampling.
+Benchmarking relay_admission_verify/d4proj_in1_out2: Collecting 10 samples in estimated 7.4967 s (55 iterations)
+Benchmarking relay_admission_verify/d4proj_in1_out2: Analyzing
+relay_admission_verify/d4proj_in1_out2
+                        time:   [136.49 ms 136.52 ms 136.56 ms]
+                        thrpt:  [7.3228  elem/s 7.3247  elem/s 7.3266  elem/s]
+                 change:
+                        time:   [+0.4173% +0.4621% +0.5074%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.5048% -0.4600% -0.4156%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d4proj_in2_out2
+Benchmarking relay_admission_verify/d4proj_in2_out2: Warming up for 3.0000 s
+Benchmarking relay_admission_verify/d4proj_in2_out2: Collecting 10 samples in estimated 6.0393 s (30 iterations)
+Benchmarking relay_admission_verify/d4proj_in2_out2: Analyzing
+relay_admission_verify/d4proj_in2_out2
+                        time:   [201.74 ms 201.92 ms 202.13 ms]
+                        thrpt:  [9.8945  elem/s 9.9051  elem/s 9.9139  elem/s]
+                 change:
+                        time:   [+0.0613% +0.2469% +0.4088%] (p = 0.02 < 0.05)
+                        thrpt:  [-0.4072% -0.2463% -0.0613%]
+                        Change within noise threshold.
+Found 2 outliers among 10 measurements (20.00%)
+  1 (10.00%) high mild
+  1 (10.00%) high severe
+Benchmarking relay_admission_verify/d4proj_in3_out2
+Benchmarking relay_admission_verify/d4proj_in3_out2: Warming up for 3.0000 s
+Benchmarking relay_admission_verify/d4proj_in3_out2: Collecting 10 samples in estimated 5.0813 s (20 iterations)
+Benchmarking relay_admission_verify/d4proj_in3_out2: Analyzing
+relay_admission_verify/d4proj_in3_out2
+                        time:   [254.67 ms 254.80 ms 254.94 ms]
+                        thrpt:  [11.767  elem/s 11.774  elem/s 11.780  elem/s]
+                 change:
+                        time:   [+0.2734% +0.3933% +0.5010%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.4985% -0.3917% -0.2727%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking relay_admission_verify/d4proj_in4_out2
+Benchmarking relay_admission_verify/d4proj_in4_out2: Warming up for 3.0000 s
+Benchmarking relay_admission_verify/d4proj_in4_out2: Collecting 10 samples in estimated 6.9960 s (20 iterations)
+Benchmarking relay_admission_verify/d4proj_in4_out2: Analyzing
+relay_admission_verify/d4proj_in4_out2
+                        time:   [350.62 ms 350.84 ms 351.07 ms]
+                        thrpt:  [11.394  elem/s 11.401  elem/s 11.408  elem/s]
+                 change:
+                        time:   [+0.6164% +0.6952% +0.7730%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.7671% -0.6904% -0.6126%]
+                        Change within noise threshold.
+Found 3 outliers among 10 measurements (30.00%)
+  1 (10.00%) low severe
+  1 (10.00%) low mild
+  1 (10.00%) high severe
+Benchmarking relay_admission_verify/d4proj_in5_out2
+Benchmarking relay_admission_verify/d4proj_in5_out2: Warming up for 3.0000 s
+Benchmarking relay_admission_verify/d4proj_in5_out2: Collecting 10 samples in estimated 8.4139 s (20 iterations)
+Benchmarking relay_admission_verify/d4proj_in5_out2: Analyzing
+relay_admission_verify/d4proj_in5_out2
+                        time:   [421.98 ms 422.17 ms 422.35 ms]
+                        thrpt:  [11.838  elem/s 11.844  elem/s 11.849  elem/s]
+                 change:
+                        time:   [+0.7884% +0.8682% +0.9444%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.9356% -0.8608% -0.7822%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d4proj_in6_out2
+Benchmarking relay_admission_verify/d4proj_in6_out2: Warming up for 3.0000 s
+Benchmarking relay_admission_verify/d4proj_in6_out2: Collecting 10 samples in estimated 8.9397 s (20 iterations)
+Benchmarking relay_admission_verify/d4proj_in6_out2: Analyzing
+relay_admission_verify/d4proj_in6_out2
+                        time:   [448.39 ms 448.52 ms 448.65 ms]
+                        thrpt:  [13.374  elem/s 13.377  elem/s 13.381  elem/s]
+                 change:
+                        time:   [+0.3901% +0.5230% +0.6267%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.6228% -0.5203% -0.3886%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d4proj_in7_out2
+Benchmarking relay_admission_verify/d4proj_in7_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 6.2s.
+Benchmarking relay_admission_verify/d4proj_in7_out2: Collecting 10 samples in estimated 6.1846 s (10 iterations)
+Benchmarking relay_admission_verify/d4proj_in7_out2: Analyzing
+relay_admission_verify/d4proj_in7_out2
+                        time:   [619.90 ms 621.75 ms 624.42 ms]
+                        thrpt:  [11.210  elem/s 11.259  elem/s 11.292  elem/s]
+                 change:
+                        time:   [+0.8171% +1.1254% +1.6213%] (p = 0.00 < 0.05)
+                        thrpt:  [-1.5954% -1.1129% -0.8105%]
+                        Change within noise threshold.
+Found 2 outliers among 10 measurements (20.00%)
+  2 (20.00%) high severe
+Benchmarking relay_admission_verify/d4proj_in8_out2
+Benchmarking relay_admission_verify/d4proj_in8_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 6.5s.
+Benchmarking relay_admission_verify/d4proj_in8_out2: Collecting 10 samples in estimated 6.4547 s (10 iterations)
+Benchmarking relay_admission_verify/d4proj_in8_out2: Analyzing
+relay_admission_verify/d4proj_in8_out2
+                        time:   [646.50 ms 647.74 ms 649.97 ms]
+                        thrpt:  [12.308  elem/s 12.351  elem/s 12.374  elem/s]
+                 change:
+                        time:   [+0.7722% +0.9992% +1.3654%] (p = 0.00 < 0.05)
+                        thrpt:  [-1.3470% -0.9893% -0.7662%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking relay_admission_verify/d4proj_in9_out2
+Benchmarking relay_admission_verify/d4proj_in9_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 7.7s.
+Benchmarking relay_admission_verify/d4proj_in9_out2: Collecting 10 samples in estimated 7.6510 s (10 iterations)
+Benchmarking relay_admission_verify/d4proj_in9_out2: Analyzing
+relay_admission_verify/d4proj_in9_out2
+                        time:   [767.07 ms 768.19 ms 769.62 ms]
+                        thrpt:  [11.694  elem/s 11.716  elem/s 11.733  elem/s]
+                 change:
+                        time:   [+1.0288% +1.1863% +1.3977%] (p = 0.00 < 0.05)
+                        thrpt:  [-1.3784% -1.1724% -1.0183%]
+                        Performance has regressed.
+Found 2 outliers among 10 measurements (20.00%)
+  2 (20.00%) high severe
+Benchmarking relay_admission_verify/d4proj_in10_out2
+Benchmarking relay_admission_verify/d4proj_in10_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 7.9s.
+Benchmarking relay_admission_verify/d4proj_in10_out2: Collecting 10 samples in estimated 7.9242 s (10 iterations)
+Benchmarking relay_admission_verify/d4proj_in10_out2: Analyzing
+relay_admission_verify/d4proj_in10_out2
+                        time:   [793.75 ms 795.94 ms 799.45 ms]
+                        thrpt:  [12.509  elem/s 12.564  elem/s 12.598  elem/s]
+                 change:
+                        time:   [+0.7643% +1.0517% +1.4994%] (p = 0.00 < 0.05)
+                        thrpt:  [-1.4773% -1.0408% -0.7585%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking relay_admission_verify/d4proj_in11_out2
+Benchmarking relay_admission_verify/d4proj_in11_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 8.2s.
+Benchmarking relay_admission_verify/d4proj_in11_out2: Collecting 10 samples in estimated 8.1936 s (10 iterations)
+Benchmarking relay_admission_verify/d4proj_in11_out2: Analyzing
+relay_admission_verify/d4proj_in11_out2
+                        time:   [821.06 ms 821.46 ms 821.90 ms]
+                        thrpt:  [13.384  elem/s 13.391  elem/s 13.397  elem/s]
+                 change:
+                        time:   [+0.5665% +0.8398% +1.0816%] (p = 0.00 < 0.05)
+                        thrpt:  [-1.0700% -0.8328% -0.5634%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking relay_admission_verify/d4proj_in12_out2
+Benchmarking relay_admission_verify/d4proj_in12_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 8.5s.
+Benchmarking relay_admission_verify/d4proj_in12_out2: Collecting 10 samples in estimated 8.4809 s (10 iterations)
+Benchmarking relay_admission_verify/d4proj_in12_out2: Analyzing
+relay_admission_verify/d4proj_in12_out2
+                        time:   [850.09 ms 850.56 ms 851.05 ms]
+                        thrpt:  [14.100  elem/s 14.108  elem/s 14.116  elem/s]
+                 change:
+                        time:   [+0.6028% +0.7914% +0.9231%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.9147% -0.7852% -0.5992%]
+                        Change within noise threshold.
+Found 2 outliers among 10 measurements (20.00%)
+  1 (10.00%) low mild
+  1 (10.00%) high mild
+Benchmarking relay_admission_verify/d4proj_in13_out2
+Benchmarking relay_admission_verify/d4proj_in13_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 11.7s.
+Benchmarking relay_admission_verify/d4proj_in13_out2: Collecting 10 samples in estimated 11.680 s (10 iterations)
+Benchmarking relay_admission_verify/d4proj_in13_out2: Analyzing
+relay_admission_verify/d4proj_in13_out2
+                        time:   [1.1702 s 1.1710 s 1.1717 s]
+                        thrpt:  [11.095  elem/s 11.102  elem/s 11.110  elem/s]
+                 change:
+                        time:   [+0.4587% +0.5583% +0.6560%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.6517% -0.5552% -0.4567%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d4proj_in14_out2
+Benchmarking relay_admission_verify/d4proj_in14_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 12.0s.
+Benchmarking relay_admission_verify/d4proj_in14_out2: Collecting 10 samples in estimated 12.002 s (10 iterations)
+Benchmarking relay_admission_verify/d4proj_in14_out2: Analyzing
+relay_admission_verify/d4proj_in14_out2
+                        time:   [1.2023 s 1.2027 s 1.2031 s]
+                        thrpt:  [11.637  elem/s 11.640  elem/s 11.644  elem/s]
+                 change:
+                        time:   [+0.6584% +0.7265% +0.7885%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.7824% -0.7213% -0.6541%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d4proj_in15_out2
+Benchmarking relay_admission_verify/d4proj_in15_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 12.3s.
+Benchmarking relay_admission_verify/d4proj_in15_out2: Collecting 10 samples in estimated 12.282 s (10 iterations)
+Benchmarking relay_admission_verify/d4proj_in15_out2: Analyzing
+relay_admission_verify/d4proj_in15_out2
+                        time:   [1.2312 s 1.2319 s 1.2325 s]
+                        thrpt:  [12.170  elem/s 12.177  elem/s 12.183  elem/s]
+                 change:
+                        time:   [+0.1264% +0.3669% +0.5495%] (p = 0.01 < 0.05)
+                        thrpt:  [-0.5465% -0.3655% -0.1262%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d4proj_in16_out2
+Benchmarking relay_admission_verify/d4proj_in16_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 12.5s.
+Benchmarking relay_admission_verify/d4proj_in16_out2: Collecting 10 samples in estimated 12.538 s (10 iterations)
+Benchmarking relay_admission_verify/d4proj_in16_out2: Analyzing
+relay_admission_verify/d4proj_in16_out2
+                        time:   [1.2564 s 1.2577 s 1.2594 s]
+                        thrpt:  [12.705  elem/s 12.722  elem/s 12.735  elem/s]
+                 change:
+                        time:   [-0.1842% +0.3598% +0.7072%] (p = 0.17 > 0.05)
+                        thrpt:  [-0.7022% -0.3585% +0.1846%]
+                        No change in performance detected.
+Found 2 outliers among 10 measurements (20.00%)
+  1 (10.00%) low mild
+  1 (10.00%) high severe
+Benchmarking relay_admission_verify/d4proj_in17_out2
+Benchmarking relay_admission_verify/d4proj_in17_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 14.7s.
+Benchmarking relay_admission_verify/d4proj_in17_out2: Collecting 10 samples in estimated 14.724 s (10 iterations)
+Benchmarking relay_admission_verify/d4proj_in17_out2: Analyzing
+relay_admission_verify/d4proj_in17_out2
+                        time:   [1.4788 s 1.4802 s 1.4821 s]
+                        thrpt:  [11.470  elem/s 11.485  elem/s 11.496  elem/s]
+                 change:
+                        time:   [+0.6129% +0.7588% +0.9163%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.9080% -0.7530% -0.6091%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking relay_admission_verify/d4proj_in18_out2
+Benchmarking relay_admission_verify/d4proj_in18_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 15.0s.
+Benchmarking relay_admission_verify/d4proj_in18_out2: Collecting 10 samples in estimated 15.010 s (10 iterations)
+Benchmarking relay_admission_verify/d4proj_in18_out2: Analyzing
+relay_admission_verify/d4proj_in18_out2
+                        time:   [1.5075 s 1.5085 s 1.5096 s]
+                        thrpt:  [11.924  elem/s 11.932  elem/s 11.940  elem/s]
+                 change:
+                        time:   [+0.6437% +0.7750% +0.8997%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.8917% -0.7691% -0.6396%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d4proj_in19_out2
+Benchmarking relay_admission_verify/d4proj_in19_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 15.4s.
+Benchmarking relay_admission_verify/d4proj_in19_out2: Collecting 10 samples in estimated 15.368 s (10 iterations)
+Benchmarking relay_admission_verify/d4proj_in19_out2: Analyzing
+relay_admission_verify/d4proj_in19_out2
+                        time:   [1.5404 s 1.5443 s 1.5512 s]
+                        thrpt:  [12.249  elem/s 12.303  elem/s 12.334  elem/s]
+                 change:
+                        time:   [+0.7632% +1.0472% +1.5411%] (p = 0.00 < 0.05)
+                        thrpt:  [-1.5177% -1.0363% -0.7574%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking relay_admission_verify/d4proj_in20_out2
+Benchmarking relay_admission_verify/d4proj_in20_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 15.6s.
+Benchmarking relay_admission_verify/d4proj_in20_out2: Collecting 10 samples in estimated 15.641 s (10 iterations)
+Benchmarking relay_admission_verify/d4proj_in20_out2: Analyzing
+relay_admission_verify/d4proj_in20_out2
+                        time:   [1.5664 s 1.5672 s 1.5679 s]
+                        thrpt:  [12.756  elem/s 12.762  elem/s 12.768  elem/s]
+                 change:
+                        time:   [+0.5253% +0.6069% +0.6797%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.6752% -0.6033% -0.5226%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d4proj_in21_out2
+Benchmarking relay_admission_verify/d4proj_in21_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 15.9s.
+Benchmarking relay_admission_verify/d4proj_in21_out2: Collecting 10 samples in estimated 15.948 s (10 iterations)
+Benchmarking relay_admission_verify/d4proj_in21_out2: Analyzing
+relay_admission_verify/d4proj_in21_out2
+                        time:   [1.5988 s 1.5995 s 1.6006 s]
+                        thrpt:  [13.120  elem/s 13.129  elem/s 13.135  elem/s]
+                 change:
+                        time:   [+0.5777% +0.6791% +0.7805%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.7745% -0.6745% -0.5744%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking relay_admission_verify/d4proj_in22_out2
+Benchmarking relay_admission_verify/d4proj_in22_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 16.2s.
+Benchmarking relay_admission_verify/d4proj_in22_out2: Collecting 10 samples in estimated 16.249 s (10 iterations)
+Benchmarking relay_admission_verify/d4proj_in22_out2: Analyzing
+relay_admission_verify/d4proj_in22_out2
+                        time:   [1.6309 s 1.6317 s 1.6325 s]
+                        thrpt:  [13.476  elem/s 13.483  elem/s 13.489  elem/s]
+                 change:
+                        time:   [+0.8213% +0.8875% +0.9558%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.9468% -0.8797% -0.8146%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking relay_admission_verify/d5proj_in1_out2
+Benchmarking relay_admission_verify/d5proj_in1_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 7.7s or enable flat sampling.
+Benchmarking relay_admission_verify/d5proj_in1_out2: Collecting 10 samples in estimated 7.6624 s (55 iterations)
+Benchmarking relay_admission_verify/d5proj_in1_out2: Analyzing
+relay_admission_verify/d5proj_in1_out2
+                        time:   [139.73 ms 139.81 ms 139.88 ms]
+                        thrpt:  [7.1491  elem/s 7.1524  elem/s 7.1565  elem/s]
+                 change:
+                        time:   [+0.9585% +1.0309% +1.1044%] (p = 0.00 < 0.05)
+                        thrpt:  [-1.0923% -1.0203% -0.9494%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d5proj_in2_out2
+Benchmarking relay_admission_verify/d5proj_in2_out2: Warming up for 3.0000 s
+Benchmarking relay_admission_verify/d5proj_in2_out2: Collecting 10 samples in estimated 6.1938 s (30 iterations)
+Benchmarking relay_admission_verify/d5proj_in2_out2: Analyzing
+relay_admission_verify/d5proj_in2_out2
+                        time:   [207.09 ms 207.18 ms 207.26 ms]
+                        thrpt:  [9.6496  elem/s 9.6536  elem/s 9.6578  elem/s]
+                 change:
+                        time:   [+0.3600% +0.4761% +0.5702%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.5670% -0.4738% -0.3587%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d5proj_in3_out2
+Benchmarking relay_admission_verify/d5proj_in3_out2: Warming up for 3.0000 s
+Benchmarking relay_admission_verify/d5proj_in3_out2: Collecting 10 samples in estimated 6.6032 s (20 iterations)
+Benchmarking relay_admission_verify/d5proj_in3_out2: Analyzing
+relay_admission_verify/d5proj_in3_out2
+                        time:   [330.84 ms 330.97 ms 331.09 ms]
+                        thrpt:  [9.0610  elem/s 9.0644  elem/s 9.0679  elem/s]
+                 change:
+                        time:   [+0.3983% +0.4835% +0.5685%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.5652% -0.4811% -0.3967%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d5proj_in4_out2
+Benchmarking relay_admission_verify/d5proj_in4_out2: Warming up for 3.0000 s
+Benchmarking relay_admission_verify/d5proj_in4_out2: Collecting 10 samples in estimated 7.2069 s (20 iterations)
+Benchmarking relay_admission_verify/d5proj_in4_out2: Analyzing
+relay_admission_verify/d5proj_in4_out2
+                        time:   [361.19 ms 361.32 ms 361.47 ms]
+                        thrpt:  [11.066  elem/s 11.070  elem/s 11.075  elem/s]
+                 change:
+                        time:   [+0.2762% +0.3929% +0.4852%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.4828% -0.3914% -0.2754%]
+                        Change within noise threshold.
+Found 2 outliers among 10 measurements (20.00%)
+  1 (10.00%) low mild
+  1 (10.00%) high mild
+Benchmarking relay_admission_verify/d5proj_in5_out2
+Benchmarking relay_admission_verify/d5proj_in5_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 5.8s.
+Benchmarking relay_admission_verify/d5proj_in5_out2: Collecting 10 samples in estimated 5.7716 s (10 iterations)
+Benchmarking relay_admission_verify/d5proj_in5_out2: Analyzing
+relay_admission_verify/d5proj_in5_out2
+                        time:   [579.06 ms 580.00 ms 581.52 ms]
+                        thrpt:  [8.5982  elem/s 8.6207  elem/s 8.6347  elem/s]
+                 change:
+                        time:   [+0.6414% +0.8082% +1.0602%] (p = 0.00 < 0.05)
+                        thrpt:  [-1.0491% -0.8018% -0.6373%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking relay_admission_verify/d5proj_in6_out2
+Benchmarking relay_admission_verify/d5proj_in6_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 6.1s.
+Benchmarking relay_admission_verify/d5proj_in6_out2: Collecting 10 samples in estimated 6.0842 s (10 iterations)
+Benchmarking relay_admission_verify/d5proj_in6_out2: Analyzing
+relay_admission_verify/d5proj_in6_out2
+                        time:   [609.74 ms 611.75 ms 615.25 ms]
+                        thrpt:  [9.7522  elem/s 9.8079  elem/s 9.8403  elem/s]
+                 change:
+                        time:   [+0.8161% +1.1690% +1.7322%] (p = 0.00 < 0.05)
+                        thrpt:  [-1.7027% -1.1555% -0.8095%]
+                        Change within noise threshold.
+Found 2 outliers among 10 measurements (20.00%)
+  1 (10.00%) high mild
+  1 (10.00%) high severe
+Benchmarking relay_admission_verify/d5proj_in7_out2
+Benchmarking relay_admission_verify/d5proj_in7_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 6.4s.
+Benchmarking relay_admission_verify/d5proj_in7_out2: Collecting 10 samples in estimated 6.3804 s (10 iterations)
+Benchmarking relay_admission_verify/d5proj_in7_out2: Analyzing
+relay_admission_verify/d5proj_in7_out2
+                        time:   [639.80 ms 641.18 ms 643.70 ms]
+                        thrpt:  [10.875  elem/s 10.917  elem/s 10.941  elem/s]
+                 change:
+                        time:   [+0.5417% +0.7965% +1.2206%] (p = 0.00 < 0.05)
+                        thrpt:  [-1.2059% -0.7902% -0.5388%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking relay_admission_verify/d5proj_in8_out2
+Benchmarking relay_admission_verify/d5proj_in8_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 6.7s.
+Benchmarking relay_admission_verify/d5proj_in8_out2: Collecting 10 samples in estimated 6.6827 s (10 iterations)
+Benchmarking relay_admission_verify/d5proj_in8_out2: Analyzing
+relay_admission_verify/d5proj_in8_out2
+                        time:   [670.13 ms 670.64 ms 671.36 ms]
+                        thrpt:  [11.916  elem/s 11.929  elem/s 11.938  elem/s]
+                 change:
+                        time:   [+0.7758% +0.9050% +1.0363%] (p = 0.00 < 0.05)
+                        thrpt:  [-1.0256% -0.8968% -0.7698%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking relay_admission_verify/d5proj_in9_out2
+Benchmarking relay_admission_verify/d5proj_in9_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 7.9s.
+Benchmarking relay_admission_verify/d5proj_in9_out2: Collecting 10 samples in estimated 7.8959 s (10 iterations)
+Benchmarking relay_admission_verify/d5proj_in9_out2: Analyzing
+relay_admission_verify/d5proj_in9_out2
+                        time:   [793.16 ms 793.86 ms 794.62 ms]
+                        thrpt:  [11.326  elem/s 11.337  elem/s 11.347  elem/s]
+                 change:
+                        time:   [+0.6988% +0.8448% +0.9717%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.9623% -0.8378% -0.6940%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d5proj_in10_out2
+Benchmarking relay_admission_verify/d5proj_in10_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 11.1s.
+Benchmarking relay_admission_verify/d5proj_in10_out2: Collecting 10 samples in estimated 11.142 s (10 iterations)
+Benchmarking relay_admission_verify/d5proj_in10_out2: Analyzing
+relay_admission_verify/d5proj_in10_out2
+                        time:   [1.1175 s 1.1179 s 1.1182 s]
+                        thrpt:  [8.9426  elem/s 8.9457  elem/s 8.9487  elem/s]
+                 change:
+                        time:   [+0.0678% +0.4158% +0.6341%] (p = 0.02 < 0.05)
+                        thrpt:  [-0.6301% -0.4141% -0.0677%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d5proj_in11_out2
+Benchmarking relay_admission_verify/d5proj_in11_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 11.4s.
+Benchmarking relay_admission_verify/d5proj_in11_out2: Collecting 10 samples in estimated 11.435 s (10 iterations)
+Benchmarking relay_admission_verify/d5proj_in11_out2: Analyzing
+relay_admission_verify/d5proj_in11_out2
+                        time:   [1.1473 s 1.1498 s 1.1539 s]
+                        thrpt:  [9.5326  elem/s 9.5672  elem/s 9.5873  elem/s]
+                 change:
+                        time:   [+0.3955% +0.6287% +1.0807%] (p = 0.00 < 0.05)
+                        thrpt:  [-1.0692% -0.6248% -0.3940%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking relay_admission_verify/d5proj_in12_out2
+Benchmarking relay_admission_verify/d5proj_in12_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 11.8s.
+Benchmarking relay_admission_verify/d5proj_in12_out2: Collecting 10 samples in estimated 11.751 s (10 iterations)
+Benchmarking relay_admission_verify/d5proj_in12_out2: Analyzing
+relay_admission_verify/d5proj_in12_out2
+                        time:   [1.1789 s 1.1793 s 1.1798 s]
+                        thrpt:  [10.171  elem/s 10.175  elem/s 10.179  elem/s]
+                 change:
+                        time:   [-1.4150% -0.3435% +0.4546%] (p = 0.62 > 0.05)
+                        thrpt:  [-0.4526% +0.3447% +1.4353%]
+                        No change in performance detected.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking relay_admission_verify/d5proj_in13_out2
+Benchmarking relay_admission_verify/d5proj_in13_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 12.1s.
+Benchmarking relay_admission_verify/d5proj_in13_out2: Collecting 10 samples in estimated 12.071 s (10 iterations)
+Benchmarking relay_admission_verify/d5proj_in13_out2: Analyzing
+relay_admission_verify/d5proj_in13_out2
+                        time:   [1.2108 s 1.2119 s 1.2135 s]
+                        thrpt:  [10.713  elem/s 10.727  elem/s 10.737  elem/s]
+                 change:
+                        time:   [+0.3538% +0.4808% +0.6127%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.6089% -0.4785% -0.3526%]
+                        Change within noise threshold.
+Found 2 outliers among 10 measurements (20.00%)
+  1 (10.00%) high mild
+  1 (10.00%) high severe
+Benchmarking relay_admission_verify/d5proj_in14_out2
+Benchmarking relay_admission_verify/d5proj_in14_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 12.4s.
+Benchmarking relay_admission_verify/d5proj_in14_out2: Collecting 10 samples in estimated 12.404 s (10 iterations)
+Benchmarking relay_admission_verify/d5proj_in14_out2: Analyzing
+relay_admission_verify/d5proj_in14_out2
+                        time:   [1.2437 s 1.2444 s 1.2451 s]
+                        thrpt:  [11.244  elem/s 11.250  elem/s 11.257  elem/s]
+                 change:
+                        time:   [+0.2855% +0.3743% +0.4596%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.4575% -0.3729% -0.2847%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d5proj_in15_out2
+Benchmarking relay_admission_verify/d5proj_in15_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 12.7s.
+Benchmarking relay_admission_verify/d5proj_in15_out2: Collecting 10 samples in estimated 12.740 s (10 iterations)
+Benchmarking relay_admission_verify/d5proj_in15_out2: Analyzing
+relay_admission_verify/d5proj_in15_out2
+                        time:   [1.2763 s 1.2771 s 1.2780 s]
+                        thrpt:  [11.737  elem/s 11.745  elem/s 11.753  elem/s]
+                 change:
+                        time:   [+0.3418% +0.4324% +0.5316%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.5287% -0.4305% -0.3406%]
+                        Change within noise threshold.
+Found 2 outliers among 10 measurements (20.00%)
+  1 (10.00%) low mild
+  1 (10.00%) high mild
+Benchmarking relay_admission_verify/d5proj_in16_out2
+Benchmarking relay_admission_verify/d5proj_in16_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 13.0s.
+Benchmarking relay_admission_verify/d5proj_in16_out2: Collecting 10 samples in estimated 13.030 s (10 iterations)
+Benchmarking relay_admission_verify/d5proj_in16_out2: Analyzing
+relay_admission_verify/d5proj_in16_out2
+                        time:   [1.3060 s 1.3069 s 1.3077 s]
+                        thrpt:  [12.235  elem/s 12.243  elem/s 12.252  elem/s]
+                 change:
+                        time:   [-1.3560% -0.2500% +0.4628%] (p = 0.74 > 0.05)
+                        thrpt:  [-0.4606% +0.2506% +1.3747%]
+                        No change in performance detected.
+Benchmarking relay_admission_verify/d5proj_in17_out2
+Benchmarking relay_admission_verify/d5proj_in17_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 15.3s.
+Benchmarking relay_admission_verify/d5proj_in17_out2: Collecting 10 samples in estimated 15.299 s (10 iterations)
+Benchmarking relay_admission_verify/d5proj_in17_out2: Analyzing
+relay_admission_verify/d5proj_in17_out2
+                        time:   [1.5350 s 1.5357 s 1.5365 s]
+                        thrpt:  [11.064  elem/s 11.070  elem/s 11.075  elem/s]
+                 change:
+                        time:   [+0.5827% +0.6924% +0.7947%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.7885% -0.6876% -0.5794%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d5proj_in18_out2
+Benchmarking relay_admission_verify/d5proj_in18_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 15.6s.
+Benchmarking relay_admission_verify/d5proj_in18_out2: Collecting 10 samples in estimated 15.634 s (10 iterations)
+Benchmarking relay_admission_verify/d5proj_in18_out2: Analyzing
+relay_admission_verify/d5proj_in18_out2
+                        time:   [1.5699 s 1.5722 s 1.5760 s]
+                        thrpt:  [11.422  elem/s 11.449  elem/s 11.466  elem/s]
+                 change:
+                        time:   [+0.5224% +0.7054% +0.9573%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.9482% -0.7004% -0.5197%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking relay_admission_verify/d5proj_in19_out2
+Benchmarking relay_admission_verify/d5proj_in19_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 16.0s.
+Benchmarking relay_admission_verify/d5proj_in19_out2: Collecting 10 samples in estimated 15.998 s (10 iterations)
+Benchmarking relay_admission_verify/d5proj_in19_out2: Analyzing
+relay_admission_verify/d5proj_in19_out2
+                        time:   [1.6034 s 1.6038 s 1.6044 s]
+                        thrpt:  [11.843  elem/s 11.847  elem/s 11.850  elem/s]
+                 change:
+                        time:   [+0.3008% +0.3928% +0.4816%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.4793% -0.3912% -0.2999%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d5proj_in20_out2
+Benchmarking relay_admission_verify/d5proj_in20_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 22.4s.
+Benchmarking relay_admission_verify/d5proj_in20_out2: Collecting 10 samples in estimated 22.378 s (10 iterations)
+Benchmarking relay_admission_verify/d5proj_in20_out2: Analyzing
+relay_admission_verify/d5proj_in20_out2
+                        time:   [2.2414 s 2.2425 s 2.2437 s]
+                        thrpt:  [8.9137  elem/s 8.9185  elem/s 8.9230  elem/s]
+                 change:
+                        time:   [-0.6792% -0.1265% +0.2938%] (p = 0.69 > 0.05)
+                        thrpt:  [-0.2930% +0.1266% +0.6839%]
+                        No change in performance detected.
+Benchmarking relay_admission_verify/d5proj_in21_out2
+Benchmarking relay_admission_verify/d5proj_in21_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 22.7s.
+Benchmarking relay_admission_verify/d5proj_in21_out2: Collecting 10 samples in estimated 22.715 s (10 iterations)
+Benchmarking relay_admission_verify/d5proj_in21_out2: Analyzing
+relay_admission_verify/d5proj_in21_out2
+                        time:   [2.2766 s 2.2776 s 2.2786 s]
+                        thrpt:  [9.2161  elem/s 9.2202  elem/s 9.2242  elem/s]
+                 change:
+                        time:   [+0.1761% +0.2846% +0.3855%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.3840% -0.2838% -0.1758%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d6proj_in1_out2
+Benchmarking relay_admission_verify/d6proj_in1_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 7.9s or enable flat sampling.
+Benchmarking relay_admission_verify/d6proj_in1_out2: Collecting 10 samples in estimated 7.9002 s (55 iterations)
+Benchmarking relay_admission_verify/d6proj_in1_out2: Analyzing
+relay_admission_verify/d6proj_in1_out2
+                        time:   [143.96 ms 144.03 ms 144.15 ms]
+                        thrpt:  [6.9374  elem/s 6.9428  elem/s 6.9466  elem/s]
+                 change:
+                        time:   [+0.1745% +0.2486% +0.3333%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.3322% -0.2480% -0.1742%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d6proj_in2_out2
+Benchmarking relay_admission_verify/d6proj_in2_out2: Warming up for 3.0000 s
+Benchmarking relay_admission_verify/d6proj_in2_out2: Collecting 10 samples in estimated 7.0951 s (30 iterations)
+Benchmarking relay_admission_verify/d6proj_in2_out2: Analyzing
+relay_admission_verify/d6proj_in2_out2
+                        time:   [237.07 ms 237.14 ms 237.22 ms]
+                        thrpt:  [8.4311  elem/s 8.4338  elem/s 8.4365  elem/s]
+                 change:
+                        time:   [+0.4544% +0.5155% +0.5724%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.5691% -0.5128% -0.4524%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d6proj_in3_out2
+Benchmarking relay_admission_verify/d6proj_in3_out2: Warming up for 3.0000 s
+Benchmarking relay_admission_verify/d6proj_in3_out2: Collecting 10 samples in estimated 7.6229 s (20 iterations)
+Benchmarking relay_admission_verify/d6proj_in3_out2: Analyzing
+relay_admission_verify/d6proj_in3_out2
+                        time:   [382.89 ms 383.24 ms 383.67 ms]
+                        thrpt:  [7.8193  elem/s 7.8280  elem/s 7.8351  elem/s]
+                 change:
+                        time:   [+0.6308% +0.7367% +0.8616%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.8542% -0.7313% -0.6268%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking relay_admission_verify/d6proj_in4_out2
+Benchmarking relay_admission_verify/d6proj_in4_out2: Warming up for 3.0000 s
+Benchmarking relay_admission_verify/d6proj_in4_out2: Collecting 10 samples in estimated 8.2594 s (20 iterations)
+Benchmarking relay_admission_verify/d6proj_in4_out2: Analyzing
+relay_admission_verify/d6proj_in4_out2
+                        time:   [414.48 ms 414.61 ms 414.79 ms]
+                        thrpt:  [9.6435  elem/s 9.6476  elem/s 9.6507  elem/s]
+                 change:
+                        time:   [+0.3312% +0.4416% +0.5299%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.5271% -0.4397% -0.3301%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking relay_admission_verify/d6proj_in5_out2
+Benchmarking relay_admission_verify/d6proj_in5_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 5.9s.
+Benchmarking relay_admission_verify/d6proj_in5_out2: Collecting 10 samples in estimated 5.9380 s (10 iterations)
+Benchmarking relay_admission_verify/d6proj_in5_out2: Analyzing
+relay_admission_verify/d6proj_in5_out2
+                        time:   [593.70 ms 594.11 ms 594.61 ms]
+                        thrpt:  [8.4089  elem/s 8.4160  elem/s 8.4218  elem/s]
+                 change:
+                        time:   [+0.3790% +0.4916% +0.6138%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.6101% -0.4892% -0.3776%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking relay_admission_verify/d6proj_in6_out2
+Benchmarking relay_admission_verify/d6proj_in6_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 7.2s.
+Benchmarking relay_admission_verify/d6proj_in6_out2: Collecting 10 samples in estimated 7.1516 s (10 iterations)
+Benchmarking relay_admission_verify/d6proj_in6_out2: Analyzing
+relay_admission_verify/d6proj_in6_out2
+                        time:   [717.06 ms 718.35 ms 720.41 ms]
+                        thrpt:  [8.3286  elem/s 8.3524  elem/s 8.3675  elem/s]
+                 change:
+                        time:   [+0.3727% +0.5792% +0.8849%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.8771% -0.5758% -0.3713%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking relay_admission_verify/d6proj_in7_out2
+Benchmarking relay_admission_verify/d6proj_in7_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 7.5s.
+Benchmarking relay_admission_verify/d6proj_in7_out2: Collecting 10 samples in estimated 7.4883 s (10 iterations)
+Benchmarking relay_admission_verify/d6proj_in7_out2: Analyzing
+relay_admission_verify/d6proj_in7_out2
+                        time:   [751.58 ms 752.00 ms 752.57 ms]
+                        thrpt:  [9.3014  elem/s 9.3086  elem/s 9.3137  elem/s]
+                 change:
+                        time:   [+0.2396% +0.4439% +0.6004%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.5968% -0.4419% -0.2390%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking relay_admission_verify/d6proj_in8_out2
+Benchmarking relay_admission_verify/d6proj_in8_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 7.8s.
+Benchmarking relay_admission_verify/d6proj_in8_out2: Collecting 10 samples in estimated 7.8072 s (10 iterations)
+Benchmarking relay_admission_verify/d6proj_in8_out2: Analyzing
+relay_admission_verify/d6proj_in8_out2
+                        time:   [783.72 ms 783.93 ms 784.16 ms]
+                        thrpt:  [10.202  elem/s 10.205  elem/s 10.208  elem/s]
+                 change:
+                        time:   [-0.1510% +0.2885% +0.5452%] (p = 0.20 > 0.05)
+                        thrpt:  [-0.5423% -0.2876% +0.1513%]
+                        No change in performance detected.
+Benchmarking relay_admission_verify/d6proj_in9_out2
+Benchmarking relay_admission_verify/d6proj_in9_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 8.2s.
+Benchmarking relay_admission_verify/d6proj_in9_out2: Collecting 10 samples in estimated 8.1673 s (10 iterations)
+Benchmarking relay_admission_verify/d6proj_in9_out2: Analyzing
+relay_admission_verify/d6proj_in9_out2
+                        time:   [819.42 ms 819.70 ms 820.01 ms]
+                        thrpt:  [10.976  elem/s 10.980  elem/s 10.983  elem/s]
+                 change:
+                        time:   [+0.6520% +0.7028% +0.7540%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.7483% -0.6979% -0.6478%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking relay_admission_verify/d6proj_in10_out2
+Benchmarking relay_admission_verify/d6proj_in10_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 11.5s.
+Benchmarking relay_admission_verify/d6proj_in10_out2: Collecting 10 samples in estimated 11.458 s (10 iterations)
+Benchmarking relay_admission_verify/d6proj_in10_out2: Analyzing
+relay_admission_verify/d6proj_in10_out2
+                        time:   [1.1491 s 1.1496 s 1.1502 s]
+                        thrpt:  [8.6942  elem/s 8.6987  elem/s 8.7026  elem/s]
+                 change:
+                        time:   [+0.2778% +0.3761% +0.4741%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.4718% -0.3747% -0.2771%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d6proj_in11_out2
+Benchmarking relay_admission_verify/d6proj_in11_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 13.7s.
+Benchmarking relay_admission_verify/d6proj_in11_out2: Collecting 10 samples in estimated 13.739 s (10 iterations)
+Benchmarking relay_admission_verify/d6proj_in11_out2: Analyzing
+relay_admission_verify/d6proj_in11_out2
+                        time:   [1.3770 s 1.3778 s 1.3786 s]
+                        thrpt:  [7.9790  elem/s 7.9837  elem/s 7.9883  elem/s]
+                 change:
+                        time:   [+0.2773% +0.3809% +0.4819%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.4796% -0.3795% -0.2765%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d6proj_in12_out2
+Benchmarking relay_admission_verify/d6proj_in12_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 14.1s.
+Benchmarking relay_admission_verify/d6proj_in12_out2: Collecting 10 samples in estimated 14.059 s (10 iterations)
+Benchmarking relay_admission_verify/d6proj_in12_out2: Analyzing
+relay_admission_verify/d6proj_in12_out2
+                        time:   [1.4124 s 1.4134 s 1.4147 s]
+                        thrpt:  [8.4826  elem/s 8.4899  elem/s 8.4960  elem/s]
+                 change:
+                        time:   [+0.3244% +0.4150% +0.5144%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.5118% -0.4133% -0.3234%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking relay_admission_verify/d6proj_in13_out2
+Benchmarking relay_admission_verify/d6proj_in13_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 14.4s.
+Benchmarking relay_admission_verify/d6proj_in13_out2: Collecting 10 samples in estimated 14.448 s (10 iterations)
+Benchmarking relay_admission_verify/d6proj_in13_out2: Analyzing
+relay_admission_verify/d6proj_in13_out2
+                        time:   [1.4510 s 1.4515 s 1.4522 s]
+                        thrpt:  [8.9521  elem/s 8.9560  elem/s 8.9595  elem/s]
+                 change:
+                        time:   [+0.5501% +0.6176% +0.6861%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.6814% -0.6138% -0.5471%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d6proj_in14_out2
+Benchmarking relay_admission_verify/d6proj_in14_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 14.9s.
+Benchmarking relay_admission_verify/d6proj_in14_out2: Collecting 10 samples in estimated 14.853 s (10 iterations)
+Benchmarking relay_admission_verify/d6proj_in14_out2: Analyzing
+relay_admission_verify/d6proj_in14_out2
+                        time:   [1.4880 s 1.4889 s 1.4898 s]
+                        thrpt:  [9.3970  elem/s 9.4030  elem/s 9.4086  elem/s]
+                 change:
+                        time:   [-1.0230% -0.0382% +0.5169%] (p = 0.93 > 0.05)
+                        thrpt:  [-0.5142% +0.0382% +1.0336%]
+                        No change in performance detected.
+Benchmarking relay_admission_verify/d6proj_in15_out2
+Benchmarking relay_admission_verify/d6proj_in15_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 15.2s.
+Benchmarking relay_admission_verify/d6proj_in15_out2: Collecting 10 samples in estimated 15.207 s (10 iterations)
+Benchmarking relay_admission_verify/d6proj_in15_out2: Analyzing
+relay_admission_verify/d6proj_in15_out2
+                        time:   [1.5264 s 1.5275 s 1.5292 s]
+                        thrpt:  [9.8093  elem/s 9.8202  elem/s 9.8273  elem/s]
+                 change:
+                        time:   [+0.3433% +0.4621% +0.6006%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.5970% -0.4599% -0.3422%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking relay_admission_verify/d6proj_in16_out2
+Benchmarking relay_admission_verify/d6proj_in16_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 15.6s.
+Benchmarking relay_admission_verify/d6proj_in16_out2: Collecting 10 samples in estimated 15.553 s (10 iterations)
+Benchmarking relay_admission_verify/d6proj_in16_out2: Analyzing
+relay_admission_verify/d6proj_in16_out2
+                        time:   [1.5622 s 1.5645 s 1.5683 s]
+                        thrpt:  [10.202  elem/s 10.227  elem/s 10.242  elem/s]
+                 change:
+                        time:   [+0.4117% +0.6066% +0.8495%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.8424% -0.6029% -0.4100%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking relay_admission_verify/d6proj_in17_out2
+Benchmarking relay_admission_verify/d6proj_in17_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 16.0s.
+Benchmarking relay_admission_verify/d6proj_in17_out2: Collecting 10 samples in estimated 15.952 s (10 iterations)
+Benchmarking relay_admission_verify/d6proj_in17_out2: Analyzing
+relay_admission_verify/d6proj_in17_out2
+                        time:   [1.5998 s 1.6035 s 1.6090 s]
+                        thrpt:  [10.566  elem/s 10.602  elem/s 10.626  elem/s]
+                 change:
+                        time:   [+0.3010% +0.5749% +0.9496%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.9407% -0.5716% -0.3001%]
+                        Change within noise threshold.
+Found 2 outliers among 10 measurements (20.00%)
+  2 (20.00%) high severe
+Benchmarking relay_admission_verify/d6proj_in18_out2
+Benchmarking relay_admission_verify/d6proj_in18_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 16.4s.
+Benchmarking relay_admission_verify/d6proj_in18_out2: Collecting 10 samples in estimated 16.373 s (10 iterations)
+Benchmarking relay_admission_verify/d6proj_in18_out2: Analyzing
+relay_admission_verify/d6proj_in18_out2
+                        time:   [1.6410 s 1.6416 s 1.6421 s]
+                        thrpt:  [10.962  elem/s 10.965  elem/s 10.969  elem/s]
+                 change:
+                        time:   [+0.4897% +0.6444% +0.7758%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.7698% -0.6402% -0.4874%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) low mild
+Benchmarking relay_admission_verify/d6proj_in19_out2
+Benchmarking relay_admission_verify/d6proj_in19_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 16.7s.
+Benchmarking relay_admission_verify/d6proj_in19_out2: Collecting 10 samples in estimated 16.740 s (10 iterations)
+Benchmarking relay_admission_verify/d6proj_in19_out2: Analyzing
+relay_admission_verify/d6proj_in19_out2
+                        time:   [1.6808 s 1.6824 s 1.6845 s]
+                        thrpt:  [11.280  elem/s 11.293  elem/s 11.304  elem/s]
+                 change:
+                        time:   [+0.6661% +0.7843% +0.9048%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.8967% -0.7782% -0.6617%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking relay_admission_verify/d6proj_in20_out2
+Benchmarking relay_admission_verify/d6proj_in20_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 23.3s.
+Benchmarking relay_admission_verify/d6proj_in20_out2: Collecting 10 samples in estimated 23.331 s (10 iterations)
+Benchmarking relay_admission_verify/d6proj_in20_out2: Analyzing
+relay_admission_verify/d6proj_in20_out2
+                        time:   [2.3430 s 2.3461 s 2.3507 s]
+                        thrpt:  [8.5080  elem/s 8.5250  elem/s 8.5362  elem/s]
+                 change:
+                        time:   [-0.4167% +0.2519% +0.7018%] (p = 0.48 > 0.05)
+                        thrpt:  [-0.6969% -0.2513% +0.4185%]
+                        No change in performance detected.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking relay_admission_verify/d6proj_in21_out2
+Benchmarking relay_admission_verify/d6proj_in21_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 23.8s.
+Benchmarking relay_admission_verify/d6proj_in21_out2: Collecting 10 samples in estimated 23.764 s (10 iterations)
+Benchmarking relay_admission_verify/d6proj_in21_out2: Analyzing
+relay_admission_verify/d6proj_in21_out2
+                        time:   [2.3843 s 2.3858 s 2.3874 s]
+                        thrpt:  [8.7960  elem/s 8.8021  elem/s 8.8078  elem/s]
+                 change:
+                        time:   [+0.2395% +0.3327% +0.4155%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.4137% -0.3316% -0.2389%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d7proj_in1_out2
+Benchmarking relay_admission_verify/d7proj_in1_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 9.9s or enable flat sampling.
+Benchmarking relay_admission_verify/d7proj_in1_out2: Collecting 10 samples in estimated 9.8684 s (55 iterations)
+Benchmarking relay_admission_verify/d7proj_in1_out2: Analyzing
+relay_admission_verify/d7proj_in1_out2
+                        time:   [179.98 ms 180.02 ms 180.07 ms]
+                        thrpt:  [5.5534  elem/s 5.5549  elem/s 5.5562  elem/s]
+                 change:
+                        time:   [+0.1585% +0.2755% +0.3954%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.3938% -0.2747% -0.1583%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking relay_admission_verify/d7proj_in2_out2
+Benchmarking relay_admission_verify/d7proj_in2_out2: Warming up for 3.0000 s
+Benchmarking relay_admission_verify/d7proj_in2_out2: Collecting 10 samples in estimated 6.2183 s (20 iterations)
+Benchmarking relay_admission_verify/d7proj_in2_out2: Analyzing
+relay_admission_verify/d7proj_in2_out2
+                        time:   [311.96 ms 312.12 ms 312.33 ms]
+                        thrpt:  [6.4035  elem/s 6.4078  elem/s 6.4110  elem/s]
+                 change:
+                        time:   [+0.2233% +0.3189% +0.4264%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.4245% -0.3179% -0.2228%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking relay_admission_verify/d7proj_in3_out2
+Benchmarking relay_admission_verify/d7proj_in3_out2: Warming up for 3.0000 s
+Benchmarking relay_admission_verify/d7proj_in3_out2: Collecting 10 samples in estimated 7.7809 s (20 iterations)
+Benchmarking relay_admission_verify/d7proj_in3_out2: Analyzing
+relay_admission_verify/d7proj_in3_out2
+                        time:   [389.74 ms 389.92 ms 390.13 ms]
+                        thrpt:  [7.6897  elem/s 7.6938  elem/s 7.6975  elem/s]
+                 change:
+                        time:   [-0.4479% +0.2082% +0.5743%] (p = 0.60 > 0.05)
+                        thrpt:  [-0.5710% -0.2077% +0.4499%]
+                        No change in performance detected.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking relay_admission_verify/d7proj_in4_out2
+Benchmarking relay_admission_verify/d7proj_in4_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 5.7s.
+Benchmarking relay_admission_verify/d7proj_in4_out2: Collecting 10 samples in estimated 5.7117 s (10 iterations)
+Benchmarking relay_admission_verify/d7proj_in4_out2: Analyzing
+relay_admission_verify/d7proj_in4_out2
+                        time:   [571.75 ms 572.00 ms 572.26 ms]
+                        thrpt:  [6.9898  elem/s 6.9930  elem/s 6.9960  elem/s]
+                 change:
+                        time:   [+0.2774% +0.3783% +0.4746%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.4724% -0.3769% -0.2766%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d7proj_in5_out2
+Benchmarking relay_admission_verify/d7proj_in5_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 6.1s.
+Benchmarking relay_admission_verify/d7proj_in5_out2: Collecting 10 samples in estimated 6.0732 s (10 iterations)
+Benchmarking relay_admission_verify/d7proj_in5_out2: Analyzing
+relay_admission_verify/d7proj_in5_out2
+                        time:   [608.45 ms 608.65 ms 608.90 ms]
+                        thrpt:  [8.2116  elem/s 8.2149  elem/s 8.2176  elem/s]
+                 change:
+                        time:   [-0.2629% +0.3395% +0.6847%] (p = 0.28 > 0.05)
+                        thrpt:  [-0.6801% -0.3384% +0.2636%]
+                        No change in performance detected.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking relay_admission_verify/d7proj_in6_out2
+Benchmarking relay_admission_verify/d7proj_in6_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 7.3s.
+Benchmarking relay_admission_verify/d7proj_in6_out2: Collecting 10 samples in estimated 7.3242 s (10 iterations)
+Benchmarking relay_admission_verify/d7proj_in6_out2: Analyzing
+relay_admission_verify/d7proj_in6_out2
+                        time:   [735.35 ms 735.69 ms 736.08 ms]
+                        thrpt:  [8.1513  elem/s 8.1556  elem/s 8.1594  elem/s]
+                 change:
+                        time:   [+0.5017% +0.5803% +0.6641%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.6597% -0.5770% -0.4992%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d7proj_in7_out2
+Benchmarking relay_admission_verify/d7proj_in7_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 7.7s.
+Benchmarking relay_admission_verify/d7proj_in7_out2: Collecting 10 samples in estimated 7.6986 s (10 iterations)
+Benchmarking relay_admission_verify/d7proj_in7_out2: Analyzing
+relay_admission_verify/d7proj_in7_out2
+                        time:   [771.83 ms 772.16 ms 772.49 ms]
+                        thrpt:  [9.0616  elem/s 9.0655  elem/s 9.0693  elem/s]
+                 change:
+                        time:   [+0.5246% +0.6352% +0.7333%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.7279% -0.6312% -0.5218%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d7proj_in8_out2
+Benchmarking relay_admission_verify/d7proj_in8_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 11.0s.
+Benchmarking relay_admission_verify/d7proj_in8_out2: Collecting 10 samples in estimated 10.998 s (10 iterations)
+Benchmarking relay_admission_verify/d7proj_in8_out2: Analyzing
+relay_admission_verify/d7proj_in8_out2
+                        time:   [1.1036 s 1.1064 s 1.1111 s]
+                        thrpt:  [7.2003  elem/s 7.2305  elem/s 7.2490  elem/s]
+                 change:
+                        time:   [+0.3500% +0.6207% +1.0385%] (p = 0.00 < 0.05)
+                        thrpt:  [-1.0278% -0.6169% -0.3488%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking relay_admission_verify/d7proj_in9_out2
+Benchmarking relay_admission_verify/d7proj_in9_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 11.4s.
+Benchmarking relay_admission_verify/d7proj_in9_out2: Collecting 10 samples in estimated 11.413 s (10 iterations)
+Benchmarking relay_admission_verify/d7proj_in9_out2: Analyzing
+relay_admission_verify/d7proj_in9_out2
+                        time:   [1.1414 s 1.1420 s 1.1428 s]
+                        thrpt:  [7.8751  elem/s 7.8807  elem/s 7.8851  elem/s]
+                 change:
+                        time:   [+0.1693% +0.3601% +0.5047%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.5022% -0.3588% -0.1691%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking relay_admission_verify/d7proj_in10_out2
+Benchmarking relay_admission_verify/d7proj_in10_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 11.8s.
+Benchmarking relay_admission_verify/d7proj_in10_out2: Collecting 10 samples in estimated 11.757 s (10 iterations)
+Benchmarking relay_admission_verify/d7proj_in10_out2: Analyzing
+relay_admission_verify/d7proj_in10_out2
+                        time:   [1.1795 s 1.1803 s 1.1811 s]
+                        thrpt:  [8.4669  elem/s 8.4728  elem/s 8.4782  elem/s]
+                 change:
+                        time:   [+0.4094% +0.4935% +0.5822%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.5789% -0.4910% -0.4077%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d7proj_in11_out2
+Benchmarking relay_admission_verify/d7proj_in11_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 14.1s.
+Benchmarking relay_admission_verify/d7proj_in11_out2: Collecting 10 samples in estimated 14.059 s (10 iterations)
+Benchmarking relay_admission_verify/d7proj_in11_out2: Analyzing
+relay_admission_verify/d7proj_in11_out2
+                        time:   [1.4121 s 1.4127 s 1.4134 s]
+                        thrpt:  [7.7825  elem/s 7.7865  elem/s 7.7901  elem/s]
+                 change:
+                        time:   [+0.0574% +0.3448% +0.5383%] (p = 0.02 < 0.05)
+                        thrpt:  [-0.5354% -0.3436% -0.0574%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d7proj_in12_out2
+Benchmarking relay_admission_verify/d7proj_in12_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 14.5s.
+Benchmarking relay_admission_verify/d7proj_in12_out2: Collecting 10 samples in estimated 14.512 s (10 iterations)
+Benchmarking relay_admission_verify/d7proj_in12_out2: Analyzing
+relay_admission_verify/d7proj_in12_out2
+                        time:   [1.4519 s 1.4526 s 1.4534 s]
+                        thrpt:  [8.2564  elem/s 8.2609  elem/s 8.2650  elem/s]
+                 change:
+                        time:   [-1.0351% -0.0910% +0.4414%] (p = 0.86 > 0.05)
+                        thrpt:  [-0.4394% +0.0910% +1.0460%]
+                        No change in performance detected.
+Benchmarking relay_admission_verify/d7proj_in13_out2
+Benchmarking relay_admission_verify/d7proj_in13_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 14.9s.
+Benchmarking relay_admission_verify/d7proj_in13_out2: Collecting 10 samples in estimated 14.865 s (10 iterations)
+Benchmarking relay_admission_verify/d7proj_in13_out2: Analyzing
+relay_admission_verify/d7proj_in13_out2
+                        time:   [1.4924 s 1.4929 s 1.4935 s]
+                        thrpt:  [8.7044  elem/s 8.7077  elem/s 8.7110  elem/s]
+                 change:
+                        time:   [+0.2789% +0.3424% +0.4006%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.3990% -0.3412% -0.2781%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d7proj_in14_out2
+Benchmarking relay_admission_verify/d7proj_in14_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 15.3s.
+Benchmarking relay_admission_verify/d7proj_in14_out2: Collecting 10 samples in estimated 15.283 s (10 iterations)
+Benchmarking relay_admission_verify/d7proj_in14_out2: Analyzing
+relay_admission_verify/d7proj_in14_out2
+                        time:   [1.5342 s 1.5350 s 1.5359 s]
+                        thrpt:  [9.1153  elem/s 9.1206  elem/s 9.1255  elem/s]
+                 change:
+                        time:   [+0.2209% +0.3284% +0.4355%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.4336% -0.3273% -0.2205%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d7proj_in15_out2
+Benchmarking relay_admission_verify/d7proj_in15_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 15.8s.
+Benchmarking relay_admission_verify/d7proj_in15_out2: Collecting 10 samples in estimated 15.751 s (10 iterations)
+Benchmarking relay_admission_verify/d7proj_in15_out2: Analyzing
+relay_admission_verify/d7proj_in15_out2
+                        time:   [1.5804 s 1.5813 s 1.5823 s]
+                        thrpt:  [9.4800  elem/s 9.4858  elem/s 9.4911  elem/s]
+                 change:
+                        time:   [+0.4422% +0.6209% +0.7580%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.7523% -0.6171% -0.4403%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d7proj_in16_out2
+Benchmarking relay_admission_verify/d7proj_in16_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 22.3s.
+Benchmarking relay_admission_verify/d7proj_in16_out2: Collecting 10 samples in estimated 22.305 s (10 iterations)
+Benchmarking relay_admission_verify/d7proj_in16_out2: Analyzing
+relay_admission_verify/d7proj_in16_out2
+                        time:   [2.2367 s 2.2373 s 2.2379 s]
+                        thrpt:  [7.1497  elem/s 7.1516  elem/s 7.1535  elem/s]
+                 change:
+                        time:   [+0.5014% +0.5548% +0.6112%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.6075% -0.5518% -0.4989%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d7proj_in17_out2
+Benchmarking relay_admission_verify/d7proj_in17_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 22.8s.
+Benchmarking relay_admission_verify/d7proj_in17_out2: Collecting 10 samples in estimated 22.756 s (10 iterations)
+Benchmarking relay_admission_verify/d7proj_in17_out2: Analyzing
+relay_admission_verify/d7proj_in17_out2
+                        time:   [2.2825 s 2.2837 s 2.2849 s]
+                        thrpt:  [7.4400  elem/s 7.4442  elem/s 7.4479  elem/s]
+                 change:
+                        time:   [-0.6118% +0.1384% +0.5692%] (p = 0.77 > 0.05)
+                        thrpt:  [-0.5660% -0.1382% +0.6155%]
+                        No change in performance detected.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking relay_admission_verify/d7proj_in18_out2
+Benchmarking relay_admission_verify/d7proj_in18_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 23.2s.
+Benchmarking relay_admission_verify/d7proj_in18_out2: Collecting 10 samples in estimated 23.221 s (10 iterations)
+Benchmarking relay_admission_verify/d7proj_in18_out2: Analyzing
+relay_admission_verify/d7proj_in18_out2
+                        time:   [2.3304 s 2.3328 s 2.3356 s]
+                        thrpt:  [7.7068  elem/s 7.7159  elem/s 7.7239  elem/s]
+                 change:
+                        time:   [+0.5315% +0.6515% +0.7908%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.7846% -0.6473% -0.5287%]
+                        Change within noise threshold.
+Benchmarking relay_admission_verify/d7proj_in19_out2
+Benchmarking relay_admission_verify/d7proj_in19_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 23.7s.
+Benchmarking relay_admission_verify/d7proj_in19_out2: Collecting 10 samples in estimated 23.670 s (10 iterations)
+Benchmarking relay_admission_verify/d7proj_in19_out2: Analyzing
+relay_admission_verify/d7proj_in19_out2
+                        time:   [2.3761 s 2.3781 s 2.3805 s]
+                        thrpt:  [7.9814  elem/s 7.9895  elem/s 7.9962  elem/s]
+                 change:
+                        time:   [+0.4773% +0.5726% +0.6814%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.6768% -0.5693% -0.4750%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking relay_admission_verify/d7proj_in20_out2
+Benchmarking relay_admission_verify/d7proj_in20_out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 24.2s.
+Benchmarking relay_admission_verify/d7proj_in20_out2: Collecting 10 samples in estimated 24.168 s (10 iterations)
+Benchmarking relay_admission_verify/d7proj_in20_out2: Analyzing
+relay_admission_verify/d7proj_in20_out2
+                        time:   [2.4160 s 2.4172 s 2.4185 s]
+                        thrpt:  [8.2697  elem/s 8.2740  elem/s 8.2780  elem/s]
+                 change:
+                        time:   [+0.1646% +0.3069% +0.4277%] (p = 0.00 < 0.05)
+                        thrpt:  [-0.4259% -0.3060% -0.1644%]
+                        Change within noise threshold.
+
+# --- terms bench output ---
+    Finished `bench` profile [optimized] target(s) in 0.78s
+     Running benches/block_connect_verify.rs (target/release/deps/block_connect_verify-3a307f409cd63866)
+Gnuplot not found, using plotters backend
+Benchmarking block_connect_terms/pqc_per_input/in1_out2_w13198
+Benchmarking block_connect_terms/pqc_per_input/in1_out2_w13198: Warming up for 3.0000 s
+Benchmarking block_connect_terms/pqc_per_input/in1_out2_w13198: Collecting 10 samples in estimated 5.0215 s (4950 iterations)
+Benchmarking block_connect_terms/pqc_per_input/in1_out2_w13198: Analyzing
+block_connect_terms/pqc_per_input/in1_out2_w13198
+                        time:   [1.0121 ms 1.0121 ms 1.0122 ms]
+                        thrpt:  [12.435 MiB/s 12.436 MiB/s 12.436 MiB/s]
+Benchmarking block_connect_terms/bp_lone/in1_out2_w13198
+Benchmarking block_connect_terms/bp_lone/in1_out2_w13198: Warming up for 3.0000 s
+Benchmarking block_connect_terms/bp_lone/in1_out2_w13198: Collecting 10 samples in estimated 5.2006 s (275 iterations)
+Benchmarking block_connect_terms/bp_lone/in1_out2_w13198: Analyzing
+block_connect_terms/bp_lone/in1_out2_w13198
+                        time:   [18.903 ms 18.911 ms 18.932 ms]
+                        thrpt:  [680.79 KiB/s 681.54 KiB/s 681.85 KiB/s]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking block_connect_terms/pqc_per_input/in22_out2_w142527
+Benchmarking block_connect_terms/pqc_per_input/in22_out2_w142527: Warming up for 3.0000 s
+Benchmarking block_connect_terms/pqc_per_input/in22_out2_w142527: Collecting 10 samples in estimated 5.0306 s (4950 iterations)
+Benchmarking block_connect_terms/pqc_per_input/in22_out2_w142527: Analyzing
+block_connect_terms/pqc_per_input/in22_out2_w142527
+                        time:   [1.0145 ms 1.0145 ms 1.0146 ms]
+                        thrpt:  [133.97 MiB/s 133.98 MiB/s 133.98 MiB/s]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking block_connect_terms/bp_lone/in22_out2_w142527
+Benchmarking block_connect_terms/bp_lone/in22_out2_w142527: Warming up for 3.0000 s
+Benchmarking block_connect_terms/bp_lone/in22_out2_w142527: Collecting 10 samples in estimated 5.2004 s (275 iterations)
+Benchmarking block_connect_terms/bp_lone/in22_out2_w142527: Analyzing
+block_connect_terms/bp_lone/in22_out2_w142527
+                        time:   [18.908 ms 18.919 ms 18.936 ms]
+                        thrpt:  [7.1781 MiB/s 7.1846 MiB/s 7.1888 MiB/s]
+Found 2 outliers among 10 measurements (20.00%)
+  2 (20.00%) high severe
+

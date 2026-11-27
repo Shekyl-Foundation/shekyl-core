@@ -301,73 +301,62 @@ spec = [
 
 [[constant]]
 name = "spec_verify_cost_modal_cell"
-defined_in = "rust/shekyl-relay-privacy/src/verify_cost.rs"
-needle = "DoorOperands::at(PI4_MASKS_AND_PROOF_1IN_D2_MS, DoorInputCount::One).millis(),"
+defined_in = "rust/shekyl-relay-privacy/src/verify_cost/door.rs"
+needle = "pub(super) const PI4_MASKS_AND_PROOF_D2_MS: [f64; 22] = ["
 measured_by = ["BA-T1", "BA-T10"]
-status = "unmeasured"
-carrier = "BA-T10. The cell is the door's sequence (BA-Q9, 2026-11-08): this masks-and-proof term plus the signature and lone range-proof terms below. The 2026-08-05 floor grids this term comes from are not in the tree, and the cell's own comment says the floor re-measurement is owed after PL-D3 (BA-G4; FOLLOWUPS, the 48-cell surface)."
+status = "current"
+capture = "docs/benchmarks/relay_admission_verify_pi4_rust_20261127T144430Z.txt"
+capture_rev = "4354a1cf1d2ce74cdf6e3599aa2a8a547c9c4133"
+rev_source = "capture header. The CEN-I4 floor session (ICD-R5, 2026-11-27): relay_admission_verify's masks-and-proof term at every legal shape, depths 2 to 7, in one session on one binary with the node stopped; this row is the depth-2 column, the modal cell first (128.06 ms). tests/spec_decision_matrix.rs recomputes every published cell from this capture."
 path_set = "relay-verify-cell"
-disposition = "floor"
 
 
 [[constant]]
 name = "pi4_hybrid_sig_1in_ms"
 defined_in = "rust/shekyl-relay-privacy/src/verify_cost/door.rs"
-needle = "const PI4_HYBRID_SIG_1IN_MS: f64 = 0.971_86;"
+needle = "pub(super) const PI4_HYBRID_SIG_1IN_MS: f64 = 1.0121;"
 measured_by = ["BA-T10"]
-status = "stale"
-stale_since = "20738bf714be3e7b31cca47fe3d614d7d7f55021"
-carrier = "BA-T10 (BA-Q9). The pqc_per_input median at the 1-input shape, the term of every SPEC_VERIFY_COST cell the pool door pays per input. Shares the block-weight path set and its capture, so it is stale from the same commit; the hybrid verify itself changed at bf2fcbe091 (verify_strict), acknowledged there."
-capture = "docs/benchmarks/gap7_block_verify_pi4_rust_20260905T181144Z.txt"
-capture_rev = "8af70a60a6d444daa858d94d8b34e71b7e54eb49"
-rev_source = "capture header"
+status = "current"
+capture = "docs/benchmarks/relay_admission_verify_pi4_rust_20261127T144430Z.txt"
+capture_rev = "4354a1cf1d2ce74cdf6e3599aa2a8a547c9c4133"
+rev_source = "capture header. pqc_per_input at the 1-input 2-output shape, in the CEN-I4 floor session (ICD-R5, 2026-11-27) with the cells it composes into."
 path_set = "block-weight"
-disposition = "floor"
 
 
 [[constant]]
 name = "pi4_hybrid_sig_8in_ms"
 defined_in = "rust/shekyl-relay-privacy/src/verify_cost/door.rs"
-needle = "const PI4_HYBRID_SIG_8IN_MS: f64 = 0.972_28;"
+needle = "pub(super) const PI4_HYBRID_SIG_22IN_MS: f64 = 1.0145;"
 measured_by = ["BA-T10"]
-status = "stale"
-stale_since = "20738bf714be3e7b31cca47fe3d614d7d7f55021"
-carrier = "BA-T10 (BA-Q9). The pqc_per_input median at the 8-input shape; as pi4_hybrid_sig_1in_ms."
-capture = "docs/benchmarks/gap7_block_verify_pi4_rust_20260905T181144Z.txt"
-capture_rev = "8af70a60a6d444daa858d94d8b34e71b7e54eb49"
-rev_source = "capture header"
+status = "current"
+capture = "docs/benchmarks/relay_admission_verify_pi4_rust_20261127T144430Z.txt"
+capture_rev = "4354a1cf1d2ce74cdf6e3599aa2a8a547c9c4133"
+rev_source = "capture header. pqc_per_input at the tail shape, which at the derived cap is 22 inputs: the row's name is the 8-input cap's. Same session as the cells; the cells take the larger of this reading and the 1-input one."
 path_set = "block-weight"
-disposition = "floor"
 
 
 [[constant]]
 name = "pi4_range_proof_lone_1in_2out_ms"
 defined_in = "rust/shekyl-relay-privacy/src/verify_cost/door.rs"
-needle = "const PI4_RANGE_PROOF_LONE_1IN_2OUT_MS: f64 = 18.838;"
+needle = "pub(super) const PI4_RANGE_PROOF_LONE_1IN_2OUT_MS: f64 = 18.911;"
 measured_by = ["BA-T10"]
-status = "stale"
-stale_since = "3f2922f1ce7a7c0168e0b604172951546b61edfd"
-carrier = "BA-T10 (BA-Q9). The 2026-11-08 bp_lone capture at the 1-input 2-output shape prices the folded verifier before 3f2922f1ce changed its commitment opening from a variable-time multiexp to a constant-time product. The published operand stays that capture; the door's re-measurement is owed."
-capture = "docs/benchmarks/gap7_block_verify_pi4_rust_20261108T232442Z.txt"
-capture_rev = "78de6a14e2ac732fc3298f4d77db7aae43136db8"
-rev_source = "capture header. bp_lone at the 1-input 2-output shape: verify_batch over a batch of one, what the pool door pays at TxSlot::Lone, on the verifier that folds Â into the batch (BA-Q9, #1319). The same session's eager control read 34.80 ms (gap7_block_verify_pi4_rust_eager_20261108T231752Z.txt), against 35.017 ms in the 2026-09-05 capture."
+status = "current"
+capture = "docs/benchmarks/relay_admission_verify_pi4_rust_20261127T144430Z.txt"
+capture_rev = "4354a1cf1d2ce74cdf6e3599aa2a8a547c9c4133"
+rev_source = "capture header. bp_lone at the 1-input 2-output shape on the constant-time opening, in the CEN-I4 floor session with the cells it composes into."
 path_set = "bp-verify"
-disposition = "floor"
 
 
 [[constant]]
 name = "pi4_range_proof_lone_8in_2out_ms"
 defined_in = "rust/shekyl-relay-privacy/src/verify_cost/door.rs"
-needle = "const PI4_RANGE_PROOF_LONE_8IN_2OUT_MS: f64 = 18.882;"
+needle = "pub(super) const PI4_RANGE_PROOF_LONE_22IN_2OUT_MS: f64 = 18.919;"
 measured_by = ["BA-T10"]
-status = "stale"
-stale_since = "3f2922f1ce7a7c0168e0b604172951546b61edfd"
-carrier = "BA-T10 (BA-Q9). The 2026-11-08 bp_lone capture at the 8-input 2-output shape prices the folded verifier before 3f2922f1ce changed its commitment opening from a variable-time multiexp to a constant-time product. The published operand stays that capture; the door's re-measurement is owed."
-capture = "docs/benchmarks/gap7_block_verify_pi4_rust_20261108T232442Z.txt"
-capture_rev = "78de6a14e2ac732fc3298f4d77db7aae43136db8"
-rev_source = "capture header. bp_lone at the 8-input 2-output shape: verify_batch over a batch of one, what the pool door pays at TxSlot::Lone, on the verifier that folds Â into the batch (BA-Q9, #1319). The same session's eager control read 34.61 ms (gap7_block_verify_pi4_rust_eager_20261108T231752Z.txt), against 34.827 ms in the 2026-09-05 capture."
+status = "current"
+capture = "docs/benchmarks/relay_admission_verify_pi4_rust_20261127T144430Z.txt"
+capture_rev = "4354a1cf1d2ce74cdf6e3599aa2a8a547c9c4133"
+rev_source = "capture header. bp_lone at the tail shape, which at the derived cap is 22 inputs: the row's name is the 8-input cap's. Same session as the cells; the cells take the larger of this reading and the 1-input one."
 path_set = "bp-verify"
-disposition = "floor"
 
 
 [[path_set]]

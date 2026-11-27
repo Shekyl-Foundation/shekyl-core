@@ -255,7 +255,10 @@ fn every_verify_cell_carries_its_shapes_real_message_size() {
     // Every moved cell in one report: a wire change moves them together, and
     // f_ms derives its node-crypto term from each pin.
     assert!(moved.is_empty(), "{}", moved.join("\n"));
-    assert_eq!(checked, 4, "the in-tree surface is the four §85.3 pins");
+    assert_eq!(
+        checked, 128,
+        "the table is every legal shape at depths 2 to 7, each with its pinned size"
+    );
 }
 
 /// The substitution-cover ceiling is the open-link count, and the peak is

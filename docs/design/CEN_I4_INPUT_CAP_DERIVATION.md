@@ -392,17 +392,18 @@ keep the cap at 8.
 
 ### 4.1 What one invalid transaction costs, at the floor
 
-Two sources: the embargo table's door sequence (`SPEC_VERIFY_COST`, 2026-11-08
-operands, measured on the floor device) and this round's harness on the
-diagnostic Pi (§2.6, **not floor values**; that unit is about 19 % slower,
-`ICD-F12`). The 22-input row on the floor device is the cutover's
-measurement (§8).
+Two sources: the embargo table's door sequence (`SPEC_VERIFY_COST`, the
+floor session of §8.1, measured on the floor device) and this round's harness
+on the diagnostic Pi (§2.6, **not floor values**; that unit is about 19 %
+slower, `ICD-F12`). Depth 7 admits at most 20 inputs, so its last row is the
+20-input cell.
 
 | inputs | depth 2, table (floor) | depth 2, §2.6 (diagnostic, not floor) | depth 3, §2.6 (diagnostic, not floor) | depth 7, table (floor, synthesized tree) |
 | ---: | ---: | ---: | ---: | ---: |
-| 1 | 144.31 ms | 176.4 ms | 180.4 ms | 163.11 ms |
-| 8 | 425.86 ms | 524.9 ms | 720.7 ms | 818.56 ms |
-| 22 | — | 1 576.2 ms | 1 650.5 ms | owed with the new rows (§8) |
+| 1 | 147.99 ms | 176.4 ms | 180.4 ms | 199.95 ms |
+| 8 | 442.55 ms | 524.9 ms | 720.7 ms | 1 133.44 ms |
+| 20 | 1 282.11 ms | — | — | 2 456.41 ms |
+| 22 | 1 332.34 ms | 1 576.2 ms | 1 650.5 ms | no legal shape |
 
 ### 4.2 How the relay meets it today
 
@@ -748,15 +749,13 @@ the cutover sweeps them.
 ## 8. The measurements the cutover owes
 
 - **The embargo table, every cell, on the floor device in one session
-  (`ICD-R5`).** `n_in = 1..=N(d)` at every depth tier the table covers, since a
-  cell no legal transaction fills is not measured: 22 cells at each of depths
-  2, 3 and 4, 21 at depths 5 and 6, 20 at depth 7, so 128 cells, the existing
-  ones remeasured beside the new ones. **Until that session the table's domain
-  stays the measured prefix (`MAX_TABLE_INPUTS`, 8).** An empty row is not a
-  measurement, so the domain does not grow to the cap to satisfy a length
-  assert. `f_ms` refuses every larger consensus-legal count
-  (`InputCountOutsideDomain`). `shekyl-node` asserts the prefix does not
-  exceed the cap. The floor session is what moves the prefix. On the floor device's configuration
+  (`ICD-R5`). MEASURED 2026-11-27; §8.1.** `n_in = 1..=N(d)` at every depth
+  tier the table covers, since a cell no legal transaction fills is not
+  measured: 22 cells at each of depths 2, 3 and 4, 21 at depths 5 and 6, 20 at
+  depth 7, so 128 cells, the existing ones remeasured beside the new ones. The
+  table's domain is the cap (`MAX_TABLE_INPUTS`, 22; `shekyl-node` asserts the
+  two equal), each depth's row is as long as `N(d)`, and `f_ms` refuses a
+  count past it (`NoLegalShapeAtDepth`). On the floor device's configuration
   (§9, `ICD-R5`) and nowhere else, after its cover-by-shape run ends
   (2026-11-24T17:11Z); never scaled from x86 or from the diagnostic Pi (§80.3's
   correction; the `Provenance` test refuses a scaled cell), never mixing
@@ -779,6 +778,58 @@ the cutover sweeps them.
   23-input transaction at depth 2, refused with CEN-I4 named in a block and
   cited at the parser. At a depth where `N(d) < N`, a transaction of `N(d) + 1`
   inputs is within the cap and over the weight limit, and CEN-H3 names it.
+
+### 8.1 The floor session — measured 2026-11-27
+
+Shekyl-core `4354a1cf1d`, one build, on the floor device in `ICD-R5`'s
+configuration, with the node stopped and no login during the bench. The
+capture is
+[`relay_admission_verify_pi4_rust_20261127T144430Z.txt`](../benchmarks/relay_admission_verify_pi4_rust_20261127T144430Z.txt).
+It holds all 172 cells of `relay_admission_verify` (the 128 table cells, plus
+the depth-1 and shared-layout controls) and the door's two other terms at 1
+and 22 inputs. The core stayed between 49.7 and 58.9 °C. Every cell's 95 %
+interval is within 1.25 % of its estimate.
+
+- **The other two terms do not move with the input count.** One hybrid
+  signature verification reads 1.0121 ms at 1 input and 1.0145 ms at 22; the
+  lone range proof at 2 outputs reads 18.911 and 18.919 ms. Each cell takes
+  the larger reading, `n_in` times for the signature.
+- **The depth-2 column is the spread layout,** the production arrangement for
+  unrelated spends. The shared-layout control reads within 0.3 % of it at
+  every count.
+- **Against the four cells the table pinned before** (2026-11-08 operands,
+  their masks-and-proof terms measured before `PL-D3`): 1 input, depth 2,
+  144.31 → 147.99 ms (+2.5 %); 8 inputs, depth 2, 425.86 → 442.55 ms (+3.9 %);
+  1 input, depth 7, 163.11 → 199.95 ms (+22.6 %); 8 inputs, depth 7, 818.56 →
+  1 133.44 ms (+38.5 %).
+- **`ICD-F21` — depth 7 is a padding step, not a continuation of depth 6.**
+  At depth 7 the Selene side of the proof needs 267 rows for one input and
+  pads to 512, where depth 6 fits 256; eight inputs pad to 4 096 rows where
+  depth 6 fits 2 048 (`Fcmp::ipa_rows`). So the masks-and-proof term reads
+  180.02 ms at one input against depth 6's 144.03, and 1 106.4 against
+  783.93 at eight. The same steps run along the input axis wherever a row
+  count crosses a power of two (depth 2: 911.71 ms at 18 inputs, 1 221.2 at
+  19).
+- **What moved downstream.** The adopted modal hop is 199 ms (from 195) and
+  the Tor hop 1 774 ms (from 1 770); the clearnet embargo draw's mean stays
+  194 s. Both modal hops now sit 2 ms below their next +1 s step
+  (`tests/embargo_steps.rs`). The embargo floor's hop part is 2 587 ms on
+  clearnet and 23 062 ms on Tor, one embargo fire's 1-in-10 wait over the
+  longest transit 1 234 s, and the wallet's failed-send wait 2 411 s.
+- **The tail's embargo more than doubles.** At the decided spec the table
+  prices the 22-input genesis shape's embargo at 428, 434 and 443 s for 25,
+  50 and 100 ms of transit, against 246, 250 and 263 s for the 8-input tail
+  it priced before; the modal embargo stays 190, 194 and 200 s. The spread
+  a single modal embargo leaves uncovered across the legal shapes is now
+  about 240 s, against the ~56 s `DAEMON_RELAY_PRIVACY.md` §80.2 read at a
+  cap of 8 (`tests/spec_decision_matrix.rs`). Shipped timers still use the
+  modal shape; whether they should follow the shape is the relay lane's
+  question (`ICD-R4`; the FOLLOWUPS row "Relay: consume the
+  verification-cost table per shape").
+- **The x86 diagnostic arm** (`F_X86_MS`, §84.2) is re-taken at the same
+  head over the same 22 counts, on an x86-64 laptop with the laptop unused
+  during the run (22.133 ms at one input, 214.06 ms at 22); it derives
+  nothing.
 
 ## 9. Rulings — RULED 2026-11-22 (Rick)
 
