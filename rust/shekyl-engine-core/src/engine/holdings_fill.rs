@@ -104,7 +104,7 @@ pub enum FillFailure {
     LocalNodeRequired,
     /// The node could not be read. `fault` is the remedy; `detail` is the
     /// log line. A channel fault, a peer check, and a service at this
-    /// computer keep their own sentences ([`DaemonFault::has_own_remedy`]).
+    /// computer keep their own sentences ([`shekyl_rpc_client::DaemonFault::has_own_remedy`]).
     /// A plain miss stays "could not be read".
     #[error("{}", read_sentence(*fault, detail))]
     Daemon {
@@ -277,7 +277,7 @@ fn read_sentence(fault: shekyl_rpc_client::DaemonFault, detail: &str) -> String 
     }
 }
 
-/// One reading of an [`RpcError`] for a fill. The fault is the remedy.
+/// One reading of an [`shekyl_rpc_client::RpcError`] for a fill. The fault is the remedy.
 fn read_of_rpc(error: &shekyl_rpc_client::RpcError) -> FillFailure {
     let fault = error.fault();
     if fault.has_own_remedy() {
