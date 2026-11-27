@@ -9,9 +9,10 @@
 //! through [`own`], which forwards the first of them from
 //! `shekyl_process::stop` (the triggers every Shekyl program takes; a
 //! second stop exits at once there); the RPC's `daemon_stop`
-//! (`shekyl-cli daemon stop`) through [`request_stop`]; and a task the
-//! node owns ending on its own, through [`fatal`], whose stop also makes
-//! the exit a failure. A wait is [`stop_requested`], which answers at once
+//! (`shekyl-cli daemon stop`) through [`request_stop`]; a task the node
+//! owns ending on its own, through [`fatal`]; and the Tor supervisor
+//! ending on its own, through [`tor_ended`]. A task's own end makes the
+//! exit a failure. A wait is [`stop_requested`], which answers at once
 //! when the latch is already set, so a trigger that arrives between two
 //! waits (the managed Tor's bootstrap sits between the RPC start and step
 //! 8) is kept, not dropped.

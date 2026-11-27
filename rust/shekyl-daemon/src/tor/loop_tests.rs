@@ -28,7 +28,7 @@ use shekyl_p2p::{
 };
 use shekyl_tor_control_client::binary::VerifiedTorBinary;
 use shekyl_tor_control_client::control::{ReplyFramer, SocksTimeout};
-use shekyl_tor_control_client::supervisor::{Action, Input, TorSetting};
+use shekyl_tor_control_client::supervisor::{Action, Input, Launch, LaunchDirectory, TorSetting};
 use shekyl_tor_control_daemon::{DaemonTorConfig, DaemonTorControl};
 use shekyl_tor_status::{ManagedTor, TorCause, TorState, TorStatus};
 use tokio::sync::watch;
@@ -557,7 +557,7 @@ fn an_upload_before_the_add_onion_reply_is_read() {
         .unwrap_or_else(|_| panic!("the launch"));
         drive.control = Some(up);
         drive.forward = Some(std::net::SocketAddr::from(([127, 0, 0, 1], 18_022)));
-        assert_eq!(drive.send_add(1), None, "the add is sent off the loop");
+        assert_eq!(drive.send_add(1), Ok(None), "the add is sent off the loop");
         let onion = drive
             .managed
             .as_ref()
@@ -676,40 +676,56 @@ fn an_off_supervisor_answers_and_runs_until_its_stop() {
     });
 }
 
-/// **A Tor action asked of a supervisor that runs no Tor ends it with a
-/// typed end, never a panic.** The core asks for a pin, a launch, a publish
-/// or a probe only while it runs this node's Tor; here a pin is put in front
-/// of a `tor = off` driver. The loop stops at that action, tears down, and
-/// ends with `NoTorToRun(Pin)`, which the daemon's wait reads as the
-/// supervisor's end. A shipped build aborts on a panic, with no teardown and
-/// no log line. Red edit: fold on past the broken promise in `perform`, so
-/// the loop never ends.
+/// **A Tor action asked of a supervisor that runs no Tor ends it with that
+/// ask, never a panic.** The core asks for a pin, a launch, a publish or a
+/// probe only while it runs this node's Tor. Each of those, put in front of
+/// a `tor = off` driver, ends the loop with `NoTorToRun` of that ask. The
+/// launch and the publish are not in flight: answering them as "nothing to
+/// send" would leave the loop running. A shipped build aborts on a panic,
+/// with no teardown and no log line. Red edit: fold on past the ask in
+/// `perform`, so the loop never ends.
 #[test]
 fn a_tor_action_without_a_managed_tor_ends_the_supervisor() {
     on_the_loops_runtime(|dir| async move {
-        let data_dir = dir.path().join("data");
-        std::fs::create_dir_all(&data_dir).expect("the data directory");
-        let (_owner, inbox, feeds) = inbox();
-        let network = network(dir.path(), feeds);
-        let kept = network.clone();
-        let mut drive = Drive::start(
-            Supervises::Unmanaged(TorSetting::Off),
-            super::policy(),
-            true,
-            18_021,
-            data_dir,
-            inbox,
-            network,
-        )
-        .expect("the driver");
-        drive.step.actions.push(Action::CheckPin);
-        let end = tokio::time::timeout(Duration::from_secs(5), drive.run())
-            .await
-            .expect("the loop ran on past a broken promise");
-        assert_eq!(end, Err(SupervisorEnd::NoTorToRun(TorAsk::Pin)));
-        // The network owns a runtime, which is not dropped on an async thread.
-        tokio::task::spawn_blocking(move || drop(kept))
-            .await
-            .expect("the network drops");
+        let witness = VerifiedTorBinary::unchecked_for_test(dir.path().join("tor-witness"));
+        let cases = [
+            (Action::CheckPin, TorAsk::Pin),
+            (
+                Action::Spawn(Launch {
+                    binary: witness,
+                    directory: LaunchDirectory::Kept,
+                }),
+                TorAsk::Launch,
+            ),
+            (Action::RepublishOnion, TorAsk::Publish),
+            (Action::AddOnion, TorAsk::Publish),
+            (Action::Probe, TorAsk::Probe),
+        ];
+        for (action, ask) in cases {
+            let data_dir = dir.path().join("data");
+            std::fs::create_dir_all(&data_dir).expect("the data directory");
+            let (_owner, inbox, feeds) = inbox();
+            let network = network(dir.path(), feeds);
+            let kept = network.clone();
+            let mut drive = Drive::start(
+                Supervises::Unmanaged(TorSetting::Off),
+                super::policy(),
+                true,
+                18_021,
+                data_dir,
+                inbox,
+                network,
+            )
+            .expect("the driver");
+            drive.step.actions.push(action);
+            let end = tokio::time::timeout(Duration::from_secs(5), drive.run())
+                .await
+                .unwrap_or_else(|_| panic!("{ask:?}: the loop ran on past the ask"));
+            assert_eq!(end, Err(SupervisorEnd::NoTorToRun(ask)), "{ask:?}");
+            // The network owns a runtime, which is not dropped on an async thread.
+            tokio::task::spawn_blocking(move || drop(kept))
+                .await
+                .expect("the network drops");
+        }
     });
 }

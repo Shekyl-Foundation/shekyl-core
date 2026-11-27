@@ -208,9 +208,10 @@ pub enum SupervisorEnd {
     /// condition.
     Returned,
     /// The core asked for a Tor action under a `tor` setting that runs no
-    /// Tor: a broken promise between the core and this driver. The loop
-    /// stops at that action, tears down as at a stop, and ends with this,
-    /// so the daemon stops and says why instead of aborting.
+    /// Tor: a broken promise between the core and this driver.
+    /// [`Drive::act`] returns it before that action runs, the loop tears
+    /// down as at a stop, and the daemon stops and says why. A panic there
+    /// would abort a shipped build with no teardown and no log line.
     NoTorToRun(TorAsk),
     /// The loop panicked, in the panic's own words. A shipped build aborts
     /// the process on a panic, so this arm is reached only where panics
@@ -240,6 +241,18 @@ impl TorAsk {
             Self::Launch => "launch a Tor",
             Self::Publish => "publish an onion",
             Self::Probe => "probe an onion",
+        }
+    }
+
+    /// The managed-Tor ask `action` is, when running it needs a
+    /// [`ManagedBoot`]. Every other action runs under any `tor` setting.
+    fn of(action: &Action) -> Option<Self> {
+        match action {
+            Action::CheckPin => Some(Self::Pin),
+            Action::Spawn(_) => Some(Self::Launch),
+            Action::RepublishOnion | Action::AddOnion => Some(Self::Publish),
+            Action::Probe => Some(Self::Probe),
+            _ => None,
         }
     }
 }
@@ -778,7 +791,6 @@ impl Drive {
             step,
             clock,
             managed,
-            broken: None,
             data_dir,
             events: poster.events(),
             poster,
@@ -810,16 +822,14 @@ impl Drive {
         Ok(drive)
     }
 
-    /// The core asked for `ask` with no managed Tor. It asks for a pin, a
-    /// launch, a publish or a probe only while it runs this node's Tor
-    /// (`AbsentDuty::Unmanaged` asks for none), so this is that promise
-    /// broken. Recorded as the supervisor's end: [`Self::perform`] stops at
-    /// this action and the loop ends with it, never a panic, which a shipped
-    /// build turns into an abort with no teardown and no log line.
-    fn no_tor_to_run(&mut self, ask: TorAsk) {
-        if self.broken.is_none() {
-            self.broken = Some(SupervisorEnd::NoTorToRun(ask));
-        }
+    /// The managed Tor `ask` needs.
+    ///
+    /// The core asks for a pin, a launch, a publish or a probe only while it
+    /// runs this node's Tor (`AbsentDuty::Unmanaged` asks for none). Without
+    /// one the ask is [`SupervisorEnd::NoTorToRun`], and the caller returns
+    /// that before it changes a launch, a publish or a probe.
+    fn boot_for(&self, ask: TorAsk) -> Result<&ManagedBoot, SupervisorEnd> {
+        self.managed.as_ref().ok_or(SupervisorEnd::NoTorToRun(ask))
     }
 }
 
@@ -832,9 +842,6 @@ struct Drive {
     /// What a Tor this daemon launches holds for the boot; `None` under
     /// `off` or an operator's Tor.
     managed: Option<ManagedBoot>,
-    /// The end a broken promise recorded ([`Self::no_tor_to_run`]): the loop
-    /// stops and ends with it.
-    broken: Option<SupervisorEnd>,
     data_dir: PathBuf,
     /// The sink Tor's control connection routes its events into. Each
     /// incarnation gets a clone; the drop count spans them all.
@@ -881,13 +888,42 @@ struct Drive {
     launch: Option<(u64, watch::Sender<bool>)>,
 }
 
+/// What [`Drive::perform`] decided for the loop.
+enum Performed {
+    /// The queue ran out. Wait for the next arrival.
+    Waiting,
+    /// [`Action::StopChild`]: tear down and return.
+    Stopping,
+    /// Tear down as at a stop, then end with this. The action's inputs are
+    /// not folded.
+    Ending(SupervisorEnd),
+}
+
+/// What one action produced. A Tor ask with no managed Tor is the `Err` of
+/// [`Drive::act`], and nothing here is folded.
+enum Acted {
+    /// Inputs to fold, in order.
+    Fold(Vec<Input>),
+    /// [`Action::StopChild`].
+    Stop,
+}
+
+impl Acted {
+    fn fold(inputs: Vec<Input>) -> Self {
+        Self::Fold(inputs)
+    }
+}
+
 impl Drive {
-    /// Run until the stop, or until a broken promise ends the loop. Either
-    /// way the work that holds a Tor or a directory ends first.
+    /// Run until the daemon stops the loop, or until a Tor action is asked
+    /// with no managed Tor. Either way the work that holds a Tor or a
+    /// directory ends first. `Err` is that ask.
     async fn run(mut self) -> Result<(), SupervisorEnd> {
-        loop {
-            if self.perform() {
-                break;
+        let ending = loop {
+            match self.perform() {
+                Performed::Waiting => {}
+                Performed::Stopping => break None,
+                Performed::Ending(end) => break Some(end),
             }
             // A launch the core gave up on, in this pass or by what was
             // just performed, stops waiting.
@@ -902,7 +938,7 @@ impl Drive {
             let woke = self.now();
             let lead = slept(armed, entered, woke).map(|late_by| Input::Resumed { late_by });
             self.pass(woken, lead, woke, wanted);
-        }
+        };
         // The stop. A launch still waiting for Tor stops waiting, and the
         // work that holds a Tor or a directory ends before the supervisor
         // does: what its answers hold is ended here, so no Tor and no
@@ -929,7 +965,7 @@ impl Drive {
         if let Some(kept) = self.kept.take() {
             say_retirement(&kept.retire().await);
         }
-        self.broken.take().map_or(Ok(()), Err)
+        ending.map_or(Ok(()), Err)
     }
 
     /// Fold what the network published before the loop, after the start's
@@ -953,17 +989,17 @@ impl Drive {
 
     /// Perform every action the last fold produced. Inputs from one action
     /// are folded in order and their actions run in that order, ahead of
-    /// anything already queued. `true` means the daemon is stopping.
-    fn perform(&mut self) -> bool {
+    /// anything already queued. [`Performed::Stopping`] is the daemon's
+    /// stop. [`Performed::Ending`] is a Tor action this supervisor cannot
+    /// run, and nothing that action returned is folded.
+    fn perform(&mut self) -> Performed {
         let mut queue: VecDeque<Action> = self.step.actions.drain(..).collect();
-        let mut halt = false;
         while let Some(action) = queue.pop_front() {
-            let inputs = self.act(action, &mut halt);
-            // A broken promise ends the loop at the action that broke it;
-            // nothing it returned is folded.
-            if self.broken.is_some() {
-                return true;
-            }
+            let inputs = match self.act(action) {
+                Ok(Acted::Fold(inputs)) => inputs,
+                Ok(Acted::Stop) => return Performed::Stopping,
+                Err(end) => return Performed::Ending(end),
+            };
             let mut produced = Vec::new();
             for input in inputs {
                 self.fold(input);
@@ -972,11 +1008,8 @@ impl Drive {
             for action in produced.into_iter().rev() {
                 queue.push_front(action);
             }
-            if halt {
-                break;
-            }
         }
-        halt
+        Performed::Waiting
     }
 
     /// Fold one observation. See [`Self::fold_many`].
@@ -1014,11 +1047,17 @@ impl Drive {
         (matches!(action, Action::Probe) && !self.core.action_stands(action)).then(Vec::new)
     }
 
-    fn act(&mut self, action: Action, halt: &mut bool) -> Vec<Input> {
-        if let Some(instead) = self.withheld(&action) {
-            return instead;
+    /// Run `action`. `Err` is a Tor ask with no managed Tor: [`TorAsk::of`]
+    /// names it, and a withdrawn probe or a request that is no longer in
+    /// flight does not get to swallow the ask.
+    fn act(&mut self, action: Action) -> Result<Acted, SupervisorEnd> {
+        if let Some(ask) = TorAsk::of(&action) {
+            self.boot_for(ask)?;
         }
-        match action {
+        if let Some(instead) = self.withheld(&action) {
+            return Ok(Acted::fold(instead));
+        }
+        Ok(match action {
             Action::Announce => {
                 let text = self.said();
                 if self.core.status().health {
@@ -1026,16 +1065,16 @@ impl Drive {
                 } else {
                     tracing::warn!(target: "global", "{text}");
                 }
-                Vec::new()
+                Acted::fold(Vec::new())
             }
             // The progress line is news. The core only asks for it when no
             // cause is set, so this arm does not re-read the posture.
             Action::SayProgress => {
                 let text = self.said();
                 tracing::info!(target: "global", "{text}");
-                Vec::new()
+                Acted::fold(Vec::new())
             }
-            Action::CheckPin => self.pin().into_iter().collect(),
+            Action::CheckPin => Acted::fold(vec![self.pin()?]),
             // A request: sent off the loop, answered as an arrival. The
             // action moves: a launch's binary is the driver's to spawn.
             action @ (Action::Reap
@@ -1047,15 +1086,15 @@ impl Drive {
             | Action::AddOnion
             | Action::RefetchDescriptor
             | Action::CheckDirectories
-            | Action::FetchFromDirectory { .. }) => self.send(action),
-            Action::WatchState => self.watch_state().into_iter().collect(),
-            Action::Publish(route) => vec![self.publish_route(route)],
-            Action::Probe => vec![self.probe()],
+            | Action::FetchFromDirectory { .. }) => Acted::fold(self.send(action)?),
+            Action::WatchState => Acted::fold(self.watch_state().into_iter().collect()),
+            Action::Publish(route) => Acted::fold(vec![self.publish_route(route)]),
+            Action::Probe => Acted::fold(vec![self.probe()?]),
             Action::CancelProbe => {
                 self.cancel_probe();
-                Vec::new()
+                Acted::fold(Vec::new())
             }
-            Action::RoundStuck { descriptor } => self.round_stuck(descriptor),
+            Action::RoundStuck { descriptor } => Acted::fold(self.round_stuck(descriptor)),
             Action::Resumed { late_by } => {
                 // Milliseconds, not whole seconds: a wake 10 s and a
                 // fraction late is past the threshold, and whole seconds
@@ -1066,15 +1105,15 @@ impl Drive {
                     late_by_ms,
                     "a timer the supervisor was waiting on came due late: this machine slept, and its windows start again from the wake"
                 );
-                Vec::new()
+                Acted::fold(Vec::new())
             }
-            Action::ProbeAfterJump => vec![probe::jump_probe(&self.network)],
+            Action::ProbeAfterJump => Acted::fold(vec![probe::jump_probe(&self.network)]),
             Action::DirectoriesUnmatched => {
                 tracing::info!(
                     target: "tor",
                     "no directory the last upload round reached holds the descriptor Tor's client asks for; the probe alone decided"
                 );
-                Vec::new()
+                Acted::fold(Vec::new())
             }
             Action::DirectoriesSettled(report) => {
                 for line in report {
@@ -1087,18 +1126,18 @@ impl Drive {
                         "this onion's descriptor at one directory, as the directory check counted it"
                     );
                 }
-                Vec::new()
+                Acted::fold(Vec::new())
             }
             Action::DescriptorOverdue => {
                 tracing::info!(
                     target: "tor",
                     "no descriptor upload began within the descriptor's lifetime"
                 );
-                Vec::new()
+                Acted::fold(Vec::new())
             }
             Action::PublishInbound(inbound) => {
                 self.publish_inbound(inbound);
-                Vec::new()
+                Acted::fold(Vec::new())
             }
             Action::PathReading(PathReading { path, at }) => {
                 tracing::debug!(target: "tor", ?path, "the onion-path reading");
@@ -1107,21 +1146,18 @@ impl Drive {
                     OnionPath::Impaired => Reading::Impaired,
                 };
                 self.network.publish_onion_path(reading, at);
-                Vec::new()
+                Acted::fold(Vec::new())
             }
             Action::TakeDown => {
                 self.withdraw_route(DownCause::ProcessExited);
-                Vec::new()
+                Acted::fold(Vec::new())
             }
             Action::StopRoute => {
                 self.withdraw_route(DownCause::ProcessStopped);
-                Vec::new()
+                Acted::fold(Vec::new())
             }
-            Action::StopChild => {
-                *halt = true;
-                Vec::new()
-            }
-        }
+            Action::StopChild => Acted::Stop,
+        })
     }
 
     /// Fold one pass: the sleep the wait observed first, so what woke the
@@ -1263,18 +1299,16 @@ impl Drive {
         inputs
     }
 
-    /// Check the binary a managed Tor launches. `None` when there is none
-    /// ([`Self::no_tor_to_run`]).
-    fn pin(&mut self) -> Option<Input> {
-        let Some(boot) = self.managed.as_ref() else {
-            self.no_tor_to_run(TorAsk::Pin);
-            return None;
-        };
-        let verified = match &boot.pin {
-            PinSource::Discover(Some(path)) => discover_and_verify_at(path),
-            PinSource::Discover(None) => discover_and_verify(),
-            #[cfg(all(test, unix))]
-            PinSource::Unchecked(binary) => Ok(binary.clone()),
+    /// Check the binary a managed Tor launches.
+    fn pin(&mut self) -> Result<Input, SupervisorEnd> {
+        let verified = {
+            let source = &self.boot_for(TorAsk::Pin)?.pin;
+            match source {
+                PinSource::Discover(Some(path)) => discover_and_verify_at(path),
+                PinSource::Discover(None) => discover_and_verify(),
+                #[cfg(all(test, unix))]
+                PinSource::Unchecked(binary) => Ok(binary.clone()),
+            }
         };
         let input = match verified {
             Ok(binary) => Input::PinAccepted { binary },
@@ -1284,7 +1318,7 @@ impl Drive {
             }
         };
         self.next_pin = PinCheck::Recheck;
-        Some(input)
+        Ok(input)
     }
 
     fn watch_state(&self) -> Option<Input> {
