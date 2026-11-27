@@ -49,14 +49,10 @@ impl SeamRecv {
                 pending.extend_from_slice(bytes);
                 let mut out = Vec::new();
                 loop {
-                    match recv.open_one(pending) {
-                        Ok((plain, used)) => {
-                            pending.drain(..used);
-                            if !plain.is_empty() {
-                                out.push(plain);
-                            }
-                        }
-                        Err(RecordError::Truncated) => return Ok(out),
+                    match recv.take_one(pending) {
+                        Ok(Some(plain)) if !plain.is_empty() => out.push(plain),
+                        Ok(Some(_)) => {}
+                        Ok(None) => return Ok(out),
                         Err(error) => return Err(error),
                     }
                 }

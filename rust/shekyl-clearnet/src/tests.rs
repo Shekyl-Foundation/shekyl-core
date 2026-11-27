@@ -13,9 +13,7 @@ use std::time::{Duration, Instant};
 
 use shekyl_net_address::NetworkAddress;
 use shekyl_network::Network;
-use shekyl_p2p_transport::{
-    prefix_for, Initiator, RecordError, RecvHalf, SendHalf, MESSAGE2_LEN, PREFIX_LEN,
-};
+use shekyl_p2p_transport::{prefix_for, Initiator, RecvHalf, SendHalf, PREFIX_LEN};
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_runtime::{runtime, RuntimeBudget, ThreadName};
 use shekyl_timing_engine::{EngineService, MonotonicClock, Tick};
@@ -148,31 +146,20 @@ fn await_close_kind(seen: &Arc<Mutex<Vec<CloseKind>>>, kind: CloseKind, why: &st
 
 /// Run the initiator's half of the handshake on `client`.
 fn open_sealed(client: &mut StdStream, network_id: &[u8; 16]) -> (SendHalf, RecvHalf) {
-    let (initiator, message1) = Initiator::new(network_id).expect("initiator");
-    client.write_all(&prefix_for(network_id)).expect("prefix");
-    client.write_all(&message1).expect("message1");
-    let mut prefix = [0u8; PREFIX_LEN];
-    client.read_exact(&mut prefix).expect("prefix");
-    assert_eq!(prefix, prefix_for(network_id));
-    let mut message2 = vec![0u8; MESSAGE2_LEN];
-    client.read_exact(&mut message2).expect("message2");
-    initiator
-        .read_message2(&message2)
-        .expect("message2")
-        .split()
+    Initiator::open(client, network_id).expect("channel")
 }
 
 /// Read one sealed record off `client` and open it.
 fn read_sealed(client: &mut StdStream, recv: &mut RecvHalf) -> Vec<u8> {
-    let mut wire = Vec::new();
+    let mut pending = Vec::new();
     let mut chunk = [0u8; 256];
     loop {
-        match recv.open_one(&wire) {
-            Ok((plain, _used)) => return plain,
-            Err(RecordError::Truncated) => {
+        match recv.take_one(&mut pending) {
+            Ok(Some(plain)) => return plain,
+            Ok(None) => {
                 let n = client.read(&mut chunk).expect("record");
                 assert_ne!(n, 0, "the socket closed inside a record");
-                wire.extend_from_slice(&chunk[..n]);
+                pending.extend_from_slice(&chunk[..n]);
             }
             Err(error) => panic!("record: {error:?}"),
         }
@@ -338,9 +325,8 @@ fn a_queued_handshake_past_its_deadline_is_skipped() {
     });
     held_rx.recv().expect("blocking thread held");
     let mut client = connect(listener.local_addr());
-    let (_initiator, message1) = Initiator::new(&ID).expect("initiator");
-    client.write_all(&prefix_for(&ID)).expect("prefix");
-    client.write_all(&message1).expect("message1");
+    let (_initiator, flight) = Initiator::new(&ID).expect("initiator");
+    client.write_all(flight.as_bytes()).expect("flight");
     let start = Instant::now();
     while listener.tally.queued() == 0 {
         assert!(

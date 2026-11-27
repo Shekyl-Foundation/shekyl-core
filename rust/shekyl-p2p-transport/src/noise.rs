@@ -28,6 +28,7 @@ use shekyl_noise::symmetric::{SplitRole, SymmetricError, SymmetricState as Sym};
 use shekyl_noise::TAG_LEN;
 
 use crate::channel::{self, RecvHalf, SendHalf};
+use crate::flight::{InitiatorFlight, ResponderFlight};
 use crate::prefix::NetworkId;
 #[cfg(test)]
 use shekyl_noise::HASH_LEN;
@@ -66,6 +67,19 @@ impl From<SymmetricError> for HandshakeError {
     }
 }
 
+impl std::fmt::Display for HandshakeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Decrypt => write!(f, "the handshake did not verify"),
+            Self::Kem => write!(f, "the encapsulation key was refused"),
+            Self::Length => write!(f, "the handshake message has the wrong length"),
+            Self::State => write!(f, "the handshake state was refused"),
+        }
+    }
+}
+
+impl std::error::Error for HandshakeError {}
+
 /// Initiator after message 1. The next call reads message 2.
 pub struct Initiator {
     sym: Sym,
@@ -76,6 +90,7 @@ pub struct Initiator {
 /// Responder before message 1.
 pub struct Responder {
     sym: Sym,
+    network_id: NetworkId,
 }
 
 /// Responder after message 1. The next call writes message 2.
@@ -86,6 +101,7 @@ pub struct ResponderReady {
     sym: Sym,
     remote_e: [u8; 32],
     remote_ek: ml_kem_768::EncapsKey,
+    network_id: NetworkId,
 }
 
 /// Both messages are done. `INITIATOR` selects which `Split` half is send.
@@ -94,11 +110,21 @@ pub struct Established<const INITIATOR: bool> {
 }
 
 impl Initiator {
-    pub fn new(network_id: &NetworkId) -> Result<(Self, Vec<u8>), HandshakeError> {
+    /// Message 1, wrapped as the initiator's flight.
+    ///
+    /// # Errors
+    ///
+    /// [`HandshakeError::Kem`] when key generation fails, or
+    /// [`HandshakeError::State`] when message 1 is not [`MESSAGE1_LEN`].
+    pub fn new(network_id: &NetworkId) -> Result<(Self, InitiatorFlight), HandshakeError> {
         let eph = StaticSecret::random_from_rng(OsRng);
         let (ek, dk) =
             ml_kem_768::KG::try_keygen_with_rng(&mut OsRng).map_err(|_| HandshakeError::Kem)?;
-        Self::from_parts(network_id, eph, dk, ek.into_bytes())
+        let (initiator, message) = Self::from_parts(network_id, eph, dk, ek.into_bytes())?;
+        Ok((
+            initiator,
+            InitiatorFlight::from_message(network_id, &message)?,
+        ))
     }
 
     fn from_parts(
@@ -158,9 +184,14 @@ impl Initiator {
         x25519: [u8; 32],
         d: &[u8; 32],
         z: &[u8; 32],
-    ) -> Result<(Self, Vec<u8>), HandshakeError> {
+    ) -> Result<(Self, InitiatorFlight), HandshakeError> {
         let (ek, dk) = ml_kem_768::KG::keygen_from_seed(*d, *z);
-        Self::from_parts(network_id, StaticSecret::from(x25519), dk, ek.into_bytes())
+        let (initiator, message) =
+            Self::from_parts(network_id, StaticSecret::from(x25519), dk, ek.into_bytes())?;
+        Ok((
+            initiator,
+            InitiatorFlight::from_message(network_id, &message)?,
+        ))
     }
 }
 
@@ -168,6 +199,7 @@ impl Responder {
     pub fn new(network_id: &NetworkId) -> Self {
         Self {
             sym: Sym::new(PROTOCOL_NAME, network_id),
+            network_id: *network_id,
         }
     }
 
@@ -175,6 +207,7 @@ impl Responder {
     pub(crate) fn with_protocol_name(name: &[u8], network_id: &NetworkId) -> Self {
         Self {
             sym: Sym::new(name, network_id),
+            network_id: *network_id,
         }
     }
 
@@ -203,12 +236,19 @@ impl Responder {
             sym: self.sym,
             remote_e,
             remote_ek,
+            network_id: self.network_id,
         })
     }
 }
 
 impl ResponderReady {
-    pub fn write_message2(self) -> Result<(Established<false>, Vec<u8>), HandshakeError> {
+    /// Message 2, wrapped as the responder's flight.
+    ///
+    /// # Errors
+    ///
+    /// [`HandshakeError`] when message 2 does not verify or does not
+    /// fit the flight.
+    pub fn write_message2(self) -> Result<(Established<false>, ResponderFlight), HandshakeError> {
         self.finish(StaticSecret::random_from_rng(OsRng), &mut OsRng)
     }
 
@@ -217,7 +257,7 @@ impl ResponderReady {
         self,
         x25519: [u8; 32],
         encaps_seed: [u8; 32],
-    ) -> Result<(Established<false>, Vec<u8>), HandshakeError> {
+    ) -> Result<(Established<false>, ResponderFlight), HandshakeError> {
         self.finish(
             StaticSecret::from(x25519),
             &mut FillRng {
@@ -231,7 +271,7 @@ impl ResponderReady {
         mut self,
         eph: StaticSecret,
         rng: &mut impl rand_core::CryptoRngCore,
-    ) -> Result<(Established<false>, Vec<u8>), HandshakeError> {
+    ) -> Result<(Established<false>, ResponderFlight), HandshakeError> {
         let epub = PublicKey::from(&eph).to_bytes();
         let mut msg = Vec::with_capacity(MESSAGE2_LEN);
         msg.extend_from_slice(&epub);
@@ -260,7 +300,8 @@ impl ResponderReady {
         if msg.len() != MESSAGE2_LEN {
             return Err(HandshakeError::Length);
         }
-        Ok((Established { sym: self.sym }, msg))
+        let flight = ResponderFlight::from_message(&self.network_id, &msg)?;
+        Ok((Established { sym: self.sym }, flight))
     }
 }
 
@@ -348,10 +389,10 @@ mod tests {
         d[0] = 1;
         z[0] = 2;
         let (ini, m1) = Initiator::pinned(&nid(), [0x07; 32], &d, &z).unwrap();
-        let ready = Responder::new(&nid()).read_message1(&m1).unwrap();
+        let ready = Responder::new(&nid()).read_message1(m1.message()).unwrap();
         let (resp, m2) = ready.write_message2_pinned([0x09; 32], [0x33; 32]).unwrap();
-        let ini = ini.read_message2(&m2).unwrap();
-        (ini, resp, m1, m2)
+        let ini = ini.read_message2(m2.message()).unwrap();
+        (ini, resp, m1.message().to_vec(), m2.message().to_vec())
     }
 
     #[test]
@@ -362,10 +403,11 @@ mod tests {
     #[test]
     fn message_lengths_and_roundtrip() {
         let (ini, m1) = Initiator::new(&nid()).unwrap();
-        assert_eq!(m1.len(), MESSAGE1_LEN);
+        assert!(m1.for_network(&nid()));
+        assert_eq!(m1.message().len(), MESSAGE1_LEN);
         let before = RESPONDER_DH.with(|count| count.get());
         let (resp, m2) = Responder::new(&nid())
-            .read_message1(&m1)
+            .read_message1(m1.message())
             .unwrap()
             .write_message2()
             .unwrap();
@@ -374,8 +416,9 @@ mod tests {
             before + 1,
             "a successful message 2 runs the responder Diffie-Hellman once"
         );
-        assert_eq!(m2.len(), MESSAGE2_LEN);
-        let mut a_send = ini.read_message2(&m2).unwrap().split().0;
+        assert!(m2.for_network(&nid()));
+        assert_eq!(m2.message().len(), MESSAGE2_LEN);
+        let mut a_send = ini.read_message2(m2.message()).unwrap().split().0;
         let mut b_recv = resp.split().1;
         let ct = a_send.seal(b"hello").unwrap();
         let (pt, _) = b_recv.open_one(&ct).unwrap();
@@ -386,12 +429,12 @@ mod tests {
     fn wrong_prologue_and_wrong_suite_fail_like_garbage() {
         let (ini, m1) = Initiator::new(&nid()).unwrap();
         let (_other, m2) = Responder::new(&[0x22; 16])
-            .read_message1(&m1)
+            .read_message1(m1.message())
             .unwrap()
             .write_message2()
             .unwrap();
         assert!(matches!(
-            ini.read_message2(&m2),
+            ini.read_message2(m2.message()),
             Err(HandshakeError::Decrypt)
         ));
 
@@ -405,12 +448,12 @@ mod tests {
         let (ini, m1) = Initiator::new(&nid()).unwrap();
         let (_bad, m2) =
             Responder::with_protocol_name(b"Noise_NNhfs_25519+MLKEM768_ChaChaPoly_BLAKE2b", &nid())
-                .read_message1(&m1)
+                .read_message1(m1.message())
                 .unwrap()
                 .write_message2()
                 .unwrap();
         assert!(matches!(
-            ini.read_message2(&m2),
+            ini.read_message2(m2.message()),
             Err(HandshakeError::Decrypt)
         ));
     }

@@ -7,16 +7,16 @@
 //! channel, runs the seed's script, and records every session byte it sent
 //! and received. A transcript is Levin bytes, never ciphertext: a Noise
 //! session's keys are fresh each run, and the goldens compare what the
-//! session carried. Each scripted write split is one sealed write.
+//! session carried. Each scripted split is its own records, sealed before
+//! the phase writes them, so a host that stops reading is measured on the
+//! socket.
 
 use std::io::{Read, Write};
 use std::net::{Shutdown, SocketAddr, TcpStream};
 use std::time::{Duration, Instant};
 
 use shekyl_levin::BucketReader;
-use shekyl_p2p_transport::{
-    prefix_for, Initiator, RecordError, RecvHalf, SendHalf, MESSAGE2_LEN, PREFIX_LEN,
-};
+use shekyl_p2p_transport::{Initiator, RecvHalf, SendHalf};
 
 use crate::script::{script, AfterHandshake, Phase, PEER_SEND_OVER_DRAIN, SEAM_NETWORK_ID};
 use crate::transcript::{End, Event, Role, Transcript, TranscriptVersion};
@@ -40,22 +40,8 @@ struct Channel {
 impl Channel {
     /// Run the initiator's half of the handshake on `sock`.
     fn open(mut sock: TcpStream) -> Result<Self, Error> {
-        let (initiator, message1) = Initiator::new(&SEAM_NETWORK_ID)
-            .map_err(|err| Error::new(format!("noise initiator: {err:?}")))?;
-        let mut flight = prefix_for(&SEAM_NETWORK_ID).to_vec();
-        flight.extend_from_slice(&message1);
-        sock.write_all(&flight)?;
-        let mut prefix = [0u8; PREFIX_LEN];
-        sock.read_exact(&mut prefix)?;
-        if prefix != prefix_for(&SEAM_NETWORK_ID) {
-            return Err(Error::new("the host answered another network's prefix"));
-        }
-        let mut message2 = vec![0u8; MESSAGE2_LEN];
-        sock.read_exact(&mut message2)?;
-        let (send, recv) = initiator
-            .read_message2(&message2)
-            .map_err(|err| Error::new(format!("noise message 2: {err:?}")))?
-            .split();
+        let (send, recv) = Initiator::open(&mut sock, &SEAM_NETWORK_ID)
+            .map_err(|err| Error::new(format!("noise channel: {err}")))?;
         Ok(Self {
             sock,
             send,
@@ -66,14 +52,9 @@ impl Channel {
 
     /// The next whole record's plaintext, if one has already arrived.
     fn next_record(&mut self) -> Result<Option<Vec<u8>>, Error> {
-        match self.recv.open_one(&self.pending) {
-            Ok((plain, used)) => {
-                self.pending.drain(..used);
-                Ok(Some(plain))
-            }
-            Err(RecordError::Truncated) => Ok(None),
-            Err(err) => Err(Error::new(format!("noise record: {err:?}"))),
-        }
+        self.recv
+            .take_one(&mut self.pending)
+            .map_err(|err| Error::new(format!("noise record: {err:?}")))
     }
 }
 
@@ -84,13 +65,18 @@ pub fn run_peer(addr: SocketAddr, seed: u64) -> Result<Transcript, Error> {
     sock.set_read_timeout(Some(PEER_IO_WAIT))?;
     sock.set_write_timeout(Some(PEER_IO_WAIT))?;
     let mut channel = Channel::open(sock)?;
+    // Seal every phase before the first session write. The backpressure
+    // host stops reading for a fixed pause; sealing an 8 MiB blob during
+    // that pause spends it, and the socket write then never blocks.
+    let wires = seal_phases(&mut channel, &plan.phases)?;
     let mut sent = Vec::new();
     let mut recv = Vec::new();
     let mut events = Vec::new();
-    for phase in &plan.phases {
+    for (phase, wire) in plan.phases.iter().zip(wires) {
         run_phase(
             &mut channel,
             phase,
+            &wire,
             plan.version(),
             &mut sent,
             &mut recv,
@@ -118,9 +104,35 @@ pub fn run_peer(addr: SocketAddr, seed: u64) -> Result<Transcript, Error> {
     })
 }
 
+/// The ciphertext of each phase, splits sealed in order.
+fn seal_phases(channel: &mut Channel, phases: &[Phase]) -> Result<Vec<Vec<u8>>, Error> {
+    let mut wires = Vec::with_capacity(phases.len());
+    for phase in phases {
+        let mut wire = Vec::new();
+        let mut start = 0;
+        for end in &phase.splits {
+            if *end < start || *end > phase.write.len() {
+                return Err(Error::new("split past the message"));
+            }
+            let record = channel
+                .send
+                .seal(&phase.write[start..*end])
+                .map_err(|err| Error::new(format!("noise seal: {err:?}")))?;
+            wire.extend(record);
+            start = *end;
+        }
+        if start != phase.write.len() {
+            return Err(Error::new("splits do not cover the message"));
+        }
+        wires.push(wire);
+    }
+    Ok(wires)
+}
+
 fn run_phase(
     channel: &mut Channel,
     phase: &Phase,
+    wire: &[u8],
     version: TranscriptVersion,
     sent: &mut Vec<u8>,
     recv: &mut Vec<u8>,
@@ -131,7 +143,7 @@ fn run_phase(
     } else {
         None
     };
-    write_chunks(channel, &phase.write, &phase.splits, stall)?;
+    write_wire(channel, wire, stall)?;
     if phase.close_after.is_some() {
         drop(channel.sock.shutdown(Shutdown::Write));
     }
@@ -147,10 +159,9 @@ fn run_phase(
     Ok(())
 }
 
-fn write_chunks(
+fn write_wire(
     channel: &mut Channel,
-    bytes: &[u8],
-    splits: &[usize],
+    wire: &[u8],
     mut stall: Option<&mut Vec<Event>>,
 ) -> Result<(), Error> {
     let note_stall = stall.is_some();
@@ -164,42 +175,28 @@ fn write_chunks(
     };
     let mut stalled = false;
     let started = Instant::now();
-    let mut start = 0;
-    for end in splits {
-        if *end < start || *end > bytes.len() {
-            return Err(Error::new("split past the message"));
+    let mut off = 0;
+    while off < wire.len() {
+        if started.elapsed() > cap {
+            return Err(Error::new("peer write stalled too long"));
         }
-        let wire = channel
-            .send
-            .seal(&bytes[start..*end])
-            .map_err(|err| Error::new(format!("noise seal: {err:?}")))?;
-        let mut off = 0;
-        while off < wire.len() {
-            if started.elapsed() > cap {
-                return Err(Error::new("peer write stalled too long"));
-            }
-            match channel.sock.write(&wire[off..]) {
-                Ok(0) => return Err(Error::new("peer write closed")),
-                Ok(n) => off += n,
-                Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {}
-                Err(err)
-                    if err.kind() == std::io::ErrorKind::TimedOut
-                        || err.kind() == std::io::ErrorKind::WouldBlock =>
-                {
-                    if let Some(events) = stall.as_mut() {
-                        if !stalled {
-                            events.push(Event::Stalled);
-                            stalled = true;
-                        }
+        match channel.sock.write(&wire[off..]) {
+            Ok(0) => return Err(Error::new("peer write closed")),
+            Ok(n) => off += n,
+            Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(err)
+                if err.kind() == std::io::ErrorKind::TimedOut
+                    || err.kind() == std::io::ErrorKind::WouldBlock =>
+            {
+                if let Some(events) = stall.as_mut() {
+                    if !stalled {
+                        events.push(Event::Stalled);
+                        stalled = true;
                     }
                 }
-                Err(err) => return Err(err.into()),
             }
+            Err(err) => return Err(err.into()),
         }
-        start = *end;
-    }
-    if start != bytes.len() {
-        return Err(Error::new("splits do not cover the message"));
     }
     if stalled {
         if let Some(events) = stall {

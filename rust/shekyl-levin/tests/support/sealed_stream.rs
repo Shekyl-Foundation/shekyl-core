@@ -7,6 +7,10 @@
 //! handshake, then Levin bytes through [`Read`] and [`Write`]. Every clearnet
 //! session a daemon holds is Noise, so a peer that speaks to one opens this
 //! first.
+//!
+//! The handshake is [`shekyl_p2p_transport::Initiator::open`]. This type owns
+//! what that call does not: the socket's byte counts, a record the socket
+//! stopped taking, and a [`Read`] of the opened plaintext.
 
 #![allow(dead_code)]
 
@@ -14,18 +18,53 @@ use std::io::{self, ErrorKind, Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;
 
-use shekyl_p2p_transport::{
-    prefix_for, Initiator, NetworkId, RecordError, RecvHalf, SendHalf, MESSAGE2_LEN, PREFIX_LEN,
-};
+use shekyl_p2p_transport::{Initiator, NetworkId, OpenError, RecvHalf, SendHalf};
 
 /// How long the daemon has to answer the handshake on a loaded host.
 const OPEN_WAIT: Duration = Duration::from_secs(10);
 /// One socket read.
 const READ_CHUNK: usize = 16 * 1024;
 
+/// Counts the bytes a socket takes and gives, the handshake included.
+struct WireCount<S> {
+    inner: S,
+    sent: u64,
+    received: u64,
+}
+
+impl<S: Read> Read for WireCount<S> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        self.received += n as u64;
+        Ok(n)
+    }
+}
+
+impl<S: Write> Write for WireCount<S> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let n = self.inner.write(buf)?;
+        self.sent += n as u64;
+        Ok(n)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+impl WireCount<TcpStream> {
+    fn set_read_timeout(&self, within: Option<Duration>) -> io::Result<()> {
+        self.inner.set_read_timeout(within)
+    }
+
+    fn shutdown_write(&self) -> io::Result<()> {
+        self.inner.shutdown(std::net::Shutdown::Write)
+    }
+}
+
 /// An open clearnet channel on a test peer's socket.
 pub struct SealedStream {
-    stream: TcpStream,
+    stream: WireCount<TcpStream>,
     seal: SendHalf,
     open: RecvHalf,
     /// Sealed bytes the socket has not taken: a record cannot be cut, so a
@@ -36,10 +75,6 @@ pub struct SealedStream {
     /// An opened record, and how much of it has been read.
     plain: Vec<u8>,
     taken: usize,
-    /// Bytes the socket took and gave, the handshake included: what the
-    /// daemon's link budget counts for this connection.
-    on_wire_sent: u64,
-    on_wire_received: u64,
 }
 
 impl SealedStream {
@@ -50,25 +85,15 @@ impl SealedStream {
     ///
     /// The socket's, or [`ErrorKind::InvalidData`] for a handshake that does
     /// not verify. A daemon that refuses the connection closes it here.
-    pub fn open(mut stream: TcpStream, network: &NetworkId) -> io::Result<Self> {
+    pub fn open(stream: TcpStream, network: &NetworkId) -> io::Result<Self> {
         let before = stream.read_timeout()?;
+        let mut stream = WireCount {
+            inner: stream,
+            sent: 0,
+            received: 0,
+        };
         stream.set_read_timeout(Some(OPEN_WAIT))?;
-        let (initiator, message1) = Initiator::new(network).map_err(invalid)?;
-        let mut flight = prefix_for(network).to_vec();
-        flight.extend_from_slice(&message1);
-        stream.write_all(&flight)?;
-        let on_wire_sent = flight.len() as u64;
-        let mut prefix = [0u8; PREFIX_LEN];
-        stream.read_exact(&mut prefix)?;
-        if prefix != prefix_for(network) {
-            return Err(io::Error::new(
-                ErrorKind::InvalidData,
-                "the daemon answered another network's prefix",
-            ));
-        }
-        let mut message2 = vec![0u8; MESSAGE2_LEN];
-        stream.read_exact(&mut message2)?;
-        let (seal, open) = initiator.read_message2(&message2).map_err(invalid)?.split();
+        let (seal, open) = Initiator::open(&mut stream, network).map_err(open_io)?;
         stream.set_read_timeout(before)?;
         Ok(Self {
             stream,
@@ -78,19 +103,17 @@ impl SealedStream {
             wire: Vec::new(),
             plain: Vec::new(),
             taken: 0,
-            on_wire_sent,
-            on_wire_received: (PREFIX_LEN + MESSAGE2_LEN) as u64,
         })
     }
 
     /// Every byte the socket has taken from this peer.
     pub fn on_wire_sent(&self) -> u64 {
-        self.on_wire_sent
+        self.stream.sent
     }
 
     /// Every byte this peer has read from the socket.
     pub fn on_wire_received(&self) -> u64 {
-        self.on_wire_received
+        self.stream.received
     }
 
     /// The socket's read timeout.
@@ -110,7 +133,7 @@ impl SealedStream {
     /// The socket's.
     pub fn shutdown_write(&mut self) -> io::Result<()> {
         self.send_unsent()?;
-        self.stream.shutdown(std::net::Shutdown::Write)
+        self.stream.shutdown_write()
     }
 
     fn send_unsent(&mut self) -> io::Result<()> {
@@ -120,9 +143,19 @@ impl SealedStream {
                 return Err(ErrorKind::WriteZero.into());
             }
             self.unsent.drain(..n);
-            self.on_wire_sent += n as u64;
         }
         Ok(())
+    }
+}
+
+fn open_io(error: OpenError) -> io::Error {
+    match error {
+        OpenError::Io(error) => error,
+        OpenError::Handshake(error) => io::Error::new(ErrorKind::InvalidData, error.to_string()),
+        OpenError::Prefix => io::Error::new(
+            ErrorKind::InvalidData,
+            "the daemon answered another network's prefix",
+        ),
     }
 }
 
@@ -161,20 +194,18 @@ impl Read for SealedStream {
                 self.taken += n;
                 return Ok(n);
             }
-            match self.open.open_one(&self.wire) {
-                Ok((plain, used)) => {
-                    self.wire.drain(..used);
+            match self.open.take_one(&mut self.wire) {
+                Ok(Some(plain)) => {
                     self.plain = plain;
                     self.taken = 0;
                 }
-                Err(RecordError::Truncated) => {
+                Ok(None) => {
                     let mut chunk = [0u8; READ_CHUNK];
                     let n = self.stream.read(&mut chunk)?;
                     if n == 0 {
                         return Ok(0);
                     }
                     self.wire.extend_from_slice(&chunk[..n]);
-                    self.on_wire_received += n as u64;
                 }
                 Err(error) => return Err(invalid(error)),
             }

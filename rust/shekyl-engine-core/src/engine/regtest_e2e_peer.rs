@@ -27,10 +27,7 @@ use shekyl_levin::{
     HandshakeResponse, NewTransactions, PortableMap, Received, TimedSyncResponse,
     COMMAND_HANDSHAKE, COMMAND_TIMED_SYNC, NOTIFY_NEW_TRANSACTIONS,
 };
-use shekyl_p2p_transport::{
-    prefix_for, Initiator, RecordError, RecvHalf, Responder, SendHalf, MESSAGE1_LEN, MESSAGE2_LEN,
-    PREFIX_LEN,
-};
+use shekyl_p2p_transport::{Initiator, RecvHalf, Responder, SendHalf};
 
 /// How long the channel's handshake may take on a loaded host.
 const CHANNEL_OPEN_WAIT: Duration = Duration::from_secs(10);
@@ -217,24 +214,9 @@ impl Link {
     fn open(mut sock: TcpStream, initiate: bool) -> Option<Self> {
         let id = network_id();
         let (seal, open) = if initiate {
-            let (initiator, message1) = Initiator::new(&id).ok()?;
-            let mut flight = prefix_for(&id).to_vec();
-            flight.extend_from_slice(&message1);
-            sock.write_all(&flight).ok()?;
-            Self::read_prefix(&mut sock, &id)?;
-            let mut message2 = vec![0u8; MESSAGE2_LEN];
-            sock.read_exact(&mut message2).ok()?;
-            initiator.read_message2(&message2).ok()?.split()
+            Initiator::open(&mut sock, &id).ok()?
         } else {
-            Self::read_prefix(&mut sock, &id)?;
-            let mut message1 = vec![0u8; MESSAGE1_LEN];
-            sock.read_exact(&mut message1).ok()?;
-            let ready = Responder::new(&id).read_message1(&message1).ok()?;
-            let (established, message2) = ready.write_message2().ok()?;
-            let mut flight = prefix_for(&id).to_vec();
-            flight.extend_from_slice(&message2);
-            sock.write_all(&flight).ok()?;
-            established.split()
+            Responder::accept(&mut sock, &id).ok()?
         };
         Some(Self {
             sock,
@@ -242,12 +224,6 @@ impl Link {
             open,
             pending: Vec::new(),
         })
-    }
-
-    fn read_prefix(sock: &mut TcpStream, id: &[u8; 16]) -> Option<()> {
-        let mut prefix = [0u8; PREFIX_LEN];
-        sock.read_exact(&mut prefix).ok()?;
-        (prefix == prefix_for(id)).then_some(())
     }
 
     /// Seal `plain` and write it. `false` ends the session.
@@ -259,15 +235,8 @@ impl Link {
     }
 
     /// The next whole record's plaintext, `None` when none has arrived.
-    fn next_record(&mut self) -> Result<Option<Vec<u8>>, RecordError> {
-        match self.open.open_one(&self.pending) {
-            Ok((plain, used)) => {
-                self.pending.drain(..used);
-                Ok(Some(plain))
-            }
-            Err(RecordError::Truncated) => Ok(None),
-            Err(error) => Err(error),
-        }
+    fn next_record(&mut self) -> Result<Option<Vec<u8>>, shekyl_p2p_transport::RecordError> {
+        self.open.take_one(&mut self.pending)
     }
 }
 

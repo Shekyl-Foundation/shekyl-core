@@ -24,7 +24,7 @@ use shekyl_p2p::{
     PerConnector, PoolDoor, ProbeArrival, ProbeSink, Sockets, SupervisorFeeds, SyncInbound,
     SyncOwner, Taken, TorPlan, TxId,
 };
-use shekyl_p2p_transport::{prefix_for, Initiator, RecordError, MESSAGE2_LEN, PREFIX_LEN};
+use shekyl_p2p_transport::Initiator;
 use tokio::sync::watch;
 
 struct NoSync;
@@ -220,19 +220,7 @@ fn a_clearnet_handshake_is_answered_with_tor_off() {
         .expect("read timeout");
     // The clearnet channel first: a clearnet session is always Noise.
     let id = [7; 16];
-    let (initiator, message1) = Initiator::new(&id).expect("an initiator");
-    let mut flight = prefix_for(&id).to_vec();
-    flight.extend_from_slice(&message1);
-    stream.write_all(&flight).expect("the first flight");
-    let mut prefix = [0u8; PREFIX_LEN];
-    stream.read_exact(&mut prefix).expect("the node's prefix");
-    assert_eq!(prefix, prefix_for(&id));
-    let mut message2 = vec![0u8; MESSAGE2_LEN];
-    stream.read_exact(&mut message2).expect("message 2");
-    let (mut send, mut recv) = initiator
-        .read_message2(&message2)
-        .expect("message 2 opens")
-        .split();
+    let (mut send, mut recv) = Initiator::open(&mut stream, &id).expect("the channel");
     let request = HandshakeRequest {
         node_data: BasicNodeData { network_id: id },
         payload_data: CoreSyncData {
@@ -264,13 +252,12 @@ fn a_clearnet_handshake_is_answered_with_tor_off() {
             Ok(None) => {}
             Err(e) => panic!("the response did not frame: {e}"),
         }
-        match recv.open_one(&wire) {
-            Ok((plain, used)) => {
-                wire.drain(..used);
+        match recv.take_one(&mut wire) {
+            Ok(Some(plain)) => {
                 reader.feed(&plain).expect("feed");
                 continue;
             }
-            Err(RecordError::Truncated) => {}
+            Ok(None) => {}
             Err(e) => panic!("the record did not open: {e:?}"),
         }
         match stream.read(&mut buf) {
