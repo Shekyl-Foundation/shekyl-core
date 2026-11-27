@@ -273,7 +273,11 @@ impl Drive {
         let plan = directory.plan(self.kept.take());
         let events = self.events.clone();
         let data_dir = self.data_dir.clone();
-        let guard_state = self.boot().guard_state.clone();
+        let Some(boot) = self.managed.as_ref() else {
+            self.no_tor_to_run(super::TorAsk::Launch);
+            return None;
+        };
+        let guard_state = boot.guard_state.clone();
         let (abandon, abandoned) = watch::channel(false);
         self.launch = Some((number, abandon));
         self.hold_later(number, async move {
@@ -406,15 +410,19 @@ impl Drive {
 
     /// `DEL_ONION`, the first half of a (re)publish. No forward listener
     /// means nothing to publish to: the core sends no `ADD_ONION` after it.
-    fn send_delete(&self, number: u64) -> Option<Vec<Input>> {
+    fn send_delete(&mut self, number: u64) -> Option<Vec<Input>> {
         let Some(asker) = self.asker() else {
             return Some(vec![Input::ControlEnded]);
         };
         if self.forward.is_none() {
             return Some(vec![Input::ForwardAbsent]);
         }
+        let Some(boot) = self.managed.as_ref() else {
+            self.no_tor_to_run(super::TorAsk::Publish);
+            return None;
+        };
+        let onion = Arc::clone(&boot.onion);
         tracing::info!(target: "tor", "publishing this node's onion again");
-        let onion = Arc::clone(&self.boot().onion);
         self.answer_later(number, async move {
             Answer::Inputs(match asker.delete_onion(&onion).await {
                 Ok(()) => Vec::new(),
@@ -440,13 +448,17 @@ impl Drive {
         let Some(forward) = self.forward else {
             return Some(vec![Input::ForwardAbsent]);
         };
-        let service = self.boot().onion.service_id().clone();
+        let Some(boot) = self.managed.as_ref() else {
+            self.no_tor_to_run(super::TorAsk::Publish);
+            return None;
+        };
+        let onion = Arc::clone(&boot.onion);
+        let service = onion.service_id().clone();
         self.rounds = Some(match &self.rounds {
             Some(previous) => previous.next_publication(service.clone()),
             None => UploadRounds::new(service.clone()),
         });
         self.service = Some(service);
-        let onion = Arc::clone(&self.boot().onion);
         let virtual_port = self.virtual_port;
         self.answer_later(number, async move {
             let outcome = asker

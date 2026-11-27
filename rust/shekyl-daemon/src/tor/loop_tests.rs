@@ -28,13 +28,13 @@ use shekyl_p2p::{
 };
 use shekyl_tor_control_client::binary::VerifiedTorBinary;
 use shekyl_tor_control_client::control::{ReplyFramer, SocksTimeout};
-use shekyl_tor_control_client::supervisor::{Input, TorSetting};
+use shekyl_tor_control_client::supervisor::{Action, Input, TorSetting};
 use shekyl_tor_control_daemon::{DaemonTorConfig, DaemonTorControl};
 use shekyl_tor_status::{ManagedTor, TorCause, TorState, TorStatus};
 use tokio::sync::watch;
 
 use super::inbox::inbox;
-use super::{drive, Drive, PinSource, Supervises, Supervisor};
+use super::{drive, Drive, PinSource, Supervises, Supervisor, SupervisorEnd, TorAsk};
 
 struct NoSync;
 
@@ -558,7 +558,14 @@ fn an_upload_before_the_add_onion_reply_is_read() {
         drive.control = Some(up);
         drive.forward = Some(std::net::SocketAddr::from(([127, 0, 0, 1], 18_022)));
         assert_eq!(drive.send_add(1), None, "the add is sent off the loop");
-        let onion = drive.boot().onion.service_id().as_str().to_owned();
+        let onion = drive
+            .managed
+            .as_ref()
+            .expect("a managed driver")
+            .onion
+            .service_id()
+            .as_str()
+            .to_owned();
         let upload = event(&format!(
             "HS_DESC UPLOAD {onion} UNKNOWN $9E67E885D46AE284534EBA3B71A2DFE13A0E4783~Torr4Tor GOkbpjFN0/2R6w08BkOWd3Zj62ZDCvu7bVmkseOLvcY"
         ));
@@ -666,5 +673,43 @@ fn an_off_supervisor_answers_and_runs_until_its_stop() {
         tokio::time::timeout(Duration::from_secs(5), supervisor.shutdown())
             .await
             .expect("the stop was taken");
+    });
+}
+
+/// **A Tor action asked of a supervisor that runs no Tor ends it with a
+/// typed end, never a panic.** The core asks for a pin, a launch, a publish
+/// or a probe only while it runs this node's Tor; here a pin is put in front
+/// of a `tor = off` driver. The loop stops at that action, tears down, and
+/// ends with `NoTorToRun(Pin)`, which the daemon's wait reads as the
+/// supervisor's end. A shipped build aborts on a panic, with no teardown and
+/// no log line. Red edit: fold on past the broken promise in `perform`, so
+/// the loop never ends.
+#[test]
+fn a_tor_action_without_a_managed_tor_ends_the_supervisor() {
+    on_the_loops_runtime(|dir| async move {
+        let data_dir = dir.path().join("data");
+        std::fs::create_dir_all(&data_dir).expect("the data directory");
+        let (_owner, inbox, feeds) = inbox();
+        let network = network(dir.path(), feeds);
+        let kept = network.clone();
+        let mut drive = Drive::start(
+            Supervises::Unmanaged(TorSetting::Off),
+            super::policy(),
+            true,
+            18_021,
+            data_dir,
+            inbox,
+            network,
+        )
+        .expect("the driver");
+        drive.step.actions.push(Action::CheckPin);
+        let end = tokio::time::timeout(Duration::from_secs(5), drive.run())
+            .await
+            .expect("the loop ran on past a broken promise");
+        assert_eq!(end, Err(SupervisorEnd::NoTorToRun(TorAsk::Pin)));
+        // The network owns a runtime, which is not dropped on an async thread.
+        tokio::task::spawn_blocking(move || drop(kept))
+            .await
+            .expect("the network drops");
     });
 }

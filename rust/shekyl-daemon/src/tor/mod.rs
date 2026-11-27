@@ -207,12 +207,41 @@ pub enum SupervisorEnd {
     /// supervisor closes it, so this is a broken promise, not an operating
     /// condition.
     Returned,
+    /// The core asked for a Tor action under a `tor` setting that runs no
+    /// Tor: a broken promise between the core and this driver. The loop
+    /// stops at that action, tears down as at a stop, and ends with this,
+    /// so the daemon stops and says why instead of aborting.
+    NoTorToRun(TorAsk),
     /// The loop panicked, in the panic's own words. A shipped build aborts
     /// the process on a panic, so this arm is reached only where panics
     /// unwind.
     Panicked(String),
     /// The runtime cancelled the loop's task.
     Cancelled,
+}
+
+/// The Tor action the core asked for (see [`SupervisorEnd::NoTorToRun`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TorAsk {
+    /// Check the Tor binary.
+    Pin,
+    /// Launch Tor.
+    Launch,
+    /// Publish this node's onion.
+    Publish,
+    /// Probe this node's onion.
+    Probe,
+}
+
+impl TorAsk {
+    fn verb(self) -> &'static str {
+        match self {
+            Self::Pin => "check a Tor binary",
+            Self::Launch => "launch a Tor",
+            Self::Publish => "publish an onion",
+            Self::Probe => "probe an onion",
+        }
+    }
 }
 
 impl SupervisorEnd {
@@ -223,9 +252,11 @@ impl SupervisorEnd {
             Self::NoOnionKey | Self::NoProbeIsolation => {
                 "Check that the system's random source works, then start the daemon again"
             }
-            Self::NoScheduler(_) | Self::Returned | Self::Panicked(_) | Self::Cancelled => {
-                "Start the daemon again; if this repeats, report it with this log"
-            }
+            Self::NoScheduler(_)
+            | Self::NoTorToRun(_)
+            | Self::Returned
+            | Self::Panicked(_)
+            | Self::Cancelled => "Start the daemon again; if this repeats, report it with this log",
         }
     }
 }
@@ -242,6 +273,11 @@ impl std::fmt::Display for SupervisorEnd {
             ),
             Self::NoProbeIsolation => f.write_str(
                 "the Tor supervisor did not start: the system's random source refused its probe's isolation",
+            ),
+            Self::NoTorToRun(ask) => write!(
+                f,
+                "the Tor supervisor was asked to {} under a tor setting that runs none",
+                ask.verb()
             ),
             Self::Returned => f.write_str("the Tor supervisor stopped though no stop was asked"),
             Self::Panicked(words) => write!(f, "the Tor supervisor panicked: {words}"),
@@ -658,8 +694,7 @@ async fn drive(
         network,
     )?
     .run()
-    .await;
-    Ok(())
+    .await
 }
 
 /// What a managed Tor holds for the boot: the binary's source, the onion
@@ -743,6 +778,7 @@ impl Drive {
             step,
             clock,
             managed,
+            broken: None,
             data_dir,
             events: poster.events(),
             poster,
@@ -774,14 +810,16 @@ impl Drive {
         Ok(drive)
     }
 
-    /// What the managed Tor holds for the boot. The core asks for a pin, a
+    /// The core asked for `ask` with no managed Tor. It asks for a pin, a
     /// launch, a publish or a probe only while it runs this node's Tor
-    /// (`AbsentDuty::Unmanaged` asks for none); an ask without one is that
-    /// promise broken.
-    fn boot(&self) -> &ManagedBoot {
-        self.managed
-            .as_ref()
-            .expect("the Tor supervisor was asked to run a Tor under a tor setting that runs none")
+    /// (`AbsentDuty::Unmanaged` asks for none), so this is that promise
+    /// broken. Recorded as the supervisor's end: [`Self::perform`] stops at
+    /// this action and the loop ends with it, never a panic, which a shipped
+    /// build turns into an abort with no teardown and no log line.
+    fn no_tor_to_run(&mut self, ask: TorAsk) {
+        if self.broken.is_none() {
+            self.broken = Some(SupervisorEnd::NoTorToRun(ask));
+        }
     }
 }
 
@@ -794,6 +832,9 @@ struct Drive {
     /// What a Tor this daemon launches holds for the boot; `None` under
     /// `off` or an operator's Tor.
     managed: Option<ManagedBoot>,
+    /// The end a broken promise recorded ([`Self::no_tor_to_run`]): the loop
+    /// stops and ends with it.
+    broken: Option<SupervisorEnd>,
     data_dir: PathBuf,
     /// The sink Tor's control connection routes its events into. Each
     /// incarnation gets a clone; the drop count spans them all.
@@ -841,7 +882,9 @@ struct Drive {
 }
 
 impl Drive {
-    async fn run(mut self) {
+    /// Run until the stop, or until a broken promise ends the loop. Either
+    /// way the work that holds a Tor or a directory ends first.
+    async fn run(mut self) -> Result<(), SupervisorEnd> {
         loop {
             if self.perform() {
                 break;
@@ -886,6 +929,7 @@ impl Drive {
         if let Some(kept) = self.kept.take() {
             say_retirement(&kept.retire().await);
         }
+        self.broken.take().map_or(Ok(()), Err)
     }
 
     /// Fold what the network published before the loop, after the start's
@@ -915,6 +959,11 @@ impl Drive {
         let mut halt = false;
         while let Some(action) = queue.pop_front() {
             let inputs = self.act(action, &mut halt);
+            // A broken promise ends the loop at the action that broke it;
+            // nothing it returned is folded.
+            if self.broken.is_some() {
+                return true;
+            }
             let mut produced = Vec::new();
             for input in inputs {
                 self.fold(input);
@@ -986,7 +1035,7 @@ impl Drive {
                 tracing::info!(target: "global", "{text}");
                 Vec::new()
             }
-            Action::CheckPin => vec![self.pin()],
+            Action::CheckPin => self.pin().into_iter().collect(),
             // A request: sent off the loop, answered as an arrival. The
             // action moves: a launch's binary is the driver's to spawn.
             action @ (Action::Reap
@@ -1214,9 +1263,14 @@ impl Drive {
         inputs
     }
 
-    /// Check the binary a managed Tor launches ([`Self::boot`]).
-    fn pin(&mut self) -> Input {
-        let verified = match &self.boot().pin {
+    /// Check the binary a managed Tor launches. `None` when there is none
+    /// ([`Self::no_tor_to_run`]).
+    fn pin(&mut self) -> Option<Input> {
+        let Some(boot) = self.managed.as_ref() else {
+            self.no_tor_to_run(TorAsk::Pin);
+            return None;
+        };
+        let verified = match &boot.pin {
             PinSource::Discover(Some(path)) => discover_and_verify_at(path),
             PinSource::Discover(None) => discover_and_verify(),
             #[cfg(all(test, unix))]
@@ -1230,7 +1284,7 @@ impl Drive {
             }
         };
         self.next_pin = PinCheck::Recheck;
-        input
+        Some(input)
     }
 
     fn watch_state(&self) -> Option<Input> {

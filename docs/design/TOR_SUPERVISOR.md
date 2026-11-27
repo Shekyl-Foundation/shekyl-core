@@ -2250,7 +2250,11 @@ in this order, all done before any outside staker runs a persona:
   PR (rule 26) that settles the host interface, what stays out of the crate,
   one instance per identity domain, and three additions to the constraints
   below: each instance's log lines kept apart, each instance's own jitter,
-  and who hears a persona's "unreachable".
+  and who hears a persona's "unreachable". The lifted driver splits a
+  managed Tor from an unmanaged setting by type, so a supervisor that runs
+  no Tor has no Tor actions at all (Rick, 2026-11-27). Until then the
+  daemon's driver ends with `SupervisorEnd::NoTorToRun` when the core asks
+  for one without a managed Tor.
 - **`TSR-W3`:** the persona host runs its Tor on the shared driver, and the
   wallet's old supervisor is deleted in the same PR.
 
