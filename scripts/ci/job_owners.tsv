@@ -156,6 +156,7 @@ scripts/ci/run_live_daemon_gates.sh	build:build-ubuntu,nightly-live-daemon-slow:
 scripts/ci/run_live_tor_tests.sh	grep-gates:grep-gates,tor-pin-verify:verify
 scripts/ci/rust_scoped_tests.sh	freebsd-nightly:freebsd,rust-audit-test:rust-audit-and-test
 scripts/ci/shipped_graph.py	grep-gates:grep-gates,gui-drift:gui-pin,gui-drift:gui-pin-nightly
+scripts/ci/snapshot_header_only.py	schema-snapshot:enforce-version-bump
 scripts/ci/strip_c_comments.py	depends:legs,docs-gates:check-doc-links,grep-gates:grep-gates
 scripts/ci/test_check_doc_code_citations.py	docs-gates:check-doc-links
 scripts/ci/test_check_frozen_tuple.py	grep-gates:grep-gates
