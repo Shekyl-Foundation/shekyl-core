@@ -45,7 +45,7 @@ use shekyl_fcmp::proof::{
 };
 use shekyl_fcmp::tree::{
     hash_grow_helios, hash_grow_selene, helios_hash_init, helios_point_to_selene_scalar,
-    selene_hash_init, selene_point_to_helios_scalar,
+    selene_hash_init, selene_point_to_helios_scalar, HELIOS_CHUNK_WIDTH,
 };
 use shekyl_fcmp::PqcKeyScalar;
 use shekyl_fcmp_proofs::SELENE_FCMP_GENERATORS;
@@ -111,7 +111,10 @@ pub enum ChunkLayout {
     /// All inputs adjacent in one leaf chunk — the §72 control.
     Shared,
     /// One input per leaf chunk, `n` siblings at the Helios layer — production
-    /// topology for unrelated spends.
+    /// topology for unrelated spends. The Helios layer holds at most
+    /// [`HELIOS_CHUNK_WIDTH`] chunks under one node, so past that many inputs
+    /// they are dealt round-robin and share chunks, as they must in a depth-2
+    /// tree; at or below it every input has its own chunk.
     Spread,
 }
 
@@ -197,7 +200,9 @@ pub fn build_fixture<R: RngCore + CryptoRng>(
     //
     // Spread: `n_in` chunks of one output each, so the Helios layer carries
     // `n_in` siblings and each input walks a distinct path — the arrangement a
-    // wallet spending unrelated outputs actually produces.
+    // wallet spending unrelated outputs actually produces. The layer-1 node
+    // takes at most `HELIOS_CHUNK_WIDTH` children, so a larger `n_in` deals
+    // its inputs over that many chunks.
     let leaf_selene_for = |idxs: &[usize]| -> <Selene as Ciphersuite>::G {
         let mut terms = Vec::with_capacity(4 * idxs.len());
         for (slot, &idx) in idxs.iter().enumerate() {
@@ -258,11 +263,19 @@ pub fn build_fixture<R: RngCore + CryptoRng>(
     } else {
         let chunks: Vec<Vec<usize>> = match layout {
             ChunkLayout::Shared => vec![all.clone()],
-            ChunkLayout::Spread => all.iter().map(|&i| vec![i]).collect(),
+            ChunkLayout::Spread => {
+                let width = n_in.min(HELIOS_CHUNK_WIDTH);
+                (0..width)
+                    .map(|c| all.iter().copied().skip(c).step_by(width).collect())
+                    .collect()
+            }
         };
         let owner: Vec<Vec<usize>> = match layout {
             ChunkLayout::Shared => vec![all.clone(); n_in],
-            ChunkLayout::Spread => all.iter().map(|&i| vec![i]).collect(),
+            ChunkLayout::Spread => all
+                .iter()
+                .map(|&i| chunks[i % chunks.len()].clone())
+                .collect(),
         };
 
         // Layer 1 (Helios) over the leaf chunk(s).
