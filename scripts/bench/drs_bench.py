@@ -414,10 +414,11 @@ def mining_address(timeout):
         _fail(f"expected exactly one REGTEST_MINING_ADDR line from the emitter, found "
               f"{len(hits)}. The emitter passed but did not report an address, so there "
               f"is nothing to mine to.\n{proc.stdout[-2000:]}")
-    addr = hits[0]
-    if addr.count("/") != 2 or not addr.startswith("shekyl1"):
-        _fail(f"emitted address is not the expected three-segment form: {addr[:60]}...")
-    return addr
+    # The format has one judge: the emitter passes only when its address
+    # decodes through the daemon's regtest decoder, and the daemon refuses a
+    # `--mine-address` it cannot read. A shape test here would be a second
+    # copy of the format, stale on the next change to it.
+    return hits[0]
 
 
 def measure(args):
