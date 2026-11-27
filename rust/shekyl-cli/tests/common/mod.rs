@@ -41,3 +41,30 @@ pub fn empty_config() -> EmptyConfig {
 pub fn write_secret_file(path: &Path, text: &str) {
     write_private(path, text.as_bytes()).expect("the secret file");
 }
+
+/// An isolated key and bundle for a test that deliberately names an offline
+/// daemon. No test borrows an enrolled identity from the account running it.
+#[allow(
+    dead_code,
+    reason = "only subprocess tests naming a daemon use this fixture"
+)]
+pub fn offline_channel_config() -> EmptyConfig {
+    use shekyl_rpc_transport::channel::{bundle_text, create_client_key};
+    let config = empty_config();
+    let dir = config.path().parent().unwrap();
+    let key_file = dir.join("client.key");
+    create_client_key(&key_file).expect("create fixture client identity");
+    let public = shekyl_rpc_channel::handshake::StaticKeypair::generate().unwrap();
+    let mut bytes = public.public().x25519().to_vec();
+    bytes.extend_from_slice(public.public().mlkem_ek());
+    let bundle = dir.join("bundle");
+    std::fs::write(&bundle, bundle_text(&bytes)).unwrap();
+    // JSON strings are valid TOML basic strings, including Windows paths.
+    let text = format!(
+        "daemon-bundle-file = {}\nrpc-key-file = {}\n",
+        serde_json::json!(bundle),
+        serde_json::json!(key_file)
+    );
+    std::fs::write(config.path(), text).unwrap();
+    config
+}

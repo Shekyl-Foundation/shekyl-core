@@ -132,7 +132,9 @@ impl LocalRefreshError {
             | DaemonFault::FeeResponse
             | DaemonFault::NotPermitted => Self::DaemonProtocol,
             DaemonFault::Internal => Self::Internal,
-            DaemonFault::PeerCheck | DaemonFault::Service(_) => Self::DaemonTarget(fault),
+            DaemonFault::Channel(_) | DaemonFault::PeerCheck | DaemonFault::Service(_) => {
+                Self::DaemonTarget(fault)
+            }
         }
     }
 }
@@ -223,6 +225,7 @@ impl From<LocalRefreshError> for RefreshError {
 #[allow(clippy::match_same_arms)]
 pub(super) const fn classify_rpc_error(err: &RpcError) -> ProtocolErrorKind {
     match err {
+        RpcError::Channel(fault, _) => ProtocolErrorKind::Channel(*fault),
         RpcError::ConnectionError(_) => ProtocolErrorKind::ConnectionError,
         RpcError::InternalError(_) => ProtocolErrorKind::InternalError,
         RpcError::InvalidNode(_) => ProtocolErrorKind::InvalidNode,

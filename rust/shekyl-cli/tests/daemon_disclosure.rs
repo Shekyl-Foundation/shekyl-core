@@ -28,7 +28,15 @@ fn create_with(daemon_address: Option<&str>) -> Output {
         .arg("--network")
         .arg("stagenet");
     if let Some(address) = daemon_address {
-        cmd.arg("--daemon-endpoint").arg(address);
+        let key = shekyl_rpc_channel::handshake::StaticKeypair::generate().unwrap();
+        let mut bytes = key.public().x25519().to_vec();
+        bytes.extend_from_slice(key.public().mlkem_ek());
+        let bundle = dir.path().join("bundle");
+        std::fs::write(&bundle, shekyl_rpc_transport::channel::bundle_text(&bytes)).unwrap();
+        cmd.arg("--daemon-endpoint")
+            .arg(address)
+            .arg("--daemon-bundle-file")
+            .arg(bundle);
     }
     cmd.arg("--wallet-password-file")
         .arg(dir.path().join("missing"))

@@ -3,10 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The channel end to end (RT-W10 step 4): the listener on a real socket,
-//! the real handshake from the client's side, the record stream, and HTTP
-//! over it into the router. No mock transport. Each test names the change
-//! that makes it fail.
+//! The channel end to end (RT-W10 step 4). Wallet enrollment is in [`wallet_client`].
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -41,13 +38,15 @@ use crate::shard_view::ShardViewAbsent;
 use crate::store_facts::RulesAt;
 use crate::submit::{DaemonTxVerifier, RustPoolShim, StoreChain, SubmitEngine};
 
-const NETWORK: NetworkId = [7u8; 16];
+fn network_id() -> NetworkId {
+    shekyl_network::Network::Regtest.network_id()
+}
 
 /// The host's administrator, as the owner's leg stamps it.
-const HOST: Authority = Authority::owner(false);
+pub(super) const HOST: Authority = Authority::owner(false);
 
 /// A served channel and its data directory.
-struct Served {
+pub(super) struct Served {
     _dir: tempfile::TempDir,
     data_dir: PathBuf,
     channel: Arc<Channel>,
@@ -76,7 +75,7 @@ impl Served {
         let data_dir = dir.path().to_path_buf();
         let channel = Channel::open(&ChannelSetup {
             data_dir: data_dir.clone(),
-            network_id: NETWORK,
+            network_id: network_id(),
             service,
             service_rendezvous: None,
             instance: shekyl_rpc_rendezvous::Instance::Default,
@@ -206,7 +205,7 @@ async fn open_over<S>(
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
-    match client::handshake_over(io, &NETWORK, key, daemon, request).await {
+    match client::handshake_over(io, &network_id(), key, daemon, request).await {
         Ok(opened) => Ok((opened.stream, opened.ceiling)),
         Err(client::Attempt::ClosedAfterMessage3) => Err(NoSession::ClosedBeforeMessage4),
         Err(client::Attempt::ClosedAfterMessage1 | client::Attempt::Io(_)) => {
@@ -261,7 +260,7 @@ impl Session {
     }
 }
 
-fn code(reply: &Value) -> Option<&str> {
+pub(super) fn code(reply: &Value) -> Option<&str> {
     reply["error"]["data"]["code"].as_str()
 }
 
@@ -421,7 +420,7 @@ async fn a_kept_session_past_the_cap_is_not_announced() {
 fn pool_to(served: &Served, key: StaticKeypair, request: GrantSet) -> Arc<client::Pool> {
     client::Pool::new(
         client::ChannelTarget::new(
-            NETWORK,
+            network_id(),
             served.bundle(),
             key,
             client::Leg::ip(served.addr, None),
@@ -543,10 +542,16 @@ async fn a_revocation_stops_the_pool_and_it_does_not_dial_again() {
             Err(fault) => break fault,
         }
     };
-    assert_eq!(refused, client::ChannelFault::Revoked);
-    assert_eq!(pool.stopped(), Some(client::ChannelFault::Revoked));
+    assert_eq!(refused, client::ChannelFault::Revoked { fingerprint });
+    assert_eq!(
+        pool.stopped(),
+        Some(client::ChannelFault::Revoked { fingerprint })
+    );
     let before = Instant::now();
-    assert_eq!(call().await.err(), Some(client::ChannelFault::Revoked));
+    assert_eq!(
+        call().await.err(),
+        Some(client::ChannelFault::Revoked { fingerprint })
+    );
     assert!(before.elapsed() < Duration::from_millis(100), "no new dial");
 }
 
@@ -886,7 +891,7 @@ async fn a_stop_waits_for_every_connection_and_ends_a_handshake() {
     let mut handshaking = TcpStream::connect(served.addr).await.expect("connect");
     let other = StaticKeypair::generate().unwrap();
     let (_waiting, message1) =
-        Client::start(&NETWORK, &other, &served.bundle()).expect("message 1");
+        Client::start(&network_id(), &other, &served.bundle()).expect("message 1");
     handshaking
         .write_all(&message1)
         .await
@@ -934,7 +939,7 @@ fn the_console_key_reset_replaces_the_console_and_nothing_else() {
     let dir = tempfile::tempdir().unwrap();
     let setup = ChannelSetup {
         data_dir: dir.path().to_path_buf(),
-        network_id: NETWORK,
+        network_id: network_id(),
         service: true,
         service_rendezvous: None,
         instance: shekyl_rpc_rendezvous::Instance::Default,
@@ -990,3 +995,5 @@ fn the_console_key_reset_replaces_the_console_and_nothing_else() {
         Some(super::Admitted::Client(Preset::View.grants()))
     );
 }
+
+mod wallet_client;

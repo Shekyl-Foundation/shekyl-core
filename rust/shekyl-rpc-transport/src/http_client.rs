@@ -26,8 +26,8 @@
 //! This client performs **no** SOCKS authentication: the principal daemon's
 //! access control is the operator's own node / the proxy, not a per-connection
 //! SOCKS identity. Per-persona SOCKS-username isolation is a *different*
-//! transport (`shekyl-p-transport`) and deliberately does not share this one;
-//! see the `PersonaIsolatedTransport` pin in engine-core.
+//! transport (`shekyl-p-transport`) and does not share this client. Persona
+//! peer circuits stay there. Daemon chain reads use the operator's node.
 
 use std::io;
 use std::pin::Pin;

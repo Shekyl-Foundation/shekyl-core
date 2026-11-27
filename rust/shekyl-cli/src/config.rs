@@ -21,8 +21,8 @@ use shekyl_wallet_rpc::server::{TorFile, TOR_FILE_OPTION};
 use shekyl_wallet_rpc::Network;
 
 use crate::commands::scripted::PasswordSource;
-use crate::enroll::Remote;
 use crate::table::{PASSWORD_STDIN, TABLE};
+use shekyl_rpc_transport::channel::RemoteNode as Remote;
 
 /// The file suffix of a wallet, as the server names it from a wallet's name.
 const WALLET_EXTENSION: &str = "wallet";
@@ -207,7 +207,10 @@ fn build(
         }
     }
     let daemon = daemon_of(resolved, network, faults);
-    let enroll_remote = enroll_remote_of(resolved, faults);
+    let enroll_remote = match daemon.as_ref() {
+        Some(DaemonTarget::Channel { node, .. }) => Some(node.clone()),
+        _ => None,
+    };
     let script_file = path_of(resolved, "script-file");
     if script_file.is_some() && !words.is_empty() {
         faults.push(conflict("script-file", "a command is given"));
@@ -437,30 +440,6 @@ fn wallet_path_parts(file: &Path) -> Option<(PathBuf, String)> {
     Some((file.parent()?.to_path_buf(), name.to_owned()))
 }
 
-/// `daemon-bundle-file`: the node on another computer the enrollment words
-/// reach, at `daemon-endpoint` over the channel.
-fn enroll_remote_of(resolved: &Resolved, faults: &mut Vec<Diagnostic>) -> Option<Remote> {
-    let bundle_file = path_of(resolved, "daemon-bundle-file")?;
-    let Some(Value::Peer(peer)) = resolved.get("daemon-endpoint") else {
-        faults.push(requires(
-            "daemon-bundle-file",
-            "daemon-endpoint, the channel's address: the usual daemon port is the plaintext \
-             listener, which is not the channel",
-        ));
-        return None;
-    };
-    match PeerRoute::reach(peer, socks_addr(resolved)) {
-        Ok(route) => Some(Remote {
-            leg: route.leg(),
-            bundle_file,
-        }),
-        Err(error) => {
-            faults.push(error.diagnostic("daemon-endpoint"));
-            None
-        }
-    }
-}
-
 /// `wallet-password-file`. Standard input is refused when it carries the
 /// commands, and at a terminal, where the line would be echoed and the
 /// hidden prompt is the way to give a password.
@@ -545,7 +524,8 @@ mod tests {
         assert!(matches!(
             options.daemon,
             DaemonTarget::ThisComputer {
-                network: Network::Mainnet
+                network: Network::Mainnet,
+                ..
             }
         ));
         let dir = options
@@ -619,14 +599,13 @@ mod tests {
     #[test]
     fn the_retired_spellings_are_unknown() {
         for name in [
+            "--rpc-grant",
             "--testnet",
             "--stagenet",
             "--engine-dir",
             "--engine-file",
             "--wallet",
-            "--daemon-address",
             "--rpc-url",
-            "--proxy",
             "--password-file",
             "--complete-tree-foundation",
             "--acknowledge",
@@ -675,10 +654,20 @@ mod tests {
     /// external wallet server.
     #[test]
     fn the_daemon_and_server_rows_are_checked() {
-        let (options, _) = run(&["--daemon-endpoint", "192.0.2.1:18081"]);
+        let bundle = absolute("bundle");
+        assert_eq!(
+            refused(&["--daemon-endpoint", "192.0.2.1:18081"]),
+            [Code::ValueRequires]
+        );
+        let (options, _) = run(&[
+            "--daemon-endpoint",
+            "192.0.2.1:18081",
+            "--daemon-bundle-file",
+            &bundle,
+        ]);
         assert!(matches!(
             options.daemon,
-            DaemonTarget::Address { ref url, proxy: None } if url == "http://192.0.2.1:18081"
+            DaemonTarget::Channel { ref node, .. } if node.leg.to_string() == "192.0.2.1:18081"
         ));
         assert_eq!(
             refused(&["--daemon-socks", "127.0.0.1:9050"]),

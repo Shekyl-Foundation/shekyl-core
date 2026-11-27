@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use shekyl_rpc_client::{wire, Rpc};
-use shekyl_rpc_transport::HttpRpc;
+use shekyl_rpc_transport::DaemonTransport;
 use shekyl_rpc_types::kinds::NoParams;
 
 use super::{
@@ -65,7 +65,7 @@ const DIALS: [(usize, usize); MESH_DIALS] = {
 /// `daemon_status` and `peer_connections`, the operator's reads, over its
 /// admin listener.
 struct MeshRelay {
-    rpc: HttpRpc,
+    rpc: DaemonTransport,
     onion: OnionPeer,
 }
 
@@ -201,7 +201,7 @@ fn a_mesh_reads_whole_only_with_every_session_up_and_every_relay_at_the_tip() {
 /// Whether `rpc`'s node holds an outbound Tor session to `onion`
 /// (`peer_connections`: an outbound Tor session names the onion it
 /// dialed; an inbound one names no host).
-async fn holds_outbound_to(rpc: &HttpRpc, onion: OnionPeer) -> bool {
+async fn holds_outbound_to(rpc: &DaemonTransport, onion: OnionPeer) -> bool {
     rpc.call::<wire::PeerConnections>(NoParams)
         .await
         .expect("peer_connections")
@@ -214,7 +214,7 @@ async fn holds_outbound_to(rpc: &HttpRpc, onion: OnionPeer) -> bool {
 }
 
 /// `rpc`'s node's tip height (`daemon_status`).
-async fn tip_height(rpc: &HttpRpc) -> u64 {
+async fn tip_height(rpc: &DaemonTransport) -> u64 {
     rpc.call::<wire::DaemonStatus>(NoParams)
         .await
         .expect("daemon_status")

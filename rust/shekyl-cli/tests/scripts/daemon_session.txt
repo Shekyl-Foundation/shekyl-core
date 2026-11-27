@@ -2,17 +2,14 @@
 # invocation, so the password never sits in this file.
 #
 #   shekyl-cli --json --script-file tests/scripts/daemon_session.txt \
-#     --network testnet --daemon-endpoint 127.0.0.1:<rpc> \
+#     --network testnet --daemon-endpoint 127.0.0.1:<channel-port> --daemon-bundle-file <bundle> \
 #     --wallet-file <dir>/<name>.wallet --wallet-password-file <path>
 #
 # The daemon is on the wallet's own network; a daemon on any other network,
 # regtest included, is refused on identity.
 #
-# `send` is expected to refuse, and the envelope's code says why. On a chain
-# still at genesis it is WALLET_NOT_SYNCED, whatever the recipient: the build
-# refuses before it reads one, and the test beside this file runs the line
-# as written. On a chain with blocks, replace `<recipient>` with a full
-# address on that network; the line then pays from a funded wallet.
+# The test runs the script as written and checks INVALID_RECIPIENT. To pay
+# from a funded wallet, replace <recipient> with a full testnet address.
 balance
 wallet refresh
 chain

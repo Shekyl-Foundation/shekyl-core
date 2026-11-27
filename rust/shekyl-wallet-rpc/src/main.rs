@@ -89,19 +89,11 @@ fn main() -> ExitCode {
 }
 
 /// `config-verify` (IG-Q63): the checks a start makes, with nothing bound or
-/// created. The effective configuration is on standard output. A cleartext
-/// listener off loopback is said here, on standard error, because this path
-/// does not start the logger.
+/// created. The effective configuration is on standard output.
 fn verify(loaded: &Loaded) -> ExitCode {
-    let cleartext = match check_server_config(&loaded.server) {
-        Ok(cleartext) => cleartext,
-        Err(e) => {
-            complain(e);
-            return exit(EXIT_REFUSED);
-        }
-    };
-    if let Some(line) = cleartext {
-        complain(line);
+    if let Err(error) = check_server_config(&loaded.server) {
+        complain(error);
+        return exit(EXIT_REFUSED);
     }
     say(format_args!(
         "{PROGRAM}: configuration verified\n{PROGRAM}: {}\n",
