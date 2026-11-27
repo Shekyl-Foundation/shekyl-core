@@ -4,6 +4,8 @@ globs:
   - "**/*.rs"
   - docs/api/**
   - docs/design/**
+scope: estate
+repos: [core, gui, prism]
 ---
 
 # Absence is not a value

@@ -1,6 +1,8 @@
 ---
 description: Verify dependencies before recommending them. Workspace state, API surface, and security properties get checked at source, not at vibes.
 alwaysApply: true
+scope: estate
+repos: [core, gui, prism]
 ---
 
 # Dependency discipline

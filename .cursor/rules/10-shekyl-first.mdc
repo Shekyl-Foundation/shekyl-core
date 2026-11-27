@@ -1,6 +1,7 @@
 ---
 description: Shekyl core is the priority codebase; the monero-oxide fork is a disposable downstream consumer.
 alwaysApply: true
+scope: core
 ---
 
 # Shekyl-First Development

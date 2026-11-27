@@ -1,6 +1,8 @@
 ---
 description: Scoped work lands where it was scoped. Deferral requires a named blocker, disclosed in the commit that defers — never discovered by later audit.
 alwaysApply: true
+scope: estate
+repos: [core, gui, prism]
 ---
 
 # No lazy deferral

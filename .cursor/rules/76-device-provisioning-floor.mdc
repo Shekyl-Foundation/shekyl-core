@@ -5,6 +5,7 @@ globs:
   - rust/shekyl-relay-privacy/**
   - rust/shekyl-relay/**
   - docs/design/DAEMON_RELAY_PRIVACY.md
+scope: core
 ---
 
 # Device Provisioning Floor

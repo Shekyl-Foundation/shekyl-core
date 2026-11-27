@@ -4,6 +4,7 @@ globs:
   - "**/consensus/**"
   - rust/shekyl-consensus/**
   - rust/shekyl-economics/**
+scope: core
 ---
 
 # Consensus and staking

@@ -5,6 +5,10 @@ globs:
   - rust/shekyl-proofs/**
   - rust/shekyl-fcmp/**
   - rust/shekyl-oxide/**
+  - prism-*/**
+  - shekyl-prism/**
+scope: estate
+repos: [core, prism]
 ---
 
 # Cryptography rules

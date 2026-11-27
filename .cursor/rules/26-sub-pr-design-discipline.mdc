@@ -1,6 +1,7 @@
 ---
 description: A new crate or consensus-boundary change is its own design doc, review, gates and PR (always). Opt-in process disciplines for multi-round per-trait PRs (design rounds + pre-flight). Cite explicitly when scoping consensus-critical or reference-port sub-PR work — not for single-commit refactors or doc-only PRs. Promoted from RandomX v2 Phase 2c.
 alwaysApply: false
+scope: core
 ---
 
 # Sub-PR design discipline

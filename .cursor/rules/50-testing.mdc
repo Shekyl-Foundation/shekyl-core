@@ -11,6 +11,10 @@ globs:
   # produced it.
   - scripts/**
   - .github/workflows/**
+  - src-tauri/tests/**
+  - prism-*/tests/**
+scope: estate
+repos: [core, gui, prism]
 ---
 
 # Testing discipline

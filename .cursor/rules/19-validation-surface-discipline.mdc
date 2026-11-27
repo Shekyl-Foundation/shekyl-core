@@ -1,3 +1,9 @@
+---
+description: Bundle work by validation surface, not by feature topic. Apply when deciding whether two pieces of work share a PR, a commit, a design round or a migration milestone.
+alwaysApply: true
+scope: core
+---
+
 # Validation surface, not feature topic, is the unit
 
 When evaluating whether to bundle two pieces of work into one PR, one

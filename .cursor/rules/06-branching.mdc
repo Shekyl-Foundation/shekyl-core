@@ -1,7 +1,8 @@
 ---
-description: Branch policy for shekyl-core and shekyl-gui-wallet
-globs: ["**/*"]
+description: Branch policy for the Shekyl repositories (shekyl-core, shekyl-gui-wallet, shekyl-prism)
 alwaysApply: true
+scope: estate
+repos: [core, gui, prism]
 ---
 
 # Branch Policy

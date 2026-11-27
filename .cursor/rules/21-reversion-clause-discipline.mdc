@@ -1,6 +1,8 @@
 ---
 description: When the disposition for a question is "we don't need this now," the right shape is reject-now-with-named-reopening-criteria, not refuse-forever and not pre-provision-for-flexibility. Optionality without concrete need is debt, not flexibility.
 alwaysApply: true
+scope: estate
+repos: [core, gui, prism]
 ---
 
 # Reversion-clause discipline

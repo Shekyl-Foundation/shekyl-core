@@ -1,6 +1,7 @@
 ---
 description: Named exception to 06-branching.mdc for PRs whose work touches a consensus-rule boundary. Four objectively-testable criteria. Opt-in only — PRs that do not explicitly cite this rule cannot invoke it. First instance is LWMA-1 Phase 4.
 alwaysApply: false
+scope: core
 ---
 
 # Consensus-atomic cutovers

@@ -4,6 +4,8 @@ globs:
   - .github/workflows/**
   - scripts/**
   - "**/*.rs"
+scope: estate
+repos: [core, gui, prism]
 ---
 
 # A gate must assert its own subject exists

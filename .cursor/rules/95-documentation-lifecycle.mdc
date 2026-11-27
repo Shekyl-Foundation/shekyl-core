@@ -1,6 +1,8 @@
 ---
 description: Document classes, status banners, archive-or-contract on plan close, FOLLOWUPS one-liners, CHANGELOG scope, three work-item targets.
 alwaysApply: true
+scope: estate
+repos: [core, gui, prism]
 ---
 
 # Documentation lifecycle

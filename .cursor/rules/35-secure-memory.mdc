@@ -2,6 +2,11 @@
 description: Secure memory wiping conventions for cryptographic secrets.
 globs:
   - rust/**
+  - src-tauri/**
+  - prism-*/**
+  - shekyl-prism/**
+scope: estate
+repos: [core, gui, prism]
 ---
 
 # Secure Memory Wiping

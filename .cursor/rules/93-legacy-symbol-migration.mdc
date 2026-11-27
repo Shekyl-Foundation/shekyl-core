@@ -5,6 +5,12 @@ globs:
   - "contrib/**"
   - "scripts/**"
   - ".github/**"
+  - "src/**"
+  - "src-tauri/**"
+  - "prism-*/**"
+  - "shekyl-prism/**"
+scope: estate
+repos: [core, gui, prism]
 ---
 
 # Legacy symbol naming

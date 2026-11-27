@@ -1,6 +1,8 @@
 ---
 description: shekyl-core is public. Foundation host identities, operational state, and local filesystem paths belong in the private shekyl-dev repo. Name the role, never the host.
 alwaysApply: true
+scope: estate
+repos: [core, gui, prism]
 ---
 
 # Internal-information boundary

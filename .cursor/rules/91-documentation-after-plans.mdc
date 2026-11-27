@@ -1,6 +1,8 @@
 ---
 description: Documentation must be updated after executing a Plan; the doc update is always the final task.
 alwaysApply: true
+scope: estate
+repos: [core, gui, prism]
 ---
 
 # Documentation After Plans

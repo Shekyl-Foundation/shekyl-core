@@ -1,6 +1,8 @@
 ---
 description: The input grammar (IG-1…IG-15) — every identifier a person types or a script depends on, in every shipped binary (command-line flags, config-file keys, shekyl-cli command words, keywords, units, REJECTED names, and RPC method, parameter and reply-field names). Apply when adding, renaming, or deleting any option, key, command word or keyword, when writing a refusal a user reads, and when reviewing a name table. The glossary tree and the name tables live in docs/design/INPUT_GRAMMAR.md.
 alwaysApply: true
+scope: estate
+repos: [core, gui, prism]
 ---
 
 # The input grammar (IG-1…IG-15)
