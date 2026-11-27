@@ -3,7 +3,8 @@
 **Status:** RULED IN PART — Round 0 posed 2026-10-15; **BD-Q1, BD-Q2, BD-Q3
 and BD-Q5 ruled 2026-10-16** (Rick); **how a plan ends ruled 2026-11-26**
 (§3.6), and **the plan's maximum wait ruled 2026-11-27: one draw
-window** (§3.6). **BD-Q4, the window, is open**, with the inputs it needs
+window** (§3.6); **the slice's own choices and the `stake_in` fee gate
+ruled 2026-11-27** (§3.6, §3.7). **BD-Q4, the window, is open**, with the inputs it needs
 first (§3). The implementation slice (BD-Q2, BD-Q3, §3.6, the BD-Q5
 deletion) is built against the window as a named constant and does not
 wait for it ([`26-sub-pr-design-discipline`](../../.cursor/rules/26-sub-pr-design-discipline.mdc));
@@ -443,8 +444,8 @@ actor wipe behind the funded gate, then the durable retired record), and
 only then is the ended record dropped. No draw is kept: there is no second
 plan for a funding.
 
-**Proposed by the slice, not yet ruled** (each built as stated, each Rick's
-to confirm or change):
+**The slice's own choices — RULED 2026-11-27 (Rick, on #1562), each as
+built:**
 
 - **A spent-elsewhere remainder is drained.** The ruling says ending 2 has
   nothing to drain; a partly spent multi-output funding would leave some.
@@ -453,6 +454,8 @@ to confirm or change):
 - **The fill classification** in the table above, with
   `AssemblyFailed` (any assembly failure the wallet cannot name) counted as
   **limited**, so a plan that can never be assembled ends at its maximum.
+  Each cause the wallet can name keeps its own outcome; a node fault is the
+  temporary `NodeUnreachable` wait and never ends a plan.
 - **`unstake` is the owner's withdrawal verb**: it withdraws a plan and
   answers "confirming" (`-29515`) for a signed post; the wallet RPC's
   `UnstakeResult` gains `WITHDRAWN` (contract 0.27.0).
@@ -462,9 +465,12 @@ to confirm or change):
   whose re-sign stays blocked for a limited reason ends at the maximum
   wait from the due it was signed at, as its plan would have; it was never
   sent, so no bond can land from it.
-- **An owed drain blocks a new stake** wallet-wide: `first_stake` refuses as
-  in flight while an ended plan's drain is owed, so the next persona's
-  funding never overlaps the last one's drain.
+- **An owed drain blocks a new stake** wallet-wide, so the next persona's
+  funding never overlaps the last one's drain. The refusal names its
+  reason: `STAKE_FUNDS_RETURNING` (-29545), not the in-flight -29501. The
+  consequence: a drain has no maximum, so while its fee stays above the
+  funding it holds, the wallet cannot stake until the fee falls. The
+  `stake_in` gate (§3.7) makes that rare.
 - **The market posture can be planned** (`PlannedPosture::Market`), and
   `fill_market` is in production builds, so the emission walk's market-bond
   fixture keeps running; the production request still refuses the market
@@ -489,6 +495,26 @@ every `P`-lane spend pays the fee over the `P`-lane weight ceiling
 own weight, `CEN_I4_INPUT_CAP_DERIVATION.md`'s P-lane fee ruling,
 2026-11-23) removes that mark. This slice lands ahead of PR A, so until PR
 A lands an ended plan's drain is recognisable by its fee.
+
+### 3.7 The `stake_in` fee gate — RULED 2026-11-27 (Rick); lands with PR A
+
+`stake_in` accepts any amount today, zero included (`wallet_rpc.yaml`,
+`stake_in`). A persona funded below what can bond never bonds: the staker
+pays for a funding transfer and then for its drain, and gets nothing.
+
+- **The gate tests the user's amount alone,** never the amount plus cover.
+  A gate that read the cover draw would let a staker retry until it passed,
+  which skews the cover distribution; the cover design already guards
+  against that.
+- **The amount required** is the bond for the requested shards, the bond
+  post's fee at today's floor, and the exit fee. It reads the fee function
+  PR A lands (the fee on each transaction's own weight), so it is built
+  with PR A, not before it.
+- **It is not a guarantee.** The fee can rise before the due block; the
+  plan's wait rule and its maximum (one draw window) cover that.
+- **The refusal is local to the wallet** and puts nothing on chain. It is a
+  new `stake_in` code, which supersedes the contract's "stake_in mints no
+  new codes" pin (WI-RPC-5 F-2).
 
 ### BD-Q4 — How wide is the window? — OPEN
 

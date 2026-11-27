@@ -21,7 +21,6 @@ use shekyl_curve_tree::{
 };
 use shekyl_engine_file::WalletFile;
 use shekyl_engine_state::pending_post_block::{PendingBondPlan, PlannedPosture, SealAdmission};
-use shekyl_engine_state::PendingPostBlock;
 use shekyl_rpc_transport::DaemonTarget;
 use shekyl_types::{BlockHeight, GlobalOutputIndex, PSlot};
 use shekyl_units::AtomicUnits;
@@ -41,6 +40,7 @@ use super::pscan::seal_basis::{load_seal_basis, SealBasisError};
 use super::pscan::start::{
     load_pscan_state_for_engine, pending_post_store_for_engine, WalletFilePendingSealStore,
 };
+use shekyl_engine_state::PendingPostBlock;
 
 /// Structural weight ceiling for the `P`-lane fee derivation: the maximum
 /// predicted weight of any legal `P`-lane spend — up to
@@ -205,6 +205,21 @@ fn engine_failure_detail(e: &StakeEngineError) -> String {
     }
 }
 
+/// The first-stake refusal the pending-post block owes, if any. Any stake
+/// of any stage refuses: the check reads `stake_slots`, which spans every
+/// stage, so a stage added later is refused too. An ended stake whose funds
+/// are still returning, with nothing else in flight, is its own reason
+/// (`ARCHIVAL_BOND_POST_DELAY.md` §3.6, ruled 2026-11-27).
+pub(super) fn in_flight_refusal(block: &PendingPostBlock) -> Option<FirstStakeError> {
+    if block.stake_slots().is_empty() {
+        None
+    } else if block.plans().is_empty() && block.posts().is_empty() {
+        Some(FirstStakeError::EndedStakeReturning)
+    } else {
+        Some(FirstStakeError::BondInFlight)
+    }
+}
+
 /// A post-persist assembly failure on the first-stake surface: an unsaved
 /// seal and the signer's own fault keep their types, and anything else
 /// renders through the amount-free sanitizer.
@@ -315,10 +330,18 @@ pub enum FirstStakeError {
     /// then retry.
     #[error("staking recovered this session: close and reopen the wallet to finish recovery")]
     RecoveredPendingReopen,
-    /// A stake is already in flight: a plan, a post awaiting dispatch, or an
-    /// ended plan whose funds are returning. The dispatch driver finishes it.
+    /// A stake is already in flight: a plan waiting for its due block, or a
+    /// signed post awaiting its send. The dispatch driver finishes it.
     #[error("a stake is already in flight")]
     BondInFlight,
+    /// A stake ended without bonding and its funds are still returning to
+    /// the principal balance: its drain is owed. A new persona's funding
+    /// never overlaps the last one's drain (`ARCHIVAL_BOND_POST_DELAY.md`
+    /// §3.6, ruled 2026-11-27). The drain has no maximum, so while the
+    /// network fee stays above what the funds hold, staking waits for the
+    /// fee to fall.
+    #[error("an ended stake's funds are still returning to the principal balance")]
+    EndedStakeReturning,
     /// A confirmed bond post exists on-chain for **any** recorded bonded
     /// persona: the wallet is already staking; a second call must not mint
     /// a second first-stake (SA-DQ-1 idempotency). Deliberately
@@ -866,18 +889,18 @@ where
         // Idempotency / W2 split (§5.1 + §5.7 W2) — every guard is
         // **wallet-level**, keyed on the wallet's own recorded state rather
         // than the caller-passed slot, so no slot value can route around a
-        // refusal. A plan, a signed post, or an ended plan is in flight —
-        // refuse. A confirmed on-chain post for any bonded persona makes this
+        // refusal. A plan or a signed post is in flight — refuse; an ended
+        // plan whose funds are returning refuses with its own reason. A confirmed on-chain post for any bonded persona makes this
         // wallet an active staker — refuse (a second call must not mint a
         // second first-stake). A durable slot with neither a record nor a
         // confirmation is the W2 phantom — resume, and only at a recorded
         // bonded slot.
-        let pending_exists = store
-            .read(PendingPostBlock::has_stake_in_flight)
+        let refusal = store
+            .read(in_flight_refusal)
             .await
             .map_err(|e| FirstStakeError::State(format!("pending read: {e}")))?;
-        if pending_exists {
-            return Err(FirstStakeError::BondInFlight);
+        if let Some(refusal) = refusal {
+            return Err(refusal);
         }
         let resumed = if staking.staking_enabled {
             let matches = load_pscan_state_for_engine(self_arc.clone())

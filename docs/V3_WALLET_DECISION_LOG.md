@@ -7632,13 +7632,16 @@ plan ends; `ARCHIVAL_BOND_POST_DELAY.md` §3, §3.6).
   not used.
 - **The drain owed is one persisted state**, written in the same save that
   ends the plan, and retried without a maximum.
-- **Proposed by the slice, awaiting Rick** (`ARCHIVAL_BOND_POST_DELAY.md`
-  §3.6 lists them): draining a spent-elsewhere remainder; the fill-failure
-  classes, with an unnamed assembly failure limited; `unstake` as the
-  withdrawal verb; `start_pscan` taking the wallet's node; a never-sent post
-  ending at the maximum; an owed drain blocking a new stake; the market
+- **The slice's own choices, ruled 2026-11-27 as built**
+  (`ARCHIVAL_BOND_POST_DELAY.md` §3.6 lists them): draining a
+  spent-elsewhere remainder; the fill-failure classes, with an unnamed
+  assembly failure limited and each named cause keeping its own outcome;
+  `unstake` as the withdrawal verb; `start_pscan` taking the wallet's node; a
+  never-sent post ending at the maximum; an owed drain blocking a new stake,
+  refused with its own reason (`STAKE_FUNDS_RETURNING`, -29545); the market
   posture plannable; absence counted only once scanned; an ending
-  deactivating its persona and retiring its slot in the same session.
+  deactivating its persona and retiring its slot in the same session; the
+  wait reason on the row that waits.
 
 **Why.** Signing at the request leaked the request time through the
 reference age and sent most posts after they could land. A persona that

@@ -888,6 +888,7 @@ fn first_stake_rpc_error(error: shekyl_engine_core::FirstStakeError) -> WalletRp
     use shekyl_engine_core::FirstStakeError as E;
     match error {
         E::BondInFlight => WalletRpcError::StakeInFlight,
+        E::EndedStakeReturning => WalletRpcError::StakeFundsReturning,
         E::AlreadyStaked => WalletRpcError::AlreadyStaked,
         E::Funding(detail) => WalletRpcError::StakeNotReady { detail },
         // Neither -29500 ("fund and retry" — funding more worsens
@@ -1282,8 +1283,8 @@ mod tests {
 
     use serde_json::json;
     use shekyl_crypto_pq::wallet_envelope::KdfParams;
-    use shekyl_engine_core::Network;
     use shekyl_engine_core::__test_helpers::make_staker_for_test;
+    use shekyl_engine_core::Network;
     use tokio::sync::Mutex;
 
     /// The fastest valid Argon2 profile (`m_log2` lower bound 8, `t`/`p` = 1) —

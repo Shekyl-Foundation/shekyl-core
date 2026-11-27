@@ -932,3 +932,61 @@ fn p_lane_ceiling_covers_the_heaviest_legal_shape() {
          re-derive reserve.rs, do not loosen this bound"
     );
 }
+
+/// An owed drain refuses a new stake with its own reason, not as a stake in
+/// flight (`ARCHIVAL_BOND_POST_DELAY.md` §3.6, ruled 2026-11-27). A plan
+/// still refuses as in flight, and so does a plan beside an ended one.
+/// Red edit: answer an ended plan with `BondInFlight`.
+#[test]
+fn an_owed_drain_refuses_a_new_stake_with_its_own_reason() {
+    use shekyl_engine_state::{PendingBondPlan, PendingPostBlock, PlanEnding, PlannedPosture};
+    use shekyl_types::{BlockCount, ChainCount, GlobalOutputIndex, PCanonicalId, PSlot};
+
+    let plan = |byte: u8| PendingBondPlan {
+        p_slot: PSlot::from_raw(u32::from(byte)),
+        persona: PCanonicalId::from_bytes([byte; 32]),
+        posture: PlannedPosture::SupportCompleteTree,
+        draw: BlockCount::from_raw(20),
+        requested_at: ChainCount::from_raw(1_000),
+        funding_gindexes: vec![GlobalOutputIndex::from_raw(u64::from(byte))],
+        funded_through: BlockHeight::from_raw(1_000),
+        wait: None,
+    };
+    let seal = |block: &mut PendingPostBlock, byte: u8| {
+        let g = block.generation();
+        assert_eq!(
+            block.seal_plan(plan(byte), g),
+            shekyl_engine_state::pending_post_block::SealAdmission::Admit
+        );
+    };
+    let refusal = |block: &PendingPostBlock| super::in_flight_refusal(block).map(|e| e.to_string());
+
+    let mut block = PendingPostBlock::empty();
+    assert_eq!(refusal(&block), None, "nothing in flight, nothing owed");
+
+    seal(&mut block, 1);
+    assert!(matches!(
+        super::in_flight_refusal(&block),
+        Some(FirstStakeError::BondInFlight)
+    ));
+
+    let ended = block.end_plan(
+        &PCanonicalId::from_bytes([1; 32]),
+        PlanEnding::Withdrawn,
+        BlockHeight::from_raw(1_010),
+    );
+    assert!(ended.is_some(), "the plan ended");
+    assert!(matches!(
+        super::in_flight_refusal(&block),
+        Some(FirstStakeError::EndedStakeReturning)
+    ));
+
+    seal(&mut block, 2);
+    assert!(
+        matches!(
+            super::in_flight_refusal(&block),
+            Some(FirstStakeError::BondInFlight)
+        ),
+        "a stake in flight is the first reason"
+    );
+}

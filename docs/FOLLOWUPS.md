@@ -11,6 +11,10 @@ There is no V3.1 / V3.2 / V3.x release train.
 
 ## Pre-genesis
 
+- **`stake_in` refuses an amount that cannot bond (ruled 2026-11-27).** The gate tests the user's amount alone, against the bond for the requested shards, the bond post's fee at today's floor and the exit fee, with its own `stake_in` code (`ARCHIVAL_BOND_POST_DELAY.md` §3.7). It reads the fee function PR A lands, so it is built with PR A. Falsify by: a `stake_in` of less than one bond plus its fees that the wallet accepts after PR A merges.
+  - Owner: PR A, the fee on each transaction's own weight — [`ARCHIVAL_BOND_POST_DELAY.md`](design/ARCHIVAL_BOND_POST_DELAY.md) §3.7
+  - Target: pre-genesis
+
 - **The Windows release archive is not yet independently reproducible: two gitian builds of one commit differ in 22 unloaded COFF symbols.** rustc generates the raw-dylib import libraries for `windows-link` 0.2.1 in a randomly named temporary folder, that name lands in the symbols, and the PE checksum follows; the loaded image is identical, and the zip's file times are normalized. The 1.97 toolchain PR finds out whether 1.97 still builds those import libraries the same way and fixes the cause there; release builds keep their symbol tables on every platform, so stripping is not the fix.
   - Owner: the 1.97 toolchain PR, against the release-archive contract — [`TOR_BUNDLE_DISTRIBUTION.md`](design/TOR_BUNDLE_DISTRIBUTION.md) (TB-6)
   - Target: pre-genesis (gate: two Windows gitian builds of one commit proven byte-identical, the `RELEASE_PROMOTION.md` §4 pre-flight)

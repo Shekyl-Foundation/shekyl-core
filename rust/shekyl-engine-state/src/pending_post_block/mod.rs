@@ -646,14 +646,6 @@ impl PendingPostBlock {
         &self.ended_plans
     }
 
-    /// Whether the wallet has a stake in flight of any stage: a plan, a
-    /// signed post, or an ended plan still draining. The stake entry's
-    /// in-flight refusal reads this one predicate, so a stage added later
-    /// cannot be missed by it.
-    pub fn has_stake_in_flight(&self) -> bool {
-        !self.plans.is_empty() || !self.posts.is_empty() || !self.ended_plans.is_empty()
-    }
-
     /// The slots of every stake in flight, of any stage: the open-time
     /// phantom reconcile keeps these slots, because each one's persona must
     /// stay derivable (a plan to sign, a post to settle, a drain to sign).
@@ -2352,7 +2344,7 @@ mod tests {
                 .map(GlobalOutputIndex::from_raw)
                 .collect()
         );
-        assert!(block.has_stake_in_flight());
+        assert!(!block.plans().is_empty() || !block.posts().is_empty());
         let g = block.generation();
         assert_eq!(
             block.seal_plan(plan(0xA1, &[3]), g),
@@ -2470,7 +2462,7 @@ mod tests {
             let ended = block.end_plan(&persona, ending, AT).expect("the plan ends");
             assert_eq!(ended.ending, ending);
             assert!(block.plans().is_empty() && block.reserved_gindexes().is_empty());
-            assert!(block.has_ended_plan_for(&persona) && block.has_stake_in_flight());
+            assert!(block.has_ended_plan_for(&persona));
             assert_eq!(block.generation(), g + 1, "a released reservation moves it");
             let written = block.outcomes().last().expect("an outcome");
             assert_eq!((written.outcome, written.sent), (outcome, false));
@@ -2533,7 +2525,7 @@ mod tests {
         assert!(block.drop_retired_plans(&BTreeSet::new()).is_empty());
         let retired: BTreeSet<PCanonicalId> = [persona].into_iter().collect();
         assert_eq!(block.drop_retired_plans(&retired).len(), 1);
-        assert!(!block.has_stake_in_flight() && block.stake_slots().is_empty());
+        assert!(block.stake_slots().is_empty());
     }
 
     /// A blocked attempt's reason is stored on the row that is waiting, and

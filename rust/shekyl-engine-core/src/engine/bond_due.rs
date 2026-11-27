@@ -117,6 +117,8 @@ impl DueBlock {
             StakeEngineError::Assembly(BondAssemblyError::OutputNotYetDrained { .. }) => {
                 Self::Wait(PlanWait::WalletBehind)
             }
+            // A node fault is named and temporary: it never ends a plan.
+            StakeEngineError::Daemon(_) => Self::Wait(PlanWait::NodeUnreachable),
             other => Self::assembly("bond assembly", other),
         }
     }

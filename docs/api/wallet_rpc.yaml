@@ -346,8 +346,8 @@
 #                            operation that reaches the daemon)
 #   -29300..-29399           proofs (RESERVED range)
 #   -29400..-29499           transfers / history queries
-#   -29500..-29599           staking (-29500..-29506, -29512 and
-#                            -29538..-29544 (the fill, WSS-Q4) live on
+#   -29500..-29599           staking (-29500..-29506, -29512,
+#                            -29538..-29544 (the fill, WSS-Q4) and -29545 live on
 #                            `stake`; -29507..-29511 live on `drain`
 #                            (WI-RPC-5); -29513..-29522 and -29528 live on
 #                            `unstake` and -29523..-29527 and -29529 on
@@ -620,6 +620,8 @@ info:
   # planned stake is in_flight `pending`, and its reason says what a due
   # stake is waiting on; outcomes gain `withdrawn`, `unbondable` and
   # `waited_out`, each returning the stake's funds to the principal balance.
+  # stake gains -29545 STAKE_FUNDS_RETURNING: while an ended stake's funds
+  # are returning, a new stake refuses with that reason, not -29501.
   # api_version stays 1.
   version: 0.27.0
   description: >
@@ -1036,6 +1038,7 @@ components:
         - -29542   # STAKE_BODY_STORE_FAILED
         - -29543   # STAKE_DAEMON_SYNCING
         - -29544   # STAKE_DAEMON_UNREACHABLE
+        - -29545   # STAKE_FUNDS_RETURNING
         - -29800   # MSG_SIG_VERIFY_FAILED
         - -29801   # MSG_SIG_CORRUPTED
         - -29802   # MSG_SIG_UNSUPPORTED_SCHEME
@@ -1616,9 +1619,10 @@ components:
                                           (not a staker, or no active
                                           persona) — stake_in mints no new
                                           codes (WI-RPC-5 F-2 pin)
-          -29501 STAKE_IN_FLIGHT          stake: a signed bond post is
-                                          already sealed awaiting its
-                                          scheduled broadcast
+          -29501 STAKE_IN_FLIGHT          stake: a stake is in flight, a
+                                          plan waiting for its due block or
+                                          a signed bond post awaiting its
+                                          send
           -29502 ALREADY_STAKED           stake: a confirmed bond exists
                                           for a bonded persona (idempotent
                                           refusal)
@@ -1981,6 +1985,11 @@ components:
                                           while filling the body store
                                           (data.detail). Nothing was
                                           posted; check the node and retry
+          -29545 STAKE_FUNDS_RETURNING    stake: the last stake ended
+                                          without bonding and its funds are
+                                          still returning to the principal
+                                          balance; staking again waits until
+                                          they arrive
           -29800 MSG_SIG_VERIFY_FAILED    verify_message: well-formed,
                                           checksum-intact, and NOT a valid
                                           signature by that address over
