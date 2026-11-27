@@ -75,6 +75,7 @@ on:
       # change, which is under the same pattern.
       - "rust/**"
       - ".github/workflows/schema-snapshot.yml"
+      - "scripts/ci/snapshot_header_only.py"
   # The push run on `dev` saves the build cache the pull requests restore
   # (the cache step below), and tests the snapshots on what the merges made.
   push:
@@ -227,35 +228,29 @@ jobs:
           echo "${CHANGED}" | sed 's/^/  /'
           echo
 
-          # A snapshot's `#` lines are its generated header, not its
-          # format: a change confined to them (a reworded header, a
-          # renumbered rule citation) moves no byte of any encoding and
-          # needs no version bump. Every family keeps `#` to its header
-          # (the chain store's, the pool's and the peer list's three
-          # lines; the wallet's snapshots are JSON and have none), so a
-          # snapshot whose body, the file without its `#` lines, is the
-          # same at the merge base and the head leaves the list below.
-          # A snapshot added or deleted always stays.
+          # A snapshot's generated header, its leading run of `#` lines, is
+          # not its format: a change confined to it (a reworded header, a
+          # renumbered rule citation) moves no byte of any encoding and owes
+          # no version bump (ruled 2026-11-27). The script prints each
+          # changed snapshot whose body is the same at the merge base and
+          # the head, and those leave the list below; an added or deleted
+          # snapshot always stays. A `#` line after a snapshot's first body
+          # line is body, so changing it still owes the bump, and the script
+          # refuses any snapshot at the head that has one. Its selftest runs
+          # first, so the filter is tested before it is trusted.
+          python3 scripts/ci/snapshot_header_only.py --selftest
           MERGE_BASE=$(git merge-base "${BASE_SHA}" "${HEAD_SHA}")
-          snap_body() { git show "$1:$2" | grep -v '^#' || true; }
-          KEEP=""
-          HEADER_ONLY=""
-          while IFS= read -r f; do
-            [ -n "$f" ] || continue
-            if [[ "$f" == *.snap ]] \
-               && git cat-file -e "${MERGE_BASE}:$f" 2>/dev/null \
-               && git cat-file -e "${HEAD_SHA}:$f" 2>/dev/null \
-               && [ "$(snap_body "${MERGE_BASE}" "$f")" = "$(snap_body "${HEAD_SHA}" "$f")" ]; then
-              HEADER_ONLY="${HEADER_ONLY}  ${f}"$'\n'
-              continue
-            fi
-            KEEP="${KEEP}${f}"$'\n'
-          done <<< "${CHANGED}"
-          CHANGED="${KEEP%$'\n'}"
+          # An assignment, not a pipe: the script's exit is the verdict
+          # (rule 46), and `set -e` stops the step on a refusal.
+          mapfile -t CHANGED_LIST <<< "${CHANGED}"
+          HEADER_ONLY=$(python3 scripts/ci/snapshot_header_only.py \
+            --base "${MERGE_BASE}" --head "${HEAD_SHA}" "${CHANGED_LIST[@]}")
           if [ -n "${HEADER_ONLY}" ]; then
             echo "Snapshots whose only change is their # header (no format change, no bump owed):"
-            printf '%s' "${HEADER_ONLY}"
+            echo "${HEADER_ONLY}" | sed 's/^/  /'
             echo
+            # grep exits 1 when every changed file was header-only; 2 is an error.
+            CHANGED=$(grep -Fxv -f <(echo "${HEADER_ONLY}") <<< "${CHANGED}" || [ $? -eq 1 ])
           fi
 
           FAIL=0
