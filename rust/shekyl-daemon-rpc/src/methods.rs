@@ -262,7 +262,7 @@ pub const RESTRICTED_BLOCK_HEADER_RANGE: u64 = 1000;
 /// How many transactions a bounded connection may name in one call.
 pub const RESTRICTED_TRANSACTIONS_COUNT: usize = 100;
 /// How many key images a bounded connection may name in one call.
-pub const RESTRICTED_SPENT_KEY_IMAGES_COUNT: usize = 5000;
+pub use shekyl_rpc_types::wire::chain::MAX_SPENT_KEY_IMAGES as RESTRICTED_SPENT_KEY_IMAGES_COUNT;
 
 /// The refusal a read about peers earns from a daemon started offline: it
 /// has nothing to describe by configuration (IG-Q85). `offline` on

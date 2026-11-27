@@ -479,7 +479,7 @@ async fn a_non_staker_reads_not_staker_never_nothing_staked() {
     // The daemon address is never dialed — the gate returns before transport.
     let err = StakeFacade::unstake(
         arc.clone(),
-        &shekyl_rpc_transport::DaemonTarget::address("http://127.0.0.1:1"),
+        &shekyl_rpc_transport::DaemonTarget::fixture_address("http://127.0.0.1:1"),
     )
     .await
     .expect_err("a non-staker cannot unstake");
@@ -530,7 +530,7 @@ async fn a_staker_with_nothing_bonded_is_not_collapsed_to_not_staker() {
 
     let err = StakeFacade::unstake(
         arc.clone(),
-        &shekyl_rpc_transport::DaemonTarget::address("http://127.0.0.1:1"),
+        &shekyl_rpc_transport::DaemonTarget::fixture_address("http://127.0.0.1:1"),
     )
     .await
     .expect_err("nothing is bonded to exit");

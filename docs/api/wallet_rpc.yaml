@@ -608,7 +608,12 @@ info:
   # own address-derivation corpus before it derives anything, and refuses
   # when the check fails, naming the build's platform in data.platform.
   # api_version stays 1.
-  version: 0.25.0
+  # 0.26.0: authenticated channel failures have distinct codes. Enrollment
+  # and revocation carry data.fingerprint and the node operator's command.
+  # A call that exceeds its own bound is -29225 CHANNEL_BUDGET, distinct
+  # from a connection the node closed (-29223) and from a revocation
+  # (-29226 CHANNEL_REVOKED).
+  version: 0.26.0
   description: >
     JSON-RPC 2.0 interface served by `shekyl-wallet-rpc` (Phase 4 of the
     wallet rewrite; replaces the C++ `wallet_rpc_server`). One wallet-bearing
@@ -959,6 +964,18 @@ components:
         - -29212   # DAEMON_GRANT_REFUSED
         - -29213   # DAEMON_PEER_CHECK_FAILED
         - -29214   # DAEMON_IS_A_SERVICE
+        - -29215   # CHANNEL_NOT_ENROLLED
+        - -29216   # CHANNEL_NOT_THE_DAEMON
+        - -29217   # CHANNEL_NOT_RECOGNISED
+        - -29218   # CHANNEL_UNREACHABLE
+        - -29219   # CHANNEL_TIMED_OUT
+        - -29220   # CHANNEL_BUSY
+        - -29221   # CHANNEL_POOL_FULL
+        - -29222   # CHANNEL_SESSION_CAP
+        - -29223   # CHANNEL_CLOSED
+        - -29224   # CHANNEL_LOCAL
+        - -29225   # CHANNEL_BUDGET
+        - -29226   # CHANNEL_REVOKED
         - -29300   # PROOF_MALFORMED
         - -29301   # PROOF_TX_SECRET_UNAVAILABLE
         - -29302   # PROOF_NO_PROVABLE_OUTPUTS
@@ -1503,6 +1520,18 @@ components:
                                           rendezvous. A security failure:
                                           the wallet did not connect and
                                           does not retry
+          -29215 CHANNEL_NOT_ENROLLED  Enroll this wallet on your node with: shekyl-cli rpc client add <fingerprint> wallet
+          -29216 CHANNEL_NOT_THE_DAEMON  The daemon proof does not match daemon-bundle-file. Check the endpoint and obtain the bundle from your node.
+          -29217 CHANNEL_NOT_RECOGNISED  The node closed before sending its proof. Check daemon-bundle-file, the network and the channel version against your node.
+          -29218 CHANNEL_UNREACHABLE  The channel endpoint did not answer. Check the node, daemon-endpoint and daemon-socks.
+          -29219 CHANNEL_TIMED_OUT  The channel handshake timed out. Check the connection to your node.
+          -29220 CHANNEL_BUSY  The node is busy. Try again shortly.
+          -29221 CHANNEL_POOL_FULL  All this wallet's channel connections are busy. Wait for an outstanding call to finish.
+          -29222 CHANNEL_SESSION_CAP  This account has reached the node's channel session limit. Close an unused client session.
+          -29223 CHANNEL_CLOSED  The node closed the connection during the call. Check its status before repeating a submission.
+          -29224 CHANNEL_LOCAL  The wallet could not open the channel. Check its key and daemon bundle files and the local log.
+          -29225 CHANNEL_BUDGET  The call exceeded its time limit. The node may still be working. Check its status before repeating a submission.
+          -29226 CHANNEL_REVOKED  The node revoked this client's enrollment. Enroll it again with: shekyl-cli rpc client add <fingerprint> wallet. data: {"fingerprint"}
           -29214 DAEMON_IS_A_SERVICE      any daemon operation: this
                                           computer's node runs as a
                                           service. data: {"view": address

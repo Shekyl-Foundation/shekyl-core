@@ -342,7 +342,7 @@ The full list, generated from the option table, is
 | Option | Description |
 |--------|-------------|
 | `--wallet-dir <dir>` | Directory of wallet files. Default: `wallets/<network>/` in the account's root |
-| `--rpc-listen <ip:port>` | Listen address (default `127.0.0.1:29500`; IPv6 as `[::1]:29500`). Hostnames are not resolved, and a wildcard is refused. An address off this machine needs a login |
+| `--rpc-listen <ip:port>` | Listen address (default `127.0.0.1:29500`; IPv6 as `[::1]:29500`). Hostnames are not resolved, and a wildcard is refused. Only loopback addresses are accepted |
 | `--rpc-socket-file <path>` | A Unix socket in place of `rpc-listen`, in a directory that is this account's alone (made 0700 if missing). Not on Windows |
 | `rpc-username`, `rpc-password` | HTTP basic authentication, both or neither, in the configuration file only |
 | `--daemon-endpoint <ip:port or onion:port>` | The daemon. Unset, this computer's node on `--network`; a node run as a service is refused with its view listener as the value to set (`-29214`) |

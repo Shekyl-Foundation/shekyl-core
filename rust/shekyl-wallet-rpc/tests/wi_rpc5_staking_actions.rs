@@ -46,10 +46,7 @@ fn state(dir: &TempDir) -> Arc<AppState> {
         tenants: tokio::sync::Mutex::new(TenantState::new(
             dir.path().to_path_buf(),
             Network::Stagenet,
-            DaemonTarget::Address {
-                url: "http://127.0.0.1:1".into(),
-                proxy: None,
-            },
+            DaemonTarget::fixture_with_proxy("http://127.0.0.1:1".into(), None),
             shekyl_wallet_rpc::server::TorFile::discover(),
         )),
         auth: Arc::new(AuthConfig::Disabled),

@@ -58,11 +58,8 @@ pub(crate) use super::pending_store::{PendingPostStore, PendingSealStore};
 // ---------------------------------------------------------------------------
 
 /// The driver's submit seam: `P`-bound bytes in, verdict out. The production
-/// impl routes through `BroadcastSubmitter::submit_bound` (the single choke
-/// path; posture → submitter binding per `for_posture`); tests script
-/// verdicts. Per-dispatch construction is the impl's concern — under the ②
-/// posture each persona gets its own circuit-bound submitter (D1
-/// independent-submitter invariant), which is invisible at this seam.
+/// implementation hands durable bytes to the wallet's node through
+/// `BroadcastSubmitter::submit_bound`. Tests supply the verdict.
 pub(crate) trait BondBroadcast: Send + Sync + 'static {
     /// Submit the bound bytes; the pairing check and transport live behind
     /// the seam.

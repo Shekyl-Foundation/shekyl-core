@@ -15,12 +15,8 @@
 //! struct exists here (§7.3 decode-locus pin: the §2 step-7 self-check must
 //! consume the same decoded values the assembly consumed).
 //!
-//! Transport: [`fetch_emission_claim_source`] is generic over
-//! [`Rpc`], but persona-side callers ride the persona's transport
-//! (`PTorClient`/`PRpc`) — **never** the principal's daemon session (§7.4
-//! transport pin; the claim orchestrator's caller supplies the transport
-//! and enforces this). The request carries `p_id` **only**: no epoch selector,
-//! no range, no claimable-subset encoding (§7.2 transport cause-blindness).
+//! The wallet asks its operator-owned daemon for the persona's on-chain claim data.
+//! The request carries only `p_id`. It carries no epoch range or claimable subset.
 //!
 //! Untrusted-daemon posture (the daemon's reply is untrusted bytes): the reply
 //! decodes strictly against the method table's type — a member absent, of the
@@ -522,11 +518,7 @@ impl EmissionClaimSource {
 /// The request carries `p_id` **only** — the §7.2 watch item: no field of
 /// this request can encode an epoch selection or the claimable subset, so
 /// the daemon-visible query is identical for every claimant regardless of
-/// serve history. Persona-side callers pass the persona transport
-/// (`PRpc`), never the principal's daemon session (§7.4).
-///
-/// Production callers, both persona-side and both bound by the §7.4
-/// transport pin above:
+/// serve history. Both production callers read from the wallet's daemon.
 ///
 /// - [`orchestrate_emission_claim`](super::claim_orchestrator::orchestrate_emission_claim),
 ///   step 1 of the claim pipeline (the consumer the PR-1/PR-2 staging allows

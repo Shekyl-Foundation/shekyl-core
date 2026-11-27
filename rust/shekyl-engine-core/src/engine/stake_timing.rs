@@ -236,9 +236,8 @@ pub(crate) const MIN_COLD_START_SPACING: EconomicSpacing = EconomicSpacing(SebSp
 /// `n` opens has expectation `window / (n + 1)`. The window therefore has to be
 /// sized against *expected open frequency*, and a window that is comfortable for
 /// a wallet opened weekly is thin for one opened hourly. This is the same
-/// discrete-vs-continuous axis [`posture`](super::posture) draws between fetch-③
-/// (continuous, statistical, unavoidable — disclosed) and broadcast-③ (discrete,
-/// categorical, avoidable — forbidden).
+/// discrete-versus-continuous axis between a fetch that is continuous and
+/// disclosed and a broadcast that is discrete and avoidable.
 ///
 /// # Provenance of the value: **UNDERIVED, and deliberately named as such**
 ///

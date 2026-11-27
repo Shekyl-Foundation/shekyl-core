@@ -294,7 +294,7 @@ async fn production_legs_are_registered_and_invoked_each_tick() {
     let log = Arc::new(Mutex::new(Vec::new()));
     let legs: Vec<Box<dyn CadenceLeg>> = production_legs(
         dead,
-        &shekyl_rpc_transport::DaemonTarget::address("http://127.0.0.1:1"),
+        &shekyl_rpc_transport::DaemonTarget::fixture_address("http://127.0.0.1:1"),
         &crate::TorFile::discover(),
         &ServingSlot::default(),
         &Arc::new(OperatorAlarms::new()),
@@ -487,7 +487,7 @@ async fn serving_liveness_leg_starts_and_restarts_a_dead_serving_task() {
     let alarms = Arc::new(OperatorAlarms::new());
     let legs = production_legs(
         Arc::downgrade(&arc),
-        &shekyl_rpc_transport::DaemonTarget::address("http://127.0.0.1:1"),
+        &shekyl_rpc_transport::DaemonTarget::fixture_address("http://127.0.0.1:1"),
         &crate::TorFile::discover(),
         &slot,
         &alarms,
@@ -742,7 +742,7 @@ async fn claim_leg_yields_while_user_work_is_in_flight() {
     let state = Arc::new(std::sync::Mutex::new(ClaimLegState::default()));
     let mut leg = EpochClaimLeg {
         engine: Arc::downgrade(&arc),
-        daemon: shekyl_rpc_transport::DaemonTarget::address("http://127.0.0.1:1"),
+        daemon: shekyl_rpc_transport::DaemonTarget::fixture_address("http://127.0.0.1:1"),
         alarms: Arc::clone(&alarms),
         state: Arc::clone(&state),
     };
@@ -791,7 +791,7 @@ async fn claim_leg_evaluates_once_per_settled_epoch() {
     let state = Arc::new(std::sync::Mutex::new(ClaimLegState::default()));
     let mut leg = EpochClaimLeg {
         engine: Arc::downgrade(&arc),
-        daemon: shekyl_rpc_transport::DaemonTarget::address("http://127.0.0.1:1"),
+        daemon: shekyl_rpc_transport::DaemonTarget::fixture_address("http://127.0.0.1:1"),
         alarms: Arc::clone(&alarms),
         state: Arc::clone(&state),
     };

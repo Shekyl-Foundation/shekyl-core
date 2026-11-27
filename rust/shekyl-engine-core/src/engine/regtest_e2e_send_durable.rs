@@ -70,7 +70,7 @@ async fn a_send_survives_a_kill_after_its_accept() {
     );
     const AMOUNT: u64 = 1_000_000_000;
 
-    let mut first = WalletServer::spawn(wallet_dir.path(), daemon.rpc_port, logs.path(), "first");
+    let mut first = WalletServer::spawn(wallet_dir.path(), &daemon, logs.path(), "first");
     open(&first, NAME);
     fund(&daemon, &first, 4 * AMOUNT).await;
     let txid = send(&daemon, &first, &recipient, AMOUNT).await;
@@ -82,7 +82,7 @@ async fn a_send_survives_a_kill_after_its_accept() {
         "the send is in the daemon's pool"
     );
 
-    let second = WalletServer::spawn(wallet_dir.path(), daemon.rpc_port, logs.path(), "second");
+    let second = WalletServer::spawn(wallet_dir.path(), &daemon, logs.path(), "second");
     open(&second, NAME);
 
     assert_eq!(
@@ -146,8 +146,7 @@ async fn each_stop_signal_closes_the_wallet() {
 
     let mut previous: Option<String> = None;
     for signal in ["TERM", "INT", "HUP"] {
-        let mut server =
-            WalletServer::spawn(wallet_dir.path(), daemon.rpc_port, logs.path(), signal);
+        let mut server = WalletServer::spawn(wallet_dir.path(), &daemon, logs.path(), signal);
         open(&server, NAME);
         if let Some(txid) = &previous {
             assert!(
@@ -174,7 +173,7 @@ async fn each_stop_signal_closes_the_wallet() {
         previous = Some(txid);
     }
 
-    let last = WalletServer::spawn(wallet_dir.path(), daemon.rpc_port, logs.path(), "last");
+    let last = WalletServer::spawn(wallet_dir.path(), &daemon, logs.path(), "last");
     open(&last, NAME);
     let txid = previous.expect("three sends");
     assert!(outgoing_state(&last, &txid).is_some());
@@ -198,7 +197,7 @@ async fn a_send_that_cannot_be_saved_is_not_sent() {
     );
     const AMOUNT: u64 = 1_000_000_000;
 
-    let server = WalletServer::spawn(wallet_dir.path(), daemon.rpc_port, logs.path(), "nosave");
+    let server = WalletServer::spawn(wallet_dir.path(), &daemon, logs.path(), "nosave");
     open(&server, NAME);
     fund(&daemon, &server, 2 * AMOUNT).await;
     let (id, gen) = build(&daemon, &server, &recipient, AMOUNT).await;

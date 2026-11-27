@@ -57,10 +57,16 @@ fn the_default_daemon_is_this_computer_on_the_network() {
         "testnet",
         "--daemon-endpoint",
         "192.0.2.7:11029",
+        "--daemon-bundle-file",
+        if cfg!(windows) {
+            r"C:\test\bundle"
+        } else {
+            "/test/bundle"
+        },
     ]);
     assert!(matches!(
         &Endpoints::of(&named).daemon().target,
-        DaemonTarget::Address { url, proxy: None } if url == "http://192.0.2.7:11029"
+        DaemonTarget::Channel { node, .. } if node.leg.to_string() == "192.0.2.7:11029"
     ));
 }
 
@@ -74,6 +80,12 @@ fn an_external_server_is_not_self_hosted() {
         "127.0.0.1:29500",
         "--daemon-endpoint",
         "127.0.0.1:11029",
+        "--daemon-bundle-file",
+        if cfg!(windows) {
+            r"C:\test\bundle"
+        } else {
+            "/test/bundle"
+        },
     ]);
     let endpoints = Endpoints::of(&external);
     assert!(
@@ -81,7 +93,7 @@ fn an_external_server_is_not_self_hosted() {
     );
     assert!(matches!(
         &endpoints.daemon().target,
-        DaemonTarget::Address { url, .. } if url == "http://127.0.0.1:11029"
+        DaemonTarget::Channel { node, .. } if node.leg.to_string() == "127.0.0.1:11029"
     ));
 }
 
@@ -131,7 +143,7 @@ fn a_session_start_makes_the_root_and_not_the_wallet_dir() {
     let rpc = host_session(
         wallets.clone(),
         Network::Regtest,
-        DaemonTarget::address("http://127.0.0.1:1"),
+        DaemonTarget::fixture_address("http://127.0.0.1:1"),
         shekyl_wallet_rpc::server::TorFile::discover(),
         false,
         Some(&root),
@@ -152,32 +164,44 @@ fn a_session_start_makes_the_root_and_not_the_wallet_dir() {
 #[test]
 fn the_daemon_down_hint_is_loopback_only_and_names_the_network() {
     let testnet = Network::Testnet;
-    let hint = daemon_down_hint(testnet, &DaemonTarget::address("127.0.0.1:12029"))
+    let hint = daemon_down_hint(testnet, &DaemonTarget::fixture_address("127.0.0.1:12029"))
         .expect("loopback gets a hint");
     assert!(hint.contains("shekyld --network testnet"), "got {hint}");
     assert!(hint.contains("12029"), "got {hint}");
-    assert!(daemon_down_hint(testnet, &DaemonTarget::address("node.example.com:12029")).is_none());
+    assert!(daemon_down_hint(
+        testnet,
+        &DaemonTarget::fixture_address("node.example.com:12029")
+    )
+    .is_none());
     assert!(
         daemon_down_hint(
             testnet,
-            &DaemonTarget::address("http://127.0.0.1.evil.com:12029")
+            &DaemonTarget::fixture_address("http://127.0.0.1.evil.com:12029")
         )
         .is_none(),
         "a spoofed 127.0.0.1 prefix is not loopback"
     );
-    assert!(daemon_down_hint(testnet, &DaemonTarget::address("[::1]:12029")).is_some());
+    assert!(daemon_down_hint(testnet, &DaemonTarget::fixture_address("[::1]:12029")).is_some());
     assert!(
-        daemon_down_hint(testnet, &DaemonTarget::address("127.0.0.2:12029")).is_some(),
+        daemon_down_hint(testnet, &DaemonTarget::fixture_address("127.0.0.2:12029")).is_some(),
         "127.0.0.0/8 is loopback"
     );
 
-    let here = daemon_down_hint(testnet, &DaemonTarget::ThisComputer { network: testnet })
-        .expect("this computer gets a hint");
+    let here = daemon_down_hint(
+        testnet,
+        &DaemonTarget::ThisComputer {
+            network: testnet,
+            key_file: None,
+        },
+    )
+    .expect("this computer gets a hint");
     assert!(here.contains("shekyld --network testnet"), "got {here}");
 
-    let mainnet_hint =
-        daemon_down_hint(Network::Mainnet, &DaemonTarget::address("127.0.0.1:11029"))
-            .expect("hint");
+    let mainnet_hint = daemon_down_hint(
+        Network::Mainnet,
+        &DaemonTarget::fixture_address("127.0.0.1:11029"),
+    )
+    .expect("hint");
     assert!(mainnet_hint.contains("shekyld"), "got {mainnet_hint}");
     assert!(
         !mainnet_hint.contains("--"),

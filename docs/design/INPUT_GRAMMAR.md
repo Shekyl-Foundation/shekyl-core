@@ -629,7 +629,7 @@ A command's last term is a verb or a view, and a command that changes state ends
 | — | `config-file` | path | the account root (IG-13) + `shekyl-wallet-rpc-<network>.toml` | CLI | | N (IG-Q29) |
 | — | `config-verify` | switch | | CLI | | N (IG-Q63): the checks a start makes, then the effective configuration; binds nothing and creates nothing |
 | `wallet-dir` | `wallet-dir` | path | the account root + `wallets/<network>` | both | | K; the default is no longer the working directory (IG-Q9) |
-| `rpc-bind` (IP:port) | `rpc-listen` | endpoint | `127.0.0.1:29500` | both | | R; a wildcard is refused (RT-1); a non-loopback bind is accepted only with `rpc-username` and `rpc-password` set, and every such start carries an IG-14 announcement that credentials and traffic cross the network in the clear; when the RPC channel's wallet leg lands (RT-W10), `rpc-listen` becomes the channel listener and the plaintext non-loopback arm is refused (FOLLOWUPS); the daemon's table reserves the same name for the same meaning |
+| `rpc-bind` (IP:port) | `rpc-listen` | endpoint | `127.0.0.1:29500` | both | | R. Only loopback TCP is accepted, with or without credentials (RT-W12 D13). Use an encrypted forward for remote wallet access. |
 | `rpc-bind` (`uds://`) | `rpc-socket-file` | path | unset | both | | N; Unix only; refused on Windows; its directory is the account's alone, made 0700 if missing and refused otherwise, and a socket there is replaced only when its server refuses the connection (`shekyl_rpc_transport::listen`, the tunnel's rule; Rick, 2026-11-21) |
 | `rpc-login` | `rpc-username`, `rpc-password` | secret | unset | file | | R (IG-Q29); both set or neither |
 | `disable-rpc-login` | — | | | | | – (IG-4): no credentials is the absence of the two rows, accepted on loopback or a socket |
@@ -727,7 +727,7 @@ The four acts of the genesis ceremony tool under IG-3 (IG-Q35). `geblock` has no
 
 **IG-Q30 — the `RETIRED` table and `quit` — RULED 2026-10-14.** Both go, with no X rows.
 
-**IG-Q31 — the daemon and wallet-RPC addresses — RULED 2026-10-14.** `daemon-endpoint` and `wallet-rpc-endpoint` are kind peer-endpoint, an IP or an onion, because a local wallet with a remote daemon over Tor is a supported posture; a hostname is refused. The socket-file rows stand beside them, unconstructible together. `shekyl-wallet-rpc`'s `rpc-listen` is interim until the RPC channel's wallet leg lands: it accepts a non-loopback bind when credentials are set, every such start carries an IG-14 announcement, and a FOLLOWUPS row refuses the plaintext non-loopback arm at RT-W10. The daemon's RPC rows are Part A's.
+**IG-Q31 — the daemon and wallet-RPC addresses — RULED 2026-10-14.** `daemon-endpoint` and `wallet-rpc-endpoint` are kind peer-endpoint, an IP or an onion, because a local wallet with a remote daemon over Tor is a supported posture; a hostname is refused. The socket-file rows stand beside them, unconstructible together. RT-W12 D13 restricts the wallet RPC listener to local connections. Its account credentials are optional on loopback. The daemon's RPC rows are Part A's.
 
 **IG-Q32 — Part A's terms that gain parents — RULED 2026-10-14.** The parents widen as §3 lists; the meanings are unchanged, and `username` and `password` name the wallet RPC's credentials as well as SOCKS5's.
 

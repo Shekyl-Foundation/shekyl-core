@@ -14,6 +14,9 @@ use crate::nullable::Nullable;
 use crate::schema::{Schema, Shape};
 use shekyl_units::wire::AtomicUnitsString as Amount;
 
+/// How many key images a bounded connection may name in one call.
+pub const MAX_SPENT_KEY_IMAGES: usize = 5000;
+
 impl Schema for shekyl_network::Network {
     fn shape() -> Shape {
         Shape::OneOf(&["mainnet", "testnet", "stagenet", "regtest"])
