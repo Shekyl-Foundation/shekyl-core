@@ -22,11 +22,6 @@ shekyl-tor-control-client = { path = "../shekyl-tor-control-client" }
 # Both are the workspace's established actor stack (shekyl-engine-core).
 tokio = { version = "1", features = ["net", "io-util", "sync", "time", "rt", "macros", "process", "fs"] }
 kameo = { workspace = true }
-# OS CSPRNG for the vanguard layer-2/layer-3 rotation draws (VG-1).
-getrandom = "0.2"
-# The vanguard state file is replaced through the tree's one replace, its
-# staged file a journal the read-back recovers (Rick, 2026-11-18).
-shekyl-os-account = { path = "../shekyl-os-account" }
 
 [dev-dependencies]
 # The circuit-isolation test's spawns take the process's one spawn lock.

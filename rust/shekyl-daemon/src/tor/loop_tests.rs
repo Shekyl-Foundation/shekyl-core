@@ -59,7 +59,7 @@ impl PoolDoor for EmptyPool {
 }
 
 /// An offline network whose Tor link the supervisor feeds.
-fn network(dir: &std::path::Path, feeds: SupervisorFeeds) -> Network {
+pub(super) fn network(dir: &std::path::Path, feeds: SupervisorFeeds) -> Network {
     let (_, node_sync) = watch::channel(NodeSync::Unsynchronised);
     let (_, tip) = watch::channel(CoreSyncData {
         current_height: 1,
@@ -288,10 +288,10 @@ fn nothing_outlives(dir: &Path, after: &str) {
 
 /// The directory a loop test works in, by path. The directory itself is
 /// [`on_the_loops_runtime`]'s, which removes it only once the runtime is gone.
-struct Dir(PathBuf);
+pub(super) struct Dir(PathBuf);
 
 impl Dir {
-    fn path(&self) -> &Path {
+    pub(super) fn path(&self) -> &Path {
         &self.0
     }
 }
@@ -303,7 +303,9 @@ impl Dir {
 /// directory was the test's own and went first, while that task still
 /// launched into it; the removal could stop part-way and leave the stand-in
 /// behind.
-fn on_the_loops_runtime<F: std::future::Future<Output = ()>>(test: impl FnOnce(Dir) -> F) {
+pub(super) fn on_the_loops_runtime<F: std::future::Future<Output = ()>>(
+    test: impl FnOnce(Dir) -> F,
+) {
     let dir = tempfile::tempdir().expect("tempdir");
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
@@ -728,4 +730,28 @@ fn a_tor_action_without_a_managed_tor_ends_the_supervisor() {
                 .expect("the network drops");
         }
     });
+}
+
+/// A driver for a persistent onion: its guard manager is loaded from the
+/// onion's own guard directory under `dir`.
+pub(super) fn persistent(dir: &Path) -> Drive {
+    let data_dir = dir.join("data");
+    std::fs::create_dir_all(&data_dir).expect("the data directory");
+    let (_owner, inbox, feeds) = inbox();
+    let network = network(dir, feeds);
+    Drive::start(
+        Supervises::Managed {
+            pin: PinSource::Discover(None),
+            onion: super::OnionSource::Persistent(
+                DaemonTorControl::mint_identity().expect("an onion identity"),
+            ),
+        },
+        super::policy(),
+        true,
+        18_021,
+        data_dir,
+        inbox,
+        network,
+    )
+    .expect("the driver")
 }

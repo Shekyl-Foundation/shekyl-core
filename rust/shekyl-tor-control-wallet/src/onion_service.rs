@@ -27,7 +27,6 @@ use std::time::Duration;
 use kameo::error::SendError;
 use tokio::sync::oneshot;
 
-use crate::vanguard_rotation::VanguardsActive;
 use shekyl_tor_control_client::awake;
 use shekyl_tor_control_client::control::onion::{
     evaluate_add_onion_reply, AddOnion, AddOnionReplyError, OnionFlags, OnionPort, OnionPow,
@@ -35,6 +34,7 @@ use shekyl_tor_control_client::control::onion::{
 };
 use shekyl_tor_control_client::control::{Command, ControlError};
 use shekyl_tor_control_client::onion_identity::OnionIdentity;
+use shekyl_tor_control_client::vanguard_rotation::VanguardsActive;
 
 /// Why publishing the configured onion service failed.
 ///
@@ -214,7 +214,7 @@ impl std::fmt::Debug for OnionServiceSpec {
 /// A serving persona **must not** run on lite-only guard protection: it would
 /// be silently weaker with no feedback channel, against an adversary whose
 /// success is invisible to the operator. The witness is mintable only by
-/// [`VanguardManager::establish`](crate::vanguard_rotation::VanguardManager::establish)
+/// [`VanguardManager::establish`](shekyl_tor_control_client::vanguard_rotation::VanguardManager::establish)
 /// after a confirmed `SETCONF`, so "onion published without full vanguards"
 /// has no representation here — the guarantee is structural rather than a
 /// convention the caller must remember.

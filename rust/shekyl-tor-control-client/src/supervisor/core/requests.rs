@@ -79,6 +79,8 @@ enum Sent {
     Refetch,
     /// [`Request::CheckDirectories`].
     CheckDirectories,
+    /// [`Request::PinGuards`].
+    PinGuards,
     /// [`Request::FetchFrom`]. The directory is named again on the action.
     FetchFrom {
         /// The directory the fetch asks.
@@ -113,6 +115,9 @@ pub(super) enum Request {
     CheckDirectories,
     /// One directory fetch ([`Action::FetchFromDirectory`]).
     FetchFrom { hsdir: RelayFingerprint },
+    /// The guard pin ([`Action::PinGuards`]): consensus, compute, `SETCONF`
+    /// and save, one request.
+    PinGuards,
 }
 
 impl Request {
@@ -130,6 +135,7 @@ impl Request {
             Action::RefetchDescriptor => vec![Self::Refetch],
             Action::CheckDirectories => vec![Self::CheckDirectories],
             Action::FetchFromDirectory { hsdir } => vec![Self::FetchFrom { hsdir }],
+            Action::PinGuards => vec![Self::PinGuards],
             other => return Err(other),
         })
     }
@@ -147,6 +153,7 @@ impl Request {
             Self::Refetch => Sent::Refetch,
             Self::CheckDirectories => Sent::CheckDirectories,
             Self::FetchFrom { hsdir } => Sent::FetchFrom { hsdir: *hsdir },
+            Self::PinGuards => Sent::PinGuards,
         }
     }
 
@@ -165,6 +172,7 @@ impl Request {
             Self::Refetch => Action::RefetchDescriptor,
             Self::CheckDirectories => Action::CheckDirectories,
             Self::FetchFrom { hsdir } => Action::FetchFromDirectory { hsdir },
+            Self::PinGuards => Action::PinGuards,
         };
         (action, sent)
     }
@@ -181,7 +189,7 @@ impl Request {
     /// has not yet answered the last sample, which the awaiting loop never
     /// saw.
     fn repeats(&self) -> bool {
-        matches!(self, Self::Sample)
+        matches!(self, Self::Sample | Self::PinGuards)
     }
 }
 
@@ -409,6 +417,11 @@ impl super::Core {
             // the publication already out: its answer settles the
             // republish's state as its own.
             let republish = matches!(action, Action::RepublishOnion);
+            // No publish before this Tor's guards are pinned (`TSR-W1`). The
+            // onion stays owed, and the confirmed pin asks for it.
+            if republish && !self.guards_allow_publish() {
+                continue;
+            }
             match Request::of(action) {
                 Ok(_) if republish && self.requests.publishing() => {}
                 Ok(requests) => {
