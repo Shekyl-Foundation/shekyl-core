@@ -13,7 +13,7 @@ to it; no surface is the reference, and nothing is patched around an
 existing spelling. There is no backward compatibility before genesis: a
 renamed spelling leaves no trace and no migration table; our own scripts
 and configs are fixed in the same change. The glossary tree and the name
-tables are in [`INPUT_GRAMMAR.md`](../../docs/design/INPUT_GRAMMAR.md);
+tables are in shekyl-core's [`INPUT_GRAMMAR.md`](https://github.com/Shekyl-Foundation/shekyl-core/blob/dev/docs/design/INPUT_GRAMMAR.md);
 this rule holds the rules only.
 
 ## Scope
@@ -109,8 +109,8 @@ Everything else: both, CLI winning per key.
 
 **IG-8 Development levers.** A `dev-` option is hidden from help and
 generated docs, names the networks it is accepted on as data in its row
-(a `dev-` option given on any other network is refused at parse, rule
-71), and is announced at every start when set. It follows every other
+(a `dev-` option given on any other network is refused at parse; shekyl-core's
+[`171-network-uniformity`](https://github.com/Shekyl-Foundation/shekyl-core/blob/dev/.cursor/rules/171-network-uniformity.mdc)), and is announced at every start when set. It follows every other
 rule. No `dev-` option is ever accepted on mainnet: a lever mainnet
 genuinely needs is not a development lever and gets a public row.
 

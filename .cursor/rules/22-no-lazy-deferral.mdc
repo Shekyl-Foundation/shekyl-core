@@ -24,9 +24,10 @@ A deferral of scoped work is legitimate only when all three hold:
    `docs/FOLLOWUPS.md` entry (or an amendment to the PR's own plan) names
    the blocker, a `Target:` (`95-documentation-lifecycle.mdc`), the
    reopening criterion (`21-reversion-clause-discipline.mdc`), and an
-   **`Owner:`** that resolves to a live `docs/design/` document or a
-   registered identifier family. Gated by `check_followups_owners.py`.
-   An owner is a doc, a family, or a plan slot. A person's name, a lane
+   **`Owner:`** that resolves to a live design document or a plan slot
+   (shekyl-core also accepts a registered identifier family, and gates
+   the cell: core rule [`122-no-lazy-deferral-core`](https://github.com/Shekyl-Foundation/shekyl-core/blob/dev/.cursor/rules/122-no-lazy-deferral-core.mdc)). An owner
+   is a doc, a family, or a plan slot. A person's name, a lane
    name, or a PR number is not an owner. An allow-comment pointing at a
    future consumer is a residue marker, not the deferral record.
 3. **The deferral is disclosed where it was made.** The commit message

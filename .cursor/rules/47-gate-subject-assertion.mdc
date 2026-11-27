@@ -21,7 +21,7 @@ reported it as a clean signal.
 ## Where this has already bitten
 
 Promoted from the RandomX v2 T18 mutation-regime round
-([`docs/completed/RANDOMX_V2_MUTATION_REGIME.md`](../../docs/completed/RANDOMX_V2_MUTATION_REGIME.md)
+(shekyl-core's [`docs/completed/RANDOMX_V2_MUTATION_REGIME.md`](https://github.com/Shekyl-Foundation/shekyl-core/blob/dev/docs/completed/RANDOMX_V2_MUTATION_REGIME.md)
 §13), which found six instances of the shape and three more in its own
 proposed fixes:
 
@@ -66,7 +66,7 @@ if its subject vanished. If green and vacuous are indistinguishable, the
 gate needs an assertion that its subject is present, and that assertion
 must fail loudly.
 
-Concrete forms already in this repo — these are instances of one rule,
+Concrete forms already in shekyl-core — these are instances of one rule,
 not separate tricks:
 
 - **Assert the population is non-empty.** A name- or path-filtered

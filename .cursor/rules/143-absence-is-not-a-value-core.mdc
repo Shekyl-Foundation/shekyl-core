@@ -1,0 +1,44 @@
+---
+description: "shekyl-core's part of absence-is-not-a-value (43): the required-nullable reply wrapper and the known sentinel instances."
+globs:
+  - "**/*.rs"
+  - docs/api/**
+  - docs/design/**
+scope: core
+---
+
+# Absence is not a value: shekyl-core's part
+
+Estate rule [`43-absence-is-not-a-value`](43-absence-is-not-a-value.mdc) holds in every Shekyl repository.
+This rule holds the part of it that only shekyl-core has: the reply
+wrapper that keeps the three states apart, and the record of sentinel
+instances.
+
+## The required-nullable wrapper
+
+A reply field whose absence differs from its nullness uses the
+required-nullable wrapper in `shekyl-rpc-types` (missing key → error;
+`null` → `None`), never bare `Option<T>`.
+
+## Known instances (checked at source 2026-10-13, `feat/rk5c-get-info-wire-cleanup@473c447d9`)
+
+Retired:
+
+| Where | Sentinel | Retired by |
+| --- | --- | --- |
+| `get_info.target_height` | `0` = synchronized | RK-D15, `CORE_RPC_VERSION` 3.46 |
+| `get_version.target_height`, `current_height`; `sync_info.target_height` | omitted / written at `0`, decoded back to `0` | RK-Q7, with RK-D15's commit (3.46) |
+| `get_info` restricted stand-ins | `0` counts, `u64::MAX` free space, rounded size, `""` version | RK-Q8, 3.48 (withheld parts are absent) |
+| `get_info.burn_pct` on refusal | `0` | RK-Q9, 3.51 (a refusal is a store fault) |
+| `shekyl_seam_board_count`, `shekyl_seam_socket_count` | `0` for no hub, a bad index or no server; `u64::MAX` on overflow | the p2p remnant cutover, 2026-11-05: the exports are deleted with `shekyl-seam`; the RPC reads the session board through `shekyl-p2p`'s `P2pFacts`, whose absence is a `FactsFault`, and the dial cap counts the dialer's own `Keep` rows |
+| `get_info.block_weight_limit`, `block_weight_median` | omitted at `0`, decoded back to `0` | RK-Q1, 3.52 (always present) |
+| `get_info` connection counts / `has_peers` | no hub read as zero peers | RK-5c `PeerFacts` (`FactsFault::HubAbsent`) |
+| `shekyl-cli` `show_chain` (`height`, `tx_count`) and `tests/stressnet/monitor.py` `height` | a missing key printed or read as `0` | RK-5c reader sweep, 2026-10-13 ("unreadable" in the CLI; an error in the monitor) |
+
+Still open:
+
+| Where | Sentinel | Owner |
+| --- | --- | --- |
+| block header `block_weight`, `long_term_weight` (`rust/shekyl-rpc-types/src/chain.rs:336`, `:344`) | omitted at `0` | RK-W |
+| block header difficulty triple | three copies of one value; adopts `HexU128` | RK-W |
+| `shekyl-cli` shard commands, `show_fetch` and `print_coverage_row` (`commands/chain.rs`) | a missing key printed as `0` | archival CLI lane (`docs/FOLLOWUPS.md`) |

@@ -1,0 +1,18 @@
+---
+description: "shekyl-core's part of no lazy deferral (22): a FOLLOWUPS Owner may be a registered identifier family, and the cell is gated."
+alwaysApply: true
+scope: core
+---
+
+# No lazy deferral: shekyl-core's part
+
+Estate rule [`22-no-lazy-deferral`](22-no-lazy-deferral.mdc) holds in every Shekyl repository.
+This rule holds the part of it that only shekyl-core has: what a
+FOLLOWUPS `Owner:` may resolve to here, and the gate that holds it.
+
+## The `Owner:` cell
+
+In shekyl-core a FOLLOWUPS row's **`Owner:`** resolves to a live
+`docs/design/` document or a registered identifier family
+([`194-tracking-index`](194-tracking-index.mdc)). Gated by
+`check_followups_owners.py`.

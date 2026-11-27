@@ -1,0 +1,62 @@
+---
+description: "shekyl-core's part of the documentation lifecycle (95): the front door, the archive checklist, protected spec names, the FOLLOWUPS Owner gate, changelog.d and the document gates."
+alwaysApply: true
+scope: core
+---
+
+# Documentation lifecycle: shekyl-core's part
+
+Estate rule [`95-documentation-lifecycle`](95-documentation-lifecycle.mdc) holds in every Shekyl repository.
+This rule holds the part of it that only shekyl-core has: its front door
+and archive checklist, the spec names a class deletion never touches,
+the FOLLOWUPS `Owner:` gate, the `changelog.d` mechanism and the
+document gates.
+
+## Front door and archive checklist
+
+`docs/README.md` is the front door.
+
+Cite from [`91-documentation-after-plans.mdc`](91-documentation-after-plans.mdc)
+and [`94-tracking-index.mdc`](94-tracking-index.mdc). Archive eligibility
+and the `git mv` checklist live in
+[`docs/design/IMPLEMENTATION_INDEX.md`](../../docs/design/IMPLEMENTATION_INDEX.md)
+§8; this rule does not restate that checklist.
+
+## Protected specification names
+
+Claim-era staking specs (confidential / lock-tier / `txin_stake_claim*`)
+are deleted, not stubbed. Archival staking SoTs (`V3_STAKER_ARCHIVAL.md`,
+`PHASE_2B_FSM_RETOOL.md`, `PRINCIPAL_STAKE_LIFECYCLE.md`,
+`REWARD_EMISSION_*`, `ARCHIVAL_*.md`, `EMISSION_CLAIM_BUILDER.md`) are
+never deleted as a side-effect of that class.
+
+## The FOLLOWUPS `Owner:` cell
+
+`Owner:` names what the row **resolves to**, and it is gated
+(`scripts/ci/check_followups_owners.py`): a live `docs/design/` document,
+or a registered identifier family (`RD-Q4`, `SI-10`). A PR number may be
+cited beside it but is not an owner on its own — PRs merge and close, and
+a row whose only owner is a merged PR is a row nobody owns. Six rows once
+named "the E2 lane" as owner while no such lane existed in any form; that
+is the shape the cell makes visible (rule 22). Rows predating the cell are
+grandfathered by exact heading in a list that only burns down.
+
+## CHANGELOG mechanics and document gates
+
+A pull request writes its entry as a new file under `docs/changelog.d/`,
+named after its branch. It never edits `docs/CHANGELOG.md`. Only the
+release cut (`docs/RELEASING.md` step 1) moves entries into the
+CHANGELOG. An edit at the top of `[Unreleased]` conflicts with every
+other open pull request that makes one, and each conflict costs a merge
+of `dev` and a full CI run.
+
+CI (`.github/workflows/docs-gates.yml`) holds the banners, FOLLOWUPS
+`Target:` tokens, forbidden fossils in always-applied rules, index §2
+prefix uniqueness, and the claim-era basename refusal. A closed plan
+left in `docs/design/` with a DRAFT banner, or a new
+`CONFIDENTIAL_STAKING.md`, fails the run.
+
+## Related rules
+
+- **`94-tracking-index.mdc`** — identifier registry; the index is a map,
+  not a status-of-record.
