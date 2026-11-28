@@ -88,6 +88,11 @@
 #                                                   body store lost, and
 #                                                   their refill; Part C
 #                                                   name)
+#     operator_alarm,
+#     operator_alarm_acknowledge                   (OA-1 — the wallet's
+#                                                   operator alarm board,
+#                                                   and acknowledging a
+#                                                   fault that cleared)
 #   SPECIFIED (WI-RPC-2a — CLI-off-wallet2 transport swap):
 #     restore_wallet                               (deterministic inverse of
 #                                                   create_wallet's BIP-39
@@ -623,7 +628,17 @@ info:
   # stake gains -29545 STAKE_FUNDS_RETURNING: while an ended stake's funds
   # are returning, a new stake refuses with that reason, not -29501.
   # api_version stays 1.
-  version: 0.27.0
+  # 0.28.0: operator_alarm and operator_alarm_acknowledge (OA-1; Rick's
+  # brief 2026-11-28). operator_alarm returns the wallet's operator alarm
+  # board: one row for every condition the wallet watches for its operator,
+  # each armed or disarmed with its reason, and the fault live on it or
+  # null, then the faults whose condition cleared while their damage
+  # stands, oldest first. operator_alarm_acknowledge clears one of those by
+  # the incident the board showed. A caller needs the wallet RPC's
+  # credential and nothing finer. The board names no onion address, no
+  # service id and no clock reading but durations. The names are proposed
+  # in INPUT_GRAMMAR.md Part M for Rick's ruling. api_version stays 1.
+  version: 0.28.0
   description: >
     JSON-RPC 2.0 interface served by `shekyl-wallet-rpc` (Phase 4 of the
     wallet rewrite; replaces the C++ `wallet_rpc_server`). One wallet-bearing
@@ -692,6 +707,8 @@ x-shekyl-method-registry:
   get_staked_outputs: { status: SPECIFIED }
   staking_info: { status: SPECIFIED }
   shard_alarm: { status: SPECIFIED }
+  operator_alarm: { status: SPECIFIED }
+  operator_alarm_acknowledge: { status: SPECIFIED }
   stake_in: { status: SPECIFIED }
   get_drain_balance: { status: SPECIFIED }
   drain: { status: SPECIFIED }
@@ -829,6 +846,8 @@ components:
             - get_staked_outputs
             - staking_info
             - shard_alarm
+            - operator_alarm
+            - operator_alarm_acknowledge
             - stake_in
             - get_drain_balance
             - drain
@@ -2697,6 +2716,198 @@ components:
             recovery fetch; that does not exist yet, so it cannot be
             refilled until it does. failed: the refill failed for another
             reason; the pass at the next chain advance retries it.
+
+    # ── Operator alarm board — OA-1 ─────────────────────────────────────
+    # One board per open wallet (Engine::operator_alarms). Keyword spelling
+    # and the one-key objects follow IG-Q86 and IG-Q70; every name here is
+    # proposed in INPUT_GRAMMAR.md Part M, IG-Q115 onward.
+    OperatorAlarmParams:
+      type: object
+      additionalProperties: false
+      description: >
+        `operator_alarm` (OA-1) takes no parameters. It is pull-only: there
+        is no subscription and no "changed since" form, so a reply's timing
+        is the caller's, never the board's, and a read reaches no producer,
+        no daemon and no Tor.
+
+    OperatorAlarmResult:
+      type: object
+      required: [conditions, unacknowledged]
+      description: >
+        The wallet's operator alarm board. Every reply has the same shape:
+        a row for every condition, in one fixed order. It carries no onion
+        address, no service id and no clock reading but durations. Faults
+        are numbered by incident, a counter each open session mints from 1;
+        it is not persisted, so a reopen starts again.
+      properties:
+        conditions:
+          type: array
+          description: >
+            One row per condition, all of them, in the order of
+            AlarmCondition's enum. A missing row is never an answer.
+          items:
+            $ref: "#/components/schemas/AlarmRow"
+        unacknowledged:
+          type: array
+          description: >
+            Faults whose condition has cleared while the damage they did
+            stands (a guard set drawn anew, shard bytes already pruned,
+            reserved funds spent by another transaction), oldest incident
+            first. Each stays until operator_alarm_acknowledge names its
+            incident. A fault that is still happening is on its row, never
+            here, so it cannot be acknowledged away.
+          items:
+            $ref: "#/components/schemas/AlarmOutstanding"
+
+    AlarmRow:
+      type: object
+      required: [condition, arming, fault]
+      properties:
+        condition:
+          $ref: "#/components/schemas/AlarmCondition"
+        arming:
+          $ref: "#/components/schemas/AlarmArming"
+        fault:
+          description: >
+            What is wrong with the condition now, or null when nothing is.
+            Required and nullable. With arming disarmed, null means
+            unknown, never healthy.
+          oneOf:
+            - $ref: "#/components/schemas/AlarmIncident"
+            - type: "null"
+
+    AlarmIncident:
+      type: object
+      required: [incident, alarm]
+      properties:
+        incident:
+          type: integer
+          format: int64
+          minimum: 1
+          description: The incident this fault belongs to.
+        alarm:
+          $ref: "#/components/schemas/AlarmFault"
+
+    AlarmOutstanding:
+      type: object
+      required: [incident, condition, alarm]
+      properties:
+        incident:
+          type: integer
+          format: int64
+          minimum: 1
+          description: The incident to name in operator_alarm_acknowledge.
+        condition:
+          $ref: "#/components/schemas/AlarmCondition"
+        alarm:
+          $ref: "#/components/schemas/AlarmFault"
+
+    AlarmCondition:
+      type: string
+      enum: [transport-liveness, onion-reachability, vanguard-integrity,
+             serve-set-integrity, serve-disk-headroom, serve-health,
+             chain-progress, epoch-claim, claim-forfeiture,
+             pending-funds-integrity]
+      description: >
+        transport-liveness: the persona's Tor is up and staying up (the
+        principal runs no Tor; its traffic goes through its daemon).
+        onion-reachability: challengers can reach the persona's onion;
+        disarmed until TSR-W3's producer arms it. vanguard-integrity: the
+        persona's guard set is intact and survives a restart.
+        serve-set-integrity: the shards the bond owes are pinned and
+        refreshed. serve-disk-headroom: the volume under the wallet's store
+        has room. serve-health: the persona's host answers its requests.
+        chain-progress: the wallet's view of the chain advances.
+        epoch-claim: settled epochs are claimed. claim-forfeiture: no
+        claimable value was let expire. pending-funds-integrity: reserved
+        staking funds were spent only by their own records.
+
+    AlarmArming:
+      description: >
+        One key. armed (value null): the condition is checked, so a null
+        fault means checked and clean. disarmed (value a reason): not
+        checked; render "not checked", never healthy. transport-unready:
+        the persona's Tor is starting, bootstrapping, retrying or degraded.
+        transport-stopped: its supervisor stopped. catching-up: the wallet
+        is catching up to the chain. disk-unreadable: the free-space probe
+        could not read the volume. host-down: no serving host is running.
+        driver-leg-parked: the driver leg that checks it panicked and is
+        parked until a reopen. unreported: no check is reporting on it
+        (every row starts here; also a driver that stopped cleanly, and a
+        condition with no check in this build). check-stopped: its check
+        ended without saying so; a reopen restarts it.
+      oneOf:
+        - type: object
+          required: [armed]
+          additionalProperties: false
+          properties:
+            armed: { type: "null" }
+        - type: object
+          required: [disarmed]
+          additionalProperties: false
+          properties:
+            disarmed:
+              type: string
+              enum: [transport-unready, transport-stopped, catching-up,
+                     disk-unreadable, host-down, driver-leg-parked,
+                     unreported, check-stopped]
+
+    AlarmFault:
+      type: object
+      minProperties: 1
+      maxProperties: 1
+      description: >
+        One key, the alarm, its value the payload object or null. Counts,
+        heights, epochs and amounts are integers; age is a duration in
+        seconds. transport-degraded {cause}: the persona's Tor keeps
+        failing and retries at its slowest pace; cause is one key (value
+        null) or null when the failure predates the reading: install-defect,
+        control-channel-failed, socks-missing, launch-failed, exited,
+        internal, onion-refused, guards-refused (the keys daemon_status's
+        Tor causes already name are reused). vanguard-state-redrawn (null):
+        the saved guard set was unusable and a fresh one was drawn.
+        vanguard-state-unpersisted (null): the guard set could not be saved.
+        vanguard-view-incomplete {decoded, announced}: part of Tor's view
+        of the network did not decode, so guard repair was held back.
+        serve-set-stale {block_count}: blocks ingested since the last
+        refresh. serve-set-refresh-failing {count}: consecutive failed
+        refreshes. serve-set-pins-dropped {dropped_count, member_count}.
+        serve-set-posture-lost {frozen_count}. serve-set-rolled-back
+        {minted_height, height}. serve-set-bytes-pruned {member_count}:
+        bytes gone until a chain replay. serve-disk-low {free, free_min}:
+        bytes. chain-progress-stalled {height, age}. epoch-unclaimed
+        {epoch, epoch_count}. claim-forfeited {epoch, amount}: atomic
+        units forfeited this session. reservation-spent-elsewhere
+        {record_count, held_count}. serve-signing-refused {pre_flight,
+        late}. serve-lookup-failing {count}. serve-listener-failing
+        {count}.
+      additionalProperties: true
+
+    OperatorAlarmAcknowledgeParams:
+      type: object
+      required: [incident]
+      additionalProperties: false
+      description: >
+        Clear the fault waiting for acknowledgment whose incident is this
+        one, the number operator_alarm showed. Naming the incident is what
+        keeps a fault that arrived while the operator was reading from
+        being cleared unseen.
+      properties:
+        incident:
+          type: integer
+          format: int64
+          minimum: 0
+
+    OperatorAlarmAcknowledgeResult:
+      type: object
+      required: [acknowledged]
+      properties:
+        acknowledged:
+          type: boolean
+          description: >
+            true when a fault waiting for acknowledgment carried the
+            incident and was cleared. false changes nothing, so a repeated
+            acknowledgment is harmless.
 
     TxResendParams:
       type: object

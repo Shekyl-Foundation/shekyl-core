@@ -109,11 +109,21 @@ fn drive(
     legs: Vec<Box<dyn CadenceLeg>>,
     stall_horizon: Duration,
 ) -> CadenceHandle {
+    drive_on(Arc::new(OperatorAlarms::new()), polls, legs, stall_horizon)
+}
+
+/// [`drive`] onto a board the test keeps.
+fn drive_on(
+    alarms: Arc<OperatorAlarms>,
+    polls: Vec<TipPoll>,
+    legs: Vec<Box<dyn CadenceLeg>>,
+    stall_horizon: Duration,
+) -> CadenceHandle {
     spawn_cadence_loop(
         EagerSchedule,
         scripted(polls),
         legs,
-        Arc::new(OperatorAlarms::new()),
+        alarms,
         stall_horizon,
         ServingSlot::default(),
         crate::engine::body_reconcile::ShardAlarms::default(),
@@ -148,29 +158,28 @@ async fn watchdog_raises_on_stall_and_clears_on_resume() {
     polls.extend((0..4).map(|_| TipPoll::Unavailable));
     polls.push(TipPoll::Height(6));
     polls.push(TipPoll::Unavailable); // one read of the cleared board
+    let alarms = Arc::new(OperatorAlarms::new());
     let handle = spawn_cadence_loop(
         FixedRateSchedule::new(Duration::from_secs(60)),
         scripted(polls),
         vec![RecordingLeg::recording("leg", &log)],
-        Arc::new(OperatorAlarms::new()),
+        Arc::clone(&alarms),
         Duration::from_secs(120),
         ServingSlot::default(),
         crate::engine::body_reconcile::ShardAlarms::default(),
     );
-    let alarms = handle.alarms();
     let mut handle = handle;
     handle.join.take().expect("join").await.expect("loop exit");
 
     // The stall alarm was raised while unavailable and cleared by the
     // resume.
     let board = alarms.board();
-    let chain = board
-        .condition(AlarmCondition::ChainProgress)
-        .expect("chain-progress condition reported");
+    let chain = board.condition(AlarmCondition::ChainProgress);
     assert_eq!(
         chain.arming(),
-        Arming::Armed,
-        "resume must leave the condition armed and clear"
+        Arming::Disarmed(shekyl_operator_alarm::DisarmedReason::Unreported),
+        "the loop has ended, so nothing watches chain progress now: a stopped \
+         driver must not read armed"
     );
     assert!(
         chain.live().is_none(),
@@ -183,6 +192,7 @@ async fn watchdog_raises_on_stall_and_clears_on_resume() {
 
 #[tokio::test(start_paused = true)]
 async fn stall_alarm_carries_last_height_and_duration() {
+    let alarms = Arc::new(OperatorAlarms::new());
     let handle = spawn_cadence_loop(
         FixedRateSchedule::new(Duration::from_secs(60)),
         scripted(vec![
@@ -192,19 +202,16 @@ async fn stall_alarm_carries_last_height_and_duration() {
             TipPoll::Unavailable,
         ]),
         Vec::new(),
-        Arc::new(OperatorAlarms::new()),
+        Arc::clone(&alarms),
         Duration::from_secs(120),
         ServingSlot::default(),
         crate::engine::body_reconcile::ShardAlarms::default(),
     );
-    let alarms = handle.alarms();
     let mut handle = handle;
     handle.join.take().expect("join").await.expect("loop exit");
 
     let board = alarms.board();
-    let chain = board
-        .condition(AlarmCondition::ChainProgress)
-        .expect("condition reported");
+    let chain = board.condition(AlarmCondition::ChainProgress);
     match chain.live().map(shekyl_operator_alarm::RaisedAlarm::alarm) {
         Some(OperatorAlarm::ChainProgressStalled {
             last_height,
@@ -253,12 +260,13 @@ async fn panicking_leg_parks_with_condition_and_others_keep_firing() {
         condition: Some(AlarmCondition::EpochClaim),
         panic_on_fire: true,
     });
-    let handle = drive(
+    let alarms = Arc::new(OperatorAlarms::new());
+    let handle = drive_on(
+        Arc::clone(&alarms),
         vec![TipPoll::Height(1), TipPoll::Height(2)],
         vec![panicker, RecordingLeg::recording("survivor", &log)],
         CHAIN_STALL_HORIZON,
     );
-    let alarms = handle.alarms();
     let mut handle = handle;
     handle.join.take().expect("join").await.expect("loop exit");
 
@@ -269,9 +277,7 @@ async fn panicking_leg_parks_with_condition_and_others_keep_firing() {
         vec![("survivor", 1), ("survivor", 2)]
     );
     let board = alarms.board();
-    let claim = board
-        .condition(AlarmCondition::EpochClaim)
-        .expect("parked condition present on the board");
+    let claim = board.condition(AlarmCondition::EpochClaim);
     assert!(
         matches!(
             claim.arming(),
@@ -641,7 +647,6 @@ fn claim_complete_forfeits_only_expired_missing_epochs() {
     let board = alarms.board();
     match board
         .condition(AlarmCondition::ClaimForfeiture)
-        .expect("forfeiture condition reported")
         .live()
         .map(shekyl_operator_alarm::RaisedAlarm::alarm)
     {
@@ -657,11 +662,7 @@ fn claim_complete_forfeits_only_expired_missing_epochs() {
     // The claim condition itself reads healthy: forfeiture is its own
     // latched condition, not a claim-backlog fault.
     assert!(
-        board
-            .condition(AlarmCondition::EpochClaim)
-            .expect("claim condition reported")
-            .live()
-            .is_none(),
+        board.condition(AlarmCondition::EpochClaim).live().is_none(),
         "a completed evaluation reads current on the claim board"
     );
 }
@@ -682,7 +683,8 @@ fn claim_fault_threshold_raises_and_complete_clears() {
         alarms
             .board()
             .condition(AlarmCondition::EpochClaim)
-            .is_none_or(|c| c.live().is_none()),
+            .live()
+            .is_none(),
         "below the threshold the board stays quiet"
     );
 
@@ -690,7 +692,6 @@ fn claim_fault_threshold_raises_and_complete_clears() {
     match alarms
         .board()
         .condition(AlarmCondition::EpochClaim)
-        .expect("condition reported")
         .live()
         .map(shekyl_operator_alarm::RaisedAlarm::alarm)
     {
@@ -711,7 +712,6 @@ fn claim_fault_threshold_raises_and_complete_clears() {
         alarms
             .board()
             .condition(AlarmCondition::EpochClaim)
-            .expect("condition reported")
             .live()
             .is_none(),
         "a completed evaluation clears the backlog alarm"

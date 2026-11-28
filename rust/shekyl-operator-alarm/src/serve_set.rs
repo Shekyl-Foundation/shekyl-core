@@ -68,6 +68,10 @@ pub enum ServeSetObservation {
 /// Total and side-effect-free apart from the board writes — the same contract
 /// [`tor_posture::apply`](crate::tor_posture) keeps, and for the same reason:
 /// the state machine is then testable by calling it.
+/// The conditions this producer watches, for its
+/// [`CheckGuard`](crate::CheckGuard).
+pub const CONDITIONS: [AlarmCondition; 1] = [AlarmCondition::ServeSetIntegrity];
+
 pub fn apply(alarms: &OperatorAlarms, observation: ServeSetObservation) {
     match observation {
         ServeSetObservation::CatchingUp => {
@@ -132,21 +136,21 @@ pub fn apply(alarms: &OperatorAlarms, observation: ServeSetObservation) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{AlarmLifetime, Arming, ConditionState, RaisedAlarm};
+    use crate::{AlarmLifetime, Arming, RaisedAlarm};
 
     fn live(alarms: &OperatorAlarms) -> Option<OperatorAlarm> {
         alarms
             .board()
             .condition(AlarmCondition::ServeSetIntegrity)
-            .and_then(ConditionState::live)
+            .live()
             .map(RaisedAlarm::alarm)
     }
 
-    fn arming(alarms: &OperatorAlarms) -> Option<Arming> {
+    fn arming(alarms: &OperatorAlarms) -> Arming {
         alarms
             .board()
             .condition(AlarmCondition::ServeSetIntegrity)
-            .map(ConditionState::arming)
+            .arming()
     }
 
     fn refreshed(staleness: Staleness) -> ServeSetObservation {
@@ -162,7 +166,7 @@ mod tests {
         apply(&alarms, ServeSetObservation::CatchingUp);
         assert_eq!(
             arming(&alarms),
-            Some(Arming::Disarmed(DisarmedReason::CatchingUp)),
+            Arming::Disarmed(DisarmedReason::CatchingUp),
             "a bound that is not armed must not read as a bound that passed",
         );
         assert!(live(&alarms).is_none());
@@ -174,7 +178,7 @@ mod tests {
         apply(&alarms, refreshed(Staleness::Stale { lag: 99, bound: 10 }));
         assert!(live(&alarms).is_some());
         apply(&alarms, refreshed(Staleness::Current { lag: 1 }));
-        assert_eq!(arming(&alarms), Some(Arming::Armed));
+        assert_eq!(arming(&alarms), Arming::Armed);
         assert!(live(&alarms).is_none());
     }
 
@@ -257,7 +261,7 @@ mod tests {
         apply(&alarms, ServeSetObservation::NotServing);
         assert_eq!(
             arming(&alarms),
-            Some(Arming::Disarmed(DisarmedReason::NotServing)),
+            Arming::Disarmed(DisarmedReason::NotServing),
         );
         assert!(
             alarms.board().unacknowledged().is_empty(),

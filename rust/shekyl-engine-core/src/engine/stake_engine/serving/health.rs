@@ -47,6 +47,7 @@ pub(crate) fn spawn_health_probe(
     cancel: CancellationToken,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
+        let _guard = alarms.check_guard(&shekyl_operator_alarm::serve_health::CONDITIONS);
         let mut window = TickWindow::new();
         report_health(&alarms, window.observe(sample()));
         let mut ticker = tokio::time::interval(cadence);
@@ -71,9 +72,7 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use shekyl_operator_alarm::serve_health::ServeHealthObservation;
-    use shekyl_operator_alarm::{
-        AlarmCondition, Arming, ConditionState, DisarmedReason, OperatorAlarm,
-    };
+    use shekyl_operator_alarm::{AlarmCondition, Arming, DisarmedReason, OperatorAlarm};
 
     use super::*;
 
@@ -95,7 +94,7 @@ mod tests {
     fn live_alarm(board: &shekyl_operator_alarm::AlarmBoard) -> Option<OperatorAlarm> {
         board
             .condition(AlarmCondition::ServeHealth)
-            .and_then(ConditionState::live)
+            .live()
             .map(shekyl_operator_alarm::RaisedAlarm::alarm)
     }
 
@@ -122,9 +121,7 @@ mod tests {
         );
 
         let armed = settle_until(&alarms, |b| {
-            b.condition(AlarmCondition::ServeHealth)
-                .map(ConditionState::arming)
-                .is_some_and(|a| a == Arming::Armed)
+            b.condition(AlarmCondition::ServeHealth).arming() == Arming::Armed
         })
         .await;
         assert!(
@@ -171,8 +168,8 @@ mod tests {
             alarms
                 .board()
                 .condition(AlarmCondition::ServeHealth)
-                .map(ConditionState::arming),
-            Some(Arming::Disarmed(DisarmedReason::NotServing)),
+                .arming(),
+            Arming::Disarmed(DisarmedReason::NotServing),
             "no late reading overwrote the disarm"
         );
     }

@@ -67,10 +67,10 @@ pub fn apply_chain_progress(alarms: &OperatorAlarms, observation: ChainProgressO
 
 /// One claim-leg reading, produced once per fired tick on staker wallets.
 ///
-/// Non-staker wallets produce **no** claim observations: their board has no
-/// `EpochClaim` / `ClaimForfeiture` rows at all, which reads as "not watched"
-/// rather than "not checking" — the honest rendering for a wallet with no
-/// claim obligation to watch.
+/// Non-staker wallets produce **no** claim observations, so their
+/// `EpochClaim` and `ClaimForfeiture` rows stay
+/// [`Unreported`](crate::DisarmedReason::Unreported) for the session: not
+/// checked, because there is no claim obligation to check.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClaimObservation {
     /// Nothing outstanding: every settled epoch is claimed, value-deferred by
@@ -89,8 +89,13 @@ pub enum ClaimObservation {
 }
 
 /// Map one claim-leg reading onto the board.
+///
+/// Arms [`AlarmCondition::ClaimForfeiture`] too: the claim leg evaluates the
+/// forfeit floor on the same fire, so from its first reading a forfeit row
+/// with nothing on it means "checked, nothing forfeited", not "not checked".
 pub fn apply_claim(alarms: &OperatorAlarms, observation: ClaimObservation) {
     alarms.arm(AlarmCondition::EpochClaim);
+    alarms.arm(AlarmCondition::ClaimForfeiture);
     match observation {
         ClaimObservation::Current => alarms.clear(AlarmCondition::EpochClaim),
         ClaimObservation::Behind {
@@ -142,6 +147,28 @@ pub fn apply_pending_outcomes(alarms: &OperatorAlarms, spent_elsewhere: u64, hel
     }
 }
 
+/// The conditions the cadence driver watches, for the driver loop's
+/// [`CheckGuard`](crate::CheckGuard).
+pub const CONDITIONS: [AlarmCondition; 4] = [
+    AlarmCondition::ChainProgress,
+    AlarmCondition::EpochClaim,
+    AlarmCondition::ClaimForfeiture,
+    AlarmCondition::PendingFundsIntegrity,
+];
+
+/// Report that the driver loop has stopped cleanly: every condition it
+/// watches that is still armed reads [`Unreported`](DisarmedReason::Unreported)
+/// until a driver reports again. A row already disarmed keeps its reason, so a
+/// leg parked for a panic still says so. A driver stops cleanly when the wallet closes, or when a
+/// close that could not complete re-arms a new one; either way no check is
+/// running. A live alarm stays: a driver that stopped observed nothing being
+/// fixed.
+pub fn report_driver_stopped(alarms: &OperatorAlarms) {
+    for condition in CONDITIONS {
+        alarms.disarm_if_armed(condition, DisarmedReason::Unreported);
+    }
+}
+
 /// Park a cadence leg's condition after the leg panicked: disarmed, never
 /// healthy-looking, for the rest of the session (§3 leg isolation).
 pub fn park_condition(alarms: &OperatorAlarms, condition: AlarmCondition) {
@@ -154,10 +181,7 @@ mod tests {
     use crate::Arming;
 
     fn state(alarms: &OperatorAlarms, condition: AlarmCondition) -> crate::ConditionState {
-        alarms
-            .board()
-            .condition(condition)
-            .expect("the condition has a row once observed")
+        alarms.board().condition(condition)
     }
 
     /// A stall raises, an advance clears, and the incident is continuous

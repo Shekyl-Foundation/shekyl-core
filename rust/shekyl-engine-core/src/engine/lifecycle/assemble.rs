@@ -365,6 +365,7 @@ impl Engine<SoloSigner> {
             capability,
             refresh_slot: crate::engine::refresh::RefreshSlot::new(),
             open_slots: crate::engine::refresh_slot::OpenTaskSlots::new(),
+            operator_alarms: std::sync::Arc::new(shekyl_operator_alarm::OperatorAlarms::new()),
             pending_gate: crate::engine::pending_post_gate::PendingPostGate::new(),
             refresh,
             economics,

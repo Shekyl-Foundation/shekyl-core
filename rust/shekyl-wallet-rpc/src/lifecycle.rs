@@ -1235,7 +1235,7 @@ async fn restart_tasks(
     daemon: &DaemonTarget,
     tor_file: &TorFile,
 ) -> OpenTasks {
-    let cadence = Engine::start_cadence(shared, daemon, tor_file);
+    let cadence = Engine::start_cadence(shared, daemon, tor_file).await;
     let pscan = match StakeFacade::start_pscan_if_staker(shared.clone(), daemon).await {
         Ok(handle) => handle,
         Err(e) => {

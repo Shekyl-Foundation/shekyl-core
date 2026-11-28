@@ -49,6 +49,10 @@ pub enum DiskObservation {
 /// Total and side-effect-free apart from the board writes — the contract
 /// every producer in this crate keeps, so the state machine is testable by
 /// calling it.
+/// The conditions this producer watches, for its
+/// [`CheckGuard`](crate::CheckGuard).
+pub const CONDITIONS: [AlarmCondition; 1] = [AlarmCondition::ServingDiskHeadroom];
+
 pub fn apply(alarms: &OperatorAlarms, observation: DiskObservation) {
     match observation {
         DiskObservation::NotServing => {
@@ -95,7 +99,6 @@ mod tests {
         alarms
             .board()
             .condition(AlarmCondition::ServingDiskHeadroom)
-            .expect("the condition has a row once observed")
     }
 
     /// The three readings are three different board states — the whole

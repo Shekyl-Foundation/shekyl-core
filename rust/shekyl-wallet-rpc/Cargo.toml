@@ -99,6 +99,13 @@ shekyl-os-account = { path = "../shekyl-os-account", features = ["test-fixture"]
 # feature is on for `cargo test`/`cargo clippy --all-targets` but never for the
 # production dependency edge above (mirrors the shekyl-scanner precedent).
 shekyl-engine-core = { path = "../shekyl-engine-core", features = ["test-helpers"] }
+# The `operator_alarm` tests raise each condition through its real producer
+# (the alarm crate's raise and clear are crate-private by design), and those
+# producers take their inputs in these crates' vocabulary. The production
+# edge reaches all three through shekyl-engine-core already.
+shekyl-operator-alarm = { path = "../shekyl-operator-alarm" }
+shekyl-p-host = { path = "../shekyl-p-host" }
+shekyl-tor-control-wallet = { path = "../shekyl-tor-control-wallet" }
 
 [target.'cfg(unix)'.dev-dependencies]
 # `tests/stops.rs` names the signal a child died by.

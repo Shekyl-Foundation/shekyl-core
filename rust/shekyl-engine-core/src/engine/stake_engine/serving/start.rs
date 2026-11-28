@@ -140,7 +140,7 @@ where
         // outside this lock — `tor_service_config` creates and chmods a
         // directory, and holding the engine `RwLock` across that would stall
         // every other reader on disk.
-        let (stake, curve_tree, base_path, synced_height) = {
+        let (stake, curve_tree, base_path, synced_height, alarms) = {
             let g = self_arc.read().await;
             let stake = match g.stake_handle() {
                 Some(stake) => stake,
@@ -157,6 +157,7 @@ where
                 g.curve_tree.clone(),
                 g.persistence().base_path().to_path_buf(),
                 synced_height,
+                g.operator_alarms(),
             )
         };
 
@@ -264,7 +265,10 @@ where
                 bodies,
             },
             pinner,
-            std::sync::Arc::new(shekyl_operator_alarm::OperatorAlarms::new()),
+            // The engine's board, not one per start: a restart of the host
+            // must not drop a fault still awaiting acknowledgment, and a
+            // reader finds every condition in one place.
+            alarms,
             ServingConfig::production(
                 crate::engine::pscan::start::DEFAULT_PSCAN_CADENCE,
                 // Single-sourced from the same place the submit driver's
@@ -381,6 +385,60 @@ mod tests {
             !shown.contains("example.com"),
             "the refused host must not leak onto a client surface: {shown}"
         );
+    }
+
+    /// A serving start reports onto the engine's own board, the one
+    /// [`Engine::operator_alarms`] returns, and its rows still read there
+    /// after the host is gone. Red edit: hand `spawn_serving_task` a fresh
+    /// `OperatorAlarms` again; the engine's serving rows then stay
+    /// `Unreported` and nothing a reader holds ever hears from serving.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_serving_start_reports_onto_the_engines_board() {
+        use shekyl_operator_alarm::{AlarmCondition, Arming, DisarmedReason};
+
+        let (_tmp, engine) = staker_engine(3).await;
+        activate(&engine, 3).await;
+        let board = engine.operator_alarms();
+        let arc = Arc::new(RwLock::new(engine));
+        let handle = Engine::<SoloSigner>::start_serving_if_staker(
+            arc.clone(),
+            &shekyl_rpc_transport::DaemonTarget::fixture_address("http://127.0.0.1:1"),
+            &TorFile::discover(),
+        )
+        .await
+        .expect("start")
+        .expect("active persona starts a host");
+
+        let serving_rows = [
+            AlarmCondition::TransportLiveness,
+            AlarmCondition::VanguardIntegrity,
+            AlarmCondition::ServeSetIntegrity,
+            AlarmCondition::ServingDiskHeadroom,
+            AlarmCondition::ServeHealth,
+        ];
+        let reported = |b: &shekyl_operator_alarm::AlarmBoard| {
+            serving_rows
+                .iter()
+                .all(|c| b.condition(*c).arming() != Arming::Disarmed(DisarmedReason::Unreported))
+        };
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !reported(&board.board()) && tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert!(
+            reported(&board.board()),
+            "every serving row is reported on the engine's board: {:?}",
+            board.board()
+        );
+
+        handle.shutdown().await;
+        for condition in serving_rows {
+            assert_eq!(
+                board.board().condition(condition).arming(),
+                Arming::Disarmed(DisarmedReason::NotServing),
+                "{condition:?} reads not serving once the host is gone"
+            );
+        }
     }
 
     #[tokio::test(flavor = "multi_thread")]
