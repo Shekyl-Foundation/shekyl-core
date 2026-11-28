@@ -103,10 +103,17 @@ const fn fixed_word(mode: u32) -> ControlWord {
 /// The four fixed words, indexed by RandomX mode.
 const FIXED_WORDS: [ControlWord; 4] = [fixed_word(0), fixed_word(1), fixed_word(2), fixed_word(3)];
 
-/// [`FIXED_WORDS`] at an address: `ldmxcsr` takes no register
-/// operand, so the x86_64 blocks read the fixed word from memory.
+/// The fixed words at addresses: `ldmxcsr` takes no register
+/// operand, so the x86_64 blocks read the fixed word from memory. Each
+/// reference is to a promoted constant (the crate has no `static`
+/// items, `check_randomx_crate_invariants.sh`).
 #[cfg(target_arch = "x86_64")]
-static FIXED_TABLE: [ControlWord; 4] = FIXED_WORDS;
+const FIXED_REFS: [&ControlWord; 4] = [
+    &FIXED_WORDS[0],
+    &FIXED_WORDS[1],
+    &FIXED_WORDS[2],
+    &FIXED_WORDS[3],
+];
 
 /// What a program run needs to compute RandomX floating-point
 /// instructions: the caller's word.
@@ -158,11 +165,11 @@ impl FpEnv {
     }
 
     /// The fixed word for `mode` as the x86_64 blocks take it: a
-    /// reference into [`FIXED_TABLE`].
+    /// reference from [`FIXED_REFS`].
     #[cfg(target_arch = "x86_64")]
     #[inline(always)]
     fn fixed_arg(mode: u32) -> &'static ControlWord {
-        &FIXED_TABLE[(mode & 3) as usize]
+        FIXED_REFS[(mode & 3) as usize]
     }
 
     /// The fixed word for `mode` as the aarch64 blocks take it: in a
