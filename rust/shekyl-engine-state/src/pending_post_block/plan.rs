@@ -219,7 +219,7 @@ pub enum Withdrawal {
 }
 
 /// Where one persona's stake stands. One persona is in one stage
-/// (`ARCHIVAL_BOND_POST_DELAY.md` §3.6). [`PendingPostBlock::stake_stage`]
+/// (`ARCHIVAL_BOND_POST_DELAY.md` §3.6). [`PendingPostBlock::stake_stage`](super::PendingPostBlock::stake_stage)
 /// is the only scan; a new stage is a new arm, and every transition matches
 /// it.
 #[derive(Clone, Copy, Debug)]
@@ -307,7 +307,7 @@ impl<'a> WaitingStake<'a> {
 }
 
 /// An ended plan whose drain is done. Constructible only by
-/// [`PendingPostBlock::drained_plans`], so holding one is the predicate:
+/// [`PendingPostBlock::drained_plans`](super::PendingPostBlock::drained_plans), so holding one is the predicate:
 /// the sealed scan covers the funding block, the slot holds no live funding,
 /// and no drain is in flight.
 ///
@@ -356,7 +356,7 @@ fn assign_wait(slot: &mut Option<PlanWait>, wait: Option<PlanWait>) -> bool {
     true
 }
 
-/// Which row [`PendingPostBlock::stake_stage`] names. The index is the
+/// Which row [`PendingPostBlock::stake_stage`](super::PendingPostBlock::stake_stage) names. The index is the
 /// scan's result, so a mutation does not scan again.
 enum StakeAt {
     Plan(usize),
