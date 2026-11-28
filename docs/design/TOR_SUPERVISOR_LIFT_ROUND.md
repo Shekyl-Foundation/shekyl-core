@@ -336,7 +336,7 @@ before anything that serves, and the signer is kept from it by type.
 
 The probe's request is one fixed-length head:
 
-```
+```text
 GET /shard/18446744073709551615 HTTP/1.1\r\n
 shekyl-pass-request: <146 lowercase hex>\r\n
 \r\n
@@ -667,17 +667,28 @@ below answer them, and **Rick rules the first two**.
      - **Armed and clean:** only a `Reachable` verdict younger than
        `VERDICT_FRESH`.
      - **Live:** `Unreachable`, at any age. It is an episode until reachable.
-     - **Disarmed**, with a reason Part M names (proposed "the first check is
+     - **Disarmed**, with a new reason (proposed "the first check is
        pending"): `NotOffered`, and `Publishing` younger than the bound.
      - **Past the bound** (`Publishing` or `Reachable` with no newer verdict):
        a **live alarm** that reachability is unknown.
-   - **Unknown is an alarm, not a disarm.** For a bonded persona, reachability
-     unknown for longer than the healthy maximum is a failure mode (rule 82),
-     not a quiet "not checked". The live alarm needs one new cause beside the
-     seven, proposed `unchecked`. That is an addition to `shekyl-tor-status`'s
-     wire type, so a minor version bump. The alternative is the wallet lane's
-     suggestion: a disarmed reason past the bound. It is honest, but it does
-     not alarm. **Rick rules which.**
+     - Neither unknown state is ever the clean one.
+   - **The new names are `TSR-W3`'s.** The pending reason and the cause below
+     belong to `TSR-W3`, which brings them to the grammar's rows. They are not
+     in the wallet lane's Part M, which covers what its PR ships.
+   - **Unknown: an alarm or a disarm. Rick rules.**
+     - **The case for an alarm.** For a bonded persona, reachability unknown
+       for longer than the healthy maximum is a failure mode the staker must
+       act on (rule 82), and that should not read as a quiet "not checked".
+       The live alarm needs one new cause beside the seven, proposed
+       `unchecked`. That is an addition to `shekyl-tor-status`'s wire type,
+       so a minor version bump.
+     - **The case for a disarm**, from the wallet lane. The board already has
+       this shape for the disk check: `DisarmedReason::DiskUnreadable` is
+       deliberately not an alarm, because "a broken probe is not evidence the
+       disk is filling" (`shekyl-operator-alarm/src/lib.rs:230–235`). A stale
+       verdict is likewise no evidence that the onion is unreachable. If
+       disarmed, the row's "not checked" says in the persona's words that the
+       staker must act.
 9. **A full serving cap.** Recognition sits behind the cap (§4.2), so a full
    cap shows on this row as unreachable (`probe-missed`) with no capacity
    reading beside it. `refused` is on no alarm today. `serve_health` raises on
