@@ -3876,17 +3876,19 @@ mod fp_control_word_tests {
     use super::*;
     use crate::fpu_rounding::{control_bits, with_caller_word, FLUSH_TO_ZERO_WORD};
 
-    /// Inputs whose hash ends with CFROUND's mode not nearest: where a
-    /// mode left in the hardware would show.
-    fn inputs_ending_directed(n: usize) -> Vec<Vec<u8>> {
+    /// The first `n` inputs whose hash ends with CFROUND's mode not
+    /// nearest, where a mode left in the hardware would show, with
+    /// their hashes; `check` runs after every hash computed.
+    fn hashes_ending_directed(n: usize, mut check: impl FnMut()) -> Vec<(Vec<u8>, [u8; 32])> {
         let p = shared_prepared_cache();
         let mut out = Vec::new();
         for i in 0u32..64 {
             let d = i.to_le_bytes().to_vec();
             let mut st = VmState::new();
-            let _ = compute_hash_inner(&mut st, p, &d);
+            let h = compute_hash_inner(&mut st, p, &d);
+            check();
             if st.fprc != 0 {
-                out.push(d);
+                out.push((d, h));
                 if out.len() == n {
                     return out;
                 }
@@ -3900,28 +3902,25 @@ mod fp_control_word_tests {
 
     #[test]
     fn a_hash_returns_the_control_word_it_found() {
-        let p = shared_prepared_cache();
         let before = control_bits();
-        for d in inputs_ending_directed(2) {
-            let _ = crate::compute_hash(p, &d);
+        let _ = hashes_ending_directed(2, || {
             assert_eq!(
                 control_bits(),
                 before,
                 "control word changed by a hash ({before:#x} -> {:#x})",
                 control_bits()
             );
-        }
+        });
     }
 
     #[test]
     fn a_panic_mid_hash_leaves_the_control_word_it_found() {
         let p = shared_prepared_cache();
-        let d = inputs_ending_directed(1).remove(0);
         let before = control_bits();
-        // Late in the hash, at the first instruction after that point
-        // that runs in a directed mode.
+        // A sixth of the way into the hash, at the first instruction
+        // after that point that runs in a directed mode.
         panic_hook::PANIC_AFTER.with(|c| c.set(1_000_000));
-        let r = std::panic::catch_unwind(|| crate::compute_hash(p, &d));
+        let r = std::panic::catch_unwind(|| crate::compute_hash(p, &[0u8; 4]));
         panic_hook::PANIC_AFTER.with(|c| c.set(u64::MAX));
         assert!(r.is_err(), "the planted panic did not fire");
         let after = control_bits();
@@ -3937,20 +3936,24 @@ mod fp_control_word_tests {
     #[test]
     fn a_hash_under_the_callers_flush_to_zero_is_unchanged() {
         let p = shared_prepared_cache();
-        let inputs = inputs_ending_directed(2);
-        let want: Vec<[u8; 32]> = inputs.iter().map(|d| crate::compute_hash(p, d)).collect();
+        let want = hashes_ending_directed(2, || {});
         let (got, word_after) = with_caller_word(FLUSH_TO_ZERO_WORD, || {
-            let got: Vec<[u8; 32]> = inputs.iter().map(|d| crate::compute_hash(p, d)).collect();
+            let got: Vec<[u8; 32]> = want
+                .iter()
+                .map(|(d, _)| crate::compute_hash(p, d))
+                .collect();
             (got, control_bits())
         });
         assert_eq!(
             word_after, FLUSH_TO_ZERO_WORD,
             "the caller's word must come back"
         );
-        assert_eq!(
-            got, want,
-            "the hash must not depend on the caller's flush-to-zero"
-        );
+        for ((d, w), g) in want.iter().zip(&got) {
+            assert_eq!(
+                g, w,
+                "input {d:?}: the hash must not depend on the caller's flush-to-zero"
+            );
+        }
     }
 }
 
