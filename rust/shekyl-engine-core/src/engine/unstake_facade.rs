@@ -54,7 +54,7 @@
 //! fire only on synthetically constructed states. The terminal sweep is
 //! what makes it reachable: its payment is an **output of selection**
 //! (`Σ selected − fee`, [`select_for_sweep`](super::drain_select)), zero
-//! change by construction, reachable only under a [`TerminalExitObserved`]
+//! change by construction, reachable only under a [`NoExitOwed`]
 //! witness — the carve-amendment rationale lives on that selection arm and
 //! in `PRINCIPAL_STAKE_LIFECYCLE.md`.
 //!
@@ -98,7 +98,7 @@ use super::bond_assembly::SpentRecordsDurablyPruned;
 use super::bond_orchestrator::p_lane_floor_fee;
 use super::drain_dispatch::DrainRequestError;
 use super::drain_orchestrator::{
-    DrainError, DrainIntent, DrainMoved, DrainOrchestrationError, TerminalExitObserved,
+    DrainError, DrainIntent, DrainMoved, DrainOrchestrationError, NoExitOwed,
 };
 use super::emission_source::EmissionSourceError;
 use super::error::PersistenceError;
@@ -139,6 +139,11 @@ pub enum UnstakeOutcome {
         /// discriminant, never settlement truth).
         height: u64,
     },
+    /// The stake was still a plan, not yet signed, so it was withdrawn
+    /// (`ARCHIVAL_BOND_POST_DELAY.md` BD-Q3 as ruled 2026-11-26). Nothing was
+    /// sent; the persona's funding returns to this wallet by a drain the
+    /// staking scan sends.
+    Withdrawn,
 }
 
 /// Why [`StakeFacade::unstake`] refused, flattened for the `pub` boundary
@@ -265,10 +270,13 @@ pub enum UnstakeError {
         /// The daemon's verdict rendering.
         detail: String,
     },
-    /// The exit's seal was saved, but the save was not confirmed on disk,
-    /// so nothing was sent; the seal was removed and the lane is open again
-    /// (Rick, 2026-11-19). The cause is the save's, and names its fix.
-    #[error("the exit was not sent: {0}")]
+    /// A save of the staking records was not confirmed on disk, so nothing
+    /// was sent (Rick, 2026-11-19). For an exit, its seal was removed and the
+    /// lane is open again. For a withdrawal, the plan's ending was written
+    /// but its save not confirmed; nothing was ever sent for a plan, and once
+    /// the save is confirmed the funds are returned. The cause is the
+    /// save's, and names its fix.
+    #[error("nothing was sent: {0}")]
     SealNotSaved(#[source] PersistenceError),
     /// The exit's bytes went out and its fate is the chain's: no verdict, a
     /// retryable one, or a daemon's terminal verdict, which never ends a
@@ -458,6 +466,8 @@ struct ExitEvidence {
 enum UnstakeTarget {
     /// Exit this slot (the first live-bonded slot).
     Post(PSlot),
+    /// Nothing live-bonded, but a stake is still a plan: withdraw it.
+    Withdraw(PCanonicalId),
     /// Nothing live-bonded, but exits are in flight or awaiting collection.
     ExitInProgress,
     /// Nothing live-bonded, but a bond post is confirming.
@@ -479,8 +489,8 @@ fn resolve_unstake_target(evidence: &ExitEvidence) -> Result<UnstakeTarget, &'st
         // Never scanned: no confirmed bond can be observed. In-flight posts
         // can still exist (sealed before the first scan seal).
         return Ok(match evidence.pending.as_ref() {
-            Some(p) if !p.posts().is_empty() => UnstakeTarget::BondConfirming,
-            _ => UnstakeTarget::NothingStaked,
+            Some(p) => in_flight_target(p),
+            None => UnstakeTarget::NothingStaked,
         });
     };
 
@@ -526,14 +536,26 @@ fn resolve_unstake_target(evidence: &ExitEvidence) -> Result<UnstakeTarget, &'st
     if !pscan.pending_releases().is_empty() || sealed_exit {
         return Ok(UnstakeTarget::ExitInProgress);
     }
-    let pending_post = evidence
+    Ok(evidence
         .pending
         .as_ref()
-        .is_some_and(|p| !p.posts().is_empty());
-    if pending_post {
-        return Ok(UnstakeTarget::BondConfirming);
+        .map_or(UnstakeTarget::NothingStaked, in_flight_target))
+}
+
+/// What `unstake` does with a stake that has not bonded (BD-Q3 as ruled
+/// 2026-11-26): a plan not yet signed is withdrawn; a signed post refuses
+/// withdrawal and confirms first; a stake that ended and whose funds are
+/// returning is an exit already in progress.
+fn in_flight_target(pending: &PendingPostBlock) -> UnstakeTarget {
+    if let Some(plan) = pending.plans().first() {
+        UnstakeTarget::Withdraw(plan.persona)
+    } else if !pending.posts().is_empty() {
+        UnstakeTarget::BondConfirming
+    } else if !pending.ended_plans().is_empty() {
+        UnstakeTarget::ExitInProgress
+    } else {
+        UnstakeTarget::NothingStaked
     }
-    Ok(UnstakeTarget::NothingStaked)
 }
 
 /// The `collect_unstaked` resolution verdict.
@@ -709,6 +731,9 @@ where
                 detail: detail.to_owned(),
             })? {
                 UnstakeTarget::Post(slot) => slot,
+                UnstakeTarget::Withdraw(persona) => {
+                    return super::plan_withdraw::withdraw_plan(engine, gate, persona).await;
+                }
                 UnstakeTarget::ExitInProgress => return Err(UnstakeError::ExitInProgress),
                 UnstakeTarget::BondConfirming => return Err(UnstakeError::BondConfirming),
                 UnstakeTarget::NothingStaked => return Err(UnstakeError::NothingStaked),
@@ -751,7 +776,7 @@ where
     /// nonempty pool (engine-resolved; no wire parameter). The pass's
     /// payment is `Σ selected − fee` — exactly zero change, which is what
     /// lets the funded retirement gate finally fire — computed by the
-    /// selection stage under a [`TerminalExitObserved`] witness; no caller
+    /// selection stage under a [`NoExitOwed`] witness; no caller
     /// amount exists to get wrong. The reply carries the two-part
     /// completion fact: see [`CollectOutcome::Swept`].
     pub async fn collect_unstaked(
@@ -818,7 +843,7 @@ where
             let witness = evidence
                 .pscan
                 .as_ref()
-                .and_then(|s| TerminalExitObserved::for_persona(s, p_id))
+                .and_then(|s| NoExitOwed::for_released(s, p_id))
                 .ok_or(CollectUnstakedError::Engine {
                     context: "sweep witness",
                     detail: "the resolved persona lost its observed exit between reads".to_owned(),

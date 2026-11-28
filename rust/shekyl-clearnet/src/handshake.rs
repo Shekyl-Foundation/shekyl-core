@@ -16,7 +16,8 @@ use std::time::{Duration, Instant};
 
 use shekyl_capped_stream::{node_gate, read_granted, write_granted, ReadStop};
 use shekyl_p2p_transport::{
-    prefix_for, Established, Initiator, Responder, SendHalf, MESSAGE1_LEN, MESSAGE2_LEN, PREFIX_LEN,
+    prefix_for, Established, Initiator, InitiatorFlight, Responder, SendHalf, MESSAGE1_LEN,
+    MESSAGE2_LEN, PREFIX_LEN,
 };
 use shekyl_timing_engine::{Clock, Handle, OwnerClass, Tick, WakeWait};
 use shekyl_transport_layer::{LinkDirection, MessageClass};
@@ -41,7 +42,7 @@ struct PoolSpans {
 }
 
 pub(crate) enum Setup {
-    Plain,
+    Native,
     Noise { flight: Vec<u8>, send: SendHalf },
 }
 
@@ -176,7 +177,7 @@ where
         initiator_job(network_id, &fired_job, &tally_job, queued)
     });
     let job = await_job(join, &mut wake, &fired).await;
-    let (initiator, message1, spans) = match job {
+    let (initiator, flight, spans) = match job {
         Ok(Ok(done)) if !fired.load(Ordering::Acquire) => done,
         Ok(Ok(_) | Err(SkipOrFail::Skipped)) => {
             ignore(owner.deregister());
@@ -195,9 +196,6 @@ where
             return Err(Observed::HandshakeOwnFailure);
         }
     };
-    let mut flight = Vec::with_capacity(PREFIX_LEN + message1.len());
-    flight.extend_from_slice(&prefix_for(&network_id));
-    flight.extend_from_slice(&message1);
     let writing = Instant::now();
     let wrote = tokio::select! {
         biased;
@@ -209,7 +207,7 @@ where
             node_gate().leave(LinkDirection::Up, conn);
             false
         }
-        result = write_budgeted(&mut write, conn, &flight) => result,
+        result = write_budgeted(&mut write, conn, flight.as_bytes()) => result,
     };
     if !wrote {
         ignore(owner.deregister());
@@ -322,17 +320,15 @@ fn handshake_job(
         let ready = Responder::new(&network_id)
             .read_message1(message1)
             .map_err(|_| SkipOrFail::Unverified)?;
-        let (established, message2) = ready.write_message2().map_err(|_| SkipOrFail::Own)?;
-        Ok((established, message2))
+        let (established, flight) = ready.write_message2().map_err(|_| SkipOrFail::Own)?;
+        Ok((established, flight))
     })();
     tally.dequeue();
-    let (established, message2) = result?;
+    let (established, flight) = result?;
     tally.compute();
     let compute_ns = span_ns(computing.elapsed());
     let (send, recv) = established_halves(established);
-    let mut flight = Vec::with_capacity(PREFIX_LEN + message2.len());
-    flight.extend_from_slice(&prefix_for(&network_id));
-    flight.extend_from_slice(&message2);
+    let flight = flight.as_bytes().to_vec();
     Ok((
         send,
         SeamRecv::Noise {
@@ -358,7 +354,7 @@ fn initiator_job(
     fired: &AtomicBool,
     tally: &HandshakeTally,
     queued: Instant,
-) -> Result<(Initiator, Vec<u8>, PoolSpans), SkipOrFail> {
+) -> Result<(Initiator, InitiatorFlight, PoolSpans), SkipOrFail> {
     let queue_ns = span_ns(queued.elapsed());
     if fired.load(Ordering::Acquire) {
         tally.skip();
@@ -367,11 +363,11 @@ fn initiator_job(
     }
     let computing = Instant::now();
     match Initiator::new(&network_id) {
-        Ok((initiator, message1)) => {
+        Ok((initiator, flight)) => {
             tally.dequeue();
             Ok((
                 initiator,
-                message1,
+                flight,
                 PoolSpans {
                     queue_ns,
                     compute_ns: span_ns(computing.elapsed()),

@@ -165,7 +165,9 @@ async fn start_pscan_without_a_stake_engine_returns_no_stake_engine() {
     );
     let arc = Arc::new(RwLock::new(engine));
 
-    let result = Engine::<SoloSigner>::start_pscan(arc).await;
+    let result =
+        Engine::<SoloSigner>::start_pscan(arc, &crate::engine::test_support::node_never_reached())
+            .await;
 
     match result {
         Err(PScanStartError::NoStakeEngine) => {}
@@ -182,9 +184,12 @@ async fn start_pscan_if_staker_is_none_for_a_non_staker() {
     let (_tmp, engine) = create_test_engine();
     let arc = Arc::new(RwLock::new(engine));
 
-    let started = Engine::<SoloSigner>::start_pscan_if_staker(arc.clone())
-        .await
-        .expect("non-staker auto-start must not error");
+    let started = Engine::<SoloSigner>::start_pscan_if_staker(
+        arc.clone(),
+        &crate::engine::test_support::node_never_reached(),
+    )
+    .await
+    .expect("non-staker auto-start must not error");
     assert!(started.is_none(), "a non-staker gets no P-scan task");
 
     // Nothing claimed the single-flight slot: the quiet path really did nothing.
@@ -244,23 +249,36 @@ async fn staker_auto_start_single_flight_and_shutdown_releases_the_engine() {
     let arc = Arc::new(RwLock::new(engine));
 
     // Auto-start: a staker gets a running P-scan task.
-    let handle = Engine::<SoloSigner>::start_pscan_if_staker(arc.clone())
-        .await
-        .expect("staker auto-start succeeds")
-        .expect("a staker gets a P-scan handle");
+    let handle = Engine::<SoloSigner>::start_pscan_if_staker(
+        arc.clone(),
+        &crate::engine::test_support::node_never_reached(),
+    )
+    .await
+    .expect("staker auto-start succeeds")
+    .expect("a staker gets a P-scan handle");
     assert!(
         arc.read().await.open_slots.pscan.is_claimed(),
         "the running task holds the single-flight slot"
     );
 
     // Double-start is refused while the first task runs.
-    match Engine::<SoloSigner>::start_pscan(arc.clone()).await {
+    match Engine::<SoloSigner>::start_pscan(
+        arc.clone(),
+        &crate::engine::test_support::node_never_reached(),
+    )
+    .await
+    {
         Err(PScanStartError::AlreadyRunning) => {}
         Ok(_) => panic!("expected AlreadyRunning, got a second handle"),
         Err(other) => panic!("expected AlreadyRunning, got {other:?}"),
     }
     // ... and through the auto-start entry too.
-    match Engine::<SoloSigner>::start_pscan_if_staker(arc.clone()).await {
+    match Engine::<SoloSigner>::start_pscan_if_staker(
+        arc.clone(),
+        &crate::engine::test_support::node_never_reached(),
+    )
+    .await
+    {
         Err(PScanStartError::AlreadyRunning) => {}
         Ok(_) => panic!("expected AlreadyRunning, got a second handle"),
         Err(other) => panic!("expected AlreadyRunning, got {other:?}"),
@@ -313,14 +331,20 @@ async fn pscan_can_be_restarted_after_shutdown() {
     .into_wallet();
     let arc = Arc::new(RwLock::new(engine));
 
-    let first = Engine::<SoloSigner>::start_pscan(arc.clone())
-        .await
-        .expect("first start");
+    let first = Engine::<SoloSigner>::start_pscan(
+        arc.clone(),
+        &crate::engine::test_support::node_never_reached(),
+    )
+    .await
+    .expect("first start");
     first.shutdown().await;
 
-    let second = Engine::<SoloSigner>::start_pscan(arc.clone())
-        .await
-        .expect("restart after shutdown succeeds");
+    let second = Engine::<SoloSigner>::start_pscan(
+        arc.clone(),
+        &crate::engine::test_support::node_never_reached(),
+    )
+    .await
+    .expect("restart after shutdown succeeds");
     second.shutdown().await;
 }
 
@@ -472,6 +496,33 @@ fn the_bond_broadcast_seam_stays_on_the_local_choke_point() {
     );
 }
 
+/// A signing seam for a test that seeds no plan: it is never asked to sign,
+/// and answers `Raced` if it were.
+#[cfg(windows)]
+struct NoSigner;
+
+#[cfg(windows)]
+impl crate::engine::pscan::dispatch::BondPlanSigner for NoSigner {
+    async fn sign_at_due(
+        &self,
+        _persona: shekyl_types::PCanonicalId,
+        _tip: shekyl_types::ChainCount,
+    ) -> crate::engine::bond_plan::PlanAttempt {
+        crate::engine::bond_plan::PlanAttempt::Raced
+    }
+
+    async fn drain_ended(
+        &self,
+        _p_slot: shekyl_types::PSlot,
+        _persona: shekyl_types::PCanonicalId,
+    ) {
+    }
+
+    async fn persona_ended(&self, _p_slot: shekyl_types::PSlot) {}
+
+    async fn slot_retired(&self, _p_slot: shekyl_types::PSlot) {}
+}
+
 /// Records every hand-off it is given and answers each as accepted.
 #[cfg(windows)]
 #[derive(Default)]
@@ -535,11 +586,13 @@ async fn nothing_staking_leaves_on_a_fat_volume() {
     let reference_height = BlockHeight::from_raw(1_000);
     let tip = ChainCount::from_raw(1_010);
     let bond_post = move |byte: u8| PendingBondPost {
+        wait: None,
         p_slot: PSlot::from_raw(u32::from(byte)),
         persona: persona(byte),
         tx_bytes: vec![byte; 4],
-        bond_post_offset_blocks: BlockCount::from_raw(0),
-        anchor_t0: ChainCount::from_raw(1_005),
+        posture: shekyl_engine_state::PlannedPosture::SupportCompleteTree,
+        due: ChainCount::from_raw(1_005),
+        funded_through: BlockHeight::from_raw(990),
         funding_gindexes: gindexes(u64::from(byte)),
         state: PendingPostState::Pending,
         reference_height,
@@ -662,9 +715,11 @@ async fn nothing_staking_leaves_on_a_fat_volume() {
             engine: arc.clone(),
         },
         broadcast.clone(),
+        NoSigner,
         DispatchConfig {
             alarm_horizon_blocks: BlockCount::from_raw(100),
             dispersal_bound: Duration::ZERO,
+            reorg_depth: BlockCount::from_raw(720),
         },
         gate,
     );
@@ -676,6 +731,8 @@ async fn nothing_staking_leaves_on_a_fat_volume() {
                     confirmed_posts: &std::collections::BTreeSet::new(),
                     live_funding: &std::collections::BTreeSet::new(),
                     scanned_through: None,
+                    funding: &std::collections::BTreeMap::new(),
+                    retired: &std::collections::BTreeSet::new(),
                 },
                 &CancellationToken::new(),
             )

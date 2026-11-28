@@ -340,12 +340,10 @@ minted from the loopback bind. An `--anonymous-inbound` bind is
 `OperatorInbound`. It does not convert into `ForwardAddr`, so it is
 not a publish target.
 
-Before the flip, ruling 4's exception is still in force. The option off
-omits the Noise layer the declaration adds, and the socket bytes are the
-session bytes. The differential harness compares those Levin bytes and
+The channel follows the stack plan: clearnet's plan is Noise, and no
+option turns it off. Nothing matches on a network's identity. The
+differential harness compares the Levin bytes inside that channel and
 the session result, as the seam section states.
-The option on follows the stack plan: clearnet's plan is Noise, and that
-is what step 7 evaluates. Neither arm matches on a network's identity.
 The worker count, the blocking cap, the shutdown timeout, and the
 handshake span are the caller's, labelled unmeasured until a measurement
 names them.
@@ -1461,8 +1459,7 @@ declaration, not a new set of branches.
   clearnet provides natively. The stack includes Noise because clearnet
   declares no native encryption. `noise.rs`, `channel.rs` and `prefix.rs`
   are that layer in `shekyl-p2p-transport`. `aead.rs`, `direction.rs` and
-  `symmetric.rs` are the shared state in `shekyl-noise`. The option-off path is the exception in ruling 4;
-  the flip is "enforce the contract". `--proxy` is a D3 dial duty and changes
+  `symmetric.rs` are the shared state in `shekyl-noise`. `--proxy` is a D3 dial duty and changes
   no declared capability.
 - **Tor is a complete overlay, not a VPN.** The Tor connector speaks onion to
   onion. Encryption is end to end to the peer's service, classical only,

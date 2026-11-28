@@ -40,7 +40,7 @@ fn a_name_that_is_not_a_path_is_named_with_its_fault() {
     let terms = glossary();
     assert_eq!(fault("tor-socks-password", &terms), None);
     assert_eq!(fault("log-size-max", &terms), None);
-    assert_eq!(fault("dev-clearnet-encrypt", &terms), None);
+    assert_eq!(fault("dev-relay-cover", &terms), None);
     assert!(fault("tor-socks-tor", &terms)
         .unwrap()
         .contains("not a parent → child edge"));

@@ -19,11 +19,11 @@ use std::sync::Arc;
 
 use shekyl_engine_file::WalletFile;
 use shekyl_engine_state::pending_post_block::{
-    end_date, end_date_disposition, EndDateDisposition, OutcomeKind, RecordKind, SealedRecord,
-    StakingOutcome, TerminalCause,
+    end_date, end_date_disposition, record_was_sent, EndDateDisposition, OutcomeKind, RecordKind,
+    SealedRecord, StakingOutcome, TerminalCause,
 };
 use shekyl_engine_state::pscan_state::PScanState;
-use shekyl_engine_state::{PendingPostBlock, PendingPostState};
+use shekyl_engine_state::{PendingPostBlock, PendingPostState, PlanWait};
 use shekyl_types::{BlockCount, BlockHeight, ChainCount, GlobalOutputIndex, PCanonicalId};
 use shekyl_units::AtomicUnits;
 use tokio::sync::RwLock;
@@ -85,6 +85,15 @@ pub struct Sends {
 /// after it, still carrying the cause.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InFlightState {
+    /// A stake that has not been sent (`ARCHIVAL_BOND_POST_DELAY.md` BD-Q3):
+    /// a plan, or a post never sent whose re-sign is blocked. `wait` is why
+    /// its last attempt at or past due was not signed, if one was blocked
+    /// (ruled 2026-11-26: "`in_flight` shows the reason"). The wire calls it
+    /// `pending`, the state WR-Q1 ruled a planned stake fits.
+    Planned {
+        /// Why the last attempt was blocked, if it was.
+        wait: Option<PlanWait>,
+    },
     /// Sealed, not yet sent.
     Pending,
     /// Sent at least once and still able to land.
@@ -138,7 +147,53 @@ impl InFlightState {
                  did land is not lost. This should not happen; check the wallet's logs."
                     .to_owned(),
             ),
-            Self::Pending | Self::Dispatched | Self::Expired { cause: None, .. } => None,
+            Self::Planned { wait: Some(wait) } => Some(plan_wait(*wait).to_owned()),
+            Self::Planned { wait: None }
+            | Self::Pending
+            | Self::Dispatched
+            | Self::Expired { cause: None, .. } => None,
+        }
+    }
+}
+
+/// Why a due stake was not signed, in the user's words (rule 81). Exhaustive
+/// with no wildcard: a new reason does not compile until it has a sentence.
+fn plan_wait(wait: PlanWait) -> &'static str {
+    match wait {
+        PlanWait::NodeUnreachable => {
+            "Your stake is due, but your node cannot be reached. It is sent once it can be."
+        }
+        PlanWait::NodeSyncing => {
+            "Your stake is due, but your node is still catching up. It is sent once it has."
+        }
+        PlanWait::WalletBehind => {
+            "Your stake is due, but this wallet is still catching up with the chain. It is \
+             sent once it has."
+        }
+        PlanWait::FeeAboveFunding => {
+            "Your stake is due, but network fees are above what its funds can pay. It is \
+             sent when fees fall; if they stay high too long, it stops and its funds come \
+             back to this wallet."
+        }
+        PlanWait::NodeNotLocal => {
+            "Your stake is due, but it can only be sent through this computer's own node. \
+             Switch the wallet back to it; if that takes too long, the stake stops and its \
+             funds come back to this wallet."
+        }
+        PlanWait::NodeMismatch => {
+            "Your stake is due, but your node's answers do not match the chain this wallet \
+             checked. It is retried; if this lasts too long, the stake stops and its funds \
+             come back to this wallet."
+        }
+        PlanWait::StoreFailed => {
+            "Your stake is due, but the archive data it must keep could not be written to \
+             disk. Check free space; if this lasts too long, the stake stops and its funds \
+             come back to this wallet."
+        }
+        PlanWait::AssemblyFailed => {
+            "Your stake is due, but it could not be put together (the wallet's log says \
+             why). It is retried; if this lasts too long, the stake stops and its funds \
+             come back to this wallet."
         }
     }
 }
@@ -203,12 +258,50 @@ impl ReportedOutcome {
                     false,
                 )
             }
+            // A stake that never left this wallet (a plan, BD-Q3) ends with
+            // its persona: what is left returns to the wallet's own balance.
+            OutcomeKind::SpentElsewhere if !self.sent => (
+                format!(
+                    "Some of the funds set aside for this {} were spent by another \
+                     transaction, so it was stopped before anything was sent. The \
+                     rest are being returned to this wallet. This should not happen; \
+                     check the wallet's logs and your keys.",
+                    noun(self.kind)
+                ),
+                false,
+            ),
             OutcomeKind::SpentElsewhere => (
                 "Some of the funds set aside for this were spent by another \
                  transaction. The rest are spendable again. This should not \
                  happen; check the wallet's logs and your keys."
                     .to_owned(),
                 true,
+            ),
+            OutcomeKind::Withdrawn => (
+                format!(
+                    "You withdrew this {} before it was sent. Its funds are being \
+                     returned to this wallet.",
+                    noun(self.kind)
+                ),
+                false,
+            ),
+            OutcomeKind::Unbondable => (
+                format!(
+                    "This {} could not be made: your node no longer holds the archive \
+                     data it would have to keep. Nothing was sent, and its funds are \
+                     being returned to this wallet.",
+                    noun(self.kind)
+                ),
+                false,
+            ),
+            OutcomeKind::WaitedOut => (
+                format!(
+                    "This {} could not be sent for too long after it was due, so it \
+                     was stopped. Nothing was sent, and its funds are being returned \
+                     to this wallet.",
+                    noun(self.kind)
+                ),
+                false,
             ),
         };
         if linkable && self.sent {
@@ -410,6 +503,13 @@ fn project(
             funds_return_at,
         };
     }
+    // A post never sent can be blocked on its re-sign. The reason lives on
+    // that row, and the wire still calls the state `pending`.
+    if let Some(wait) = record.sign_wait {
+        if !record_was_sent(record.state, record.terminal) {
+            return InFlightState::Planned { wait: Some(wait) };
+        }
+    }
     if matches!(record.state, PendingPostState::Dispatched { .. }) {
         InFlightState::Dispatched
     } else {
@@ -437,15 +537,14 @@ fn tip_of(at: ChainCount) -> BlockHeight {
 /// wallet's own distinct outputs, so that is corrupt state; a money total
 /// is never wrapped.
 fn reserved_amount(
-    record: &SealedRecord<'_>,
+    reserved: &[GlobalOutputIndex],
     evidence: ScanEvidence<'_>,
 ) -> Result<Option<AtomicUnits>, ReservedOverflow> {
     let Some(funding) = evidence.funding else {
         return Ok(None);
     };
     AtomicUnits::checked_sum(
-        record
-            .reserved
+        reserved
             .iter()
             .filter_map(|gindex| funding.get(gindex).copied()),
     )
@@ -468,23 +567,30 @@ pub(crate) fn in_flight(
     ledger_tip: BlockHeight,
     evidence: ScanEvidence<'_>,
 ) -> Result<Vec<InFlightRecord>, ReservedOverflow> {
-    block
-        .sealed_records()
-        .map(|record| {
-            Ok(InFlightRecord {
-                kind: record.kind,
-                state: project(record, ledger_tip, evidence),
-                sends: match record.state {
-                    PendingPostState::Pending => None,
-                    PendingPostState::Dispatched { at, attempts } => Some(Sends {
-                        first_at_height: tip_of(at),
-                        attempts,
-                    }),
-                },
-                reserved: reserved_amount(&record, evidence)?,
-            })
+    // Plans first (a stake not yet signed), then the sealed records.
+    let plans = block.plans().iter().map(|plan| {
+        Ok(InFlightRecord {
+            kind: RecordKind::Post,
+            state: InFlightState::Planned { wait: plan.wait },
+            sends: None,
+            reserved: reserved_amount(&plan.funding_gindexes, evidence)?,
         })
-        .collect()
+    });
+    let sealed = block.sealed_records().map(|record| {
+        Ok(InFlightRecord {
+            kind: record.kind,
+            state: project(record, ledger_tip, evidence),
+            sends: match record.state {
+                PendingPostState::Pending => None,
+                PendingPostState::Dispatched { at, attempts } => Some(Sends {
+                    first_at_height: tip_of(at),
+                    attempts,
+                }),
+            },
+            reserved: reserved_amount(record.reserved, evidence)?,
+        })
+    });
+    plans.chain(sealed).collect()
 }
 
 /// Stakes [`project`] reads as [`InFlightState::Held`] at `ledger_tip`.

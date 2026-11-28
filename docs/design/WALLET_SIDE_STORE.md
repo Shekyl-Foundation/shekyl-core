@@ -1022,8 +1022,9 @@ lied at the restore base.
 
 #### 6.4.4 What comes after this, in order
 
-1. **When the fill runs** — from `Engine::assemble_bond_post`, before the
-   bond is posted, on the deadlines in §6.5 (`WSS-Q4`). A shard joining
+1. **When the fill runs** — at the stake request, before the plan is
+   sealed, and again in `Engine::sign_bond_at_due` at the plan's due block,
+   before the bond is signed, on the deadlines in §6.5 (`WSS-Q4`). A shard joining
    holdings is not the trigger: `HoldingsUpdate` is rejected, and the store
    is filled before the post names the shard.
 2. **The serving interface** — a **whole-shard** byte stream to
@@ -1143,11 +1144,11 @@ failed fill means the post is not made, and the operator is told.
 A shard joins a bond at `JoinMarket` or never (`HoldingsUpdate` is REJECTED
 with the immutable bond, [`PRINCIPAL_STAKE_LIFECYCLE.md`](PRINCIPAL_STAKE_LIFECYCLE.md)
 §5.3), so fill-then-post is the whole rule. Every `JoinMarket` is assembled by
-one function, `Engine::assemble_bond_post`
-(`shekyl-engine-core/src/engine/bond_orchestrator.rs`), which `first_stake`
-calls and the emission walk's market-bond fixture calls with the shard set it
-names. The fill and the refusal sit there, so no entry reaches the post
-without them.
+one function, `Engine::sign_bond_at_due`
+(`shekyl-engine-core/src/engine/bond_due.rs`), at the due block of a plan that
+`first_stake` seals, or that the emission walk's market-bond fixture seals with
+the shard set it names (`seal_bond_plan`). The fill and the refusal sit there,
+so no entry reaches the post without them.
 
 **This is also what makes §6.4.3's boundary refusal free.** A fill refused
 because shard `k` fails a boundary check happens **before anything is
@@ -1302,9 +1303,8 @@ during the freeze epoch, before the post is admissible (§6.5.2).
 - **Fill first, as a type.** `FilledHoldings` (`holdings_fill.rs`) follows
   `DurableTxBytes`: a private field, no `Clone`, minted only by
   `fill_complete_tree` and `fill_market` once every owed shard is held.
-  `Engine::assemble_bond_post` and the stake engine's `AssembleBond` and
-  `PlanBondPost` take it, so no vin is built from holdings a fill did not
-  return.
+  `Engine::sign_bond_at_due` and the stake engine's `AssembleBond` take it,
+  so no vin is built from holdings a fill did not return.
 - **Owed and final.** A shard is final when its close sits at least the
   process's reorg cap below the claimed tip (`ClosedUniverse::final_before`
   for the next block), read from the sealed fold. A `CompleteTree` bond owes

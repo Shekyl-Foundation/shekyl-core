@@ -1,9 +1,10 @@
 # P2P differential harness
 
 **Status: OPEN.** The epee recording host is deleted. CI is
-`check-goldens` against the option-off parity goldens
-(`p2p-harness-seeds`). Option off, on loopback. The comparison is
-what the peer receives back and whether the session is established.
+`check-goldens` against the parity goldens (`p2p-harness-seeds`), on
+loopback, over the clearnet channel. The transcripts are the Levin bytes
+inside that channel, never ciphertext. The comparison is what the peer
+receives back and whether the session is established.
 
 ## Expected divergences
 
@@ -56,7 +57,7 @@ against either host.
 Two hosts, each with a recording handler:
 
 - `seam-host`, the Rust host. Until zone bind its socket is the public
-  clearnet `listen` with the option off. The session bytes are what
+  clearnet `listen`, so its channel is Noise. The session bytes are what
   the seam delivers to the Levin handler. It does not use the
   connector's tests, and it does not open a second admission table.
 - `epee-host` (deleted). It hosted `boosted_tcp_server`, served
@@ -197,8 +198,7 @@ keyed by seed. `record-goldens` writes that scope
 version line, the parity fields, and nothing else. Events are omitted.
 A send-over suffix past the script's handshake response is omitted.
 The six deferred invariants are not transcript fields, so they are
-not in the files. Recorded at `88a202195`. Option-off goldens;
-re-recorded at the flip per §Goldens. The epee host is deleted
+not in the files. Recorded at `88a202195`. The epee host is deleted
 with that server. CI runs `check-goldens` on these files.
 **Re-recorded 2026-10-13 (PR-3), from the seam:** the handshake carries
 no `address` (ruled 2026-10-09), so every handshake is 44 bytes

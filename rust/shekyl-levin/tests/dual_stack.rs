@@ -36,6 +36,11 @@ use shekyl_levin::{
 #[path = "support/owner_socket_dir.rs"]
 mod owner_socket_dir;
 
+#[path = "support/sealed_stream.rs"]
+mod sealed_stream;
+
+use sealed_stream::SealedStream;
+
 /// Regtest (`--network regtest`) derives its id from its own genesis pin.
 fn regtest_network_id() -> shekyl_p2p_transport::NetworkId {
     shekyl_p2p_transport::network_id_from_genesis(&shekyl_rpc_types::genesis_hash_for(
@@ -279,7 +284,7 @@ fn from_hex(b: u8) -> Option<u8> {
 }
 
 struct Session {
-    stream: TcpStream,
+    stream: SealedStream,
     reader: BucketReader,
     log_path: PathBuf,
 }
@@ -299,6 +304,12 @@ impl Session {
             .set_write_timeout(Some(Duration::from_secs(15)))
             .expect("write timeout");
         stream.set_nodelay(true).expect("nodelay");
+        let stream = SealedStream::open(stream, &regtest_network_id()).unwrap_or_else(|e| {
+            panic!(
+                "the clearnet channel to {p2p_port}: {e}; log tail:\n{}",
+                log_tail(&log_path)
+            )
+        });
         Self {
             stream,
             reader: BucketReader::new(),

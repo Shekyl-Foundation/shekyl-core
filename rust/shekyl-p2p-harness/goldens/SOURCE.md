@@ -6,4 +6,5 @@ The first line is the transcript version. The fields are the parity
 scope: wire bytes and the session outcome. Events are omitted. A
 send-over suffix past the script's handshake response is omitted.
 The six deferred invariants are not transcript fields.
-Option-off goldens; re-recorded at the flip per §Goldens.
+The files are the Levin bytes inside the channel, so the Noise flip
+(Rick, 2026-11-23) leaves them unchanged.

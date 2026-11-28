@@ -209,8 +209,9 @@ pub(crate) mod body_reconcile;
 // funding-sweep policy over the sealed `PFundingOutputRecord` set (GF-4b
 // sweep semantics), and the assemble path's typed failure surface.
 pub(crate) mod bond_assembly;
-// WI-2 §3.3 Engine-side `assemble_bond_post` orchestrator (public halves +
-// persist-before-return via an independent `PendingPostStore`).
+// The Engine-side bond orchestrator (WI-2 §3.3): a stake request seals a plan
+// (`seal_bond_plan`), persisted before return through an independent
+// `PendingPostStore`; `bond_due` signs it at its due block.
 pub(crate) mod bond_orchestrator;
 // SA-R-6 bond watch: shared `Input::BondPost` lift + merge sighting adoption.
 pub(crate) mod bond_watch;
@@ -387,12 +388,16 @@ pub mod stake_facade;
 // `Engine::persist_bond_record`. Inert until 2c-2b's `plan_bond_post` consumes the
 // ticket; produced here so the cross-split contract is an unforgeable type.
 pub(crate) mod stake_persist;
-/// Bond-PR 2c-2b (Round 2): typed timing-seam newtypes — `BlockSpan`, `SebSpan`,
-/// `NetworkGap`, `EconomicSpacing`, and their named default constants. Prevents
-/// cross-applying the block-level standoff window with the economic SEB spacing
-/// (distinct inner types → compile error on cross-apply). Design-now; real checks
-/// wire in cold-start / 2d wiring.
+/// Bond-PR 2c-2b (Round 2): the typed timing seam — `BlockSpan`, `NetworkGap` and
+/// the bond-post delay's window (`ARCHIVAL_BOND_POST_DELAY.md` BD-Q2; the
+/// funding-to-bond floor was deleted under BD-Q5).
 pub(crate) mod stake_timing;
+// BD-Q2/BD-Q3: when a planned stake comes due and how long it may wait.
+pub(crate) mod bond_plan;
+// BD-Q3: signing a stake at its due block, and draining an ended persona.
+pub(crate) mod bond_due;
+// BD-Q3: the owner withdraws a stake that is still a plan.
+pub(crate) mod plan_withdraw;
 pub mod submit;
 // Transfer / pending-tx workflow (extracted from the former monofile
 // `local_pending_tx.rs` — see `docs/design/ENGINE_COMPOSITION_DECOMPOSITION.md`).

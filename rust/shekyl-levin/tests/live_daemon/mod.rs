@@ -25,6 +25,11 @@ use shekyl_levin::{
 #[path = "../support/owner_socket_dir.rs"]
 mod owner_socket_dir;
 
+#[path = "../support/sealed_stream.rs"]
+pub mod sealed_stream;
+
+use sealed_stream::SealedStream;
+
 pub struct Daemon {
     pub child: Child,
     pub data_dir: PathBuf,
@@ -46,6 +51,16 @@ impl Daemon {
     /// `descriptor_limit` (Unix: `ulimit -n` in the shell that execs the
     /// daemon, so nothing but the child is limited) and the log level given.
     pub fn start_with(test: &str, descriptor_limit: Option<u64>, log_level: &str) -> Self {
+        Self::start_with_options(test, descriptor_limit, log_level, &[])
+    }
+
+    /// [`Self::start_with`], with `options` after the rig's own.
+    pub fn start_with_options(
+        test: &str,
+        descriptor_limit: Option<u64>,
+        log_level: &str,
+        options: &[&str],
+    ) -> Self {
         let bin = PathBuf::from(std::env::var_os("SHEKYLD_BIN").unwrap_or_else(|| {
             panic!(
                 "SHEKYLD_BIN not set. Build the daemon and run e.g. \
@@ -71,7 +86,7 @@ impl Daemon {
         // constant (`out-peers` is a rejected row). Regtest's default is the
         // managed Tor; `--tor off` keeps this rig clearnet-only
         // (DAEMON_CONFIG_CUTOVER.md §5.1).
-        let args = [
+        let rig = [
             "--network",
             "regtest",
             "--tor",
@@ -95,10 +110,11 @@ impl Daemon {
             "--rpc-socket-dir",
             socket_dir.to_str().expect("utf8 socket dir"),
         ];
+        let args: Vec<&str> = rig.iter().copied().chain(options.iter().copied()).collect();
         let mut command = match descriptor_limit {
             None => {
                 let mut c = Command::new(&bin);
-                c.args(args);
+                c.args(&args);
                 c
             }
             Some(limit) => {
@@ -110,7 +126,7 @@ impl Daemon {
                     .arg("sh")
                     .arg(limit.to_string())
                     .arg(&bin)
-                    .args(args);
+                    .args(&args);
                 c
             }
         };
@@ -202,6 +218,24 @@ pub fn distinct_ports<const N: usize>() -> [u16; N] {
         ports[i] = port;
     }
     ports
+}
+
+/// The body of a `json_rpc` call of `method` with no parameters, or `None`
+/// when the daemon did not answer.
+pub fn rpc_body(rpc_port: u16, method: &str) -> Option<String> {
+    let mut s = TcpStream::connect(("127.0.0.1", rpc_port)).ok()?;
+    s.set_read_timeout(Some(Duration::from_secs(2))).ok()?;
+    let body = format!(r#"{{"jsonrpc":"2.0","id":0,"method":"{method}"}}"#);
+    let req = format!(
+        "POST /json_rpc HTTP/1.1\r\nHost: 127.0.0.1:{rpc_port}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    s.write_all(req.as_bytes()).ok()?;
+    let mut buf = Vec::new();
+    s.read_to_end(&mut buf).ok()?;
+    let text = String::from_utf8_lossy(&buf);
+    let start = text.find("\r\n\r\n")? + 4;
+    Some(text[start..].to_string())
 }
 
 pub fn rpc_ok(rpc_port: u16) -> bool {
@@ -357,7 +391,10 @@ pub fn spawn_peer(
         drop(stream.set_read_timeout(Some(Duration::from_millis(500))));
         drop(stream.set_write_timeout(Some(Duration::from_secs(10))));
         drop(stream.set_nodelay(true));
-        let mut s = stream;
+        // A daemon past its ceiling closes the socket here.
+        let Ok(mut s) = SealedStream::open(stream, &regtest_network_id()) else {
+            return PeerOutcome::Closed;
+        };
         let mut reader = BucketReader::new();
         let req = HandshakeRequest {
             node_data: BasicNodeData {

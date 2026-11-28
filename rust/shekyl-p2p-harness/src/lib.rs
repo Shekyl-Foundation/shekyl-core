@@ -7,7 +7,7 @@
 //!
 //! One scripted peer, one seam host, a comparator, and a driver.
 //! The epee host was the C++ recording binary. It is deleted. CI is
-//! [`check_goldens`] against the option-off parity goldens.
+//! [`check_goldens`] against the parity goldens.
 //! This crate does not link epee.
 //! [`compare::DeferredInvariant`] is the vocabulary of the checks that
 //! need no epee reference. A golden changes only with a ruling, in

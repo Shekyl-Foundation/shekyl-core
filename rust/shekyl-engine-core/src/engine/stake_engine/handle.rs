@@ -26,7 +26,7 @@ use super::actor::StakeEngine;
 use super::bond::{AssembleBond, AssembledBondPost};
 use super::claim::{AssembleEmissionClaim, AssembledEmissionClaim};
 use super::persona::{
-    ActivatePersona, ActivePersona, ActivePersonaPaymentDestination, BondPostPlacement,
+    ActivatePersona, ActivePersona, ActivePersonaPaymentDestination, DeactivateEndedPersona,
     MintPersonaHandle, PersonaIdentityOf, PersonaOnionIdentityOf, PlanBondPost,
     SignReceiptTranscript,
 };
@@ -223,6 +223,17 @@ impl StakeEngineHandle {
             .map_err(collapse_send_error)
     }
 
+    /// Stop an ended persona being the active one ([`DeactivateEndedPersona`]).
+    pub(crate) async fn deactivate_ended_persona(
+        &self,
+        p_slot: PSlot,
+    ) -> Result<(), StakeEngineError> {
+        self.actor
+            .ask(DeactivateEndedPersona { p_slot })
+            .await
+            .map_err(collapse_send_error)
+    }
+
     /// The public identity of the currently-active persona, or `None` when idle.
     pub(crate) async fn active_persona(&self) -> Result<Option<PersonaIdentity>, StakeEngineError> {
         self.actor
@@ -306,50 +317,35 @@ impl StakeEngineHandle {
             .map_err(collapse_send_error)
     }
 
-    /// Construct a JoinMarket archival bond-post vin for the persona named by
-    /// `handle` (Bond-PR 2c-2b), returning the constructed vin **paired with**
-    /// its block-timed placement plan ([`BondPostPlacement`]). No on-vin
-    /// signature (SA-2b); surface-A signing is the assemble path.
+    /// Plan the stake for the persona named by `handle`: draw the bond-post
+    /// delay, once (BD-Q2). Nothing is built or signed; see [`PlanBondPost`].
     ///
     /// Consumes both `handle` (operation-scoped capability, typed contract #2)
     /// and `ticket` (persist-before-use witness, typed contract #1) by value,
-    /// so "construct before persist" and "construct for an unheld persona" are
+    /// so "plan before persist" and "plan for an unheld persona" are
     /// uncallable.
-    ///
-    /// See [`PlanBondPost`] for the full caller workflow.
     ///
     /// # Errors
     ///
     /// - [`StakeEngineError::StakeActorUnavailable`] — actor stopped (terminal).
     /// - [`StakeEngineError::StaleHandle`] — the handle is from a prior
-    ///   generation *or* its slot is no longer in the held set. Both collapse to
-    ///   `StaleHandle` in `validate_handle` (a wipe advances the generation, so a
-    ///   stale-generation handle and a no-longer-held slot are the same failure).
-    ///   `LookaheadExhausted` is *not* reachable here — it is a `mint_handle`
-    ///   error; construction only validates an already-minted handle.
+    ///   generation *or* its slot is no longer in the held set.
     /// - [`StakeEngineError::SlotMismatch`] — `handle.p_slot != ticket.p_slot`.
     /// - [`StakeEngineError::RngSourceFailed`] — OS entropy source unavailable.
     /// - [`StakeEngineError::RngDegeneracy`] — the entry-gap run collided; the source is stuck.
-    /// - [`StakeEngineError::BondBuild`] — bond construction failed (see inner).
-    #[allow(dead_code)] // 2c-2b: the production caller lands with the request path; today's callers are all `cfg(test)`.
     pub(crate) async fn plan_bond_post(
         &self,
         handle: PersonaHandle,
         ticket: crate::engine::stake_persist::PersistedBondTicket,
-        holdings: FilledHoldings,
-    ) -> Result<BondPostPlacement, StakeEngineError> {
+    ) -> Result<BlockCount, StakeEngineError> {
         self.actor
-            .ask(PlanBondPost {
-                handle,
-                ticket,
-                holdings,
-            })
+            .ask(PlanBondPost { handle, ticket })
             .await
             .map_err(collapse_send_error)
     }
 
     /// Ask the actor to assemble the full, broadcast-ready JoinMarket bond
-    /// (`AssembleBond`). Engine-side caller is [`Engine::assemble_bond_post`](crate::engine::Engine::assemble_bond_post)
+    /// (`AssembleBond`). Engine-side caller is [`Engine::sign_bond_at_due`](crate::engine::Engine::sign_bond_at_due)
     /// (WI-2 §3.3), so this carries no suppression. Go-live still needs
     /// **both** SP-R0 / 2d-1 pruning **and** the RPC stake entry — neither
     /// alone (half (a) landed 2026-07-18 with SP-R0 arm #1; half (b) remains).

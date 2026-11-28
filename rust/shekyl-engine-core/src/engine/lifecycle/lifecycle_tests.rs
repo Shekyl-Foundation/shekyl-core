@@ -730,7 +730,12 @@ async fn a_stale_pscan_seal_refuses_the_staker_start_naming_the_file_and_version
     let expected_path = shekyl_engine_file::paths::pscan_state_path_from(&fix.base_path);
 
     let arc = std::sync::Arc::new(tokio::sync::RwLock::new(opened));
-    match Engine::<SoloSigner>::start_pscan(arc.clone()).await {
+    match Engine::<SoloSigner>::start_pscan(
+        arc.clone(),
+        &crate::engine::test_support::node_never_reached(),
+    )
+    .await
+    {
         Err(PScanStartError::StateFileVersionUnsupported {
             path,
             found,
@@ -747,7 +752,11 @@ async fn a_stale_pscan_seal_refuses_the_staker_start_naming_the_file_and_version
     // The single-flight slot was released on the refusal (RAII guard), so a
     // second start refuses the same way rather than with `AlreadyRunning`.
     assert!(matches!(
-        Engine::<SoloSigner>::start_pscan(arc.clone()).await,
+        Engine::<SoloSigner>::start_pscan(
+            arc.clone(),
+            &crate::engine::test_support::node_never_reached()
+        )
+        .await,
         Err(PScanStartError::StateFileVersionUnsupported {
             found: PSCAN_STATE_VERSION_KEYLESS_JOIN,
             ..

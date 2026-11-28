@@ -10,7 +10,6 @@
 
 use std::fmt::{self, Write};
 
-#[cfg(test)]
 use shekyl_economics::params::TX_VOLUME_WINDOW;
 
 use crate::rng::HONEST_SEEDS;
@@ -351,9 +350,9 @@ fn write_row(out: &mut impl Write, row: &Row, scope: Scope) -> fmt::Result {
 /// line per row, the figures the rulings read, each the median across the
 /// row's seeds as the narration prints it. The full run's narration and JSON
 /// summary are the record behind it; neither is committed, and the repo keeps
-/// the SHA-256 of each. Test code: the nightly slice's table and the full
-/// table are each rebuilt from their run by a pin.
-#[cfg(test)]
+/// the SHA-256 of each. The nightly slice's table and the full table are
+/// each rebuilt from their run by a pin. A slice cell prints its table
+/// beside production's (§5.38).
 pub(super) fn table(summary: &Summary) -> String {
     let mut out = String::new();
     write_table(&mut out, &summary.rows).expect("String sink is infallible");
@@ -363,7 +362,6 @@ pub(super) fn table(summary: &Summary) -> String {
 /// The derived table's columns, in order: the row's names, then security,
 /// release and burn, inclusion, bloat, distribution, archival, and the
 /// reward against the fees with the year the tail era begins.
-#[cfg(test)]
 pub(super) const TABLE_COLUMNS: [&str; 41] = [
     "scenario",
     "zone",
@@ -410,13 +408,11 @@ pub(super) const TABLE_COLUMNS: [&str; 41] = [
 
 /// The narration's median of `values` ([`median_and_range`]), as `digits`
 /// decimals, or `-`.
-#[cfg(test)]
 fn med(values: &[f64], digits: usize) -> String {
     median_and_range(values)
         .map_or_else(|| "-".into(), |(median, _, _)| format!("{median:.digits$}"))
 }
 
-#[cfg(test)]
 #[allow(clippy::cast_precision_loss)]
 fn write_table(out: &mut impl Write, rows: &[Row]) -> fmt::Result {
     writeln!(
