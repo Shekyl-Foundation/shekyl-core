@@ -444,7 +444,7 @@ DECIDED_DARK=(
 #     the persona's wallet serving its shard on an onion, the mining
 #     daemon's producer reading it, the served epoch's bundles admitted and
 #     settled, the claim accepted and paid, and the reward re-discovered by
-#     the wallet's P-scan. First green on dev 2026-11-24 (391eee001b).
+#     the wallet's P-scan.
 #     Prior reds: sabotage 2026-09-08 (was ARMED_SLOW).
 ACCEPTANCE=(
   engine::regtest_e2e::e2e_emission_claim_accepted_and_applied

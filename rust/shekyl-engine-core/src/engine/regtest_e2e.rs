@@ -4639,15 +4639,13 @@ async fn pscan_until(
 /// drains on the first batch; the loop stays as the fill-policy-agnostic
 /// shape (a tx skipped by a readiness check retries rather than failing the
 /// caller). Pass `blocks_per_batch = 1` when the caller needs the tx's block
-/// to be the tip at return (the emission e2e's depth-1 pop leg pops exactly
-/// it).
+/// to be the tip at return.
 async fn mine_until_pool_drains(daemon: &RegtestDaemon, what: &str, blocks_per_batch: u64) {
     let mine_deadline = Instant::now() + Duration::from_secs(240);
     // Condition checked BEFORE every batch: an already-drained pool must
     // not advance the chain. Callers passing `blocks_per_batch = 1` rely on
-    // the tx's block being the tip when this returns (the A5a depth-1 pop
-    // pops exactly it), and an unconditional first batch would bury it
-    // under an empty block.
+    // the tx's block being the tip when this returns, and an unconditional
+    // first batch would bury it under an empty block.
     while daemon.tx_pool_size().await > 0 {
         assert!(
             Instant::now() < mine_deadline,
@@ -5312,8 +5310,9 @@ async fn e2e_staker_bond_post_accepted_and_applied() {
 /// is settled, at the slash pass in the last block of `J + 2`, so the walk
 /// mines up to that block one at a time and claims within
 /// `REF_ANCHOR_AGE` of it. The pinned ordering
-/// `epoch_close < referenceBlock < settle ≤ claim tip` follows. The A5b pop
-/// leg straddles that pass.
+/// `epoch_close < referenceBlock < settle ≤ claim tip` follows. The pops
+/// that straddled this pass are single-daemon tests on Chain L
+/// (`CHAIN_FORGE.md` §12.2).
 ///
 /// **Conservation (A6, `§9.5 item 8`).** The claim's reward vout must equal
 /// `budget_atomic(1)` byte-exactly — the daemon's per-block accrual
@@ -5496,8 +5495,7 @@ async fn e2e_emission_claim_accepted_and_applied() {
     // read 404 (`stake_engine/serving/start.rs`), so no draw of the served
     // epoch could pass, and the walk would learn it hours later at the
     // epoch's close. Filling the store is the wallet's, before it posts the
-    // bond (`WSS-Q4`); this walk does not fill it (FOLLOWUPS: the emission
-    // walk).
+    // bond (`WSS-Q4`); this walk does not fill it.
     let bodies = fixture
         .arc
         .read()
@@ -5652,8 +5650,7 @@ async fn e2e_emission_claim_accepted_and_applied() {
     // the last block of `J + 2` (`EmissionEpochStanding::Settled`; the
     // claim source shows a budget only then). Mine to just short of that
     // block, then one block at a time, so the claim is made inside
-    // `REF_ANCHOR_AGE` of the pass and its reference block lies before it
-    // (the A5c geometry).
+    // `REF_ANCHOR_AGE` of the pass and its reference block lies before it.
     let settle_height = (target_epoch + 2) * SEB - 1;
     let short_of_pass = daemon.height().await;
     if short_of_pass + 3 < settle_height {
@@ -5848,7 +5845,8 @@ async fn e2e_emission_claim_accepted_and_applied() {
         "single-claimant reward must equal the epoch's accrued budget byte-exactly \
          (conservation, both inflow halves)"
     );
-    // Pinned geography: first pass < referenceBlock < epoch_close < claim tip.
+    // Pinned geography: the first pass precedes the reference, and the
+    // reference lies after the epoch close and before the settlement pass.
     // The wallet anchors at `synced_tip − REF_ANCHOR_AGE`; `tip_before_claim`
     // is the daemon height the successful attempt saw.
     let reference_est =
@@ -5860,7 +5858,7 @@ async fn e2e_emission_claim_accepted_and_applied() {
     assert!(
         epoch_row.close_block_height < reference_est && reference_est < settle_height,
         "the claim reference (~{reference_est}) must lie after the close ({}) and before \
-         the settlement pass ({settle_height}) — the A5c pop-through-reference geometry",
+         the settlement pass ({settle_height})",
         epoch_row.close_block_height
     );
 
