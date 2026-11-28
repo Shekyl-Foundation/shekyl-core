@@ -10,7 +10,7 @@
 //! store or the block the validator judged, and a chain that does not
 //! keep the promise fails the forge rather than publishing the name.
 
-use shekyl_archival_retention::ARCHIVAL_BOND_FLOOR_ATOMIC;
+use shekyl_archival_retention::archival_params;
 use shekyl_chain_forge::Check;
 use shekyl_chain_ingest::chain_drive::{is_pruning_boundary, spender_owning_before};
 use shekyl_chain_ingest::scenario_shard::{closed_shards, ClosedShard};
@@ -467,7 +467,7 @@ impl Forge {
         let rate = self.scenario().connecting_default_rate().await;
         let fee = shekyl_economics::quantized_fee(BODY_FILL_POST_WEIGHT, rate)
             .ok_or_else(|| failed(what, "the post's fee does not price"))?;
-        let needed = ARCHIVAL_BOND_FLOOR_ATOMIC + BODY_FILL_CUSHION + fee;
+        let needed = archival_params().bond_floor_atomic + BODY_FILL_CUSHION + fee;
         if amount <= needed {
             return Err(failed(
                 what,

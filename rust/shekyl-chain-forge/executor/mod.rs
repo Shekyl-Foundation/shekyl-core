@@ -43,7 +43,7 @@ use std::num::{NonZeroU128, NonZeroUsize};
 use std::path::Path;
 use std::sync::Arc;
 
-use shekyl_archival_retention::RELEASE_COOLDOWN_EPOCHS;
+use shekyl_archival_retention::archival_params;
 use shekyl_bundle_producer::DrawTarget;
 use shekyl_chain_forge::{
     close_event, sha256_hex, Action, BlocksTxt, Branch, Difference, EpochBlocks, EventRecord,
@@ -879,7 +879,7 @@ impl Forge {
     /// The block's own verdict then holds the count to it.
     async fn fill_block(&mut self, to: FillTo) -> Result<(), ForgeFault> {
         let connecting = self.connecting();
-        let params = shekyl_economics::EconomicParams::default();
+        let params = shekyl_economics::economic_params();
         let before = self.chain.last().expect("genesis at least");
         if !before.template.transactions.is_empty() {
             return Err(ForgeFault::Plan(
@@ -889,7 +889,7 @@ impl Forge {
         }
         let coinbase_weight = before.weights.weight.to_raw();
         let median = before.weights.medians.effective_median.to_raw();
-        let limit = before.weights.medians.limit(&params).to_raw();
+        let limit = before.weights.medians.limit(params).to_raw();
         let first = self.reserve(connecting)?;
         let rate = self.scenario().connecting_default_rate().await;
         let spender = self.spender();
@@ -948,7 +948,7 @@ impl Forge {
             .unwrap_or_else(|fault| panic!("the filled block connects: {fault}"));
         let weight = block.weights.weight.to_raw();
         let in_force = block.weights.medians.effective_median.to_raw();
-        let limit = block.weights.medians.limit(&params).to_raw();
+        let limit = block.weights.medians.limit(params).to_raw();
         let reaches = match to {
             FillTo::Median => weight > in_force && weight - body_weight <= in_force,
             FillTo::Bound => weight <= limit && weight + body_weight > limit,
@@ -1343,7 +1343,7 @@ impl Forge {
             .ok_or_else(|| ForgeFault::Plan("a release follows a served epoch".into()))?;
         let opens = BlockHeight::from_raw(
             self.schedule
-                .open_height(last.to_raw() + RELEASE_COOLDOWN_EPOCHS),
+                .open_height(last.to_raw() + archival_params().release_cooldown_epochs),
         );
         let mut chain = std::mem::take(&mut self.chain);
         mine_to(self.scenario.as_mut().expect("home"), &mut chain, opens).await;
