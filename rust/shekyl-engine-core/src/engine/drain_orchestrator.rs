@@ -556,7 +556,7 @@ pub(crate) struct DrainCtx<'a> {
     pub intent: DrainIntent,
     /// The validated daemon fee snapshot the drain is priced from: the
     /// `P`-lane floor fee on the drain's own weight
-    /// ([`p_lane_spend_fee`](super::bond_orchestrator::p_lane_spend_fee)),
+    /// ([`p_lane_spend_fee`]),
     /// which depends on how many inputs it selects. A transfer-shaped drain so
     /// pays what an ordinary transfer of its shape pays (T-DS-6/7).
     pub fee_estimates: super::traits::FeeEstimates,

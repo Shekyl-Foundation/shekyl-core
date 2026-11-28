@@ -46,7 +46,7 @@
 //! `dispatch_retires` / `RetireOutcome::SkippedFunded`) had **passing
 //! coverage and zero production reach**: emptying a slot requires a drain
 //! of exactly `spendable − fee`, the fee is an internal quote over a live
-//! daemon estimate ([`p_lane_floor_fee`]) — never a parameter, never
+//! daemon estimate ([`p_lane_floor_fee`](super::bond_orchestrator::p_lane_floor_fee)) — never a parameter, never
 //! exposed by any RPC read — and `get_drain_balance` is gross-of-fee, so no
 //! user path could construct the zero the gate fires on (the normal exit
 //! arc always leaves outputs on the slot: the bond post's change, then the

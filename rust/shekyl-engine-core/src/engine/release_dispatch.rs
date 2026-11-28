@@ -184,7 +184,7 @@ pub(crate) enum ReleaseRequestError {
     /// The canonical P-lane floor fee could not be quoted — the daemon's
     /// answer was refused ([`FeeEstimatorError::DaemonFeeUnreasonable`]) or
     /// malformed. The exit pays the same single fee decision every P-lane
-    /// spend quotes ([`p_lane_floor_fee`]); there is no caller override to
+    /// spend quotes ([`p_lane_floor_fee`](super::bond_orchestrator::p_lane_floor_fee)); there is no caller override to
     /// fall back to.
     #[error("P-lane floor fee: {0}")]
     Fee(#[from] FeeEstimatorError),
@@ -342,7 +342,7 @@ where
     /// persona being exited is routinely *not* the active one).
     ///
     /// **Takes no fee** — the exit pays the canonical weight-priced P-lane
-    /// floor ([`p_lane_floor_fee`], the same single fee decision the bond
+    /// floor ([`p_lane_floor_fee`](super::bond_orchestrator::p_lane_floor_fee), the same single fee decision the bond
     /// post and drain quote; §3.5 rule 3: a tunable fee on a `P`-attributed
     /// transaction is a wallet-fingerprint channel in a cleartext field).
     ///

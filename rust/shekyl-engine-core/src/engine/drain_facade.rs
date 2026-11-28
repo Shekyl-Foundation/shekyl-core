@@ -24,7 +24,7 @@
 //! - **No `fee` parameter (P-lane fee-uniformity CONTRACT PIN).** The fee is
 //!   the canonical `P`-lane floor, quoted internally from the **same**
 //!   function the bond post uses
-//!   ([`p_lane_floor_fee`]) — a
+//!   ([`p_lane_floor_fee`](super::bond_orchestrator::p_lane_floor_fee)) — a
 //!   user fee control would be a wallet fingerprint in a cleartext field.
 //! - **No `destination` parameter.** The dispatch seam pins the principal
 //!   output to the wallet's own principal address (T-DS-3); the façade adds nothing a
