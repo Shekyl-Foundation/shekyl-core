@@ -11,7 +11,6 @@ There is no V3.1 / V3.2 / V3.x release train.
 
 ## Pre-genesis
 
-- **`stake_in` refuses an amount that cannot bond (ruled 2026-11-27).** The gate tests the user's amount alone, against the bond for the requested shards, the bond post's fee at today's floor and the exit fee, with its own `stake_in` code (`ARCHIVAL_BOND_POST_DELAY.md` §3.7). It reads the fee function PR A lands, so it is built with PR A. Falsify by: a `stake_in` of less than one bond plus its fees that the wallet accepts after PR A merges.
   - Owner: PR A, the fee on each transaction's own weight — [`ARCHIVAL_BOND_POST_DELAY.md`](design/ARCHIVAL_BOND_POST_DELAY.md) §3.7
   - Target: pre-genesis
 
@@ -732,6 +731,7 @@ Default. Lands before genesis if it should exist at launch.
 
 - **Shard assignment for market staking — the `NoShardsAvailable` stub's discharge.**
   - Target: pre-genesis
+  - Carries: a persona is funded once (decision log 2026-09-20), so when assignment exists the `stake_in` bond gate (`ARCHIVAL_BOND_POST_DELAY.md` §3.7) is sized for the whole assigned set; today it sizes for the cheapest bond, one floor (ruled 2026-11-28).
 
 - **F5 pruning inherits two constraints from the CompleteTree round** (recorded 2026-08-16; `COMPLETETREE_ACTIVATION.md` §10 item 2).
   - Target: pre-genesis

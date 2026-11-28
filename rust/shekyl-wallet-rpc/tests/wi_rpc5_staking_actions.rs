@@ -127,9 +127,9 @@ async fn staking_actions_reject_steering_params_with_invalid_params() {
 // ---------------------------------------------------------------------------
 
 /// The pinned code split for "this wallet has no persona to fund/drain":
-/// `stake_in` mints no new codes and reuses `-29500` (`STAKE_NOT_READY`,
-/// F-2 pin) with its scalar-free `data.detail`; `drain` refuses `-29507`
-/// (`DRAIN_NOT_STAKER`) — the drain path does not exist on a non-staker.
+/// `stake_in` reuses `-29500` (`STAKE_NOT_READY`) with its scalar-free
+/// `data.detail`; `drain` refuses `-29507` (`DRAIN_NOT_STAKER`) — the drain
+/// path does not exist on a non-staker.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn non_staker_stake_in_is_29500_and_drain_is_29507() {
     let dir = TempDir::new().expect("tempdir");
@@ -234,8 +234,10 @@ async fn get_balance_staking_fields_match_the_staked_balance_legs() {
 /// wallet gate, the daemon fee round trip, or any engine work. `-29101`'s
 /// "lower the payment" remedy is unsatisfiable at zero (rule 82). The
 /// negative control is load-bearing: `stake_in {"amount":"0"}` must KEEP
-/// parsing (a zero stake is designed-valid — DQ1, no floor), so the zero
-/// rejection must never migrate into the shared amount parser.
+/// parsing, so the zero rejection never migrates into the shared amount
+/// parser. A zero stake is refused by the engine's bond gate instead
+/// (`-29546`, `ARCHIVAL_BOND_POST_DELAY.md` §3.7), once a staker's wallet is
+/// open and the fee is known.
 #[tokio::test]
 async fn drain_of_zero_is_invalid_params_and_stake_in_zero_stays_valid() {
     let dir = TempDir::new().expect("tempdir");

@@ -251,6 +251,59 @@ pub(crate) fn p_lane_bond_post_fee(
     .map_err(BondPostFeeError::Fee)
 }
 
+/// What a `stake_in` must carry for its persona to bond at all
+/// (`ARCHIVAL_BOND_POST_DELAY.md` §3.7, ruled 2026-11-27 and 2026-11-28): the
+/// cheapest bond, its post's fee and the exit's fee, both at today's rate on
+/// their own weight at `layers`.
+///
+/// - **The cheapest bond** is one bond floor: a CompleteTree bond and a
+///   one-shard market bond both post it, and the CompleteTree input, which
+///   carries no shard ids, is the lighter of the two.
+/// - **The post** spends the one output `stake_in` creates.
+/// - **The exit** is a `Release` of that bond, swept with one funding input,
+///   paying the consensus minimum of outputs.
+///
+/// Shard assignment is its own unruled round, so no shard request sizes
+/// this. A persona is funded once: when assignment exists, the requirement
+/// is the whole assigned set's.
+///
+/// # Errors
+///
+/// [`BondPostFeeError::Fee`] for the lane's fee functions' snapshot
+/// refusals, and `DaemonResponseInvalid` for a sum that does not fit in
+/// `u64`, as the fees answer it; [`BondPostFeeError::Holdings`] if the
+/// cheapest bond's input does not encode.
+pub(crate) fn stake_in_requirement(
+    estimates: super::traits::FeeEstimates,
+    layers: ProofLayers,
+) -> Result<AtomicUnits, BondPostFeeError> {
+    let cheapest = HoldingsDescriptor {
+        kind: HoldingsKind::CompleteTree,
+        shard_ids: ShardSet::empty(),
+    };
+    let one_input = InputCount::clamped(1);
+    let bond = AtomicUnits::from_raw(bond_floor(
+        &cheapest,
+        shekyl_archival_retention::archival_params(),
+    ));
+    let post = p_lane_bond_post_fee(estimates, &cheapest, one_input, layers)?;
+    let exit = p_lane_extra_input_fee(
+        estimates,
+        one_input,
+        OutputCount::clamped(shekyl_tx_weight::MIN_NON_COINBASE_OUTPUTS),
+        layers,
+        shekyl_wire::transaction::weight::release_input_len(bond.to_raw()),
+    )
+    .map_err(BondPostFeeError::Fee)?;
+    bond.checked_add(post)
+        .and_then(|sum| sum.checked_add(exit))
+        .ok_or(BondPostFeeError::Fee(
+            FeeEstimatorError::DaemonResponseInvalid {
+                reason: "the fee does not fit in u64",
+            },
+        ))
+}
+
 /// What [`Engine::sweep_bond_funding`] hands back: the funding it took, the
 /// reference it anchored, the seal basis's generation, and the post's fee on
 /// its own weight over that funding.

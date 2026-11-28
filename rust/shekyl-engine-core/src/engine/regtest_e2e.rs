@@ -4934,6 +4934,37 @@ async fn plan_persona_stake(
     // production yet — the test helper drives the actor's own activation),
     // then `stake_in`, which pays the active persona's handed-over keys.
     super::test_support::activate_persona(&*arc.read().await, slot_raw).await;
+    // The bond gate (`ARCHIVAL_BOND_POST_DELAY.md` §3.7): an amount that
+    // cannot bond is refused before anything is built, naming what a bond
+    // and its fees need, and the fixture's funding clears it.
+    {
+        use super::principal_stake::StakeInError;
+        let refused = {
+            let g = arc.read().await;
+            g.stake().stake_in(AtomicUnits::from_raw(1)).await
+        };
+        match refused {
+            Err(StakeInError::AmountCannotBond { amount, required }) => {
+                assert_eq!(amount, 1);
+                assert!(
+                    required
+                        > bond_floor(
+                            &floor_holdings,
+                            shekyl_archival_retention::archival_params()
+                        ),
+                    "the requirement carries the bond and its fees"
+                );
+                assert!(
+                    funding.to_raw() >= required,
+                    "the fixture funds at least what a bond needs"
+                );
+            }
+            other => daemon.panic_with_log(
+                "the bond gate refuses one atomic unit",
+                format!("{other:?}"),
+            ),
+        }
+    }
     stake_in_and_confirm(daemon, &arc, funding, MINE_BATCH_BLOCKS, MAX_MINE_BATCHES).await;
 
     // Discovery: push the shallow finality horizon past the funding block,

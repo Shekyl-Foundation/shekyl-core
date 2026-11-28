@@ -536,6 +536,10 @@ wallet_rpc_error_codes! {
     /// returning to the principal balance; staking again waits until they
     /// arrive (`ARCHIVAL_BOND_POST_DELAY.md` §3.6).
     StakeFundsReturning = -29545 => "STAKE_FUNDS_RETURNING",
+    /// `stake_in`: the amount cannot bond — it is below the cheapest bond
+    /// plus its post's fee and the exit's fee at today's network fee
+    /// (`ARCHIVAL_BOND_POST_DELAY.md` §3.7). Local; nothing was built.
+    StakeAmountCannotBond = -29546 => "STAKE_AMOUNT_CANNOT_BOND",
     /// `verify_message`: well-formed, intact, and **not** a valid signature
     /// by the claimed address over this message on this network. An answer,
     /// not a fault (SM-R-6).
@@ -1570,6 +1574,18 @@ pub enum WalletRpcError {
          they hold, they return once the fee falls"
     )]
     StakeFundsReturning,
+    /// `stake_in` (`-29546`): the amount cannot bond.
+    #[error(
+        "this amount cannot become a stake: a bond and its network fees need {required} \
+         atomic units at today's fee, {shortfall} more than the amount. Nothing was sent"
+    )]
+    StakeAmountCannotBond {
+        /// The cheapest bond, its post's fee and the exit's fee at today's
+        /// fee, atomic units.
+        required: u64,
+        /// How far the amount falls short of `required`, atomic units.
+        shortfall: u64,
+    },
 
     /// `verify_message` (`-29800`): the signature is well-formed and intact
     /// but does not verify for that address, message, and network. This is
@@ -1731,6 +1747,7 @@ impl WalletRpcError {
             Self::StakeDaemonSyncing => WalletRpcErrorCode::StakeDaemonSyncing,
             Self::StakeDaemonUnreachable { .. } => WalletRpcErrorCode::StakeDaemonUnreachable,
             Self::StakeFundsReturning => WalletRpcErrorCode::StakeFundsReturning,
+            Self::StakeAmountCannotBond { .. } => WalletRpcErrorCode::StakeAmountCannotBond,
             Self::MessageSigVerifyFailed => WalletRpcErrorCode::MessageSigVerifyFailed,
             Self::MessageSigCorrupted => WalletRpcErrorCode::MessageSigCorrupted,
             Self::MessageSigUnsupportedScheme { .. } => {
@@ -1766,6 +1783,13 @@ impl WalletRpcError {
             | Self::ShardViewBusy { detail }
             | Self::StakeLocalNodeRequired { detail }
             | Self::StakeDaemonUnreachable { detail } => Some(json!({ "detail": detail })),
+            Self::StakeAmountCannotBond {
+                required,
+                shortfall,
+            } => Some(json!({
+                "required": required.to_string(),
+                "shortfall": shortfall.to_string(),
+            })),
             Self::StakeScanBehind { scanned, needed } => {
                 Some(json!({ "scanned": scanned, "needed": needed }))
             }
@@ -2824,11 +2848,12 @@ fn from_store_open_fault(fault: StoreOpenFault, detail: &str) -> WalletRpcError 
 }
 
 impl From<StakeInError> for WalletRpcError {
-    /// `stake_in` mints no new codes (WI-RPC-5 F-2 pin): the no-persona
-    /// refusals reuse `-29500` (`STAKE_NOT_READY` — the remedy really is
-    /// "get a funded persona, then retry"), the transfer-build failures
-    /// reuse the `-291xx` send codes via the [`SendError`] mapping, and
-    /// everything else is an internal fault with server-side detail.
+    /// The no-persona refusals reuse `-29500` (`STAKE_NOT_READY` — the
+    /// remedy really is "get a funded persona, then retry"), the
+    /// transfer-build failures reuse the `-291xx` send codes via the
+    /// [`SendError`] mapping, an amount that cannot bond is `-29546`, its own
+    /// code (§3.7 supersedes WI-RPC-5 F-2's "stake_in mints no new codes"),
+    /// and everything else is an internal fault with server-side detail.
     fn from(err: StakeInError) -> Self {
         match err {
             // The engine arm's own Display IS the wire `data.detail` (one
@@ -2849,6 +2874,10 @@ impl From<StakeInError> for WalletRpcError {
             e @ StakeInError::CoverOverflow { .. } => {
                 internal_detail("stake_in cover arithmetic overflow", e)
             }
+            StakeInError::AmountCannotBond { amount, required } => Self::StakeAmountCannotBond {
+                required,
+                shortfall: required.saturating_sub(amount),
+            },
         }
     }
 }
@@ -3952,9 +3981,10 @@ mod tests {
         assert_eq!(raced.data().expect("data")["cause"], "raced");
     }
 
-    /// `stake_in` mints no new codes: the no-persona arms are `-29500`
-    /// (with distinguishing `data.detail`), the transfer-build arms are the
-    /// `-291xx` family, and internal arms are category-only `-32603`.
+    /// `stake_in`'s codes: the no-persona arms are `-29500` (with
+    /// distinguishing `data.detail`), the transfer-build arms are the
+    /// `-291xx` family, internal arms are category-only `-32603`, and an
+    /// amount that cannot bond is `-29546`, which names the shortfall.
     #[test]
     fn stake_in_reuses_send_and_stake_not_ready_codes() {
         let err: WalletRpcError = StakeInError::NotStaking.into();
@@ -3982,6 +4012,18 @@ mod tests {
             "amounts must not reach the wire: {}",
             err.message()
         );
+
+        // An amount that cannot bond: its own code, the requirement and the
+        // shortfall in data as decimal strings, as every amount is.
+        let err: WalletRpcError = StakeInError::AmountCannotBond {
+            amount: 400,
+            required: 1_000,
+        }
+        .into();
+        assert_eq!(err.code().as_i32(), -29546);
+        let data = err.data().expect("data");
+        assert_eq!(data["required"], "1000");
+        assert_eq!(data["shortfall"], "600");
     }
 
     /// The drain façade's fee arms preserve the send path's remedy split:

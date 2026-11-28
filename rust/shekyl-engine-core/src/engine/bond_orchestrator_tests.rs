@@ -939,3 +939,63 @@ fn the_priced_join_market_input_is_the_built_ones_length() {
         );
     }
 }
+
+/// What a `stake_in` must carry (§3.7) is the cheapest bond, its post's fee
+/// over one funding input and the exit's fee over one funding input and the
+/// `Release`, each the lane's own-weight fee at that rate and depth. Bites
+/// against a term being dropped, the post being priced over a heavier
+/// bond, or the exit being priced on a weight other than its own.
+#[test]
+fn a_stake_in_must_carry_the_cheapest_bond_and_both_fees() {
+    use super::{p_lane_bond_post_fee, p_lane_extra_input_fee, stake_in_requirement};
+    use crate::engine::traits::FeeEstimates;
+    use crate::engine::tx_fee_model::{InputCount, OutputCount, ProofLayers};
+    use shekyl_rpc_client::FeeRate;
+
+    let rate = FeeRate::new(27_306).expect("the genesis floor rate");
+    let estimates = FeeEstimates {
+        economy: rate,
+        standard: rate,
+        high: rate,
+    };
+    let floor = shekyl_archival_retention::archival_params().bond_floor_atomic;
+    let cheapest = HoldingsDescriptor {
+        kind: HoldingsKind::CompleteTree,
+        shard_ids: ShardSet::empty(),
+    };
+    let one_shard = HoldingsDescriptor {
+        kind: HoldingsKind::ShardSetCompact,
+        shard_ids: ShardSet::new(vec![70_000]).expect("a shard set"),
+    };
+    let one = InputCount::clamped(1);
+    let mut previous = None;
+    for depth in [2u8, 7, 14] {
+        let layers = ProofLayers::new(depth).expect("a legal proof depth");
+        let post = p_lane_bond_post_fee(estimates, &cheapest, one, layers).expect("post fee");
+        let exit = p_lane_extra_input_fee(
+            estimates,
+            one,
+            OutputCount::clamped(shekyl_tx_weight::MIN_NON_COINBASE_OUTPUTS),
+            layers,
+            shekyl_wire::transaction::weight::release_input_len(floor),
+        )
+        .expect("exit fee");
+        let required = stake_in_requirement(estimates, layers).expect("a requirement");
+        assert_eq!(
+            required.to_raw(),
+            floor + post.to_raw() + exit.to_raw(),
+            "depth {depth}"
+        );
+        assert!(
+            post <= p_lane_bond_post_fee(estimates, &one_shard, one, layers).expect("post fee"),
+            "the CompleteTree post is the cheapest at depth {depth}"
+        );
+        if let Some(shallower) = previous {
+            assert!(
+                required > shallower,
+                "a deeper tree costs more at depth {depth}"
+            );
+        }
+        previous = Some(required);
+    }
+}

@@ -134,8 +134,7 @@ pub fn cmd_stake_in(
 
     // The confirmation must not understate the debit: the transfer carries
     // `amount + cover`, so a summary of Amount + Fee alone would confirm a
-    // smaller send than the one that fires (and `stake_in 0` would confirm a
-    // "zero" send that debits real money). Only the BOUND is shown — from
+    // smaller send than the one that fires. Only the BOUND is shown — from
     // the enforcing constant, never a hardcoded figure — because disclosing
     // the exact draw before sending would let a discard-and-rebuild loop
     // steer the cover distribution the privacy property depends on.
