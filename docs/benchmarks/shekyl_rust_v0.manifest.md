@@ -1052,11 +1052,10 @@ term the 45 do; what the full block adds is the count.
 **Shapes not here.** The set is `DAEMON_REDB_STORE.md` §1.3a.7's. An
 emission claim's own verification (its backing proof and its two
 signatures) is `validate`'s, not `form`'s, so its row needs a store
-holding a settled epoch: a chain through a closed shard and about three
-epochs. No fixture here carries one. That row is the chain forge's (its
-F4 pilot consumer, over the first-settled-epoch snapshot), as is any
-bench that needs a closed shard, a settled epoch, a claim, a slash or a
-discard. The
+holding a settled epoch, which no fixture here carries: it is §15's
+emission-claim row, on Chain L's snapshot. A bench that needs a closed
+shard, a settled epoch, a claim, a slash or a discard starts from a
+Chain L snapshot the same way (`CHAIN_FORGE.md` §8). The
 multisig container needs a builder of a scheme-2 spend, which the harness
 does not have (`docs/FOLLOWUPS.md`).
 
@@ -1110,6 +1109,25 @@ count does not see the `fsync`, which is most of a commit's wall time on a
 real disk; `PB-D1s`' milliseconds are the release cut's. The reads are
 against a chain of about seventy blocks: they count the read's code, not
 a tree of production depth.
+
+**The emission claim's block** (`benches/emission_claim_iai.rs`,
+`crypto_bench_block_connect_emission_claim`; `BA-T2`'s emission-claim
+shape, counted as the connect row above counts a block). The chain is
+Chain L (`CHAIN_FORGE.md` §3, §4, `CF-4b`), fetched by its pin, and the
+store is its `first-settled-epoch` snapshot (§8 there): what a
+production replay of the pinned chain left at height 1,799, the
+persona's first drawn epoch settled, opened as a copy and refused if a
+byte moved. `BlockPath::resumed` reads the identities and the header
+ledger's window off the store, as the connector answers the ingest
+driver. The subject is the block the corpus writes next, height 1,800,
+which lists Chain L's first emission claim; setup forms it, and judges
+it once in a batch it aborts (`BlockPath::rehearse`), so the count reads
+the drawable memo a running node holds, as the fixture rows' history
+leaves theirs. The count is `validate_with_memo` with the claim's backing
+proof and two signatures, `WriteBatch::connect` and the commit. Setup
+never replays: the snapshot must be sealed in the cache, which
+`nightly.yml`'s `bench-full` builds in the step before its capture. It
+is a nightly row for that reason.
 
 ## 16. `crypto_bench_randomx_verify_header` — one header's proof-of-work (`BA-T42`)
 
@@ -1488,3 +1506,7 @@ prescribes (`docs/MID_REWIRE_HARDENING.md` §4.3).
   the switch's reader refuses. The listing is still the 28 2-in/2-out
   spends one block admits. §17's template count stays the format-3
   capture; the row's next capture counts this corpus.
+- 2026-11-27: §15 gains the emission claim's block
+  (`benches/emission_claim_iai.rs`), connected on Chain L's
+  first-settled-epoch snapshot (`CHAIN_FORGE.md` `CF-4b`), in the
+  nightly capture; §14's "Shapes not here" points to it.
