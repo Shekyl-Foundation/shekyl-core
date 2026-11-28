@@ -314,10 +314,7 @@ fn a_secret_never_shows_its_text() {
 fn a_map_takes_key_value_pairs_from_its_closed_key_set() {
     const LEVEL: Kind = Kind::OneOf(&["error", "warn", "info"]);
     const CATEGORIES: Kind = Kind::Map {
-        keys: KeyRule {
-            describe: "a logging category",
-            check: |k| k == "net" || k == "rpc",
-        },
+        keys: &["net", "rpc"],
         value: &LEVEL,
     };
     let v = CATEGORIES

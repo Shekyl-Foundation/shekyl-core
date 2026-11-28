@@ -55,24 +55,6 @@ pub enum PeerRule {
     OnionOnly,
 }
 
-/// The closed key set of a map, checked by reference to its owner (IG-6:
-/// "keys are a closed set named in the row").
-#[derive(Clone, Copy)]
-pub struct KeyRule {
-    /// How the keys are described in a refusal.
-    pub describe: &'static str,
-    /// Whether a key belongs to the set.
-    pub check: fn(&str) -> bool,
-}
-
-impl fmt::Debug for KeyRule {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("KeyRule")
-            .field("describe", &self.describe)
-            .finish_non_exhaustive()
-    }
-}
-
 /// A name's rule, held by its owner (IG-6 `name`: a word an operator types,
 /// whose rule the row names). The check returns the broken rule in words.
 #[derive(Clone, Copy)]
@@ -149,8 +131,10 @@ pub enum Kind {
     List(&'static Kind),
     /// A map from a closed key set to a scalar kind; `none` is the empty map.
     Map {
-        /// The keys the map accepts.
-        keys: KeyRule,
+        /// The keys the map accepts, named in the row by reference to their
+        /// owner's list (IG-6: "keys are a closed set named in the row"). A
+        /// refused key's refusal lists them, as a one-of's lists its words.
+        keys: &'static [&'static str],
         /// The values' kind.
         value: &'static Kind,
     },
@@ -646,14 +630,14 @@ fn check_min(n: u64, min: u64, text: &str) -> Result<(), Fault> {
 
 fn insert_key(
     out: &mut BTreeMap<String, Value>,
-    keys: &KeyRule,
+    keys: &'static [&'static str],
     key: &str,
     value: Value,
 ) -> Result<(), Fault> {
-    if !(keys.check)(key) {
+    if keyword(key, keys).is_none() {
         return Err(Fault::new(Code::ValueWord)
             .param("value", key)
-            .param("words", keys.describe));
+            .param("words", words(keys)));
     }
     if out.insert(key.to_owned(), value).is_some() {
         return Err(range(key, "each key once"));

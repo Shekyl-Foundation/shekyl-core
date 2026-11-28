@@ -173,21 +173,26 @@ impl Subsystem {
     }
 }
 
-/// Whether `name` is a subsystem. Shaped as a plain function so a table's
-/// key rule can point at it.
-#[must_use]
-pub fn is_subsystem(name: &str) -> bool {
-    Subsystem::from_name(name).is_some()
-}
+/// The subsystem keys, in [`Subsystem::ALL`] order. Every binary's
+/// `log-category` row names this set as its keys, so the keys it admits and
+/// the keys its refusal lists are this one list.
+pub const NAMES: [&str; Subsystem::ALL.len()] = {
+    let mut names = [""; Subsystem::ALL.len()];
+    let mut i = 0;
+    while i < names.len() {
+        names[i] = Subsystem::ALL[i].name();
+        i += 1;
+    }
+    names
+};
 
-/// The subsystem keys, in [`Subsystem::ALL`] order, comma separated.
-/// The retired-target error names them from here, so the list cannot
-/// drift from the keys the table admits.
+/// [`NAMES`], comma separated. The retired-target error names them from
+/// here, so the list cannot drift from the keys the table admits.
 #[must_use]
 pub(crate) fn names() -> &'static str {
     use std::sync::OnceLock;
-    static NAMES: OnceLock<String> = OnceLock::new();
-    NAMES.get_or_init(|| Subsystem::ALL.map(Subsystem::name).join(", "))
+    static JOINED: OnceLock<String> = OnceLock::new();
+    JOINED.get_or_init(|| NAMES.join(", "))
 }
 
 /// Targets no Rust code logs under. A free-form directive naming one, or
@@ -320,8 +325,13 @@ mod tests {
             assert!(seen.insert(n), "{n} twice");
             assert_eq!(Subsystem::from_name(n), Some(s));
         }
-        assert!(!is_subsystem("Net"));
-        assert!(!is_subsystem("shekyl_dialer"));
+        assert_eq!(Subsystem::from_name("Net"), None);
+        assert_eq!(Subsystem::from_name("shekyl_dialer"), None);
+    }
+
+    #[test]
+    fn the_key_list_is_every_subsystem_in_order() {
+        assert_eq!(NAMES, Subsystem::ALL.map(Subsystem::name));
     }
 
     #[test]

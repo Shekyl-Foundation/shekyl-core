@@ -1,0 +1,1 @@
+- **A refused `log-category` key lists every subsystem, `wallet` included.** The refusal's list was written out by hand beside the row and had fallen behind: it left out `wallet`, which every binary admits. The row now names the subsystem list itself, so the keys a binary admits and the keys its refusal lists are one list.

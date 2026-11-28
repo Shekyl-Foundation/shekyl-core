@@ -12,8 +12,8 @@
 
 use shekyl_network::{Lever, Staging};
 use shekyl_options::{
-    Default, DevGate, Dimension, EndpointRule, Grant, KeyRule, Kind, NameRule, PeerRule, Row,
-    Surface, Table, Visibility,
+    Default, DevGate, Dimension, EndpointRule, Grant, Kind, NameRule, PeerRule, Row, Surface,
+    Table, Visibility,
 };
 
 /// The five log levels, as `log-level` and `log-category` spell them.
@@ -85,10 +85,7 @@ pub const BYTES: Kind = Kind::Quantity {
 /// The kind of `log-category`, which every binary's logging rows share: a
 /// level for each log subsystem.
 pub const LOG_CATEGORY: Kind = Kind::Map {
-    keys: KeyRule {
-        describe: "a log subsystem: daemon, p2p, sync, chain, store, txpool, relay, rpc, tor, miner, notify or archival",
-        check: shekyl_logging::subsystem::is_subsystem,
-    },
+    keys: &shekyl_logging::subsystem::NAMES,
     value: &LEVEL,
 };
 const COUNT: Kind = Kind::Integer {
@@ -509,6 +506,26 @@ mod tests {
         assert_eq!(v.render(), "p2p=debug");
         assert!(row.kind.parse_cli(&["net=debug".into()]).is_err());
         assert!(row.kind.parse_cli(&["p2p=loud".into()]).is_err());
+    }
+
+    #[test]
+    fn a_log_category_admits_every_subsystem_and_its_refusal_lists_them_all() {
+        let row = TABLE.row("log-category").unwrap();
+        for name in shekyl_logging::subsystem::NAMES {
+            assert!(
+                row.kind.parse_cli(&[format!("{name}=debug")]).is_ok(),
+                "{name}"
+            );
+        }
+        let refused = row.kind.parse_cli(&["net=debug".into()]).unwrap_err();
+        let words = refused.at("log-category", shekyl_options::Source::Cli);
+        let words = words.get("words").unwrap();
+        for name in shekyl_logging::subsystem::NAMES {
+            assert!(
+                words.contains(&format!("`{name}`")),
+                "{name} not in {words}"
+            );
+        }
     }
 
     #[test]
