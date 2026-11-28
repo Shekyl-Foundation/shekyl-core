@@ -55,6 +55,7 @@ pub(crate) fn k_blind(leaf: &PqcLeaf) -> KBlind<EdwardsPoint> {
         EdwardsPoint(*PQC_LEAF_COMMITMENT_J),
         ScalarDecomposition::new(leaf.blind).unwrap(),
     )
+    .unwrap()
 }
 
 #[test]
@@ -126,20 +127,24 @@ fn test() {
             OBlind::new(
                 EdwardsPoint(*T),
                 ScalarDecomposition::new(rerandomized_output.o_blind()).unwrap(),
-            ),
+            )
+            .unwrap(),
             IBlind::new(
                 EdwardsPoint(*FCMP_PLUS_PLUS_U),
                 EdwardsPoint(*FCMP_PLUS_PLUS_V),
                 ScalarDecomposition::new(rerandomized_output.i_blind()).unwrap(),
-            ),
+            )
+            .unwrap(),
             IBlindBlind::new(
                 EdwardsPoint(*T),
                 ScalarDecomposition::new(rerandomized_output.i_blind_blind()).unwrap(),
-            ),
+            )
+            .unwrap(),
             CBlind::new(
                 EdwardsPoint::generator(),
                 ScalarDecomposition::new(rerandomized_output.c_blind()).unwrap(),
-            ),
+            )
+            .unwrap(),
             k_blind(&pqc),
         );
 

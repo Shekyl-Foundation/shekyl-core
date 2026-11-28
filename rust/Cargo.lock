@@ -989,7 +989,6 @@ dependencies = [
  "ff",
  "group",
  "rand_core 0.6.4",
- "std-shims",
  "subtle",
  "zeroize",
 ]
