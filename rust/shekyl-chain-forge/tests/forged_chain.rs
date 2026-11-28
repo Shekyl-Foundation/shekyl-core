@@ -91,6 +91,56 @@ async fn forged_open(plan: &Plan, out: &std::path::Path) -> Forge {
     forge
 }
 
+/// A reorg whose rewind the store refuses stops the forging with the
+/// refusal: the branch is never built on a chain the store did not pop.
+/// Twenty-block epochs and a cap of 10: the pruning boundary at 40 retires
+/// the undo journal below 30, so a reorg of 20 from the tip at 45 forks at
+/// 25, under the floor.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_rewind_below_the_undo_floor_stops_the_forging() {
+    let plan = Plan::parse(
+        r#"
+chain = "rewind-refused"
+seed = "0000000000000000000000000000000000000000000000000000000000000001"
+network = "regtest"
+fixed_difficulty = 1
+block_seconds = 1
+schedule = { settlement_epoch_blocks = 20, reorg_cap_blocks = 10 }
+
+[[step]]
+do = "mine"
+blocks = 45
+
+[[step]]
+do = "reorg"
+depth = 20
+"#,
+    )
+    .expect("parses");
+    let out = tempfile::tempdir().expect("a directory");
+    let mut forge = Forge::open(
+        &plan,
+        out.path(),
+        Options {
+            swapped: BTreeSet::new(),
+            stop_at_difference: None,
+            hashers: NonZeroUsize::MIN,
+            producer: executor::ProducerOptions::default(),
+        },
+    )
+    .await
+    .expect("the forging opens");
+    match forge.run(&plan).await {
+        Err(executor::ForgeFault::RewindRefused { fork, floor }) => {
+            assert_eq!(fork, BlockHeight::from_raw(25));
+            assert_eq!(floor, BlockHeight::from_raw(30));
+        }
+        Err(other) => panic!("the forging stopped on something else: {other}"),
+        Ok(stopped) => panic!("the forging ran past a refused rewind: {stopped:?}"),
+    }
+    forge.abandon().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "minutes of proofs; run in release by chain-forge.yml"]
 async fn the_small_plan_is_regtests_alone_and_refuses_a_tampered_receipt() {

@@ -67,6 +67,7 @@ use shekyl_chain_ingest::scenario_shard::{
 use shekyl_chain_ingest::schedule::ChainRules;
 use shekyl_chain_ingest::source::SequenceNo;
 use shekyl_chain_ingest::ProductionPow;
+use shekyl_chain_ingest::Rewound;
 use shekyl_chain_rules::{
     CappedEpoch, CenRow, ChainView as _, SettlementEpochBlocks, SettlementSchedule,
 };
@@ -168,6 +169,16 @@ pub enum ForgeFault {
     /// The plan asks for what the chain cannot do.
     #[error("plan: {0}")]
     Plan(String),
+    /// A reorg's rewind was refused: the lowest block it would pop is below
+    /// the store's undo floor. The plan's branch would be built on a chain
+    /// the store did not pop, so the forging stops here.
+    #[error("the rewind to {fork} was refused: the lowest poppable height is {floor}")]
+    RewindRefused {
+        /// The height the reorg forks at.
+        fork: BlockHeight,
+        /// The store's lowest poppable height.
+        floor: BlockHeight,
+    },
 }
 
 /// The rules `plan`'s chain is forged and replayed under: regtest at the
@@ -1495,10 +1506,17 @@ impl Forge {
                 )
             })
             .await;
-        self.scenario()
+        match self
+            .scenario()
             .rewind_to(fork)
             .await
-            .unwrap_or_else(|fault| panic!("the rewind to {fork}: {fault:?}"));
+            .unwrap_or_else(|fault| panic!("the rewind to {fork}: {fault:?}"))
+        {
+            Rewound::Popped { .. } => {}
+            Rewound::Refused { floor, .. } => {
+                return Err(ForgeFault::RewindRefused { fork, floor })
+            }
+        }
         let after = self
             .scenario()
             .read_chain(move |view, _| {
