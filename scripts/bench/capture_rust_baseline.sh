@@ -171,6 +171,11 @@ NIGHTLY_BENCHES=(
   # the connect and pop rows each pay a form in setup. nightly.yml's
   # bench-full job captures it and compares it with the night before.
   "shekyl-chain-ingest::block_path_full_iai:bench-internals,harness"
+  # BA-T2's emission-claim shape, counted as BA-T41 counts a connect: the
+  # claim's block on Chain L's first-settled-epoch snapshot. The pinned
+  # chain and the sealed snapshot must be in place; nightly.yml's
+  # bench-full builds the snapshot in the step before this capture.
+  "shekyl-chain-ingest::emission_claim_iai:bench-internals,harness"
 )
 
 # ---- which rows this run captures --------------------------------------

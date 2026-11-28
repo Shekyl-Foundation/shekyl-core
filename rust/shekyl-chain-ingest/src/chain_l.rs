@@ -14,15 +14,13 @@
 
 use std::fs::File;
 use std::io::BufReader;
-use std::num::{NonZeroU128, NonZeroU64, NonZeroUsize};
+use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::{Path, PathBuf};
 
-use shekyl_chain_forge::hosted;
+use shekyl_chain_forge::hosted::{self, Fetched};
 use shekyl_chain_forge::is_close_event;
-use shekyl_chain_rules::{CappedEpoch, SettlementEpochBlocks};
 use shekyl_harness_spender::Linked;
-use shekyl_network::Network;
-use shekyl_types::{BlockCount, BlockHeight, ShardId, Timestamp};
+use shekyl_types::{BlockHeight, ShardId, Timestamp};
 use shekyl_wire::block::Block;
 use shekyl_wire::Transaction;
 
@@ -30,20 +28,11 @@ use crate::corpus::CorpusSource;
 use crate::scenario::{FreeHash, Scenario};
 use crate::scenario_shard::ClosedShard;
 use crate::schedule::ChainRules;
-use crate::snapshot::{ensure, open_copy, ChainFiles, SnapshotKey};
+use crate::snapshot::{cache_root, ensure, forged_rules, open_copy, ChainFiles, SnapshotKey};
 use crate::source::{IngestEvent, SequenceNo, Source};
 
 /// The hosted chain's name.
 pub const CHAIN: &str = "chain-l";
-
-/// Where snapshots are cached when `SHEKYL_CHAIN_SNAPSHOTS` does not say:
-/// under the build's target directory, never in the tree.
-fn cache_root() -> PathBuf {
-    std::env::var_os("SHEKYL_CHAIN_SNAPSHOTS").map_or_else(
-        || Path::new(env!("CARGO_MANIFEST_DIR")).join("../target/chain-snapshots"),
-        PathBuf::from,
-    )
-}
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -130,40 +119,39 @@ fn main_chain_through(corpus: &Path, last: SequenceNo) -> Vec<PrefixBlock> {
     main
 }
 
-/// A scenario named `name` on Chain L at `event`.
+/// Chain L's snapshot at one event, in the cache.
+struct Ensured {
+    fetched: Fetched,
+    manifest: shekyl_chain_forge::Manifest,
+    record: SequenceNo,
+    rules: ChainRules,
+    key: SnapshotKey,
+    dir: PathBuf,
+    expected: crate::trace::Digest,
+}
+
+/// The cached snapshot at `event`, built by a production replay from
+/// genesis when the cache does not hold it.
 ///
 /// # Panics
 ///
 /// If the chain is not fetched or does not match its pin, if its manifest
-/// names no such event, or if the snapshot is refused.
-pub async fn resume_at(name: &str, event: &str) -> Resumed {
+/// names no such event, or if the replay disagrees with the pinned trace.
+async fn ensured(event: &str) -> Ensured {
     let fetched = hosted::open(CHAIN).unwrap_or_else(|fault| panic!("{fault}"));
     let manifest = fetched.manifest().unwrap_or_else(|fault| panic!("{fault}"));
-    let at = manifest
-        .events
-        .iter()
-        .find(|named| named.name == event)
-        .unwrap_or_else(|| panic!("Chain L's manifest records no `{event}`"));
-    let record = SequenceNo::from_raw(at.record);
-    let closed: Vec<ClosedShard> = manifest
-        .events
-        .iter()
-        .filter(|named| is_close_event(&named.name) && named.record <= at.record)
-        .enumerate()
-        .map(|(shard, named)| ClosedShard {
-            shard: ShardId::from_raw(u64::try_from(shard).expect("a count fits")),
-            close_height: BlockHeight::from_raw(named.height),
-        })
-        .collect();
-    let epoch = CappedEpoch::new(
-        SettlementEpochBlocks::new(manifest.schedule.settlement_epoch_blocks)
-            .expect("the manifest's epoch is not zero"),
-        BlockCount::from_raw(manifest.schedule.reorg_cap_blocks),
-    )
-    .unwrap_or_else(|refused| panic!("the manifest's schedule: {refused:?}"));
-    let rules = ChainRules::new(Network::Regtest, Some(NonZeroU128::MIN), epoch)
-        .unwrap_or_else(|refused| panic!("regtest's row permits every lever: {refused}"));
-
+    let record = SequenceNo::from_raw(
+        manifest
+            .events
+            .iter()
+            .find(|named| named.name == event)
+            .unwrap_or_else(|| panic!("Chain L's manifest records no `{event}`"))
+            .record,
+    );
+    let rules = forged_rules(
+        manifest.schedule.settlement_epoch_blocks,
+        manifest.schedule.reorg_cap_blocks,
+    );
     let (corpus, trace) = (fetched.corpus(), fetched.trace());
     let files = ChainFiles {
         corpus: &corpus,
@@ -180,6 +168,44 @@ pub async fn resume_at(name: &str, event: &str) -> Resumed {
     let expected = files
         .expected_digest()
         .unwrap_or_else(|fault| panic!("the `{event}` snapshot: {fault}"));
+    Ensured {
+        fetched,
+        manifest,
+        record,
+        rules,
+        key,
+        dir,
+        expected,
+    }
+}
+
+/// A scenario named `name` on Chain L at `event`.
+///
+/// # Panics
+///
+/// As [`ensured`], or if the snapshot is refused on open.
+pub async fn resume_at(name: &str, event: &str) -> Resumed {
+    let Ensured {
+        fetched,
+        manifest,
+        record,
+        rules,
+        key,
+        dir,
+        expected,
+    } = ensured(event).await;
+    let closed: Vec<ClosedShard> = manifest
+        .events
+        .iter()
+        .filter(|named| is_close_event(&named.name) && named.record <= record.to_raw())
+        .enumerate()
+        .map(|(shard, named)| ClosedShard {
+            shard: ShardId::from_raw(u64::try_from(shard).expect("a count fits")),
+            close_height: BlockHeight::from_raw(named.height),
+        })
+        .collect();
+    let epoch = rules.schedule();
+    let corpus = fetched.corpus();
     let prefix = main_chain_through(&corpus, record);
     let tip = prefix.last().expect("the chain has a genesis");
     let tip_hash = tip.block.hash();
@@ -214,4 +240,48 @@ pub async fn resume_at(name: &str, event: &str) -> Resumed {
         rules,
         closed,
     }
+}
+
+/// `event`'s snapshot is in the cache and opens: built by a production
+/// replay from genesis and held to the pinned trace at the event when the
+/// cache does not hold it, then copied and held to that digest again.
+///
+/// Run over an empty cache, each test below is the nightly's rebuild from
+/// genesis (`CHAIN_FORGE.md` §8); over a filled cache, it is the step before
+/// a consumer that must not replay (the emission-claim bench row).
+async fn built_and_opened(event: &str) {
+    let ensured = ensured(event).await;
+    let copy = tempfile::tempdir().expect("a directory for the copy");
+    open_copy(
+        &ensured.dir,
+        &ensured.key,
+        &ensured.expected,
+        &ensured.rules,
+        &copy.path().join(crate::snapshot::STORE_FILE),
+    )
+    .unwrap_or_else(|fault| panic!("the `{event}` snapshot: {fault}"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "chain-ingest-ignored: Chain L replayed from genesis to `shard-0-closed`, unless the cache holds it"]
+async fn the_shard_0_closed_snapshot_builds_and_opens() {
+    built_and_opened("shard-0-closed").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "chain-ingest-ignored: Chain L replayed from genesis to `body-fill-complete-tree`, unless the cache holds it"]
+async fn the_body_fill_complete_tree_snapshot_builds_and_opens() {
+    built_and_opened("body-fill-complete-tree").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "chain-ingest-ignored: Chain L replayed from genesis to `body-fill-market`, unless the cache holds it"]
+async fn the_body_fill_market_snapshot_builds_and_opens() {
+    built_and_opened("body-fill-market").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "chain-ingest-ignored, bench-full: Chain L replayed from genesis to `first-settled-epoch`, unless the cache holds it"]
+async fn the_first_settled_epoch_snapshot_builds_and_opens() {
+    built_and_opened("first-settled-epoch").await;
 }

@@ -147,6 +147,14 @@ name = "block_path_full_iai"
 harness = false
 required-features = ["bench-internals", "harness"]
 
+# An emission claim's block connected (BA-T2's emission-claim shape, as
+# BA-T41 counts a connect), over Chain L's first-settled-epoch snapshot:
+# a 34 MB store and the pinned chain, so the nightly capture's.
+[[bench]]
+name = "emission_claim_iai"
+harness = false
+required-features = ["bench-internals", "harness"]
+
 # One body response built from the store (BA-T44): the sync owner's
 # `serve_bodies`, over the block-path driver's store.
 [[bench]]

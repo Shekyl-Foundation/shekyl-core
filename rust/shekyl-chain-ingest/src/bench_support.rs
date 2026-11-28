@@ -35,18 +35,28 @@
 //! into a fresh store, outside the measured region, and hands the last
 //! block back unconnected.
 //!
+//! # A forged chain's snapshot
+//!
+//! [`BlockPath::resumed`] starts from a store the snapshot cache holds
+//! ([`crate::snapshot`], `CHAIN_FORGE.md` §8) instead of a replayed
+//! fixture: a forged chain's state at a named event, which a fixture of a
+//! few hundred blocks cannot reach (a settled epoch, a claim's backing).
+//! The store arrives as a production replay left it, and the driver reads
+//! what it needs off the store as the connector answers the ingest driver.
+//!
 //! Behind `bench-internals` with `harness`; the fixture tests compile it
 //! under `cfg(test)`.
 
 use std::io::Cursor;
+use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use shekyl_chain_rules::{
-    form, seed_height, validate_with_memo, Candidate, DrawableMemo, FormAttempt, FormClaims,
-    ReferenceClaims, RuleSet, StructurallyValid, Substrate, Target,
+    form, seed_height, validate_with_memo, AtHeight, Candidate, DrawableMemo, FormAttempt,
+    FormClaims, HeaderRecord, ReferenceClaims, RuleSet, StructurallyValid, Substrate, Target,
 };
 use shekyl_chain_store::apply_policy::ApplyPolicy;
-use shekyl_chain_store::store::{ChainStore, Horizons};
+use shekyl_chain_store::store::{ChainStore, Horizons, StoreError};
 use shekyl_types::{BlockHash, BlockHeight, PowHash, Timestamp};
 
 use crate::corpus::CorpusSource;
@@ -103,6 +113,9 @@ pub struct Claimed {
 /// claims are read from.
 pub struct BlockPath {
     store: ChainStore,
+    /// The rules the chain is judged under: [`RULES`] for a fixture, the
+    /// forged chain's own for a snapshot.
+    rules: ChainRules,
     targets: TargetLedger,
     /// The connected blocks' identities by height: the next height and
     /// the seed claim, without a store read.
@@ -128,17 +141,11 @@ impl BlockPath {
         let subject = blocks.pop().expect("a fixture holds its subject block");
         assert!(!blocks.is_empty(), "a fixture holds a history");
 
-        let dir = tempfile::Builder::new()
-            .prefix("shekyl-block-path-")
-            .tempdir()
-            .expect("a bench directory");
-        let horizons = Horizons::under(&RULES.in_force(BlockHeight::ZERO))
-            .expect("a well-formed rule set's pair is a store schedule");
-        let store =
-            ChainStore::with_horizons(dir.path().join("chain.redb"), ApplyPolicy::Full, horizons)
-                .expect("a fresh store");
+        let dir = bench_dir();
+        let store = opened(&dir.path().join(STORE_FILE), &RULES);
         let mut path = Self {
             store,
+            rules: RULES,
             targets: TargetLedger::new(),
             hashes: Vec::new(),
             clock: FixedClock::new(),
@@ -149,13 +156,120 @@ impl BlockPath {
         (path, subject)
     }
 
+    /// A driver over the store `place` writes at the path it is handed,
+    /// judged under `rules`: a snapshot's copy, placed by
+    /// [`open_copy`](crate::snapshot::open_copy), which refuses a store
+    /// whose bytes moved.
+    ///
+    /// Nothing is connected and no corpus is walked. The identities and the
+    /// header ledger's window are read off the store, as the connector
+    /// answers the ingest driver (`HashAt`, `HeaderAt`), so the next
+    /// block's claims are read exactly as after [`Self::replayed`].
+    ///
+    /// # Panics
+    ///
+    /// The placed store does not open or holds no chain.
+    #[must_use]
+    pub fn resumed(place: impl FnOnce(&Path), rules: ChainRules) -> Self {
+        let dir = bench_dir();
+        let file = dir.path().join(STORE_FILE);
+        place(&file);
+        let store = opened(&file, &rules);
+        let (hashes, targets) = {
+            let read = store.begin_read().expect("the placed store reads");
+            let tip = read
+                .tip()
+                .expect("the placed store's tip reads")
+                .recorded
+                .expect("a snapshot holds a chain");
+            let recorded = |height: BlockHeight| match read
+                .block_info(height)
+                .expect("the placed store's block row reads")
+            {
+                AtHeight::Recorded(info) => info,
+                AtHeight::AboveTip => panic!("height {height} is at or below the tip"),
+            };
+            let hashes: Vec<BlockHash> = (0..=tip.height.to_raw())
+                .map(|height| recorded(BlockHeight::from_raw(height)).hash)
+                .collect();
+            let mut targets = TargetLedger::new();
+            for at in targets.missing_for(next_height(&hashes)) {
+                let info = recorded(at);
+                let AtHeight::Recorded(body) =
+                    read.block(at).expect("the placed store's body reads")
+                else {
+                    panic!("height {at} is at or below the tip");
+                };
+                targets.record(
+                    at,
+                    HeaderRecord {
+                        hash: info.hash,
+                        header: body.block.header,
+                        cumulative_difficulty: info.cumulative_difficulty,
+                    },
+                );
+            }
+            (hashes, targets)
+        };
+        Self {
+            store,
+            rules,
+            targets,
+            hashes,
+            clock: FixedClock::new(),
+            memo: DrawableMemo::new(),
+            _dir: dir,
+        }
+    }
+
+    /// Judge `candidate` on the tip and abort the batch, so the drawable
+    /// memo holds what judging it files: a row then counts the block as a
+    /// running node does, with its memo built by the blocks before. Nothing
+    /// is written.
+    ///
+    /// A driver built by [`Self::replayed`] arrives with the memo its
+    /// history filled; one built by [`Self::resumed`] has judged nothing,
+    /// as a daemon has not when it opens its store.
+    ///
+    /// # Panics
+    ///
+    /// The block is refused or the store faults: a stale chain.
+    pub fn rehearse(&mut self, candidate: &Candidate, claimed: &Claimed) {
+        enum Rehearsed {
+            Judged,
+            Store(StoreError),
+        }
+        impl From<StoreError> for Rehearsed {
+            fn from(fault: StoreError) -> Self {
+                Self::Store(fault)
+            }
+        }
+        let formed = self.form(candidate.clone(), claimed);
+        let trust = self.rules.trust();
+        let memo = &mut self.memo;
+        let rehearsed = self.store.write(|batch| -> Result<(), Rehearsed> {
+            let view = batch.chain_view();
+            judged(
+                validate_with_memo(formed, &view, &claimed.rule_set, &trust, Some(memo)),
+                claimed.height,
+            );
+            Err(Rehearsed::Judged)
+        });
+        match rehearsed {
+            Err(Rehearsed::Judged) => {}
+            Ok(()) => unreachable!("the rehearsal never commits"),
+            Err(Rehearsed::Store(fault)) => panic!("the rehearsal's batch faulted: {fault}"),
+        }
+    }
+
     /// The history, in one write and one commit: the connector's `Apply`
     /// for a run of blocks. A commit per block made the replay most of a
     /// row's setup under callgrind.
     fn connect_history(&mut self, blocks: Vec<Candidate>) {
-        let trust = RULES.trust();
+        let trust = self.rules.trust();
         let Self {
             store,
+            rules,
             targets,
             hashes,
             clock,
@@ -166,8 +280,8 @@ impl BlockPath {
             .write(
                 |batch| -> Result<(), shekyl_chain_store::store::StoreError> {
                     for candidate in blocks {
-                        let claimed = claims_over(targets, hashes, clock, &candidate);
-                        let formed = formed_under(clock, candidate, &claimed);
+                        let claimed = claims_over(rules, targets, hashes, clock, &candidate);
+                        let formed = formed_under(rules, clock, candidate, &claimed);
                         let view = batch.chain_view();
                         let valid = judged(
                             validate_with_memo(
@@ -197,7 +311,13 @@ impl BlockPath {
     /// The header ledger disagrees with the chain.
     #[must_use]
     pub fn claims(&mut self, candidate: &Candidate) -> Claimed {
-        claims_over(&self.targets, &self.hashes, &self.clock, candidate)
+        claims_over(
+            &self.rules,
+            &self.targets,
+            &self.hashes,
+            &self.clock,
+            candidate,
+        )
     }
 
     /// The stateless stage: `shekyl_chain_rules::form` under `claimed`.
@@ -208,7 +328,7 @@ impl BlockPath {
     ///
     /// The block is refused: a stale fixture.
     pub fn form(&self, candidate: Candidate, claimed: &Claimed) -> StructurallyValid {
-        formed_under(&self.clock, candidate, claimed)
+        formed_under(&self.rules, &self.clock, candidate, claimed)
     }
 
     /// The view-bound stage and the write: `validate_with_memo` over the
@@ -219,7 +339,7 @@ impl BlockPath {
     ///
     /// The block is refused or the store faults: a stale fixture.
     pub fn connect(&mut self, formed: StructurallyValid, claimed: &Claimed) {
-        let trust = RULES.trust();
+        let trust = self.rules.trust();
         let memo = &mut self.memo;
         let block = self
             .store
@@ -278,7 +398,7 @@ impl BlockPath {
         std::path::PathBuf,
         tempfile::TempDir,
     ) {
-        let file = self._dir.path().join("chain.redb");
+        let file = self._dir.path().join(STORE_FILE);
         (std::sync::Arc::new(self.store), file, self._dir)
     }
 
@@ -287,6 +407,29 @@ impl BlockPath {
     pub fn hashes(&self) -> &[BlockHash] {
         &self.hashes
     }
+}
+
+/// The store's file in a driver's directory.
+const STORE_FILE: &str = "chain.redb";
+
+/// A driver's own directory, removed with it.
+fn bench_dir() -> tempfile::TempDir {
+    tempfile::Builder::new()
+        .prefix("shekyl-block-path-")
+        .tempdir()
+        .expect("a bench directory")
+}
+
+/// The store at `file` under `rules`' schedule, every archival apply run.
+fn opened(file: &Path, rules: &ChainRules) -> ChainStore {
+    let horizons = Horizons::under(&rules.in_force(BlockHeight::ZERO))
+        .expect("a well-formed rule set's pair is a store schedule");
+    ChainStore::with_horizons(file, ApplyPolicy::Full, horizons).expect("the bench store opens")
+}
+
+/// The height the block after `hashes` connects at.
+fn next_height(hashes: &[BlockHash]) -> BlockHeight {
+    BlockHeight::from_raw(u64::try_from(hashes.len()).expect("a chain's length fits"))
 }
 
 /// Every block of `corpus`, in chain order: the history and then the
@@ -312,17 +455,18 @@ pub fn blocks_of(corpus: &[u8]) -> Vec<Candidate> {
 /// header ledger and the connected identities, with the clock set to the
 /// block's timestamp.
 fn claims_over(
+    rules: &ChainRules,
     targets: &TargetLedger,
     hashes: &[BlockHash],
     clock: &FixedClock,
     candidate: &Candidate,
 ) -> Claimed {
-    let height = BlockHeight::from_raw(u64::try_from(hashes.len()).expect("a short chain"));
+    let height = next_height(hashes);
     let seed = match seed_height(height) {
         None => BlockHash::NULL,
-        Some(at) => hashes[usize::try_from(at.to_raw()).expect("a short chain")],
+        Some(at) => hashes[usize::try_from(at.to_raw()).expect("a chain's length fits")],
     };
-    let rule_set = RULES.in_force(height);
+    let rule_set = rules.in_force(height);
     let target = targets
         .claim(height, &rule_set)
         .unwrap_or_else(|corrupt| panic!("the bench chain is consistent: {corrupt}"));
@@ -341,7 +485,12 @@ fn claims_over(
 }
 
 /// `shekyl_chain_rules::form` under `claimed`, refusing a refusal.
-fn formed_under(clock: &FixedClock, candidate: Candidate, claimed: &Claimed) -> StructurallyValid {
+fn formed_under(
+    rules: &ChainRules,
+    clock: &FixedClock,
+    candidate: Candidate,
+    claimed: &Claimed,
+) -> StructurallyValid {
     let formed = form(
         candidate,
         &FormClaims {
@@ -349,7 +498,7 @@ fn formed_under(clock: &FixedClock, candidate: Candidate, claimed: &Claimed) -> 
             seed: claimed.seed,
             target: claimed.target,
             references: &claimed.references,
-            network: RULES.trust().network_id(),
+            network: rules.trust().network_id(),
         },
         clock,
         FormAttempt::FIRST,

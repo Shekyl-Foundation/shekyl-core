@@ -14,7 +14,8 @@
 # ignore string names the job. The set: the scenarios that fill shards
 # with real proofs (the archival pop round trips, the emission claims, the
 # levered slash chain, the join, the two pool-shim posts, a produced
-# bundle and a produced support bundle, each admitted), the miner
+# bundle and a produced support bundle, each admitted), Chain L's consumed
+# snapshots rebuilt from genesis (CHAIN_FORGE.md §8), the miner
 # over real RandomX, two service runs past the first seed epoch, a spend
 # read by the wallet and the RPC after its shard was discarded, the
 # captured-chain replay under the production proof-of-work boundary, and the
@@ -62,6 +63,10 @@ subjects=(
   'archival_slash_tests::the_slash_chain_judges_each_row_on_one_record'
   'bundle_producer_gate_tests::a_produced_bundle_is_admitted_and_connects'
   'bundle_producer_gate_tests::a_produced_support_bundle_is_admitted_and_connects'
+  'chain_l::the_body_fill_complete_tree_snapshot_builds_and_opens'
+  'chain_l::the_body_fill_market_snapshot_builds_and_opens'
+  'chain_l::the_first_settled_epoch_snapshot_builds_and_opens'
+  'chain_l::the_shard_0_closed_snapshot_builds_and_opens'
   'forged_fill::tests::the_forged_fill_connects_under_every_readers_schedule'
   'forged_fill::tests::the_manifest_closes_each_shard_where_the_capture_rule_does'
   'miner_tests::a_chain_at_the_difficulty_floor_mines_its_way_back'
@@ -119,10 +124,15 @@ fi
 echo "shekyl-chain-ingest ignored set: ${#subjects[@]} test(s) run and ${#helpers[@]} helper(s) not, exactly the listed set"
 ignored_set_stop_after_judgement
 
-# The forged shard-fill chain the long scenarios build on (CHAIN_FORGE.md
-# CF-4a), pulled by its pin and checked layer by layer before anything
-# reads it. A missing or damaged copy stops the lane here, by name.
+# The forged chains the long scenarios build on (CHAIN_FORGE.md CF-4a,
+# CF-4b), pulled by their pins and checked layer by layer before anything
+# reads them. A missing or damaged copy stops the lane here, by name.
+# Chain L's snapshots are not cached between nights: the lane starts with
+# none, so the four `chain_l::the_*_snapshot_builds_and_opens` tests are
+# the nightly rebuild of each consumed snapshot from genesis, held to the
+# pinned trace (§8).
 python3 ../scripts/ci/fetch_test_chain.py shard-fill
+python3 ../scripts/ci/fetch_test_chain.py chain-l
 
 START=$(date +%s)
 status=0

@@ -1829,3 +1829,12 @@ path_set = "bench-crypto-pq"
 bench = "shekyl-chain-ingest::block_path_full_iai"
 measured_by = ["BA-T2", "BA-T41"]
 path_set = "block-path"
+
+# The emission claim's block, connected on Chain L's first-settled-epoch
+# snapshot (CHAIN_FORGE.md CF-4b): the nightly capture's row, on the same
+# path set.
+
+[[gated_row]]
+bench = "shekyl-chain-ingest::emission_claim_iai"
+measured_by = ["BA-T2", "BA-T41"]
+path_set = "block-path"

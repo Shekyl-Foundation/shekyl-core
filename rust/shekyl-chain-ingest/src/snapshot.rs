@@ -28,23 +28,27 @@
 
 use std::fs::{self, File};
 use std::io::{self, BufReader, Read};
-use std::num::NonZeroUsize;
+use std::num::{NonZeroU128, NonZeroUsize};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
+use shekyl_chain_rules::{Candidate, CappedEpoch, SettlementEpochBlocks};
 use shekyl_chain_store::apply_policy::ApplyPolicy;
 use shekyl_chain_store::codec::SCHEMA_VERSION;
 use shekyl_chain_store::store::{ChainStore, StoreError};
 use shekyl_hash_budget::Budget;
 use shekyl_hasher::Hasher;
+use shekyl_network::Network;
+use shekyl_types::BlockCount;
 
+use crate::corpus::CorpusSource;
 use crate::metrics::Metrics;
 use crate::pipeline::PipelineConfig;
 use crate::rebaseline::{horizons, publish_bytes, replay_corpus_through, ReplayFault};
 use crate::schedule::ChainRules;
-use crate::source::SequenceNo;
+use crate::source::{IngestEvent, SequenceNo, Source};
 use crate::trace::{Digest, Trace, TraceFault};
 use crate::ProductionPow;
 
@@ -357,6 +361,69 @@ pub async fn build(
     seal(dir, key, record)
 }
 
+/// Where snapshots are cached when `SHEKYL_CHAIN_SNAPSHOTS` does not say:
+/// under the build's target directory, never in the tree.
+#[must_use]
+pub fn cache_root() -> PathBuf {
+    std::env::var_os("SHEKYL_CHAIN_SNAPSHOTS").map_or_else(
+        || Path::new(env!("CARGO_MANIFEST_DIR")).join("../target/chain-snapshots"),
+        PathBuf::from,
+    )
+}
+
+/// The rules a forged chain runs under: regtest at difficulty one, on the
+/// settled schedule its manifest records.
+///
+/// # Panics
+///
+/// The manifest's epoch is zero, or its reorg cap is not below it.
+#[must_use]
+pub fn forged_rules(settlement_epoch_blocks: u64, reorg_cap_blocks: u64) -> ChainRules {
+    let epoch = CappedEpoch::new(
+        SettlementEpochBlocks::new(settlement_epoch_blocks)
+            .expect("the manifest's epoch is not zero"),
+        BlockCount::from_raw(reorg_cap_blocks),
+    )
+    .unwrap_or_else(|refused| panic!("the manifest's schedule: {refused:?}"));
+    ChainRules::new(Network::Regtest, Some(NonZeroU128::MIN), epoch)
+        .unwrap_or_else(|refused| panic!("regtest's row permits every lever: {refused}"))
+}
+
+/// `key`'s snapshot under `root` when one is sealed there. A consumer that
+/// must not replay (a bench's setup) reads it here; [`ensure`] builds.
+#[must_use]
+pub fn sealed(root: &Path, key: &SnapshotKey) -> Option<PathBuf> {
+    let dir = root.join(key.name());
+    dir.join(SEAL_FILE).is_file().then_some(dir)
+}
+
+/// The block `corpus` writes at `record`, which must extend the chain: the
+/// block after an event's snapshot, for a consumer that judges it there.
+///
+/// # Panics
+///
+/// The corpus does not read, ends before `record`, or writes something
+/// other than an extend there.
+#[must_use]
+pub fn extend_at(corpus: &Path, record: SequenceNo) -> Candidate {
+    let mut source = CorpusSource::open(BufReader::new(
+        File::open(corpus).expect("the fetched corpus opens"),
+    ))
+    .unwrap_or_else(|fault| panic!("the forged corpus: {fault}"));
+    loop {
+        let next = source
+            .next()
+            .unwrap_or_else(|fault| panic!("the forged corpus: {fault}"))
+            .unwrap_or_else(|| panic!("the corpus ends before record {}", record.to_raw()));
+        if next.seq == record {
+            return match next.event {
+                IngestEvent::Extend(candidate) => *candidate,
+                other => panic!("record {} is not an extend: {other:?}", record.to_raw()),
+            };
+        }
+    }
+}
+
 /// `key`'s snapshot under `root`, built by [`build`] if no process has.
 /// Concurrent callers wait on one lock, so one of them replays.
 ///
@@ -374,7 +441,7 @@ pub async fn ensure(
     let dir = root.join(&name);
     let lock = File::create(root.join(format!("{name}.lock")))?;
     lock.lock()?;
-    if !dir.join(SEAL_FILE).is_file() {
+    if sealed(root, key).is_none() {
         if dir.exists() {
             fs::remove_dir_all(&dir)?;
         }
