@@ -1,6 +1,7 @@
 ---
 description: Named exception to 06-branching.mdc for PRs whose work touches a consensus-rule boundary. Four objectively-testable criteria. Opt-in only — PRs that do not explicitly cite this rule cannot invoke it. First instance is LWMA-1 Phase 4.
 alwaysApply: false
+scope: core
 ---
 
 # Consensus-atomic cutovers
@@ -117,7 +118,7 @@ All four criteria must be met. Each is independently testable;
    reviewers verify.
 
    4.1. **Rule citation.** The PR cites this rule by name
-   (`07-consensus-atomic-cutovers.mdc`) in the description.
+   (`107-consensus-atomic-cutovers.mdc`) in the description.
    Retroactive citation does not satisfy 4.1 (see "What this
    exception is not" below).
 

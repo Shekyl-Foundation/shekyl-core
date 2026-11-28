@@ -1,0 +1,28 @@
+---
+description: "shekyl-core's part of secure memory (35): how its binaries harden the process and which types own locked storage."
+globs:
+  - rust/**
+scope: core
+---
+
+# Secure memory: shekyl-core's part
+
+Estate rule [`35-secure-memory`](35-secure-memory.mdc) holds in every Shekyl repository.
+This rule holds the part of it that only shekyl-core has: how its
+binaries and its secret types implement the OS-level protection.
+
+## OS-level protection in shekyl-core
+
+A secret must not reach swap or a core dump. This is a requirement, and it
+has two named implementations:
+
+- **Every binary hardens its process first.** `shekyld`, `shekyl-cli` and
+  `shekyl-wallet-rpc` call `shekyl_process::harden::harden_process()` as
+  the first statement of `main` and refuse to start if it fails. It sets
+  the core limit to zero and, on Linux, `prctl(PR_SET_DUMPABLE, 0)`.
+- **The long-lived secret types own locked storage.** The typed secret
+  types in `shekyl-crypto-pq` (wallet spend and view keys, the PQC secret
+  keys, the transaction key) lock their pages (`mlock`; `VirtualLock` on
+  Windows) and exclude them from core dumps (`madvise(MADV_DONTDUMP)`)
+  once, at construction. A caller gets the protection by holding the
+  type, never by calling an OS function itself.

@@ -1,0 +1,131 @@
+---
+description: "shekyl-core's part of the branch policy (06): the consensus-cutover exception to the splitting guidance, and how CI tests the merges into dev."
+alwaysApply: true
+scope: core
+---
+
+# Branch policy: shekyl-core's part
+
+Estate rule [`06-branching`](06-branching.mdc) holds in every Shekyl repository.
+This rule holds the part of it that only shekyl-core has: the
+consensus-cutover exception to the splitting guidance, and how its CI
+tests the merges into `dev`.
+
+## The 5-day / 10-commit guidance has one named exception
+
+The 5-working-day / 10-commit splitting guidance, and the guidance to
+land on `dev` within 5 working days, live in
+[`06-branching`](06-branching.mdc): rule 2, and "When a short-lived
+branch is appropriate". They have a single ratified exception: PRs
+that meet all four criteria of
+[`107-consensus-atomic-cutovers.mdc`](./107-consensus-atomic-cutovers.mdc)
+— consensus-rule boundary, indivisible under flag decomposition,
+surface enumerated in advance with grep evidence, and disposition
+documented in the PR description with reviewer-map and rollback
+procedure. The exception applies only to that splitting guidance.
+[`06-branching`](06-branching.mdc) holds the hard rules: no direct
+commits to `main`, no `dev`-merges-into-feature, no force-pushes to
+`main`/`dev`, and no deletion without confirmation.
+
+If a PR appears to need the exception, the test is *not* "is this
+analogous to LWMA-1 Phase 4" — it is "does this PR meet the four
+named criteria in `107-consensus-atomic-cutovers.mdc`?" The exception
+is auditable mechanically against the criteria, not by precedent.
+
+## The runs on `dev` test the merge result
+
+A PR merges into `dev` once its own required checks pass; the `dev`
+ruleset requires a PR and those checks, and nothing else.
+A PR's CI runs on its head merged onto the `dev` of its last push. Two PRs
+each green alone can be broken together (#771×#772, #853×#858,
+#878×#880), and neither PR's run can see it. The runs on `dev` do: every
+gate that checks the whole tree also runs on push to `dev`, with the same
+`paths` filter it has on PRs. Consequences:
+
+- **A red run on `dev` is `dev`'s finding, not the last PR's.** The PRs
+  were green on their own heads. Each red job opens its own issue,
+  assigned to the Foundation's lead, naming the failing tests and the
+  merges since the workflow last passed, and the job's next green run
+  closes it (`report-dev-red.yml`). Read the diff since the last green run
+  on `dev`, find the two changes that disagree, and fix it on a new PR
+  before more merges land on top; every open PR that merges `dev` until
+  then inherits the red.
+- **A run on `dev` that has started finishes** (ruled 2026-11-19, every
+  workflow). A workflow's concurrency group is its ref, so every push to
+  `dev` shares one. A merge queues behind the running `dev` run, and a
+  newer merge replaces the queued one: one runs, one waits, and a burst of
+  merges is tested at the commit already running and at its newest. Only
+  a pull request's newer push cancels its older run
+  (`scripts/ci/check_dev_push_runs_finish.py`, over every workflow that
+  pushes on `dev`). The build and Rust scope jobs measure a push from the
+  last commit that workflow passed on (`scripts/ci/push_scope_base.sh`),
+  not from the previous push, so a replaced or cancelled run's commits stay in scope
+  and a docs-only merge cannot skip them. A red names the merges since the
+  last green run, not one PR.
+- **A gate on a PR's own diff runs on PRs only:** the schema snapshots'
+  version-bump pairing (the snapshot tests themselves are in the Rust
+  suite) and the benchmark comparator. CodeQL analyses each push to `dev`
+  and, weekly, `main`; the depends cross-compiles run per PR and nightly;
+  the ProVerif model is not a required check and runs per PR.
+- **A draft PR runs the cheap gates only.** The Rust suite, the
+  economics sim's narration pins, the OS builds, the benchmark capture
+  and the RandomX differential jobs skip a draft, and run when it is
+  marked ready and on every push after; their workflows list
+  `ready_for_review` (`scripts/ci/check_pr_event_triggers.py`). Ubuntu
+  22.04 builds pushes to `dev` and `main` only.
+- **Each of the two build workflows has one required check, its pass
+  job:** `cli-pass` (`build.yml`) and `rust-pass` (`rust-audit-test.yml`).
+  A skipped job counts as a pass to protection, so no job that can be
+  skipped is required. The pass job needs every other job and runs
+  whatever they did: green when each succeeded or was skipped by scope,
+  red when the scope job did not succeed or any job failed or was
+  cancelled. On a draft it reports as `<name> (draft)`, so a draft never
+  satisfies the requirement, and a PR marked ready waits for its own pass
+  job (`scripts/ci/workflow_pass.py`).
+- **A PR is a draft while it is worked on, comes out of draft for review,
+  and takes `merge-ready` when review and validation are complete**
+  (ruled 2026-11-23).
+- **`merge-ready` is the owner's "done", enforced** (ruled 2026-11-19).
+  Required checks going green is not the end of a PR: other workflows and
+  the lane's fleet runs on the same head can still be going. The owning
+  lane applies the `merge-ready` label when every check on the current
+  head has concluded, not only the required ones, its fleet and local
+  runs for that head are done, and its review threads are resolved; the
+  handoff to the merger is "labelled merge-ready at <sha>". The required
+  status `merge-ready` (`merge-ready.yml`, `scripts/ci/merge_ready.py`)
+  is pending until then. The label going on is refused, and taken off
+  with a comment naming each reason, while a check runs or is red, a
+  review thread is open, or the PR is a draft. A push takes it off, with
+  a comment: the label vouches for one head. It is a commit status,
+  never a job, so it cannot be skipped into a pass, and no job that
+  posts it is named `merge-ready`, since a ruleset matches a check run
+  and a status by name alike.
+- **The label is a signal to the merger, not a second test run** (ruled
+  2026-11-23). Nothing re-runs a test when the label goes on or when a
+  merge reaches a labelled PR, and a merge into `dev` leaves the label and
+  the status as they are. A PR's CI runs on its head merged onto the `dev`
+  of its last push, so two PRs each green against the same `dev` can be
+  red together (#1425 and #1426, #1489 and #1497). The run on `dev` after
+  the merge tests that combination, and a red there opens its own issue
+  (`report-dev-red.yml`). One check does look at the combination when the
+  label goes on, because the break costs every lane its pushes and takes
+  seconds to see: the head must merge with the newest `dev`, and the fuzz
+  lockfiles must agree with the workspace lock on that merge. It reads
+  files and runs no test. A merge after the label is `dev`'s run's.
+- **A stacked PR retargeted onto `dev` keeps its old base's checks until
+  its next push.** Merge `dev` into it before it merges
+  (`scripts/ci/check_pr_event_triggers.py` names why no event does this).
+- **"Require branches to be up to date" is the alternative not taken.**
+  It tests each merge result before it lands by making every author merge
+  `dev` and rerun CI after every other merge; with the Rust job over an
+  hour and six lanes open, each merge would cost the other five that run.
+  The runs on `dev` test every combination once, after the merge; what
+  lands before it is seen is a break between two changes each green alone.
+- **No merge queue (rule 21).** A queue also tests each merge result
+  before it lands, but a group passes only if every required check
+  finishes inside the queue's timeout, and a group removed for a timeout
+  or a conflict sends its PRs back to wait again: in the queue's last
+  eight hours on `dev` (to 2026-11-07), one PR merged. Reopen when the required checks
+  finish well inside a queue timeout (the Rust suite partitioned across
+  runners is the step that gets there), and record what the queue would
+  replace here.

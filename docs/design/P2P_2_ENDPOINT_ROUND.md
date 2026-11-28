@@ -5,8 +5,8 @@ wider than it should have; PWD-E3/E4's mechanisms were already ruled on `dev`
 and are retained as records-was. What this round contributes: the direction of
 the nonce/address dependency, the dead `m_our_address` fact, PWD-E2's
 enforcement requirement, and PWD-E5's requirement on the removal lane. See §0
-before reading anything else. Rule 26 is cited explicitly
-(`26-sub-pr-design-discipline.mdc`): this is a multi-round design surface with
+before reading anything else. Rule 126 is cited explicitly
+(`126-sub-pr-design-discipline.mdc`): this is a multi-round design surface with
 untrusted-input and identity coupling, so A2 (audit-against-actual-code) and
 A3 (threat-model framing) are load-bearing here, not optional.
 
@@ -14,7 +14,7 @@ A3 (threat-model framing) are load-bearing here, not optional.
 lands in [`SHEKYL_P2P_PROTOCOL.md`](SHEKYL_P2P_PROTOCOL.md) when signed. The
 implementation belongs to `p2p/basic-node-data-address` (the wire half) and to
 the Rust p2p node when it exists — **not to this document, and not to C++**
-beyond what those lanes already scope (rule 20).
+beyond what those lanes already scope (`RULE_20_RUST_VS_CPP`).
 
 **Pinned sha:** `93e7860ba2755fbd61614f0fe5bbed66f83b920a` (`dev` tip,
 `git ls-remote origin`-verified 2026-09-06). Every `file:line` below was read
@@ -273,7 +273,7 @@ concedes, and the falsifier that reopens it.
 > [`SHEKYL_P2P_PROTOCOL.md`](SHEKYL_P2P_PROTOCOL.md) §0.5 carries a
 > per-decision status with evidence for all 37 P2P-2 decisions, E1–E9
 > included. One table, one owner: a second status here would be the
-> restatement that goes stale (rule 94 §6).
+> restatement that goes stale (rule 194 §6).
 
 ### PWD-E1 — does a node determine its own reachable endpoint?
 
@@ -495,13 +495,13 @@ Field placement — request-level on `COMMAND_HANDSHAKE` rather than inside
 `basic_node_data` — is right for the layering reason in §0, independently of
 whether p2p encryption ever lands.
 
-## 6. Forward actions (rule 26 A5)
+## 6. Forward actions (rule 126 A5)
 
 | # | Action | Target |
 |---|---|---|
 | F1 | Answer PWD-E5 against the built field set | `p2p/basic-node-data-address` |
 | F2 | Whatever PWD-E3/E4 rule must land **with** the `peer_id` removal, not after it | same lane — removing job 1 and job 2 with no replacement is the regression this round exists to prevent |
-| F3 | Rust shape (endpoint typestate `Candidate<Source>` → `Verified{at}` → `Stale`; `Zone` marker types with `type Dedup`/`type Announced`, distinct from `RelayZone`) | the Rust p2p node; rule-18 question of whether `RelayZone` derives from the transport zone is **not** settled here |
+| F3 | Rust shape (endpoint typestate `Candidate<Source>` → `Verified{at}` → `Stale`; `Zone` marker types with `type Dedup`/`type Announced`, distinct from `RelayZone`) | the Rust p2p node; rule-118 question of whether `RelayZone` derives from the transport zone is **not** settled here |
 | F4 | Re-home PWD-I2's eclipse-completion-oracle argument when `ANON_ZONE_SENTINEL_PEER_ID` is deleted | the removal lane — the argument outlives its subject and is the standing reason not to reintroduce per-node identity |
 | F5 | **DISCHARGED 2026-09-07.** §5c's check, corrected: ordering is enforced by construction (`mint_recorded_handshake_nonce`) with a test pinning the construction; **boundedness rests on the attempt scope guard alone** (`net_node.h:344-346` — attempt-scoped by construction), while erase-on-match pins single-fire/anti-replay rather than a second size bound. Both erase implementations are exercised by count and by detection; the termination *wiring* is RAII and deliberately unobserved — see §5c, which states the boundary rather than claiming path coverage | the removal lane, PR #643 |
 
@@ -896,7 +896,7 @@ opportunity against the durable identity. The §7 residual has no such generator
 both wallet identities are durable. So the accepted-residual argument does not
 merely fail to transfer — it points the other way.
 
-#### Crate shape (rule 25), proposed
+#### Crate shape (rule 125), proposed
 
 The test the peer named is the right one: **neither crate's docs should have to
 describe the other's posture.** `shekyl-tor-control-wallet` today opens *"Wallet-owned Tor

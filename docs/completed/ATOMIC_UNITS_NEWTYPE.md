@@ -40,7 +40,7 @@ privacy- and feature-neutral.
 
 ---
 
-## 2. Type-placement disposition (`18-type-placement.mdc`)
+## 2. Type-placement disposition (`118-type-placement.mdc`)
 
 `AtomicUnits` is **state-shaped**: it is a value that flows through balances,
 fees, recipients, and persisted ledger state, not the output of one defining
@@ -104,7 +104,7 @@ greppable set that bounds the migration.
 ABI-identical at the FFI edge. **Consequence:** the
 `amount: u64 → AtomicUnits` swap is a *type-level* change with **no
 serialized-format change** and therefore **no `WALLET_LEDGER_FORMAT_VERSION`
-bump** (`42-serialization-policy.mdc`: a type change that produces identical
+bump** (`142-serialization-policy.mdc`: a type change that produces identical
 wire bytes is not a wire-format change). Verified for the JSON-RPC surface in
 §4.5.
 
@@ -144,7 +144,7 @@ This is the **full** raw-`u64` boundary — the complete `to_raw`/`from_raw`
 set, not "three edges plus an unstated oxide." Everything inside the boundary
 carries `AtomicUnits`; conversion happens only at these sites.
 
-### 4.1 oxide fork `u64` surface (vendored; stays `u64` per `10-shekyl-first`)
+### 4.1 oxide fork `u64` surface (vendored; stays `u64` per `110-shekyl-first`)
 
 The fork is a downstream consumer and never depends on `shekyl-units`. SHEKYL
 → oxide *write* sites each get a named `to_raw`:
@@ -179,7 +179,7 @@ already uses `checked_add`/`try_fold`; migrate its `&[u64]` → `&[AtomicUnits]`
 `*amount_out` stay `#[repr(C)] u64`. Convert at the wrapper only where a
 now-`AtomicUnits` Shekyl function is called. Mostly automatic, since the
 crates the FFI delegates to (`crypto-pq`, `economics`) stay `u64`.
-`src/shekyl/shekyl_ffi.h` stays in sync (`25-rust-architecture.mdc`).
+`src/shekyl/shekyl_ffi.h` stays in sync (`125-rust-architecture.mdc`).
 
 ### 4.4 postcard `commitment_bytes` (`shekyl-engine-state/src/serde_helpers.rs`)
 
@@ -222,7 +222,7 @@ rounding mode for wallet and consensus to disagree on). The in-scope
 
 Adding a duplicate `mul_div_rem` to `AtomicUnits` now would be (a)
 pre-provisioning (its only natural consumer is the u128-native consensus
-module that already owns the math) and (b) a `18-type-placement.mdc`
+module that already owns the math) and (b) a `118-type-placement.mdc`
 consensus-surface duplication.
 
 **Reopening criterion (`21-reversion-clause-discipline.mdc`):** introduce an
@@ -285,7 +285,7 @@ a FOLLOWUPS item, §10).
 
 ## 7. Migration discipline (write into code review, not improvised per-site)
 
-### 7.1 Fallibility ripple (`20-rust-vs-cpp-policy.mdc`)
+### 7.1 Fallibility ripple (`RULE_20_RUST_VS_CPP.md`)
 
 Checked-only turns previously-infallible `+`/`saturating_add` sites fallible.
 Arithmetic sites (`fee_estimator`, `tx-builder/validate`, `output_selector`,

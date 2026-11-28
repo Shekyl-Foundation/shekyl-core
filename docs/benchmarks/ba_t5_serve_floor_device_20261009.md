@@ -30,7 +30,7 @@ This session extends the run of 2026-10-07
 same device, the same probe with one mode added, and the same reading
 rules where the lines are the same. The floor device is the Raspberry Pi
 4 Model B of
-[`76-device-provisioning-floor`](../../.cursor/rules/76-device-provisioning-floor.mdc),
+[`176-device-provisioning-floor`](../../.cursor/rules/176-device-provisioning-floor.mdc),
 ruled on 2026-10-07 to be the ground floor for the serve path. Devices are
 named by role.
 

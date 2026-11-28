@@ -101,7 +101,7 @@ RandomX v2 algorithm-review gate (genesis release checklist)
 RandomX v2 mining floor-vs-ceiling asymmetry — Phases 1–3 parked after Phase 0.
 Miner template conformance vector (bless the interface, not a miner).
 `rust/shekyl-consensus` fold
-Promote 2c-emergent sub-PR design disciplines to project-level [`.cursor/rules/26-sub-pr-design-discipline.mdc`](../.cursor/rules/26-sub-pr-design-discipline.mdc)
+Promote 2c-emergent sub-PR design disciplines to project-level [`.cursor/rules/126-sub-pr-design-discipline.mdc`](../.cursor/rules/126-sub-pr-design-discipline.mdc)
 CL-7 forward-compat audit of trait-owned value/error types [`engine/error/send.rs`](../rust/shekyl-engine-core/src/engine/error/send.rs)
 `shekyl-tx-builder::SpendInput` derives plain `#[derive(Debug)]` over [`rust/shekyl-tx-builder/src/types.rs`](../rust/shekyl-tx-builder/src/types.rs)
 Migrate residual consensus-parity Keccak (`keccak256`) call sites to cSHAKE256 / [`shekyl_crypto_hash::keccak256`](../rust/shekyl-crypto-hash/src/lib.rs)
@@ -166,7 +166,7 @@ Derive PWD-B2's timed-sync `min`/`jitter` split.
 Re-derive initial-sync verification cost at the Pi-4 floor now that C2-R1a has deleted `PER_BLOCK_CHECKPOINT`.
 Measure address volatility for ephemeral-per-boot onion endpoints (PWD-E8), then rule the acceptable dead fraction.
 Run the `ρ`/`g_max` sub-round (Q-10) deferred by PWD-I4.
-Daemon PQC phase-1 payload assembly duplicates [`20-rust-vs-cpp-policy`](completed/RULE_20_RUST_VS_CPP.md)
+Daemon PQC phase-1 payload assembly duplicates [`RULE_20_RUST_VS_CPP`](completed/RULE_20_RUST_VS_CPP.md)
 FCMP++ sender-side output verification — inherited `wallet2::sanity_check` [`16-architectural-inheritance`](../.cursor/rules/16-architectural-inheritance.mdc)
 `shekyld` `fee_policy_version` daemon-side exposure.
 `ActivityMetric` producer actor (wallet-side coherent bundle).

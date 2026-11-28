@@ -101,7 +101,7 @@ persona slots — persona-activity history, the same class as
 `BondPostRecord`. Same treatment: redacted `Debug` (contents *and* count),
 sealed at rest under the existing `.wallet.pscan` seal.
 
-**Schema.** `PSCAN_STATE_VERSION` bumps 3 → 4 (rule 42). Pre-genesis: no
+**Schema.** `PSCAN_STATE_VERSION` bumps 3 → 4 (rule 142). Pre-genesis: no
 migration shim — a v3 seal fails the existing fail-closed version gate and
 the operator re-scans (`rm -rf ~/.shekyl` posture, rule 15). The
 `from_state`/`to_state` round-trip in `PScanAccrual` carries the new table
@@ -238,7 +238,7 @@ pscan seal — *not* a field inside `PScanState`:
   by the assemble path (a different writer on a different cadence). Two
   writers racing one read-modify-seal cycle is the bug class the slot
   exists to prevent — separate blocks keep each seal single-writer.
-- **Content** (postcard, own `PENDING_POST_VERSION = 1`, rule 42):
+- **Content** (postcard, own `PENDING_POST_VERSION = 1`, rule 142):
 
 ```text
 PendingBondPost {

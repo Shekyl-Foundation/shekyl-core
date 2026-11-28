@@ -125,7 +125,7 @@ pub const SLASH_GRACE_EPOCHS: u64 = 1;
 /// that). Raising W₂ then means **widening the band deliberately**, re-running
 /// the ruling rather than editing past the assert.
 ///
-/// **What is not a reopening trigger:** whether a rule-76 Pi-4 can serve ~97
+/// **What is not a reopening trigger:** whether a rule-176 Pi-4 can serve ~97
 /// concurrent rendezvous circuits. That reads like a W₂ question, is not one,
 /// and on inspection is not a question at all: `λ·D/E` ≈ 97 is *draws per block
 /// assigned to that block's producer*, a producer is a miner, and nobody mines
@@ -262,11 +262,11 @@ pub enum SettlementEpochOverrideError {
 /// behind [`effective_settlement_epoch_blocks`] /
 /// [`arm_settlement_epoch_override_for_regtest`].
 ///
-/// Bounds rationale (rule 75): the lever exists only to *shorten* epochs
+/// Bounds rationale (rule 175): the lever exists only to *shorten* epochs
 /// so a regtest chain reaches close boundaries in minutes — a value above
 /// the genesis pin has no consumer and is rejected. The lower bound is the
 /// cap's: `SEB > D_max` is an invariant of every valid configuration on
-/// every nettype (`ARCHIVAL_PRUNED_DAEMON_MODE.md` Q2, rule 71), so a
+/// every nettype (`ARCHIVAL_PRUNED_DAEMON_MODE.md` Q2, rule 171), so a
 /// regtest that shortens the epoch below the production cap lowers the
 /// cap lever with it. The node's rule set names that cap through
 /// `CappedEpoch` (`RuleSet::with_levers`); this parser is the latch's

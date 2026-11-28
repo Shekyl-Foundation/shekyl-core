@@ -1408,7 +1408,7 @@ and what a lost one costs is stated beside it:
 | Seen-seed fingerprints | the one-way fingerprint of every intent seed this member has seen, never the seed | a malicious proposer can reuse a seed, which links two attempts and loses nothing |
 
 Before a member's first ceremony there is no file. A file of another
-version is refused, not migrated (`MULTISIG_STATE_VERSION`, rule 42).
+version is refused, not migrated (`MULTISIG_STATE_VERSION`, rule 142).
 
 ### 13.3 Disagreement resolution
 

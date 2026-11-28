@@ -653,7 +653,7 @@ The umbrella chat reviews the round's output before it goes to ratification.
 The deferral as it was disclosed at the time, retained because the reasoning is
 the record of why these did not ride in the brief's own PR:
 
-- **Blocker (discharged):** the register is a separate document with its own validation surface and its own steering review (rule 19). Folding four corrections — one of which **retires a requirement** and adds a posture row — into a dispatch-brief PR would have buried the brief under an edit needing review on its own terms.
+- **Blocker (discharged):** the register is a separate document with its own validation surface and its own steering review (rule 119). Folding four corrections — one of which **retires a requirement** and adds a posture row — into a dispatch-brief PR would have buried the brief under an edit needing review on its own terms.
 - **Owner:** this session.
 - **Schedule (met): before the P2P-2 round dispatches**, which was a hard ordering rather than a preference. The round *reads the register*; had it still carried PW-3's padding requirement and PW-8's wrong figures at dispatch, it would have inherited a retired requirement and a mis-stated ratio.
 

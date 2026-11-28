@@ -1,4 +1,4 @@
-dynamic (dudect-style) RE-RUN after the review round — the rule-76 FLOOR DEVICE: Raspberry Pi 4 Model B, Cortex-A72, aarch64 Linux, idle, the daemon inactive
+dynamic (dudect-style) RE-RUN after the review round — the rule-176 FLOOR DEVICE: Raspberry Pi 4 Model B, Cortex-A72, aarch64 Linux, idle, the daemon inactive
 binary: docs/formal/checkct/dynamic at 40ac33a8c (operands over the full field through wide_reduce; from_repr rows on unrestricted bytes; whole result through black_box before the sink; sample floor), cargo build --release --target aarch64-unknown-linux-gnu, pinned 1.94.0 / LLVM 21.1.8
 run window (UTC): Sat Oct 24 18:27:08 UTC 2026 -> Sat Oct 24 19:03:49 UTC 2026
 

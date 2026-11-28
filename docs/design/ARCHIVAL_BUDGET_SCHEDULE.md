@@ -545,7 +545,7 @@ follow-on notes below).
   fee-market ceiling (below it, saturation → graceful loud failure) —
   and the fiat-cost leg (L17 P2) is only partially dampable by any
   token-denominated servo. Reopens when the fee-era servo lands (its
-  own design round on this document, `75-system-autonomy` jurisdiction —
+  own design round on this document, `175-system-autonomy` jurisdiction —
   the servo's gain/signal/ceiling are the sim's named post-testnet
   empirics): the servo modifies the **amount** computed at the same
   single write site (`staker_inflow(h)` → `budget_eff(h)`), never adds
@@ -596,7 +596,7 @@ follow-on notes below).
 This spec is **commit-block 1 of the C-1 PR** once ratified (the accrual
 and frozen rows are consensus-inert until the whitelist flip — nothing
 reads `archival_budget` until dispatch lands — so the atomic-flip shape of
-the round's §9.6 rule-07 check is unchanged). The rest of the §9.5 build
+the round's §9.6 rule-107 check is unchanged). The rest of the §9.5 build
 list consumes `budget(E)` **as defined here**: "emittable inflow for E,"
 never "all inflow for E."
 

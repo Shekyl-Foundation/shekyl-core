@@ -20,7 +20,7 @@ behavior** lands behind that round (the DQ-F split, precisified 2026-07-18 — �
 
 **Status:** ROUND 0 — DQ-A…DQ-F **ratified 2026-07-18** (dispositions inline in §5).
 Round-0 exit tasks in §7. **Process rule:**
-[`26-sub-pr-design-discipline`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
+[`126-sub-pr-design-discipline`](../../.cursor/rules/126-sub-pr-design-discipline.mdc)
 (firewall-load-bearing: an over-eager GC drops live collateral / strands live funds).
 
 **Priority note (`00-mission`).** SP-R0's funding arm is **V3.0 pre-genesis** (assemble is
@@ -183,7 +183,7 @@ sealed state** — the DQ-F production fire, asserted live
 
 **BUILD RECORD (2026-07-18, `feat/sp-r0-arm2-retire-gc`) — arm #2 BUILT.** The done-side
 ledger landed as designed (2d-1 §"Records-driven retirement"): `RetiredPersonaRecord`
-rows in `PScanState` (**`PSCAN_STATE_VERSION` 6 → 7**, snapshot regenerated per rule 42),
+rows in `PScanState` (**`PSCAN_STATE_VERSION` 6 → 7**, snapshot regenerated per rule 142),
 written by the **atomic retire-time prune** `PScanAccrual::retire_persona` — the
 persona's `bond_post_matches` rows and the `pending_releases` trigger leave in the same
 mutation that appends the record, sealed by the task's one atomic write (the §15 pin; the
@@ -398,7 +398,7 @@ Specify the CI wiring (the observer + the non-zero assertion) in each arm's land
 ## 7. Round-0 exit
 
 DQ-A…DQ-F ratified. Remaining Round-0 tasks: correct the stale status lines (§6), register the
-three arms as index rows (rule 94; SP-R0 identifier exists), and open the activation round.
+three arms as index rows (rule 194; SP-R0 identifier exists), and open the activation round.
 **Executed 2026-07-18 (this branch + companion PR):** the three stale FOLLOWUPS entries
 corrected (the "SP-6 unbuilt" gate — stale since 2026-06-29 — plus the arm-#1 gate header
 and arm #3's "persona scanning lands" reopen trigger, re-pointed at the DQ-F fire

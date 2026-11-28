@@ -454,10 +454,6 @@ pub enum DelayFamily {
     Geometric,
 }
 
-/// Historical name for [`DelayFamily`]. Prefer the new name at new call sites.
-#[deprecated(note = "renamed to DelayFamily — shared by all relay delays, not embargo-only")]
-pub type EmbargoDistribution = DelayFamily;
-
 /// The stem embargo: how long a node waits for a stemmed transaction to come
 /// back to it as fluff before giving up and fluffing it itself.
 ///

@@ -8,7 +8,7 @@
 //!
 //! Light-mode RandomX is bound by cache and memory bandwidth, and each hash
 //! holds a scratchpad: more hashers than cores thrash rather than hash
-//! (RD-F11), and on the floor device (rule 76) the scratchpads are what the
+//! (RD-F11), and on the floor device (rule 176) the scratchpads are what the
 //! memory holds. So every hasher in the daemon takes a permit from one
 //! [`Budget`] of `available_parallelism` permits, derived at run time, never
 //! provisioned as a constant.
@@ -151,7 +151,7 @@ impl Budget {
     }
 
     /// A budget of this host's parallelism, one when the platform will not
-    /// say: read at run time (rule 76).
+    /// say: read at run time (rule 176).
     #[must_use]
     pub fn of_host() -> Self {
         Self::new(std::thread::available_parallelism().unwrap_or(NonZeroUsize::MIN))

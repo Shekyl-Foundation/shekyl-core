@@ -5,6 +5,7 @@ globs:
   - rust/shekyl-engine-file/**
   - rust/shekyl-chain-store/**
   - rust/shekyl-peerlist/**
+scope: core
 ---
 
 # Serialization policy

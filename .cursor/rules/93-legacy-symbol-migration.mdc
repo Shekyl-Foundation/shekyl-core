@@ -5,6 +5,12 @@ globs:
   - "contrib/**"
   - "scripts/**"
   - ".github/**"
+  - "src/**"
+  - "src-tauri/**"
+  - "prism-*/**"
+  - "shekyl-prism/**"
+scope: estate
+repos: [core, gui, prism]
 ---
 
 # Legacy symbol naming
@@ -23,8 +29,8 @@ build flag, a build variable, a feature name, a workflow variable) uses
   environment variable a contributor is tempted to match to a Monero
   convention ("`MONERO_LOGS` syntax is familiar") as much as a constant.
 - An upstream project's name is a proper noun, not a legacy identifier:
-  `UPSTREAM_MONERO_OXIDE_COMMIT` names the monero-oxide commit the vendored
-  `shekyl-oxide` tracks (rule 10), and stays.
+  `UPSTREAM_MONERO_OXIDE_COMMIT` names the monero-oxide commit the vendored `shekyl-oxide` tracks (shekyl-core's
+  [`110-shekyl-first`](https://github.com/Shekyl-Foundation/shekyl-core/blob/dev/.cursor/rules/110-shekyl-first.mdc)), and stays.
 
 ## Not governed: frozen crypto domain separators
 
@@ -34,7 +40,7 @@ strings. Some literals containing `"Monero"` (for example
 hashed to derive generator points, so changing a byte moves the point and
 silently breaks proofs. A rebrand sweep skips them. They carry inline
 `// FROZEN DST` markers and are enumerated in
-[`docs/FROZEN_DOMAIN_SEPARATORS.md`](../../docs/FROZEN_DOMAIN_SEPARATORS.md),
+shekyl-core's [`docs/FROZEN_DOMAIN_SEPARATORS.md`](https://github.com/Shekyl-Foundation/shekyl-core/blob/dev/docs/FROZEN_DOMAIN_SEPARATORS.md),
 backstopped by a release KAT on the derived points. An identifier that
 merely *binds* a frozen point (an import alias, a constant's name) is
 still governed by the rule: name the binding for Shekyl; the bytes stay

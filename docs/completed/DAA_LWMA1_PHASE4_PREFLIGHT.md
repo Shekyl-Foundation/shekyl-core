@@ -5,14 +5,14 @@ before the Phase 4 implementation branch is cut.
 
 **Base commit.** `dev` at `96555a829a4` (post-Phase-2 merge, PR #52
 "feat/daa-lwma1-phase2"). Records the base SHA per
-`07-consensus-atomic-cutovers.mdc` criterion 3's
+`107-consensus-atomic-cutovers.mdc` criterion 3's
 grep-against-base-commit requirement; the Phase 4 PR description
 repeats this SHA.
 
 **Branch (forthcoming).** `feat/daa-lwma1-phase4`, cut off `dev` at
 the SHA above once this pre-flight lands. Per `06-branching.mdc` rule
 2 the branch is short-lived (target: ≤5 working days); per
-`07-consensus-atomic-cutovers.mdc` criteria 1–4 the PR itself does not
+`107-consensus-atomic-cutovers.mdc` criteria 1–4 the PR itself does not
 split (single atomic cutover).
 
 **Scope.** Re-anchors `DAA_LWMA1_PLAN.md` Phase 4's 14-item work
@@ -32,7 +32,7 @@ PR description will reuse verbatim.
 - **Spec.** [`DAA_LWMA1.md`](./DAA_LWMA1.md) §§9.1–9.8 and §11 are
   the binding file-by-file enumeration.
 - **Exception rule.**
-  [`.cursor/rules/07-consensus-atomic-cutovers.mdc`](../../.cursor/rules/07-consensus-atomic-cutovers.mdc)
+  [`.cursor/rules/107-consensus-atomic-cutovers.mdc`](../../.cursor/rules/107-consensus-atomic-cutovers.mdc)
   defines the four-criterion test. LWMA-1 Phase 4 is the rule's
   first invocation per its "Approved invocations" section.
 - **CI invariant pattern.**
@@ -564,7 +564,7 @@ Phase 4's scope per `15-deletion-and-debt.mdc`.**
 None anticipated at pre-flight time. The Phase 4 surface is
 enumeration-bounded; new findings during implementation that fall
 outside the enumerated surface fail
-`07-consensus-atomic-cutovers.mdc` criterion 3's
+`107-consensus-atomic-cutovers.mdc` criterion 3's
 scope-bounding and are deferred to a separate PR.
 
 ---
@@ -609,7 +609,7 @@ single-OS-matrix, fast-running).
 
 ## §15 Reviewer-map for the Phase 4 PR description
 
-Per `07-consensus-atomic-cutovers.mdc` sub-clause 4.3, the PR
+Per `107-consensus-atomic-cutovers.mdc` sub-clause 4.3, the PR
 description partitions the diff into three categories. This is
 the working draft for the Phase 4 PR; the Phase 4 PR description
 copies this section verbatim with line numbers updated to match
@@ -678,13 +678,13 @@ enumeration, not to amend the map mid-review.**
 
 ---
 
-## §16 Criterion-mapping for `07-consensus-atomic-cutovers.mdc`
+## §16 Criterion-mapping for `107-consensus-atomic-cutovers.mdc`
 
 Per sub-clauses 4.1–4.4 of the rule, the Phase 4 PR description
 contains this section verbatim.
 
 - **Rule citation (4.1).** This PR invokes
-  `07-consensus-atomic-cutovers.mdc`. The history-entry commit
+  `107-consensus-atomic-cutovers.mdc`. The history-entry commit
   adding this PR to the rule's "Approved invocations" section
   lands in the same PR (rule sub-clause 4.1).
 
@@ -780,7 +780,7 @@ knowledge to apply. Sub-clause 4.4's enforcement clause is met.
 
 ## §18 Commit decomposition for the Phase 4 branch
 
-`07-consensus-atomic-cutovers.mdc` relaxes the *PR* splitting
+`107-consensus-atomic-cutovers.mdc` relaxes the *PR* splitting
 guidance but not the commit-level scope discipline from
 `90-commits.mdc`: "within the PR, commits still respect
 single-purpose scope per the commit rule." Phase 4's recommended
@@ -834,7 +834,7 @@ commit decomposition:
     (consensus-delta framing), `FOLLOWUPS.md` close-record for
     the V3.0 DAA item, `DAA_LWMA1.md` and `DAA_LWMA1_PLAN.md`
     amendments for the drift findings F1–F5 above, and the
-    `07-consensus-atomic-cutovers.mdc` "Approved invocations"
+    `107-consensus-atomic-cutovers.mdc` "Approved invocations"
     history-entry commit.
 
 Each commit's message subject is ≤72 chars per `90-commits.mdc`;
@@ -867,7 +867,7 @@ pre-flight time (F1–F5); both are absorbed under §18's
   `#include "cryptonote_config.h"` they pulled in; retain the
   `check_hash` family. The disposition narrows scope and does not
   trigger scope-creep-loses-the-exception per
-  `07-consensus-atomic-cutovers.mdc` "Compensating discipline."
+  `107-consensus-atomic-cutovers.mdc` "Compensating discipline."
 - **F7 — `check_difficulty_checkpoints()` not a deletion target**
   (Commit 10). The pre-flight §14 and spec §7.1 enumerated this
   function in the symbol-isolation invariant's match list.
@@ -893,7 +893,7 @@ item 7 in `DAA_LWMA1_PLAN.md` Phase 4 is amended in Commit 11.
 
 If implementation surfaces a finding outside this pre-flight's
 scope, the disposition (per
-`07-consensus-atomic-cutovers.mdc` "Compensating discipline when
+`107-consensus-atomic-cutovers.mdc` "Compensating discipline when
 the exception is invoked"):
 
 - **In-scope surfaces** (anything covered by §§2–13 of this doc):
@@ -926,6 +926,6 @@ After the pre-flight lands:
    criterion-mapping verbatim from §16, rollback procedure
    verbatim from §17).
 4. Add the history-entry commit to
-   `.cursor/rules/07-consensus-atomic-cutovers.mdc`'s "Approved
+   `.cursor/rules/107-consensus-atomic-cutovers.mdc`'s "Approved
    invocations" section as part of the Phase 4 PR (sub-clause
    4.1's self-anchoring requirement).

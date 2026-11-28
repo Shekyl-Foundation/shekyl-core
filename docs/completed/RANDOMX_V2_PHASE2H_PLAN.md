@@ -1,21 +1,21 @@
 ---
 name: RandomX v2 Phase 2h plan
-overview: "Post-2g adversarial-corpus methodology + implementation. Closes the Phase 2g R7 deferrals — RANDOMX_V2_PHASE2G_PLAN.md §3.19 R7-D1/R7-D2/R7-D3/R7-D4/R7-D5 — that reopened R1-D5 (adversarial seedhash corpus), R1-D6 (u128 / __int128_t edge-case data corpus), and R1-D8 (worst-case timing) under two independent substrate findings against R1-D5's V1-shaped class-heaviness grinding methodology (verifier-accessor gap + statistical-infeasibility gap; per-class σ-gaps from 6.8σ (CACHE_MISS) to ~125σ (CFROUND) against V2's PROGRAM_SIZE = 384). Restores the §2.5 corpus-coverage-as-leg-3-completeness audit-posture claim to full strength before genesis cut. Verifier surface is frozen (Phase 2F R3 + Phase 2g R5-D1); harness layering is frozen (Phase 2g Round 2 T2 four-crate split); 2h is harness-side work bounded by §1 substrate. Round 0 enumerates decision points (D-A through D-H, plus optional D-I rule-26 amendment) without closing them; Round 1 closes architecture; Round 2 closes threat model; pre-implementation round verifies surfaces / dependencies / corpus-size budget; implementation PR lands the methodology, accessor (if any), grinding tool (if any), corpus contents, mode_worst_case reactivation, T2/T6 reactivation, and the §2.5 leg-3 framing restoration. V3.0 pre-genesis queue target per docs/FOLLOWUPS.md; escalates ahead of V3.0 only if a Phase-2 audit finding surfaces a rare-path divergence the random + canonical corpora missed (per 16-architectural-inheritance.mdc priority-1 security override)."
+overview: "Post-2g adversarial-corpus methodology + implementation. Closes the Phase 2g R7 deferrals — RANDOMX_V2_PHASE2G_PLAN.md §3.19 R7-D1/R7-D2/R7-D3/R7-D4/R7-D5 — that reopened R1-D5 (adversarial seedhash corpus), R1-D6 (u128 / __int128_t edge-case data corpus), and R1-D8 (worst-case timing) under two independent substrate findings against R1-D5's V1-shaped class-heaviness grinding methodology (verifier-accessor gap + statistical-infeasibility gap; per-class σ-gaps from 6.8σ (CACHE_MISS) to ~125σ (CFROUND) against V2's PROGRAM_SIZE = 384). Restores the §2.5 corpus-coverage-as-leg-3-completeness audit-posture claim to full strength before genesis cut. Verifier surface is frozen (Phase 2F R3 + Phase 2g R5-D1); harness layering is frozen (Phase 2g Round 2 T2 four-crate split); 2h is harness-side work bounded by §1 substrate. Round 0 enumerates decision points (D-A through D-H, plus optional D-I rule-126 amendment) without closing them; Round 1 closes architecture; Round 2 closes threat model; pre-implementation round verifies surfaces / dependencies / corpus-size budget; implementation PR lands the methodology, accessor (if any), grinding tool (if any), corpus contents, mode_worst_case reactivation, T2/T6 reactivation, and the §2.5 leg-3 framing restoration. V3.0 pre-genesis queue target per docs/FOLLOWUPS.md; escalates ahead of V3.0 only if a Phase-2 audit finding surfaces a rare-path divergence the random + canonical corpora missed (per 16-architectural-inheritance.mdc priority-1 security override)."
 todos:
   - id: phase2h-round-0
-    content: "Round 0 scaffold: front-matter + §0 framing + §1 frozen substrate (six items with cite paths) + §2 forward-actions absorbed (R7-D1..R7-D5 specifications, FOLLOWUPS V3.0 scope items 1–6, rule-26 surface-enumeration-pass + substrate-derived constant validation pass) + §3 R1-D1..R1-D8 decision points (open; not closed at Round 0) + §11 Round 0 history row. §4–§10 reserved as placeholders for Round 1+ substantive content. Land on chore/randomx-v2-phase2h-plan as one design-phase commit per 06-branching.mdc rule 2."
+    content: "Round 0 scaffold: front-matter + §0 framing + §1 frozen substrate (six items with cite paths) + §2 forward-actions absorbed (R7-D1..R7-D5 specifications, FOLLOWUPS V3.0 scope items 1–6, rule-126 surface-enumeration-pass + substrate-derived constant validation pass) + §3 R1-D1..R1-D8 decision points (open; not closed at Round 0) + §11 Round 0 history row. §4–§10 reserved as placeholders for Round 1+ substantive content. Land on chore/randomx-v2-phase2h-plan as one design-phase commit per 06-branching.mdc rule 2."
     status: completed
   - id: phase2h-round-1
-    content: "Round 1 architecture close (collaborative): R1-D1 (specified-outliers methodology as composition of three definitions — audit-anchored spec-silence enumeration primary, per-opcode boundary-value supplementary, coverage-metric validation; definition (1) rejected as substrate-unreachable; corpus size 50-200 entries; additively maintainable as load-bearing substrate property), R1-D2 (PreparedCache::from_raw_for_testing under cfg(feature=\"test-internals\") + C-side symmetry via existing randomx_get_cache_memory + production-equivalence constraint pinned as substrate principle), R1-D3 (lib module in shekyl-randomx-differential + declarative C1 recipes primary with C2 imperative escape hatch + B2 runtime expansion + first-class recipe evaluator + executable-specification recipes pinned as substrate property), R1-D4 (Family 1 Rust source const array at adversarial_canonical_outputs.rs + compile-time bidirectional cross-checkability + gen_canonical_outputs.rs bin extension + derive-substrate-inputs/cache-attestation-outputs pinned as substrate principle), R1-D5 (mode_worst_case renamed to mode_adversarial_ratio + Claim 1 per-recipe max-ratio (5.0×−margin) with single-retry noise filter as hard gate + Claim 2 no-per-class-systematic-regression as regression-tracking signal + vocabulary-shift cascade to §2.5/§4/parent §6), R1-D6 (continuous enforcement from first recipe + cadence-corpus alignment as substrate policy + actionable failure semantics pinned as substrate principle), R1-D7 (T2 in existing workflow + T6 in new dedicated workflow with workflow_dispatch pre-genesis + M3 PR-template discipline expansion to .github/workflows/ files + GitHub-hosted runner class with committed RUNNER_NOISE_MARGIN under M1/M3 disciplines + self-hosted runners deferred), R1-D8 (substrate-anchored recipe-acceptance criterion via three evidence categories — audit-anchored / coverage-attested / substrate-derived + corpus directory taxonomy mirrors three categories + M3 PR-template discipline rejects recipes without rationale citation + statistical-realism satisfied by construction), R1-D9 (evaporates — Round 1's substrate findings did not produce a third instance of substrate-derived constant gaps (R5-D1's surface enumeration and R7-D5's substrate-derived constant validation pass remain the two precedents) or a new pre-implementation discipline class (extensions of existing classes, not a sixth); trigger conditions not met; closes as no-decision; eight substrate-discipline observations queued for future rule-26 amendment PR — including R1-D9's own contribution that scaffolded optional decisions close as no-decision when triggers don't fire and manufacturing decision work to fill scaffolded slots is anti-discipline). Each close carries explicit reopen-criteria per 21-reversion-clause-discipline.mdc. Collaboration-discipline pin: unilateral mid-round close attempt was reverted before push per the collaborative-design principle that closing a round before all participants provide input opens the round again every time."
+    content: "Round 1 architecture close (collaborative): R1-D1 (specified-outliers methodology as composition of three definitions — audit-anchored spec-silence enumeration primary, per-opcode boundary-value supplementary, coverage-metric validation; definition (1) rejected as substrate-unreachable; corpus size 50-200 entries; additively maintainable as load-bearing substrate property), R1-D2 (PreparedCache::from_raw_for_testing under cfg(feature=\"test-internals\") + C-side symmetry via existing randomx_get_cache_memory + production-equivalence constraint pinned as substrate principle), R1-D3 (lib module in shekyl-randomx-differential + declarative C1 recipes primary with C2 imperative escape hatch + B2 runtime expansion + first-class recipe evaluator + executable-specification recipes pinned as substrate property), R1-D4 (Family 1 Rust source const array at adversarial_canonical_outputs.rs + compile-time bidirectional cross-checkability + gen_canonical_outputs.rs bin extension + derive-substrate-inputs/cache-attestation-outputs pinned as substrate principle), R1-D5 (mode_worst_case renamed to mode_adversarial_ratio + Claim 1 per-recipe max-ratio (5.0×−margin) with single-retry noise filter as hard gate + Claim 2 no-per-class-systematic-regression as regression-tracking signal + vocabulary-shift cascade to §2.5/§4/parent §6), R1-D6 (continuous enforcement from first recipe + cadence-corpus alignment as substrate policy + actionable failure semantics pinned as substrate principle), R1-D7 (T2 in existing workflow + T6 in new dedicated workflow with workflow_dispatch pre-genesis + M3 PR-template discipline expansion to .github/workflows/ files + GitHub-hosted runner class with committed RUNNER_NOISE_MARGIN under M1/M3 disciplines + self-hosted runners deferred), R1-D8 (substrate-anchored recipe-acceptance criterion via three evidence categories — audit-anchored / coverage-attested / substrate-derived + corpus directory taxonomy mirrors three categories + M3 PR-template discipline rejects recipes without rationale citation + statistical-realism satisfied by construction), R1-D9 (evaporates — Round 1's substrate findings did not produce a third instance of substrate-derived constant gaps (R5-D1's surface enumeration and R7-D5's substrate-derived constant validation pass remain the two precedents) or a new pre-implementation discipline class (extensions of existing classes, not a sixth); trigger conditions not met; closes as no-decision; eight substrate-discipline observations queued for future rule-126 amendment PR — including R1-D9's own contribution that scaffolded optional decisions close as no-decision when triggers don't fire and manufacturing decision work to fill scaffolded slots is anti-discipline). Each close carries explicit reopen-criteria per 21-reversion-clause-discipline.mdc. Collaboration-discipline pin: unilateral mid-round close attempt was reverted before push per the collaborative-design principle that closing a round before all participants provide input opens the round again every time."
     status: completed
   - id: phase2h-round-2
-    content: "Round 2 threat-model close (collaborative): four R2-D# substantive closes plus three §4.5 cascade absorptions plus one §4.6 N/A confirmation plus one §4.7 mitigation-pattern extension summary. R2-D1 split recipe surface into T-A12 (recipe substrate tamper; primary defense M1 + M3) plus T-A13 (recipe evaluator divergence; primary defense evaluator's own test surface with M1 backstop) — single-class disposition rejected because mitigation chains differ structurally between data-tamper and derivation-correctness. R2-D2 closed T-A14 (test-internals production-equivalence violation) with Mitigation 1 (PR-template reviewer checklist) plus Mitigation 2 (rustdoc production-reachability cite) composed; Mitigation 3 (mechanical cargo deny / clippy lint) rejected as over-engineered for the 2–3-accessor surface size. R2-D3 closed T-A15 (adversarial-recipe-injection via fraudulent rationale citation) with Mitigation A (mechanical citation-format validation script) plus Mitigation C (PR-template explicit reviewer verification) composed; Mitigation B (citation hash anchoring) rejected as implementation-cost-not-justified for 2h scope. R2-D4 introduced M5 (mechanical citation validation) as new §4.6 mitigation pattern (not M3 extension) — structurally distinct mechanical-at-CI defense versus M3's procedural-at-PR-review; project-wide applicability beyond the recipe surface. §4.5 records three cascade absorptions (§4.5.1 T-A1 extension to non-substantive tamper surfaces; §4.5.2 T-A2 corpus-tamper extension; §4.5.3 T-A1 vocabulary cascade per R1-D5). §4.6 records §35-secure-memory / §36-secret-locality N/A confirmation by substrate enumeration. §4.7 records M1 / M3 scope extensions plus M5 introduction summary plus the 9th substrate-discipline observation queued for rule-26 amendment ('convention-enforced disciplines need reviewer-attention mitigations plus mechanical-validation backstops'). Each R2-D# carries explicit reopen criteria per 21-reversion-clause-discipline.mdc. Collaborative-close discipline applied: user-provided substantive framing drove each close; assistant-provided integration mapping preserved cross-decision consistency and was confirmed before integration."
+    content: "Round 2 threat-model close (collaborative): four R2-D# substantive closes plus three §4.5 cascade absorptions plus one §4.6 N/A confirmation plus one §4.7 mitigation-pattern extension summary. R2-D1 split recipe surface into T-A12 (recipe substrate tamper; primary defense M1 + M3) plus T-A13 (recipe evaluator divergence; primary defense evaluator's own test surface with M1 backstop) — single-class disposition rejected because mitigation chains differ structurally between data-tamper and derivation-correctness. R2-D2 closed T-A14 (test-internals production-equivalence violation) with Mitigation 1 (PR-template reviewer checklist) plus Mitigation 2 (rustdoc production-reachability cite) composed; Mitigation 3 (mechanical cargo deny / clippy lint) rejected as over-engineered for the 2–3-accessor surface size. R2-D3 closed T-A15 (adversarial-recipe-injection via fraudulent rationale citation) with Mitigation A (mechanical citation-format validation script) plus Mitigation C (PR-template explicit reviewer verification) composed; Mitigation B (citation hash anchoring) rejected as implementation-cost-not-justified for 2h scope. R2-D4 introduced M5 (mechanical citation validation) as new §4.6 mitigation pattern (not M3 extension) — structurally distinct mechanical-at-CI defense versus M3's procedural-at-PR-review; project-wide applicability beyond the recipe surface. §4.5 records three cascade absorptions (§4.5.1 T-A1 extension to non-substantive tamper surfaces; §4.5.2 T-A2 corpus-tamper extension; §4.5.3 T-A1 vocabulary cascade per R1-D5). §4.6 records §35-secure-memory / §36-secret-locality N/A confirmation by substrate enumeration. §4.7 records M1 / M3 scope extensions plus M5 introduction summary plus the 9th substrate-discipline observation queued for rule-126 amendment ('convention-enforced disciplines need reviewer-attention mitigations plus mechanical-validation backstops'). Each R2-D# carries explicit reopen criteria per 21-reversion-clause-discipline.mdc. Collaborative-close discipline applied: user-provided substantive framing drove each close; assistant-provided integration mapping preserved cross-decision consistency and was confirmed before integration."
     status: completed
   - id: phase2h-pre-implementation
-    content: "Pre-implementation round (mandatory per 26-sub-pr-design-discipline.mdc + the R5-D1 R4-blind-spot finding queued for rule-26 amendment; second instance of the discipline after Phase 2g, promoting it to amendment-ready status). Round 3 opens with five enumerated passes + three named artifacts + implementation-cut criteria. Pass 1 surface enumeration (closed clean at round-open): production surface unchanged from §1.1 freeze; PreparedCache::from_raw_for_testing additive to existing test-internals carve-out (R5-D1 / Phase 2g R7-D1 precedent at lib.rs:194-205); no Cache::derive_item_for_testing required since R1-D2 C-side-symmetry close delegates base-seedhash→cache-bytes to the C-side reference. Pass 2 dependency discipline (closed clean at round-open): sha2 = \"0.10\" verified at workspace level (lockfile 0.10.9); no new workspace deps required by R1/R2 closes; R2-D4 M5 citation-validation script pinned as shell script in scripts/ci/ per Phase 2f precedent (Choice A Rust+regex rejected as over-engineered for single-consumer surface). Pass 5 methodology-vs-substrate consistency (closed clean at round-open): Phase 2d §3.4 audit substrate exists (lines 494-562) with four edge-case classes supporting R1-D1 Category 1 cites + Category 3 boundary-value recipes; standard Rust coverage tooling (cargo llvm-cov / tarpaulin) sufficient for Category 2 attestation. Pass 4 corpus-size budget verification (partial at round-open; concrete values pin at Pass 3): 16-30 initial recipe estimate; ~8.5min per-PR runtime estimate within R1-D6's 10-min budget; smoke-subset transition NOT active at launch (~40-recipe trigger threshold). Pass 3 substrate-derived constant validation (deferred to implementation-PR first commit per M1 canonical-output-substrate discipline): RUNNER_NOISE_MARGIN + per-class threshold + 100-sample budget require empirical measurement. Three artifacts: Pass-3 measurement bundle (implementation-PR first commit), surface-enumeration confirmation (round-open), dependency-substrate audit (round-open). Implementation-cut criteria: all three artifacts land cleanly; substrate-finding-class outcome promotes rule-26 amendment trigger from 'queued' to 'fire' per §3 R1-D9 close's pre-implementation-discipline-class trigger. Round 3 close commits land with implementation PR's docs-close, or as stand-alone commit if Pass 3 cleanly clears the criteria pre-implementation-PR. Closed at the implementation PR's C1 with Pass 3 measurement-bundle landing; the discipline caught no substrate findings at implementation cut (Pass 1/2/5 clean at round-open held through Pass 3 close); the substrate-finding-class outcome did not trigger, leaving the rule-26 amendment trigger at its R1-D9 'queued' state."
+    content: "Pre-implementation round (mandatory per 126-sub-pr-design-discipline.mdc + the R5-D1 R4-blind-spot finding queued for rule-126 amendment; second instance of the discipline after Phase 2g, promoting it to amendment-ready status). Round 3 opens with five enumerated passes + three named artifacts + implementation-cut criteria. Pass 1 surface enumeration (closed clean at round-open): production surface unchanged from §1.1 freeze; PreparedCache::from_raw_for_testing additive to existing test-internals carve-out (R5-D1 / Phase 2g R7-D1 precedent at lib.rs:194-205); no Cache::derive_item_for_testing required since R1-D2 C-side-symmetry close delegates base-seedhash→cache-bytes to the C-side reference. Pass 2 dependency discipline (closed clean at round-open): sha2 = \"0.10\" verified at workspace level (lockfile 0.10.9); no new workspace deps required by R1/R2 closes; R2-D4 M5 citation-validation script pinned as shell script in scripts/ci/ per Phase 2f precedent (Choice A Rust+regex rejected as over-engineered for single-consumer surface). Pass 5 methodology-vs-substrate consistency (closed clean at round-open): Phase 2d §3.4 audit substrate exists (lines 494-562) with four edge-case classes supporting R1-D1 Category 1 cites + Category 3 boundary-value recipes; standard Rust coverage tooling (cargo llvm-cov / tarpaulin) sufficient for Category 2 attestation. Pass 4 corpus-size budget verification (partial at round-open; concrete values pin at Pass 3): 16-30 initial recipe estimate; ~8.5min per-PR runtime estimate within R1-D6's 10-min budget; smoke-subset transition NOT active at launch (~40-recipe trigger threshold). Pass 3 substrate-derived constant validation (deferred to implementation-PR first commit per M1 canonical-output-substrate discipline): RUNNER_NOISE_MARGIN + per-class threshold + 100-sample budget require empirical measurement. Three artifacts: Pass-3 measurement bundle (implementation-PR first commit), surface-enumeration confirmation (round-open), dependency-substrate audit (round-open). Implementation-cut criteria: all three artifacts land cleanly; substrate-finding-class outcome promotes rule-126 amendment trigger from 'queued' to 'fire' per §3 R1-D9 close's pre-implementation-discipline-class trigger. Round 3 close commits land with implementation PR's docs-close, or as stand-alone commit if Pass 3 cleanly clears the criteria pre-implementation-PR. Closed at the implementation PR's C1 with Pass 3 measurement-bundle landing; the discipline caught no substrate findings at implementation cut (Pass 1/2/5 clean at round-open held through Pass 3 close); the substrate-finding-class outcome did not trigger, leaving the rule-126 amendment trigger at its R1-D9 'queued' state."
     status: completed
   - id: phase2h-implementation
-    content: "Implementation PR on feat/randomx-v2-phase2h-impl off dev: methodology landing, accessor (if any) under the existing `test-internals` feature gate (R5-D1 carve-out shape; sole consumer is shekyl-randomx-differential), grinding/construction tool (if any), adversarial corpus contents, mode_worst_case reactivation in src/main.rs (replaces the §3.19 R7-D4 diagnostic-only branch at the existing CLI dispatch point), §6 T2 + T6 reactivation, §9 CI cadence wiring, canonical-output pinning for adversarial entries per §3.18 R6 cluster discipline, plan-doc closure (§5/§6/§8 substantive content at implementation time per Phase 2g precedent), §2.5 leg-3 framing restoration. Bounded by 06-branching.mdc rule 2 (≤10 commits / ≤5 working days); 07-consensus-atomic-cutovers.mdc explicitly NOT invoked (2h is harness-side, no consensus-rule boundary). Landed at C1-C9 per the implementation log; renamed `mode_worst_case` to `mode_adversarial_ratio` at C6 (matches the methodology shift from V1-grinding to V2-recipe-corpus); T2/T6 reactivated at C7 with inherited `#[ignore]` deferral behind the universal-across-inputs verifier-divergence FOLLOWUP (the Phase 2g 'at large data sizes' framing was revised by C7 cross-input diagnostics)."
+    content: "Implementation PR on feat/randomx-v2-phase2h-impl off dev: methodology landing, accessor (if any) under the existing `test-internals` feature gate (R5-D1 carve-out shape; sole consumer is shekyl-randomx-differential), grinding/construction tool (if any), adversarial corpus contents, mode_worst_case reactivation in src/main.rs (replaces the §3.19 R7-D4 diagnostic-only branch at the existing CLI dispatch point), §6 T2 + T6 reactivation, §9 CI cadence wiring, canonical-output pinning for adversarial entries per §3.18 R6 cluster discipline, plan-doc closure (§5/§6/§8 substantive content at implementation time per Phase 2g precedent), §2.5 leg-3 framing restoration. Bounded by 06-branching.mdc rule 2 (≤10 commits / ≤5 working days); 107-consensus-atomic-cutovers.mdc explicitly NOT invoked (2h is harness-side, no consensus-rule boundary). Landed at C1-C9 per the implementation log; renamed `mode_worst_case` to `mode_adversarial_ratio` at C6 (matches the methodology shift from V1-grinding to V2-recipe-corpus); T2/T6 reactivated at C7 with inherited `#[ignore]` deferral behind the universal-across-inputs verifier-divergence FOLLOWUP (the Phase 2g 'at large data sizes' framing was revised by C7 cross-input diagnostics)."
     status: completed
   - id: phase2h-docs-close
     content: "Per 91-documentation-after-plans.mdc: docs/CHANGELOG.md entry (V3.0 pre-genesis queue closure), parent RANDOMX_V2_PLAN.md status note refresh (Track A Phase 2 status as of close; phase2h-* todo entry closed), this plan-doc's §11 Round history rows for every round landed, docs/FOLLOWUPS.md V3.0 'Post-2g adversarial-corpus methodology + implementation' entry closed by replacement (item's reopening criterion is 'the post-2g round completes and lands the adversarial corpus, at which point R7-D1 closes by replacement' — same close shape as 2h's implementation PR lands). Landed at C10."
@@ -37,8 +37,8 @@ isProject: false
 | Base commit (`dev` tip at scaffold) | `33d22a83b44918da7efcab2e3dcc8f543c9495fa` — "Merge pull request #75 from Shekyl-Foundation/feat/randomx-v2-phase2g-impl" (2026-05-25) |
 | Fork pin | `external/randomx-v2` at `aaafe71` (v2.0.1); unchanged by 2h per §1 substrate (2h is harness-side; no fork bump) |
 | Design-phase branch | `chore/randomx-v2-phase2h-plan` (single short-lived branch off `dev` carrying Round 0 scaffold + Round 1 architecture close + Round 2 threat-model close + pre-implementation round; consolidated single-branch flow chosen at Round 1 open per [`06-branching.mdc`](../../.cursor/rules/06-branching.mdc) rule 2's ≤5-working-day / ≤10-commit budget. Phase 2g used a scaffold-then-feat-branch split; 2h's smaller scope makes single-branch consolidation defensible. Per-round commits stay mechanically separable via commit-message discipline per [`90-commits.mdc`](../../.cursor/rules/90-commits.mdc).) |
-| Implementation branch | `feat/randomx-v2-phase2h-impl` (separate implementation branch for the post-design-close work per [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc) rounds discipline; the design/implementation split is preserved even with the design-phase consolidation, because the implementation PR carries production-code changes that warrant the standard fresh-branch review boundary) |
-| Round 0 scope envelope | Substrate capture only: lock the 2c/2d/2f/2g-frozen surfaces against which 2h operates; enumerate R1-D1..R1-D8 decision points without closing them; absorb the §3.19 R7-D1..R7-D5 specifications and the FOLLOWUPS V3.0 scope items; name the rule-26 surface-enumeration-pass and substrate-derived constant validation pass forward-actions as pre-implementation-round obligations. No production Rust code; no harness binary changes; no `mode_worst_case` reactivation; no CI workflow changes; no FOLLOWUPS reflow; no `adversarial_corpus.rs` body change. |
+| Implementation branch | `feat/randomx-v2-phase2h-impl` (separate implementation branch for the post-design-close work per [`126-sub-pr-design-discipline.mdc`](../../.cursor/rules/126-sub-pr-design-discipline.mdc) rounds discipline; the design/implementation split is preserved even with the design-phase consolidation, because the implementation PR carries production-code changes that warrant the standard fresh-branch review boundary) |
+| Round 0 scope envelope | Substrate capture only: lock the 2c/2d/2f/2g-frozen surfaces against which 2h operates; enumerate R1-D1..R1-D8 decision points without closing them; absorb the §3.19 R7-D1..R7-D5 specifications and the FOLLOWUPS V3.0 scope items; name the rule-126 surface-enumeration-pass and substrate-derived constant validation pass forward-actions as pre-implementation-round obligations. No production Rust code; no harness binary changes; no `mode_worst_case` reactivation; no CI workflow changes; no FOLLOWUPS reflow; no `adversarial_corpus.rs` body change. |
 | Out of scope (forward-deferred) | (a) **`compute_hash` divergence from C reference at large data sizes** — separate FOLLOWUPS V3.0 entry with its own trigger ([`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) lines 50–82); 2h consumes the harness as-is. 2h benefits if the divergence lands first; if not, 2h proceeds independently against the random + canonical-output corpora plus the new adversarial corpus. (b) **V4 lattice-cryptography corpus** — V4 substrate is not stable per [`00-mission.mdc`](../../.cursor/rules/00-mission.mdc) three-timeframe discipline; reopening criterion is NIST lattice-cryptography standardization, not 2h. (c) **Re-litigation of Phase 2g R7-D1/R7-D2/R7-D3/R7-D4/R7-D5 closures** — those dispositions are "deferred to the post-2g round"; 2h is the round, not a re-opening of the deferral. (d) **Phase 2F R3-frozen verifier public surface reshape** — `Seedhash`, `PreparedCache`, `compute_hash`, `CacheStore` are frozen; 2h may add a second `test-internals`-gated accessor under the R5-D1 discipline but does not alter the production surface. (e) **Per-PR per-hash latency CI gate (≤3.0× ratio)** — activates at Phase 3a per [`RANDOMX_V2_PLAN.md`](../design/RANDOMX_V2_PLAN.md) §6; 2h's `mode_worst_case` lands the release-gate worst-case ratio measurement, not the per-PR latency gate. (f) **Full 600k-block initial-sync wall-time test** — release-gate suite per parent plan §6; orthogonal to 2h. |
 
 ## 0. Why this document exists (Round 0)
@@ -48,7 +48,7 @@ Round 0 captures **the inherited substrate**: what the merged 2c / 2d / 2f
 deferrals routed forward to this round, and what shape the Round 1
 decisions need to take when they land. Round 0 does **not** close
 decisions — that is Round 1's job. The scaffold's purpose, per
-[`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc),
+[`126-sub-pr-design-discipline.mdc`](../../.cursor/rules/126-sub-pr-design-discipline.mdc),
 is to give a reviewer reading any future Round-N round a single
 substrate-anchored document to check the round's claims against, rather
 than re-derive the carry-forwards from `RANDOMX_V2_PHASE2G_PLAN.md`'s
@@ -99,11 +99,11 @@ Per R7-D4, the disposition routes adversarial-corpus methodology
 design + implementation to "the post-2g design round." **Phase 2h
 is that round.** §3.19 R7-D5 additionally queues "substrate-derived
 constant validation pass" as a fourth pre-implementation discipline
-class for [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
+class for [`126-sub-pr-design-discipline.mdc`](../../.cursor/rules/126-sub-pr-design-discipline.mdc)
 amendment, alongside R5-D1's surface-enumeration pass, R5-D2's
 cross-invariant impact analysis, and R6-D2's methodology-vs-surface-contract
 reconciliation. The 2h pre-implementation round is the second instance
-of the discipline, promoting it to rule-26 amendment-ready status
+of the discipline, promoting it to rule-126 amendment-ready status
 (see §3 R1-D9 optional decision).
 
 ### Audit-posture restoration (why this lands pre-genesis)
@@ -165,7 +165,7 @@ adversarial entries) and the active surface (the §3.18 R6 cluster
 canonical-output property extends to the adversarial canonical
 hashes).
 
-**Pre-implementation round** is mandatory per the queued rule-26
+**Pre-implementation round** is mandatory per the queued rule-126
 amendment (R7-D5 + the R5-D1 R4-blind-spot finding). The round
 performs five passes: (1) surface enumeration against the actual
 verifier source (no production surface grows); (2) dependency
@@ -196,7 +196,7 @@ the discipline that would have caught the original R1-D5 failure
 mode if applied at original methodology-selection time. Round 1
 or the pre-implementation round determines whether Pass 5 is a
 distinct discipline class (a fifth) or a refinement of Pass 3
-(a sub-pass) for the rule-26 amendment queue per R1-D9.
+(a sub-pass) for the rule-126 amendment queue per R1-D9.
 
 Calibration precedent. Phase 2g closed in 8 substrate-anchored
 rounds (Round 0 scaffold + Rounds 1–7 covering architecture,
@@ -408,7 +408,7 @@ cannot quietly reabsorb the scope:
   pre-implementation round reads its actual `Cargo.toml` under
   `~/.cargo/registry/src/` and verifies API existence + property
   existence + feature-flag plumbing before any addition lands.
-- **Do not invoke `07-consensus-atomic-cutovers.mdc`**. 2h is
+- **Do not invoke `107-consensus-atomic-cutovers.mdc`**. 2h is
   harness-side; criterion 1 (consensus-rule boundary) is not met;
   the standard
   [`06-branching.mdc`](../../.cursor/rules/06-branching.mdc) ≤10-commit
@@ -430,7 +430,7 @@ cannot quietly reabsorb the scope:
 ## 2. Forward-actions absorbed from prior phases
 
 This section consolidates the forward-actions Phase 2g routed to
-this round, the FOLLOWUPS V3.0 scope items, and the queued rule-26
+this round, the FOLLOWUPS V3.0 scope items, and the queued rule-126
 amendments. Each item is named with its origin cite so a future
 round's reviewer can trace the carry-forward without re-deriving it.
 
@@ -536,28 +536,28 @@ corpus landing.
   needs no accessor; C-shim instrumentation lives in the C
   reference, not the Rust verifier).
 
-### 2.5 §3.19 R7-D5 — Substrate-derived constant validation pass (rule-26 queue)
+### 2.5 §3.19 R7-D5 — Substrate-derived constant validation pass (rule-126 queue)
 
 **Origin:** [`RANDOMX_V2_PHASE2G_PLAN.md`](./RANDOMX_V2_PHASE2G_PLAN.md)
 §3.19 R7-D5 (lines 4871–4903).
 
 **Specification:** R7-D5 named "substrate-derived constant
 validation pass" as the **fourth** pre-implementation discipline
-class for [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
+class for [`126-sub-pr-design-discipline.mdc`](../../.cursor/rules/126-sub-pr-design-discipline.mdc)
 amendment, alongside R5-D1's surface-enumeration pass (the
 R4-blind-spot finding), R5-D2's cross-invariant impact analysis,
 R6-D2's methodology-vs-surface-contract reconciliation, and (per
 the accumulated queue) R6-D3 / R6-D4. The accumulated queue spans
 five discipline classes surfaced across three substrate-completeness
-rounds (R5, R6, R7); the rule-26 amendment after 2h closes records
+rounds (R5, R6, R7); the rule-126 amendment after 2h closes records
 all five.
 
 **2h's role.** 2h is the **second instance** of the discipline
 (after Phase 2g). Per [`16-architectural-inheritance.mdc`](../../.cursor/rules/16-architectural-inheritance.mdc)
 "Distributed application" and "Compounding payoff" properties,
-the second instance promotes the discipline to rule-26
+the second instance promotes the discipline to rule-126
 amendment-ready status. R1-D9 (open if Round 1 surfaces it; see
-§3) names the disposition: land the rule-26 amendment alongside
+§3) names the disposition: land the rule-126 amendment alongside
 the implementation PR (small, single-purpose), or formally cite
 2h's pre-implementation round as the precedent the amendment
 captures and defer the rule edit to a separate chore-PR.
@@ -825,7 +825,7 @@ rejected** as substrate-unreachable per §3.19 R7-D1's per-class
 
 **Corpus size estimate.** 50-200 entries — small enough to be
 reviewable at PR time per
-[`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc);
+[`126-sub-pr-design-discipline.mdc`](../../.cursor/rules/126-sub-pr-design-discipline.mdc);
 large enough to span the §3.4 audit's spec-silence enumeration plus
 per-opcode boundary-value coverage plus coverage-validated
 additions.
@@ -1072,7 +1072,7 @@ post-implementation surfaces the trigger.
   existing bin or from a test target.
 - **(c) Standalone crate.** New workspace member alongside
   `shekyl-randomx-differential`. Higher cost per
-  [`25-rust-architecture.mdc`](../../.cursor/rules/25-rust-architecture.mdc).
+  [`125-rust-architecture.mdc`](../../.cursor/rules/125-rust-architecture.mdc).
 - **(d) Integration test.** Lives under
   [`rust/shekyl-randomx-differential/tests/`](../../rust/shekyl-randomx-differential/tests/);
   runs at `cargo test` time; no separate binary.
@@ -1364,7 +1364,7 @@ M1: an attacker tampering with the verifier could tamper with the
 canonical-output recomputation in parallel.
 
 This is a refinement of the broader "derive-don't-cache" principle
-worth recording as a candidate for the rule-26 amendment queue
+worth recording as a candidate for the rule-126 amendment queue
 (see R1-D9): the principle applies asymmetrically — derive
 substrate inputs to keep their source-of-truth single; cache
 attestation outputs to preserve their as-of-attestation snapshot
@@ -1785,7 +1785,7 @@ plan-doc.
    need the same gating until the divergence lands.
 3. **Workflow file proliferation cost.** New workflow files
    add review surface; reuse of the existing file is preferred
-   per [`19-validation-surface-discipline.mdc`](../../.cursor/rules/19-validation-surface-discipline.mdc).
+   per [`119-validation-surface-discipline.mdc`](../../.cursor/rules/119-validation-surface-discipline.mdc).
 
 **Round-0 default-expectation sketch:** R1-D7 closes on (a) per
 Phase 2g precedent; T2 + T6 entries added to the existing
@@ -1842,7 +1842,7 @@ treats `.github/workflows/randomx-v2-*.yml` changes the same as
 canonical-output changes — every modification cites the change
 class (recipe addition, runner-class change, cadence change,
 diagnostic format change) and the substrate evidence justifying
-it. The expansion is queued as a rule-26 amendment candidate
+it. The expansion is queued as a rule-126 amendment candidate
 under R1-D9.
 
 **Sub-C — Runner-class is committed substrate;
@@ -1885,7 +1885,7 @@ mean.* The principle is broader than R1-D7: it applies to test
 runners, fork-pin SHA, dependency versions, and rule-config files
 generally. Worth forwarding to §11 Round-1 history as
 discipline-promotion candidate; queued under R1-D9 for the
-rule-26 amendment.
+rule-126 amendment.
 
 **Option-set rejections.**
 
@@ -2096,20 +2096,20 @@ FOLLOWUPS entry under
 [`15-deletion-and-debt.mdc`](../../.cursor/rules/15-deletion-and-debt.mdc)
 discipline post-genesis.
 
-### R1-D9 (open if Round 1 surfaces it) — Rule-26 amendment shape
+### R1-D9 (open if Round 1 surfaces it) — Rule-126 amendment shape
 
 **Option set:**
 
-- **(a) Land the rule-26 amendment alongside the implementation PR.**
+- **(a) Land the rule-126 amendment alongside the implementation PR.**
   Small, single-purpose chore-PR-shaped edit to
-  [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
+  [`126-sub-pr-design-discipline.mdc`](../../.cursor/rules/126-sub-pr-design-discipline.mdc)
   recording all five queued discipline classes (surface
   enumeration, cross-invariant impact analysis, methodology-vs-
   surface-contract reconciliation, substrate-derived constant
   validation, plus the R6-D3/R6-D4 carry-forwards if any). The
   edit lands in the implementation PR's final commit per
   [`91-documentation-after-plans.mdc`](../../.cursor/rules/91-documentation-after-plans.mdc).
-- **(b) Land the rule-26 amendment in a separate chore-PR after 2h impl close.**
+- **(b) Land the rule-126 amendment in a separate chore-PR after 2h impl close.**
   Cite 2h's pre-implementation round as the second instance
   in the rule's "Where the pattern appears" enumeration;
   the chore-PR's scope is the rule edit only.
@@ -2137,7 +2137,7 @@ discipline post-genesis.
 **Round-0 default-expectation sketch:** R1-D9 closes on (b) — the
 implementation PR carries the methodology + accessor + corpus +
 mode reactivation + test reactivation + CI cadence + canonical
-pinning + §2.5 leg-3 restoration + plan-doc closure; the rule-26
+pinning + §2.5 leg-3 restoration + plan-doc closure; the rule-126
 amendment is a separate single-purpose chore-PR that cites 2h's
 pre-implementation round as the second instance promoting the
 discipline.
@@ -2147,7 +2147,7 @@ discipline.
 constant gaps surfaces during 2h's pre-implementation round** —
 R5-D1 was the first instance, R7-D5 named the discipline class,
 2h's pre-implementation pass would be the third instance and the
-pattern is triple-confirmed (the rule-26 amendment is still
+pattern is triple-confirmed (the rule-126 amendment is still
 warranted at two instances per prior conversation, but a third
 makes the amendment urgent rather than queued); **or** (b) **a
 new pre-implementation discipline class emerges during 2h that
@@ -2156,7 +2156,7 @@ enumeration / cross-invariant impact analysis / methodology-vs-
 surface-contract reconciliation / substrate-derived constant
 validation / methodology-vs-substrate consistency — see §2.5 +
 §0). A new class is a substrate-amendment trigger that the
-rule-26 amendment must cover, and waiting for a separate chore-PR
+rule-126 amendment must cover, and waiting for a separate chore-PR
 risks the class being forgotten between 2h and the amendment PR.
 Otherwise R1-D9 defers to a forward-action for a future
 discipline-promotion PR; the queue stays as-is and the default
@@ -2170,7 +2170,7 @@ later (substrate-derived constant gaps surface during the
 pre-implementation pass; new discipline class surfaces during
 the implementation PR's surface-enumeration audit). Re-evaluation
 shape: amend R1-D9's closure in §11's round-history table and
-land the rule-26 amendment in the implementation PR's final
+land the rule-126 amendment in the implementation PR's final
 commit or as a follow-on chore-PR per the trigger's timing.
 
 #### Round 1 disposition (closes R1-D9) — collaborative close
@@ -2206,7 +2206,7 @@ The mechanical opening criteria per §0 in detail:
 
 **Substrate-discipline observations queue persists.** Round 1's
 closes surface multiple discipline-refinement candidates worth
-forwarding to the rule-26 amendment queue (not Round 1's scope):
+forwarding to the rule-126 amendment queue (not Round 1's scope):
 
 - **Derive substrate inputs; cache attestation outputs** (R1-D4
   close refinement of derive-don't-cache).
@@ -2229,7 +2229,7 @@ forwarding to the rule-26 amendment queue (not Round 1's scope):
   trigger conditions, not against pressure to produce a
   decision because the slot exists).
 
-These persist as queue items for a future rule-26 amendment PR
+These persist as queue items for a future rule-126 amendment PR
 per §3 R1-D9 Round-0 option (c) (cite 2h as precedent; defer the
 rule edit further until additional substrate accumulates). No
 Round 1 substrate-amendment is required; R1-D9 stays closed at
@@ -2239,7 +2239,7 @@ mechanical criteria above.
 **Re-evaluation shape (unchanged from Round-0 sketch).** Reopen
 R1-D9 if Round 2 / pre-implementation rounds surface either
 trigger (a) or (b) retroactively. Re-evaluation venue: amend
-R1-D9's closure in §11's round-history table and land the rule-26
+R1-D9's closure in §11's round-history table and land the rule-126
 amendment in the implementation PR's final commit (option (a) per
 §3 R1-D9 option set) or as a follow-on chore-PR (option (b)) per
 the trigger's timing.
@@ -2248,7 +2248,7 @@ the trigger's timing.
 
 **Round 2 closes against the Round-1-anchored substrate
 (R1-D1..R1-D8 closes).** Per
-[`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
+[`126-sub-pr-design-discipline.mdc`](../../.cursor/rules/126-sub-pr-design-discipline.mdc)
 late-rounds threat-model timing: Round 1's substantive closes are
 the substrate Round 2 adversarially probes. The methodology pivot
 from statistical-grinding to specified-outliers reshapes both
@@ -2361,7 +2361,7 @@ reading §4.5 see which defense is primary for which threat shape.
 recipe substrate tamper and evaluator divergence as one attack
 class would obscure the distinction between data-tamper mitigation
 and derivation-correctness mitigation. Per
-[`19-validation-surface-discipline.mdc`](../../.cursor/rules/19-validation-surface-discipline.mdc)
+[`119-validation-surface-discipline.mdc`](../../.cursor/rules/119-validation-surface-discipline.mdc)
 bundling discipline: collapse is appropriate when validation
 surfaces are the same; split is appropriate when they are
 structurally distinct. Here they are structurally distinct (M1+M3
@@ -2596,7 +2596,7 @@ additional cite-parsing rules per surface).
 **Rejected alternative: extension of M3.** Treating citation
 validation as a sub-pattern of M3 PR-template discipline would
 conflate procedural and mechanical defenses. Per
-[`19-validation-surface-discipline.mdc`](../../.cursor/rules/19-validation-surface-discipline.mdc)
+[`119-validation-surface-discipline.mdc`](../../.cursor/rules/119-validation-surface-discipline.mdc)
 bundling discipline: surfaces should collapse when validation
 surfaces are the same; here they differ structurally (per-PR
 reviewer attention vs. per-CI mechanical parsing). Conflating
@@ -2799,7 +2799,7 @@ project-level substrate-discipline observation surfaced by the
 R2-D3 plus R2-D4 close composition (T-A15 mitigation chain
 combines Mitigation A mechanical floor with Mitigation C reviewer
 ceiling; M3 plus M5 composed instantiate the same pattern at the
-project level). Queues for the rule-26 amendment queue as the
+project level). Queues for the rule-126 amendment queue as the
 9th observation across Rounds 1 plus 2 (8 R1-derived observations
 per §3 R1-D9 close plus 1 R2-derived observation per this entry).
 
@@ -2831,7 +2831,7 @@ to the new committed substrate; T-A1 vocabulary cascade per
 R1-D5). §4.6 records §35-secure-memory / §36-secret-locality
 N/A confirmation by substrate enumeration. §4.7 records M1 / M3
 mitigation-pattern extensions plus M5 introduction and queues
-the 9th substrate-discipline observation for rule-26 amendment.
+the 9th substrate-discipline observation for rule-126 amendment.
 
 The collaborative-close discipline pinned at Round 1 close
 applied: user-provided substantive framing drove each close;
@@ -2908,7 +2908,7 @@ pipeline placeholder. Round-0 pre-bindings:
 **Reserved for Round-N close** within the
 [`06-branching.mdc`](../../.cursor/rules/06-branching.mdc) rule-2
 ≤10-commit / ≤5-working-day budget. Per §1.7,
-[`07-consensus-atomic-cutovers.mdc`](../../.cursor/rules/07-consensus-atomic-cutovers.mdc)
+[`107-consensus-atomic-cutovers.mdc`](../../.cursor/rules/107-consensus-atomic-cutovers.mdc)
 is **not invoked** — 2h is harness-side; criterion 1 (consensus-rule
 boundary) is not met.
 
@@ -2941,7 +2941,7 @@ closure). Total ≤10 commits; aggregate ≤5 working days.
   is consumed at Phase 3a's release-gate suite.
 - **Release-gate suite.** `mode_worst_case` runs at release-gate
   cadence per R1-D5 + R1-D7 close.
-- **Rule-26 amendment.** Lands per R1-D9 close (likely separate
+- **Rule-126 amendment.** Lands per R1-D9 close (likely separate
   chore-PR per the Round-0 default-expectation sketch).
 - **§2.5 leg-3 framing restoration.** Plan-doc edit at 2h
   implementation-PR close per
@@ -2961,13 +2961,13 @@ closure). Total ≤10 commits; aggregate ≤5 working days.
 Phase 2F R3, Phase 2g R5-D1, Phase 2g R6, and Phase 2g R7
 landings), §2 forward-actions absorbed (§3.19 R7-D1 / R7-D2 /
 R7-D3 / R7-D4 / R7-D5 specifications, FOLLOWUPS V3.0 scope
-items 1–6, and the rule-26 surface-enumeration-pass and
+items 1–6, and the rule-126 surface-enumeration-pass and
 substrate-derived constant validation pass forward-actions),
 §3 R1-D1..R1-D8 decision points enumerated with option sets,
 criteria, Round-0 default-expectation sketches, and
 reopen-criterion sketches per
 [`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc),
-plus optional R1-D9 (rule-26 amendment shape), §4–§10
+plus optional R1-D9 (rule-126 amendment shape), §4–§10
 placeholders reserved for Round-N substantive content, and §11
 Round 0 history row.
 
@@ -2983,7 +2983,7 @@ Round 0 history row.
   R3-frozen verifier surface out-of-scope, per-PR per-hash
   latency CI gate out-of-scope (Phase 3a), 600k-block
   initial-sync wall-time out-of-scope (release-gate suite),
-  [`07-consensus-atomic-cutovers.mdc`](../../.cursor/rules/07-consensus-atomic-cutovers.mdc)
+  [`107-consensus-atomic-cutovers.mdc`](../../.cursor/rules/107-consensus-atomic-cutovers.mdc)
   not invoked.
 - The forward-actions absorbed from prior phases in §2 — the
   R7-D1..R7-D5 specifications + FOLLOWUPS V3.0 scope items +
@@ -2997,7 +2997,7 @@ Round 0 history row.
 - The R1-D1..R1-D8 decision-point enumeration in §3 (option
   sets, criteria, Round-0 default-expectation sketches,
   reopen-criterion sketches), plus the optional R1-D9 for
-  rule-26 amendment shape.
+  rule-126 amendment shape.
 - The pre-implementation round's mandatory shape per §2.5 and
   the Round-count expectation in §0 — surface enumeration,
   dependency discipline, substrate-derived constant validation,
@@ -3111,10 +3111,10 @@ measurement is *per-recipe ratio*, not *statistical worst-case*.
   the five pinned in §2.5). Trigger conditions for R1-D9
   opening are not met; the optional decision closes as
   no-decision. Substrate-discipline observations from
-  R1-D1..R1-D9 queue as candidates for a future rule-26
+  R1-D1..R1-D9 queue as candidates for a future rule-126
   amendment PR.
 
-**Substrate-discipline observations queued for the rule-26
+**Substrate-discipline observations queued for the rule-126
 amendment queue (forward-action; not Round 1 scope).** Eight
 candidate refinements surfaced during the round; each carries
 its closing-decision provenance:
@@ -3177,7 +3177,7 @@ explicit input."
   noise-baseline pass — lands at pre-implementation round
   (R1-D7 Sub-C).
 - §3 R1-D9 substrate-discipline observations queue carry-forward
-  to future rule-26 amendment PR.
+  to future rule-126 amendment PR.
 
 **What this round defers.**
 
@@ -3281,12 +3281,12 @@ scope extends across all Round-1-introduced tamper surfaces plus
 plus recipe rationale field semantic verification. M5 introduced
 as new mitigation pattern with project-wide applicability.
 
-**Substrate-discipline observation queued for rule-26 amendment
+**Substrate-discipline observation queued for rule-126 amendment
 (9th observation across Rounds 1 plus 2).** The pattern
 *"convention-enforced disciplines need reviewer-attention
 mitigations plus mechanical-validation backstops"* is a new
 project-level substrate-discipline observation surfaced by the
-R2-D3 plus R2-D4 close composition. Queues for rule-26 amendment
+R2-D3 plus R2-D4 close composition. Queues for rule-126 amendment
 as the 9th observation (8 R1-derived per §3 R1-D9 close plus
 1 R2-derived per this round).
 
@@ -3314,7 +3314,7 @@ as the 9th observation (8 R1-derived per §3 R1-D9 close plus
 
 **Scope.** Round 3 opens the pre-implementation round per §0
 calibration and the
-[`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
+[`126-sub-pr-design-discipline.mdc`](../../.cursor/rules/126-sub-pr-design-discipline.mdc)
 rule (second instance of the discipline after Phase 2g,
 promoting it to amendment-ready status per the §3 R1-D9 close's
 queued observation list). Five enumerated passes verify the
@@ -3389,7 +3389,7 @@ measurement-as-canonical-output-substrate discipline.
   Category 2 attestation is standard Rust toolchain (`cargo
   llvm-cov` recommended; `cargo tarpaulin` fallback); no new
   workspace tooling required. The methodology-vs-substrate
-  consistency check from prior rule-26 discipline observations
+  consistency check from prior rule-126 discipline observations
   applies with clean result; R1-D1's three-category composition
   has substrate-anchored evidence at every cite class.
 
@@ -3450,7 +3450,7 @@ to the `feat/randomx-v2-phase2h-impl` branch per the
 finding, the finding is substrate-amendment-class and Round 3
 absorbs it; the third instance of pre-implementation-round
 discipline catching a pre-genesis-impactful substrate finding
-promotes the rule-26 amendment trigger from "queued" to "fire"
+promotes the rule-126 amendment trigger from "queued" to "fire"
 per the §3 R1-D9 close's pre-implementation-discipline-class
 trigger.
 

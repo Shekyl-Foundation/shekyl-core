@@ -1,6 +1,6 @@
 # Chain sync — headers-first sync in Rust: Round 0 (`CS-`)
 
-**Families (registered in `IMPLEMENTATION_INDEX.md` §2, rule 94):** **`CS-Q`** (questions, ruled here) and **`CS-F`** (findings). Grep surface: `rg -n -e '\bCS-[QF]'`, because the serve-credit findings family `SCS-F` contains `CS-F` as a substring. `CSR-` is a separate family.
+**Families (registered in `IMPLEMENTATION_INDEX.md` §2, rule 194):** **`CS-Q`** (questions, ruled here) and **`CS-F`** (findings). Grep surface: `rg -n -e '\bCS-[QF]'`, because the serve-credit findings family `SCS-F` contains `CS-F` as a substring. `CSR-` is a separate family.
 **Ground:** `dev` at `24961a9a8` (2026-10-19), after #1101 (DRS-X Round 0), #1088 (the daemon-config cutover) and #1102 (the Rust pool); DRS-X PR 2 (#1123, open) read at `e3180b665` for the door's `BeyondCap`. The handler is 2,669 + 228 lines; `block_queue` is 651 (`.h` 115 + `.cpp` 536); `cryptonote_protocol_defs.h` is 300.
 **Status:** **CS-5, the cutover, is implemented (2026-11-01, #1237):** live sessions sync through the Rust owner, which the node owns and the seam's bind attaches; the C++ handler keeps RD's transaction routes only; `sync_info` is the owner's view (3.68); 2003, 2004, 2006 and 2007 are retired (§ CS-5 below). CS-1 implemented (2026-10-21); CS-2 model and its §5 harness are in `shekyl-chain-sync` (2026-10-22); CS-3 implemented (2026-10-23): the runtime half and CS-Q11's loopback harness. CS-4 (pre-cutover, pure Rust): the inbound claim tap, the relay, the state handle's publisher and the cutover's deletion table. The cutover follows the DRS-X flip. Round 0 RULED, Rick 2026-10-18: CS-Q1…CS-Q12 as recommended, with four amendments: the complement request is chain sync's (CS-Q1, CS-Q10); `Synced` reads verified headers only (CS-Q2 step 8); the long-run slot is paid for in PoW and goes to the most verified work (CS-Q2 step 3); `following_degraded` gets a Rust producer (§A, coupling 4). Three corrections to CS-Q2 and CS-Q3, confirmed 2026-10-19 (Rick): a body, with its attestation witness, is bound to its header before the offer, so a substituted body or witness never invalidates an honest header (CEN-G2, CEN-B4); `Synced` waits for PDM-Q5's backward fill, with `Following` until then; and the body form is per transaction. The objects response follows PWD-B3's continuation (Rick, 2026-10-20): every requested block is sent, deferred by the budget, or marked unavailable, and only an unmarked shortfall closes the session (CS-Q3.2). Ruled 2026-10-19 (Rick), from DRS-X PR 2's design review: `following_degraded` is set by ingest's three refusals and by the sync owner, all through the connector, its one writer (§A items 7 and coupling 4); header PoW follows the earned-seed rule; and a past-cap branch is checked as evidence under `Class::Evidence` (CS-Q2 step 3). **Amended 2026-10-22 (Rick):** CS-Q2 step 1 refuses a block count of 0, or cumulative work below that count. **CS-1 is implemented (2026-10-21):** `form_header`, `judge_header`, `judge_header_cheap` and `bind_body` in `shekyl-chain-rules`; `PowBlob` and `BlockBody` in `shekyl-wire`; commands 2011–2014 in `shekyl-levin`, not admitted at ingress; the handler files are shrink-frozen (CS-Q9). CS-2, the sync model, is in `shekyl-chain-sync` (2026-10-22): the branch view, runs, the long-run slot, bodies, entry outcomes and close causes. **CS-3 is implemented (2026-10-23),** in `shekyl-chain-sync-runtime`, layered over the pure model in `shekyl-chain-sync` (Rick, 2026-10-23: ingest and the node depend on the model, the runtime on them): the router (the seam's post sink, attached to the node's owner since CS-5), the sync owner on its `chain-sync` row, the executor with `Class::Evidence`, serving 2011–2014 from the store, `Door::offer_bound` (formed with `form_judged`), the latch through the connector (`RaiseAlarm`, `WatchLatch`), and CS-Q11's loopback harness in `shekyl-p2p-harness` (`sync`).
 **Parent:** [`P2P_3_IMPLEMENTATION_ROUND.md`](P2P_3_IMPLEMENTATION_ROUND.md) §4.2, row **CS**. [`DRS_X_STORE_FLIP.md`](DRS_X_STORE_FLIP.md) carries §A below as chain sync's Round 0 requirement.
@@ -35,7 +35,7 @@ move to this node's, net of both stores; fsync is 40 × 4 KiB `pwrite` +
 | The public host (4 vCPU, KVM) | served the chain | 0.01 / 0.1 s; 0.01 / 0.02 s | 0.81 / 0.93 / 1.05 s; 1.31 / 1.52 / 35.0 s | 5 / 23 ms |
 | The lab miner host (8 vCPU, KVM) | 79.1 s / 197.4 s | 0.46 / 20.9 s; 0.30 / 33.3 s | 1.67 / 2.15 / 22.1 s; 1.95 / 17.7 / 39.8 s | 133 ms / 23.5 s |
 | The staging staker host (8 vCPU, KVM; a testnet daemon beside it) | 170.6 s / 144.9 s | 7.76 / 38.1 s; 7.12 / 40.1 s | 9.5 / 43.3 / 55.9 s; 2.46 / 32.1 / 49.3 s | 107 ms / 962 ms |
-| The floor device (rule 76) | not in the fleet: derived | — | — | — |
+| The floor device (rule 176) | not in the fleet: derived | — | — | — |
 
 The learn latencies the stale-rate takes report (#1237 §12: p50 3.0 s
 clearnet, 3.7 s Tor; p90 29–36 s) are the finder's commit, the wire and
@@ -215,7 +215,7 @@ owner of block propagation.
 | `handle_notify_get_txpool_complement` | RD | Serving the complement stays RD's |
 | `hit_score`, `drop_connections` | — | `hit_score` still drops the session at `DROP_PEERS_ON_SCORE`. That counter goes with the handler (CS-Q5). `drop_connection_with_score` was deleted with the automatic ban (#1250): a drop carries no weight |
 | `shekyl-peer-policy`'s `BlockIngest`, `BlockAnnounceAction`, `BlockSyncAction` and their FFI predicates (`peer_policy_ffi.rs`, `block_ingest.h`; landed Rust, PWD-B7) | CS | **Keep and extend additively.** CS-Q2's mapping from the entry's reply to an action is built in this crate, under PWD-B7's tri-state verdict (CS-Q4). `Drop` and `DropBadPow` stay, so that mapping can name a PoW refusal. `heavier_score` had no production caller and existed only to pick a ban weight; it was deleted with the automatic ban (#1250). The C++ predicates go with the sync half |
-| Sync-time estimate pair, `cumulative_block_sync_weight` | CS | Redesign. Progress is read from the header chain (rule 80). The Monero mainnet size table is deleted (rules 60, 71) |
+| Sync-time estimate pair, `cumulative_block_sync_weight` | CS | Redesign. Progress is read from the header chain (rule 80). The Monero mainnet size table is deleted (rules 60, 171) |
 | `log_connections` | console | Delete. The console reads the board |
 | `safesyncmode`, the `pause_mine`/`resume_mine` coupling | — | Delete. `safesyncmode` is an LMDB knob and leaves with DRS-X; the miner reacts to tip changes, not to sync |
 | `dev-sync` (was `--no-sync`; `INPUT_GRAMMAR.md:262`, "the chain-sync lane owns it"; regtest only) | CS (data) | Keep as the grammar has it: with `dev-sync = off` the sync owner requests nothing (`Requesting::Off`; CS-5). The node reads it from the configuration (`rust/shekyl-node/src/lib.rs:369`); the snapshot carries no field for it |
@@ -691,7 +691,7 @@ ingest deciding forks.**
    - **The inputs** (Rick, 2026-11-01): verified work, the sessions, and
      **the operator's declaration of the node's network**, read from the
      resolved configuration once at open and never from the network type
-     (rule 71):
+     (rule 171):
      - **`Offline`**: both connectors off (`DaemonConfig::offline`);
      - **`Closed`**: the peer list is closed (`p2p-closed-peer` rows), so
        the operator has named the node's whole network;
@@ -1931,7 +1931,7 @@ with its reason, under IG's REJECTED convention:
 - **`span-limit`, `block-sync-size` and `block-download-max-size`** are
   replaced by protocol constants: the per-response, objects and global
   byte budgets, and the deadlines (CS-Q2, CS-Q3, CS-Q8).
-  - They are provisioned at the floor device (rule 76) and measured on
+  - They are provisioned at the floor device (rule 176) and measured on
     the Rust path (CS-Q11).
   - An operator setting would only let a node mis-provision itself
     against the floor.
@@ -1947,7 +1947,7 @@ with its reason, under IG's REJECTED convention:
 **Wargame.**
 - **Remote trigger.** None: these are local options.
 - **What refusing them costs.** An operator who tuned spans has nothing
-  to tune. The budgets are ours, sized at the floor, which is rule 76's
+  to tune. The budgets are ours, sized at the floor, which is rule 176's
   point.
 
 ---

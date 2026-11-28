@@ -155,7 +155,7 @@ vendored monero-oxide client and our axum `shekyl-daemon-rpc` server — all
    requires `id`. Fixed in `Rpc::json_rpc_call` to emit a compliant 2.0 envelope.
 
 (2) and (3) edit vendored `shekyl-oxide` RPC code (protocol code, ours per rule
-10) and diverge from the stale `monero-oxide@3933664d` pin.
+110) and diverge from the stale `monero-oxide@3933664d` pin.
 
 4. **`get_curve_tree_path` 404 under the Rust/Axum daemon RPC — CLOSED twice
    over (records-was, 2026-06-21).** As found: the C++ `on_get_curve_tree_*`

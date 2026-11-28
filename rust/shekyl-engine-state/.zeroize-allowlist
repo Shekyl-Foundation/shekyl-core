@@ -27,7 +27,7 @@
 # the same spelling to land unwrapped.
 #
 # Policy:
-#   .cursor/rules/42-serialization-policy.mdc
+#   .cursor/rules/142-serialization-policy.mdc
 #   docs/MID_REWIRE_HARDENING.md §3.5
 
 

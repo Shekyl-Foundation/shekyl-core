@@ -79,7 +79,7 @@ they govern every CT-5 disposition):
 1. **Rust-first, push the FFI boundary.** This is the Rust wallet rewrite; the
    C++ surface goes away at Stage 5. New logic is Rust — including daemon-side
    work when a CT-5 change touches the daemon (route through a `shekyl_*` FFI
-   entry point, keep C++ a marshaling shim) per `20-rust-vs-cpp-policy.mdc`.
+   entry point, keep C++ a marshaling shim) per `RULE_20_RUST_VS_CPP.md`.
 2. **`shekyl-oxide` is ours to rewrite** (except vendored crypto primitives).
    Extending its block types for Shekyl consensus (§3.6, pre-0) is normal work,
    not fork-fighting.
@@ -100,7 +100,7 @@ new work (§7).
 ([`CT3_ROUND1_CLOSEOUT.md`](./CT3_ROUND1_CLOSEOUT.md),
 [`CT4_ROUND1_CLOSEOUT.md`](./CT4_ROUND1_CLOSEOUT.md)).
 
-**Process discipline:** this plan-doc cites `26-sub-pr-design-discipline.mdc`
+**Process discipline:** this plan-doc cites `126-sub-pr-design-discipline.mdc`
 (multi-round per-trait PR; crosses the FFI-adjacent signer boundary and the
 consensus-coupled reference-block selection). The substrate audit (§3) follows
 **A2** (audit-against-actual-code, pinned `path:line` citations read at the dev
@@ -663,7 +663,7 @@ trial-decap success, independent of the tree; spendable/synced-height advances
 only under ack-before-commit) is **real merge surgery** plus a new
 pending-incoming surface — a *presentation/spendability-semantics* validation
 surface distinct from commit 4's *correctness* surface (O2: the spendable tip
-never outruns the tree). Per `19-validation-surface-discipline.mdc` and
+never outruns the tree). Per `119-validation-surface-discipline.mdc` and
 `90-commits.mdc` scope discipline they separate:
 
 - **Commit 4 (correctness):** wire the genesis-anchored feed + the
@@ -871,7 +871,7 @@ header-committed `curve_tree_root` — and the substrate audit found there is
 the Rust block parser the consensus field.
 
 **Derive, don't hold (Round 2).** The header root is *not* retained per height —
-no `42-serialization-policy.mdc` schema bump. Instead:
+no `142-serialization-policy.mdc` schema bump. Instead:
 
 - **Verify at ingest (transient).** Each ingested block carries its header root
   (pre-0); the merge reconstructs the new root and compares — loud DoS on
@@ -953,7 +953,7 @@ first time and corrects `Block::hash()` / `ReferenceBlock.block_hash`.
 
 ### 3.7 Type-enforced contracts (make the §3.4 / E1 bug classes unrepresentable)
 
-`20-rust-vs-cpp-policy.mdc` #2: a cryptographic contract is enforced by the type
+`RULE_20_RUST_VS_CPP.md` #2: a cryptographic contract is enforced by the type
 system at every use site, not by documentation. The §3.4 bugs and the E1
 read-atomicity hazard are all expressible **only because the current API permits
 them**; the cutover removes the permission. No *new* type vocabulary is added —
@@ -1472,7 +1472,7 @@ at itself.
 
 Boundaries are firm now that R1-Q1/Q2/Q6 are resolved (they decided the field
 shapes). Each sub-PR lands ≤ the `06-branching.mdc` 5-day / 10-commit envelope;
-none is a consensus-atomic cutover (`07-consensus-atomic-cutovers.mdc` not
+none is a consensus-atomic cutover (`107-consensus-atomic-cutovers.mdc` not
 invoked — the synthetic→real swap is flag-decomposable behind the assembler
 boundary).
 

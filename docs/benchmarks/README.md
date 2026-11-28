@@ -345,7 +345,7 @@ will make it current or why nothing will:
 | `forge` | Its instrument needs chain state only the chain forge builds (a closed shard, a settled epoch, a claim, a slash, a discard, the design-load chain) | `forge_event`, an event in [`CHAIN_FORGE.md`](../design/CHAIN_FORGE.md)'s catalogue; the carrier says "chain forge" |
 | `retire` | It will not be measured | `replaced_by`, what took its place |
 
-A count from the CI runner is not a device time (rule 76), so a row whose
+A count from the CI runner is not a device time (rule 176), so a row whose
 figure is a floor time is a `floor` row, whatever bench measures it on CI.
 A constant turning stale or unmeasured takes a disposition in the same
 edit.

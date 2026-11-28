@@ -17,7 +17,7 @@ PoW + redb); `Box::new_zeroed_slice` (stable 1.92.0) is already covered.
 
 | Factor | Rationale |
 |--------|-----------|
-| **Shekyl-first** | Pure Rust, no C FFI, no MSVC LMDB build risk (`10-shekyl-first.mdc`) |
+| **Shekyl-first** | Pure Rust, no C FFI, no MSVC LMDB build risk (`110-shekyl-first.mdc`) |
 | **Operational** | File grows automatically; freed pages reused on later writes. **Cosmetic only:** large prune-to-`R_k` does not shrink the file on disk; footprint may stay elevated until later growth reuses pages. **Not** a correctness hazard — unlike heed `map_size`, where `MDB_MAP_FULL` is a hard failure. |
 | **ACID reorg** | Single write transaction across leaves + segment metadata; `truncate_from_tree_position` atomic by construction |
 | **Correctness > perf** | Transactional store over mmap micro-opts pre-genesis; flat-mmap remains bench-gated per `CURVE_TREE_CLIENT.md` §3.6 |

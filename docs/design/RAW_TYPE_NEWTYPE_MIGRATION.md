@@ -23,7 +23,7 @@ status of record; a section below that disagrees with a row is
 | `PqcAuthHash`, `ShardId`, `LeafIndex`, `BlockWeight`, `LongTermWeight`, `OneTimePubkey`, `CommitmentBytes`, `AttestationRoot`; crate `#![no_std]` | LANDED — RTN-1 | `rust/shekyl-types` |
 | Store codecs (`BlockInfo`, `TxIndex`, `OutTx`, `OutKey`, `TxOutputIndices`, `ConnectFacts`) typed; `CurveRoot` deleted in favor of `CurveTreeRoot`; type-only codec change, no `SCHEMA_VERSION` bump | LANDED — RTN-2 | `shekyl-chain-store` |
 | `TxIdentity.pqc_auth_hash: Option<PqcAuthHash>` (`PDM-Q-F26`) | LANDED — #768 | DRS §7.7 item 1; `shekyl-chain-rules` |
-| `PowHash` — the RandomX longhash as its own `hash32!` member, distinct from `BlockHash` in both directions (a longhash is never a block id; a block id is never compared against a target). Minted by `shekyl-chain-rules::form` from `Substrate::longhash`. **Sibling-lane write (rule 94 §6), disclosed:** minted by DRS-E6 slice 2, which consumes it (`CHAIN_RULES_SLICE_2.md` §4.2), not by an RTN increment | LANDED — 2026-09-19 (E6 slice 2, commit 1) | `rust/shekyl-types`; consumer `shekyl-chain-rules` |
+| `PowHash` — the RandomX longhash as its own `hash32!` member, distinct from `BlockHash` in both directions (a longhash is never a block id; a block id is never compared against a target). Minted by `shekyl-chain-rules::form` from `Substrate::longhash`. **Sibling-lane write (rule 194 §6), disclosed:** minted by DRS-E6 slice 2, which consumes it (`CHAIN_RULES_SLICE_2.md` §4.2), not by an RTN increment | LANDED — 2026-09-19 (E6 slice 2, commit 1) | `rust/shekyl-types`; consumer `shekyl-chain-rules` |
 | `shekyl-curve-tree` uses `shekyl-types` `BlockHeight` / `Gindex` (`pub type Gindex = GlobalOutputIndex`) | LANDED — RTN-4 | `shekyl-curve-tree` |
 | `shekyl-difficulty` `lwma1_next(BlockHeight, &[Timestamp], &[CumulativeDifficulty]) -> Difficulty`; leftover `shekyl-consensus::Difficulty` deleted (re-export) | LANDED — RTN-5 | `shekyl-difficulty` |
 | `TransferDetails` indices/heights typed; `PaymentRequest.expiry` is wall-clock `Timestamp`; CLI `--expiry` unix seconds or duration | LANDED — RTN-6 | `shekyl-engine-state` / CLI |
@@ -82,7 +82,7 @@ A transparent newtype (`#[repr(transparent)] + #[serde(transparent)]`) is
 wire- and ABI-identical to the primitive it wraps. The `KeyImage` swap in
 `transfer.rs` already proved a `[u8; 32]` → transparent-newtype field change
 is byte-identical on disk and needs **no** serialized-format version bump
-(`42-serialization-policy.mdc`). The one caveat: `postcard-schema` derives a
+(`142-serialization-policy.mdc`). The one caveat: `postcard-schema` derives a
 *named* schema, so a field type rename `[u8; 32]` → `TxHash` may still change
 the committed `.snap` and require `UPDATE_SNAPSHOTS=1` regeneration — a
 mechanical regen, **not** a `LEDGER_BLOCK_VERSION` bump. The first task of any
@@ -96,7 +96,7 @@ are scattered and mishoused:
 
 - `BlockHeight(u64)`, `Gindex(u64)`, `TreePosition(u64)` live in
   **`shekyl-curve-tree`** — the wrong home for wallet/consensus-wide
-  vocabulary (`18-type-placement.mdc`: state-shaped types live with their
+  vocabulary (`118-type-placement.mdc`: state-shaped types live with their
   semantic owner, and curve-tree is not it).
 - `TxHash([u8; 32])` lives in **`shekyl-engine-core/src/engine/pending.rs`** —
   too deep; `shekyl-engine-state` cannot reach it cleanly, so `transfer.rs`
@@ -107,14 +107,14 @@ extend `shekyl-units`) to host the shared state-shaped newtypes:
 `BlockHeight`, `BlockCount`, `Timestamp`, `BlockHash`, `TxHash`,
 `GlobalOutputIndex`, `OutputIndexInTx`. Everything else re-exports/imports from
 there. This PR also resolves the `Gindex` vs `GlobalOutputIndex` naming
-collision (pick one canonical name). Per `18-type-placement.mdc`, record the
+collision (pick one canonical name). Per `118-type-placement.mdc`, record the
 transform-vs-state disposition of each new type in PR 0's commit body. No
 call-site changes in PR 0; validation surface is "the types compile,
 round-trip serde-identically, and the schema-snapshot harness sees them."
 
 ## 3. PR sequence (unbundled by validation surface)
 
-Each PR is its own validation surface (`19-validation-surface-discipline.mdc`).
+Each PR is its own validation surface (`119-validation-surface-discipline.mdc`).
 They are deliberately **not** bundled: "they're all about types" is the
 topic-coherence trap that rule names. Ordering:
 
@@ -290,7 +290,7 @@ surface — landing on its own PR per §3, **not** bundled into a Rust crate mov
 
 Points / scalars / signatures / ciphertexts in crypto-pq / proofs / fcmp /
 curve-tree. Transform-shaped → live in their defining crate
-(`18-type-placement.mdc`). Lower priority because they are mostly internal to
+(`118-type-placement.mdc`). Lower priority because they are mostly internal to
 crypto and less prone to the cross-domain confusion that bites the wallet path.
 
 - `HybridSignature` & `HybridPublicKey.ml_dsa` blobs ([`signature.rs:28,49-50`](../../rust/shekyl-crypto-pq/src/signature.rs))
@@ -314,8 +314,8 @@ crypto and less prone to the cross-domain confusion that bites the wallet path.
 
 ## 10. Related rules
 
-- `18-type-placement.mdc` — transform vs state; where each newtype lives.
-- `19-validation-surface-discipline.mdc` — why the PRs are unbundled.
+- `118-type-placement.mdc` — transform vs state; where each newtype lives.
+- `119-validation-surface-discipline.mdc` — why the PRs are unbundled.
 - `30-cryptography.mdc` / `35-secure-memory.mdc` — secret material wrapping (PR B).
-- `42-serialization-policy.mdc` — when a persisted-field change needs a version bump.
+- `142-serialization-policy.mdc` — when a persisted-field change needs a version bump.
 - `60-no-monero-legacy.mdc` — the `unlock_time` / `Timelock::Time` deletions.

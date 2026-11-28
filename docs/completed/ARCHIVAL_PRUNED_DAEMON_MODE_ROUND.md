@@ -63,7 +63,7 @@ as the record of its state:
 > needs both txid components; Q3's instrument is `ChainView`'s surface.**
 > **F30–F31 (2026-09-17, `4bc378d68`): Q11's census home is `CEN-E2`, and
 > F27's Rust-held anchor fires `CEN-E1`/`CEN-E2`'s recorded reopening
-> trigger — re-key owed in F27's PR; S-PRUNE owes a rule-26 plan doc before
+> trigger — re-key owed in F27's PR; S-PRUNE owes a rule-126 plan doc before
 > its first increment; §3's six adversarial items now carry status and
 > owner; Q6 item 2 is the second increment built on an unruled default;
 > Q11's owner is unnamed at day five. §3 WALKED the same day by steering:
@@ -90,14 +90,14 @@ opening prompt (written at `1c6238bf8`).
 
 **Family:** `PDM-Q` — tokens `PDM-Q1`…`PDM-Q12` (questions), `PDM-Q-F*`
 (findings), `PDM-Q-S0` (sequencing constraint). Registered in
-[`IMPLEMENTATION_INDEX.md`](../design/IMPLEMENTATION_INDEX.md) §2 at birth (rule 94).
+[`IMPLEMENTATION_INDEX.md`](../design/IMPLEMENTATION_INDEX.md) §2 at birth (rule 194).
 Family cell `**PDM-Q1…PDM-Q12**` parses to `PDM-Q`. Distinct from
 `**PD-A…PD-F**` (parses `PD-A`, the reopen-(d) probe).
 
-**Process:** [`26-sub-pr-design-discipline`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
+**Process:** [`126-sub-pr-design-discipline`](../../.cursor/rules/126-sub-pr-design-discipline.mdc)
 — retention and the archival possession test are consensus-adjacent;
 design closure precedes any cut. **No C++ and no implementation in this
-round** (rule 20: new daemon logic belongs in Rust; steering forbids a
+round** (`RULE_20_RUST_VS_CPP`: new daemon logic belongs in Rust; steering forbids a
 C++ landing regardless — see `PDM-Q-S0`).
 
 **What this round is.** The design home for pruned-daemon mode: ordinary
@@ -128,7 +128,7 @@ as of this pin, banner line 11).
 
 **Why, under current substrate.** Steering, 2026-09-12: this design will
 not be implemented until after the C++→Rust daemon cutover. Independently,
-rule 20 already sends new daemon logic to Rust — a C++ `prune_worker`
+`RULE_20_RUST_VS_CPP` already sends new daemon logic to Rust — a C++ `prune_worker`
 extension would be debt the rewrite re-creates. DRS-D5's
 decompose-in-C++-first rationale is already retired (2026-09-01
 countermand).
@@ -424,7 +424,7 @@ inside it — so a `W` change ships as a coordinated release, and its
 home is beside `D_max`'s. Two releases with different `W` are
 distinguishable on the wire during a rollout: that is a **bounded Q8
 uniformity exception** (retention selecting wire behaviour for the
-length of the rollout), accepted and named as such, not a rule-71
+length of the rollout), accepted and named as such, not a rule-171
 matter.
 
 **Closed rulings touched.** `RF-D6` (reopened per Q6 item 4); the
@@ -530,7 +530,7 @@ attacker, it only reduces scarcity. Bounds:
   under Q8 the window is what every daemon answers identically inside,
   so two releases with different `W` are distinguishable on the wire
   during rollout. `W` changes are network-uniform releases, stated as
-  such (rule 71), and its home is beside `D_max`'s.
+  such (rule 171), and its home is beside `D_max`'s.
 
 Whatever the number, the convergence statement in §8 is corrected to
 **unconditional for running nodes with downtime under `W`, band 2 for
@@ -593,7 +593,7 @@ The instrument Q3 names has to fail if a new consensus caller appears.
 
 Do **not** re-derive in ignorance of TJ's already-stated sequencing
 resolution (index `TJ-A…TJ-G` row): *the pruning MODE is node-local and
-ships post-genesis without coordination (rule 75)*. That sentence is
+ships post-genesis without coordination (rule 175)*. That sentence is
 about the mode not needing a coordinated hard-fork to *activate*; it
 is not a claim that genesis ships before PDM exists (`PDM-Q-S0`), and
 it is not a claim that leaf discard is node-local *today* (`PDM-Q-F8`).
@@ -1442,7 +1442,7 @@ inference, with the linking fact (`s`) supplied by the chain itself.
 The rule: **every daemon serves transaction bodies over P2P only
 inside the universal window, and refuses identically outside it,
 regardless of what it retains locally.** Retention selects data;
-it never selects wire behaviour (rule 71's shape, applied to the
+it never selects wire behaviour (rule 171's shape, applied to the
 serve side). Consequences, recorded as they follow:
 
 - All beyond-window *serving* is wallet-fronted over onion, under a
@@ -1612,7 +1612,7 @@ run), so retaining shard `s` is one thing: do not discard the prunable
 regions in `range(s)`. That is a filter on the predicate every daemon
 already evaluates — `retain(block) = in_window(block) ∨ block ∈
 exceptions` — one code path, one deletion site, archivers differing
-from other nodes by data rather than by software (rule 71's shape).
+from other nodes by data rather than by software (rule 171's shape).
 Serving path: onion request → wallet → operator-to-operator leg →
 daemon reads `range(s)` → wallet streams; localhost against a Tor
 circuit is not a latency question. What the candidate changes in the
@@ -1797,7 +1797,7 @@ fires the reopening trigger both rows named.
 chain. A fresh node's exposure is bounded by the anchor `C` and not by
 `D_max` at any value; a node with an empty checkpoint table has no cap
 at all, which is the pin today (`init_default_checkpoints` is a
-rule-71-shaped no-op, `src/checkpoints/checkpoints.cpp:136-145`). The anchor
+rule-171-shaped no-op, `src/checkpoints/checkpoints.cpp:136-145`). The anchor
 is therefore a **precondition** of `D_max`, not a sibling, and
 `PDM-Q5`'s ordering item is discharged by this sentence.
 
@@ -2030,7 +2030,7 @@ through `shekyl-p-serve` (`SF-D8`'s content half, sub-PR 2); carry its
 own lapse tail (#775's retention row); receive recovery shards the
 daemon hands across and retain them; hold the Foundation `CompleteTree`
 behind a persona (Q9's floor). The round registers its family at birth
-(rule 94) and cites this contract for its inputs; FOLLOWUPS row with the
+(rule 194) and cites this contract for its inputs; FOLLOWUPS row with the
 falsifier. The curve tree's *verification-side*
 leaf store, if any, is Q1's to grade. *C++:*
 `process_archival_segment_freezes_at_height`, `archival_shard_segment`,
@@ -3021,7 +3021,7 @@ consensus question: *does anything read it after admission?*
   inherited machinery is the reorg cap and the sync anchor in one
   function.** `init_default_checkpoints` is a no-op on every network
   (`checkpoints.cpp:163-172`, shaped as per-network data under rule
-  71). `is_alternative_block_allowed` (`:124`, called at
+  171). `is_alternative_block_allowed` (`:124`, called at
   `blockchain.cpp:2242`) refuses any reorg below the last checkpoint —
   so with an empty table the chain has **no reorg cap at all**, which
   is Q11 stated from the code side. A syncing node verifies every
@@ -3106,7 +3106,7 @@ consensus question: *does anything read it after admission?*
   unit and is the hole. The countersignature check is not inside the
   hole, and the hole's `expected` is opaque until Q6 names it.
   **Sub-PR 2, blocked on `PDM-Q6`:** the frame codec and the per-tx
-  content-verify; that row carries the Q6 dependency. Rule 26's sub-PR line *is* the seam. This defuses
+  content-verify; that row carries the Q6 dependency. Rule 126's sub-PR line *is* the seam. This defuses
   the real hazard, which is not wasted work: a client built now against
   `recompute_segment_r_k` becomes the thing Q6 has to argue *against*
   instead of the thing Q6 rules *on*. **Falsifier (rule 15, so the
@@ -3284,7 +3284,7 @@ the relevant type *now*; none is a ruling.
   `enforced` omits the proof rows, (b) a selector for it that is not
   `RuleSchedule` — the schedule is height → set per network, and
   below-anchor is a position relative to *this node's* `C`, not a
-  height at which the chain's rules changed (rule 71: `C`/`H` are
+  height at which the chain's rules changed (rule 171: `C`/`H` are
   per-network *data*; the arm that consumes them is one code path),
   and (c) a home for the anchor check itself (block `C` has hash `H`):
   `CenRow` is a bijection with the census
@@ -3430,7 +3430,7 @@ consequence that no lane had recorded.
   extracted** (`DAEMON_REDB_STORE.md` §7: five of six methods are the
   stripe engine, superseded before they can be ported) and already
   carries two contracts written on its row before it has a home (SCW-7,
-  F26's three-leg invariant). It has no `DRS_E*_SPRUNE.md`. Rule 26:
+  F26's three-leg invariant). It has no `DRS_E*_SPRUNE.md`. Rule 126:
   design closure precedes any cut; E1 got `DRS_E1_SCHAIN_W.md` before
   its writers. S-PRUNE's successor needs the same before its first
   increment — and the plan doc is the natural place for the three-leg
@@ -3634,7 +3634,7 @@ with a compile-shaped falsifier (F29). Each is cheap exactly once.
 one clock.** F27's landing PR re-keys `CEN-E1` and `CEN-E2` — their
 C2-R1b "reopens when DRS/R8 moves checkpoint state" trigger fires the
 day a Rust-held anchor table exists, and E1's rule text still names the
-JSON channel F23 deleted (F30). The DRS-E lane writes S-PRUNE's rule-26
+JSON channel F23 deleted (F30). The DRS-E lane writes S-PRUNE's rule-126
 plan doc before its first increment; it can be written now against this
 charter (F31). And Q6 item 2 is now the second increment
 built on an unruled default: when Q6 rules it, it confirms a landed

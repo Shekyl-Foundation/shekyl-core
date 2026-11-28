@@ -1,4 +1,4 @@
-# RT-W10 — the daemon side of the channel: rule-26 pre-flight
+# RT-W10 — the daemon side of the channel: rule-126 pre-flight
 
 **Status:** Round 0 pre-flight — **questions RULED 2026-10-25** (Rick):
 `RT-O30`…`RT-O36`, §4, every part, six as recommended with additions and
@@ -227,9 +227,9 @@ enrollment.
 `INPUT_GRAMMAR.md` IG-Q49 (2026-10-19) rules the armed levers never on
 mainnet, and the option table carries that as `dev-rpc` accepted on the
 test networks only. `RPC_CHANNEL.md` §6.1 (2026-10-09) rules the
-override "never selected by nettype" (rule 71).
+override "never selected by nettype" (rule 171).
 
-- **(a)** IG-Q49 stands. §6.1 names it as the ratified divergence rule 71
+- **(a)** IG-Q49 stands. §6.1 names it as the ratified divergence rule 171
   allows: named, ruled, and loud (the switch is refused on mainnet with
   its own diagnostic, and logged when armed).
 - **(b)** §6.1 stands. `dev-rpc` is accepted on every network, armed only
@@ -243,7 +243,7 @@ round, which owns the option table.
 
 **RULED: no exception is needed; the two rulings are compatible.** The
 explicit, logged `dev-rpc` start switch is the only thing that enables the
-armed levers, and the network type never does, which satisfies rule 71.
+armed levers, and the network type never does, which satisfies rule 171.
 The switch is refused on mainnet with a clear error: the network type
 restricting the switch, not selecting behaviour, which satisfies IG-Q49.
 `RPC_CHANNEL.md` §6.1 says so. Step 1 routes `generateblocks`,

@@ -1,0 +1,24 @@
+# Vacated rule numbers. A vacated number is never reused, and nothing
+# cites it: scripts/ci/check_vacated_rule_numbers.py fails on any citation
+# of one, and scripts/rules/sweep_rule_citations.py rewrites citations to
+# the successor named here. Ruled 2026-11-19 (Round 0 §7) and 2026-11-27.
+# Columns (tab-separated): number, old name, status, repository, successor.
+# status renumbered: successor is the rule's new file stem in that repository.
+# status retired: successor is the record that keeps the rule's text.
+number	old_name	status	repo	successor
+07	07-consensus-atomic-cutovers	renumbered	core	107-consensus-atomic-cutovers
+10	10-shekyl-first	renumbered	core	110-shekyl-first
+18	18-type-placement	renumbered	core	118-type-placement
+19	19-validation-surface-discipline	renumbered	core	119-validation-surface-discipline
+20	20-rust-vs-cpp-policy	retired	core	docs/completed/RULE_20_RUST_VS_CPP.md
+25	25-rust-architecture	renumbered	core	125-rust-architecture
+26	26-sub-pr-design-discipline	renumbered	core	126-sub-pr-design-discipline
+27	27-composition-decomposition	renumbered	gui	227-composition-decomposition
+28	28-command-surface	renumbered	gui	228-command-surface
+40	40-ffi-discipline	retired	core	docs/completed/RULE_40_FFI_DISCIPLINE.md
+42	42-serialization-policy	renumbered	core	142-serialization-policy
+70	70-modular-consensus	renumbered	core	170-modular-consensus
+71	71-network-uniformity	renumbered	core	171-network-uniformity
+75	75-system-autonomy	renumbered	core	175-system-autonomy
+76	76-device-provisioning-floor	renumbered	core	176-device-provisioning-floor
+94	94-tracking-index	renumbered	core	194-tracking-index

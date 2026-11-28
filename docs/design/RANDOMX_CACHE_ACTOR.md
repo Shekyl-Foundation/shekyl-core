@@ -186,7 +186,7 @@ Each caller passes its own stop flag. A set flag ends that caller's waits and re
 
 The node starts the hasher before every consumer and stops it last (`shekyl-node/src/lib.rs`, "Stop", step 8): after the runtime is down and the miner drained, every job, loan and form has ended, so the stop waits on none. `Owner::stop` refuses new jobs and drops every request not yet granted: its caller returns stopped, and a build that finishes later grants nothing, so no job starts during a stop. A lease already granted stands, and the stop waits for it to return. It lets a running derive finish, frees every cache, waits for each to be dropped, and joins the builder. Dropping the `Owner` stops it too.
 
-The crate has no end of its own, so it has no `NodeEnd` variant: `PreparedCache::derive` is infallible, an allocation failure aborts, both production profiles abort on panic, and the list arrives by method call, not a channel, so no input can close (rule 25 covers a task that can end on its own).
+The crate has no end of its own, so it has no `NodeEnd` variant: `PreparedCache::derive` is infallible, an allocation failure aborts, both production profiles abort on panic, and the list arrives by method call, not a channel, so no input can close (rule 125 covers a task that can end on its own).
 
 ### 5.8 The bound, and what a rebuild costs
 
@@ -244,7 +244,7 @@ The record is kept with the Foundation's internal captures, dated 2026-11-16: th
 ## 6. The PR sequence — RULED (HA-R6)
 
 1. **This document.**
-2. **`shekyl-hasher`, with no consumer** (rule 26: a new crate is its own PR) — BUILT (as of 2026-11-12). The actor, the cap, leases, builds, refill and the metric. Its tests are the invariant tests of §8, written against the crate's own API.
+2. **`shekyl-hasher`, with no consumer** (rule 126: a new crate is its own PR) — BUILT (as of 2026-11-12). The actor, the cap, leases, builds, refill and the metric. Its tests are the invariant tests of §8, written against the crate's own API.
 3. **The cutover, one PR, driven by the deletion** — BUILT (as of 2026-11-14). The cache store's slots were shared by every consumer in §2, so any split would have left two owners of caches in one process. The PR deleted the slot API and moved the ingest, chain sync's executor, the miner, `pow`, the node, the replay binary, the pipeline and the test harnesses onto the actor, with `ranked_seeds` and its tests.
 4. **Close-out** — under way (as of 2026-11-16). Done: the live RSS capture repeated with a fork case (§5.10), and PB-R1's cache rows restated against the cap. Waiting: the floor device's `RssAnon` with three caches resident during a real initial sync. That needs a chain a release daemon can sync past height 4,161, where a third seed takes effect: the alpha.12 testnet, about six days after its genesis at the 120 s target (Rick, 2026-11-16; `docs/FOLLOWUPS.md`). That reading is of the cache places and the process; the store cache's share of PB-R1 is Chain P's to measure (§5.10). This document becomes a contract when that reading is in §5.10 (rule 95).
 

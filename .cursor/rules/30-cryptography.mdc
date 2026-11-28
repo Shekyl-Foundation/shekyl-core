@@ -5,6 +5,10 @@ globs:
   - rust/shekyl-proofs/**
   - rust/shekyl-fcmp/**
   - rust/shekyl-oxide/**
+  - prism-*/**
+  - shekyl-prism/**
+scope: estate
+repos: [core, prism]
 ---
 
 # Cryptography rules
@@ -17,20 +21,12 @@ is non-negotiable — never propose a classical-only operation on the wallet
 path. The V4 transition removes the classical half; classical-only today is
 V4 deletion debt.
 
-## Per-output PQC keys (Option C)
-
-PQC signing uses per-output KEM-derived keys, not the wallet master key.
-Per-output keys give forward secrecy per output. The ML-KEM ciphertext lives
-in `tx_extra` under tag `0x06` and must survive pruning permanently — it is
-required for wallet PQC key rederivation.
-
 ## Test vectors are pinned, not generated
 
-Cryptographic operations have known-answer test vectors in
-`docs/test_vectors/*.json`. Vectors are written *before* the implementation.
-The implementation is tested against the vectors, not the other way around.
-A change to a vector requires explicit review and a CHANGELOG entry — vectors
-define consensus and cannot drift silently.
+Cryptographic operations have known-answer test vectors. Vectors are
+written *before* the implementation. The implementation is tested against
+the vectors, not the other way around. A change to a vector requires
+explicit review: a vector cannot drift silently.
 
 ## Wide-reduce, not modular reduction
 
@@ -125,5 +121,5 @@ and a surface, an inner customization and an outer preimage — are two
 contexts and get two strings; reusing one string for both is dual-duty,
 and dual-duty is how a signature minted in one context verifies in
 another. Mint `…-v2` alongside a migration; never edit a live string in
-place (a live domain's bytes are state, not style — see
-SIGNATURE_ALIGNMENT §5 and the domain registry gate).
+place (a live domain's bytes are state, not style; shekyl-core's registry and its
+gate: [`130-cryptography-core`](https://github.com/Shekyl-Foundation/shekyl-core/blob/dev/.cursor/rules/130-cryptography-core.mdc)).

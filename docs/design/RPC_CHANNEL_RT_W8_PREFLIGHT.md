@@ -1,4 +1,4 @@
-# RT-W8 — the channel's model, vectors and names: rule-26 pre-flight
+# RT-W8 — the channel's model, vectors and names: rule-126 pre-flight
 
 **Status:** Round 0 pre-flight — **questions RULED 2026-10-09** (Rick):
 `RT-O11`…`RT-O15`, §4. The substrate re-check is recorded (§2) and what
@@ -70,7 +70,7 @@ source.
 
 ## 3. Artifact execution
 
-Rule 26 asks that the prescribed tests, benches and generators be run
+Rule 126 asks that the prescribed tests, benches and generators be run
 before the PR opens. For this slice almost none exists yet, and this
 section says exactly what was and was not done.
 

@@ -1,6 +1,8 @@
 ---
 description: Every disposition class (REJECTED / DEFERRED / STAGED / RESERVED) has a defined grep surface. Zero code symbols for anything not staged; refused names stay in namespace contracts as structured status entries, not header prose. Document assertions are a grep surface too - grep returns a LINE, so a superseded row or a section whose status differs from its file's declares that status in the matching line, never only in a banner or an enclosing heading.
 alwaysApply: true
+scope: estate
+repos: [core, gui, prism]
 ---
 
 # Disposition visibility

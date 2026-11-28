@@ -148,7 +148,7 @@ sufficient, none relying on reviewer vigilance:
    dependency-graph assertion (the no-import guard, sibling of the DQ6
    injectable-cadence discipline): `cargo tree` over every production crate
    must not contain `shekyl-staking-sim`; the check is a grep-mechanical CI
-   step, same class as the rule-42 schema snapshot check.
+   step, same class as the rule-142 schema snapshot check.
 3. **The emit path is feature-gated off default builds.** The event types and
    the observer plumbing that carries them live behind a non-default feature
    (working name `gf7-hooks`) on the crate that hosts the seam, the same

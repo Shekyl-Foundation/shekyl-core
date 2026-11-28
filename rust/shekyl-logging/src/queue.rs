@@ -46,13 +46,13 @@ use tracing_subscriber::fmt::MakeWriter;
 /// P2P sessions writes (the PR-3 measurement logs, 2026-10-14). A sink that
 /// stalls longer than that drops and counts. Lines are a few hundred bytes,
 /// so a full queue is a few MB per sink, inside the floor device's budget
-/// (rule 76). *Records-was:* `tracing_appender`'s default, 128 000 lines and
+/// (rule 176). *Records-was:* `tracing_appender`'s default, 128 000 lines and
 /// lossy with no report, on the file sink only.
 pub const SINK_QUEUE_LINES: usize = 8_192;
 
 /// How long a flush waits for the writers before it gives up.
 ///
-/// Provisioned at the floor device (rule 76): a full queue is
+/// Provisioned at the floor device (rule 176): a full queue is
 /// [`SINK_QUEUE_LINES`] lines of a few hundred bytes, about 3 MB per sink,
 /// and the writer appends them through the page cache in one write per line.
 /// On a Pi 4 that is about 8 000 `write` calls of a few microseconds each:

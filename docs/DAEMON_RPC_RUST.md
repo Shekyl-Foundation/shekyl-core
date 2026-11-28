@@ -157,7 +157,7 @@ removes their knowledge of where their queries went. Same shape as
 widen who sees the wallet.
 
 **Rule-21 reopen.** Evidence that IBD at the device floor
-([`76`](../.cursor/rules/76-device-provisioning-floor.mdc), Pi 4) leaves a
+([`176`](../.cursor/rules/176-device-provisioning-floor.mdc), Pi 4) leaves a
 fresh install without a usable wallet for longer than the failure-mode UX
 ([`82`](../.cursor/rules/82-failure-mode-ux.mdc)) can carry, **and** a design
 that keeps the choice with the user: a wallet-side "use this remote until my
@@ -322,7 +322,7 @@ Specified in [`design/DAEMON_RPC_KV_CUTOVER.md`](completed/DAEMON_RPC_KV_CUTOVER
 (family `RK-`). The Phase-1 sentence "replace epee portable-storage in
 `core_rpc_ffi.cpp` with a Rust-native codec" was re-scoped there: a Rust
 codec cannot serialize C++ structs without a `#[repr(C)]` façade of every
-wire type (rule 40), so the wire type and the handler of each method move to
+wire type (`RULE_40_FFI_DISCIPLINE`), so the wire type and the handler of each method move to
 Rust **together**, over coarse `shekyl_rpc_*_facts` FFI, with the console
 rendering following the method. epee KV leaves the RPC path method by method
 and `core_rpc_server.*` / `core_rpc_server_commands_defs.h` / the dispatch

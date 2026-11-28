@@ -6,7 +6,7 @@
 //! Which rules are in force at a height — the driver's half of RD-Q10.
 //!
 //! `connect` takes the in-force [`RuleSet`] by value and compares; it holds
-//! no schedule and no `Network` (rule 71). Resolving *height → set* is
+//! no schedule and no `Network` (rule 171). Resolving *height → set* is
 //! therefore the driver's, and [`ChainRules`] is where it lives: one shape
 //! for every network (`NETWORK_IDENTITY.md` NI-R4). The network's schedule
 //! (`RuleSchedule::for_network`) names the issued set at each height, and
@@ -179,7 +179,7 @@ impl ChainRules {
     /// input (DRS-E6 slice 3; `PDM-Q5`): the network's table genesis, on
     /// every network (NI-Q8). Resolved here beside `in_force` because the
     /// two are the run's two chain-derived inputs to `validate` and the
-    /// rules crate holds neither a schedule nor a `Network` (rule 71).
+    /// rules crate holds neither a schedule nor a `Network` (rule 171).
     #[must_use]
     pub const fn trust(&self) -> Trust {
         Trust::full(self.genesis)

@@ -42,7 +42,7 @@ rather than cost; **PW-19a** gains the reusable prior-knowledge check; and
 **PW-25's** pointers corrected (`ρ` is §13.5, not §12.10; §12.11's body is
 superseded in part). **Sequencing ruling — historical, and now spent:**
 this landed first as its own docs PR with `PW-` registered in the index at
-birth (rule 94 §1); P2P-1 (the wire census) was the next artifact and absorbed
+birth (rule 194 §1); P2P-1 (the wire census) was the next artifact and absorbed
 §7's open tasks as census work rather than a separate errand. **Both steps are
 complete** — the census merged as PR #588 and the P2P-2 dispatch brief as PR
 #591 — so the order below records how this document came to be, not what
@@ -65,7 +65,7 @@ the brief" describes work already done rather than work owed.
 
 **Identifier family:** `PW-` (P2P wire), checked unique against the index's
 existing families (CW/VG/SH/CT-ACT/PC/RF/SO/CR/CB/F-D/…) — no collision.
-Register at birth (rule 94 §1) when this lands as a tracked doc.
+Register at birth (rule 194 §1) when this lands as a tracked doc.
 
 **Scope boundary, ratified by prior work, verified this session:**
 `RPC_TRANSPORT_POSTURE.md` §2.1 (`:99-106`) — "P2P is not RPC... RPC is

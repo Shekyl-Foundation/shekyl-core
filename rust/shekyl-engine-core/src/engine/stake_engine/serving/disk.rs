@@ -29,7 +29,7 @@ use tokio_util::sync::CancellationToken;
 /// particular node's corpus grows and how long its operator needs to act;
 /// both are local facts the wallet cannot know. 8 GiB is chosen to be
 /// comfortably more than a segment's growth across many refresh cadences at
-/// the rule-76 device floor, while small enough that a Pi-class node with a
+/// the rule-176 device floor, while small enough that a Pi-class node with a
 /// modest disk is not warned from the day it starts.
 ///
 /// **Reopen criterion (rule 21):** operational measurement showing the

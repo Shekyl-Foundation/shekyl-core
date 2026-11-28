@@ -965,7 +965,7 @@ fn spendable_height_coinbase_shaped_timelock_floors() {
     );
 }
 
-/// Both new fields survive the rule-18 transform↔state seam round-trip
+/// Both new fields survive the rule-118 transform↔state seam round-trip
 /// (the `From` impls are exhaustive struct literals; this pins the
 /// values, not just the compile).
 #[test]

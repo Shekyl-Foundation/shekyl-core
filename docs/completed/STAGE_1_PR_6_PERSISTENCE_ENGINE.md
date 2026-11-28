@@ -10,7 +10,7 @@ branch:
 `feat/stage-1-pr6-persistence-engine-design` → PR to `dev`. Opened from `dev`
 tip `b9c03dc24` (post–PR #81 `PendingTxEngine` merge). This document follows
 [`STAGE_1_PER_PR_TEMPLATE.md`](../design/STAGE_1_PER_PR_TEMPLATE.md) and
-[`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc).
+[`126-sub-pr-design-discipline.mdc`](../../.cursor/rules/126-sub-pr-design-discipline.mdc).
 **Phase 1 implementation** lands on `feat/stage-1-pr6-persistence-engine`
 after §6.3 prerequisites (HKDF PR merged to `dev`).
 
@@ -1426,4 +1426,4 @@ PR 6 must not break:
 
 *Template:* [`STAGE_1_PER_PR_TEMPLATE.md`](../design/STAGE_1_PER_PR_TEMPLATE.md).
 *Spec:* [`V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md) §2.6, §2.8, §3, §6.4, §8.1–§8.3.
-*Process:* [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc).
+*Process:* [`126-sub-pr-design-discipline.mdc`](../../.cursor/rules/126-sub-pr-design-discipline.mdc).

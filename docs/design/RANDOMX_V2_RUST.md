@@ -52,7 +52,7 @@ there is a specific named reason to diverge, and that reason has to
 clear the same review bar as any other consensus change.
 
 This is the "disposable fork" disposition from
-`10-shekyl-first.mdc` — useful for control, deletable when the cost
+`110-shekyl-first.mdc` — useful for control, deletable when the cost
 exceeds the value.
 
 ### 1.2 Pinned source
@@ -287,7 +287,7 @@ the spec.
 
 ## 4. Derived-First Design
 
-Per [`18-type-placement.mdc`](../../.cursor/rules/18-type-placement.mdc),
+Per [`118-type-placement.mdc`](../../.cursor/rules/118-type-placement.mdc),
 RandomX verification values are transform-shaped:
 
 - `Cache::derive(seedhash) -> Cache`
@@ -311,7 +311,7 @@ module-level mutable state.
 
 ## 5. FFI Surface
 
-> **Superseded (2026-11-14).** The export this section specifies, and the process-global `CacheStore` behind it, are no longer in the tree: the workspace has no C ABI (rule 25), and `CacheStore` is deleted. One crate, `shekyl-hasher`, owns every RandomX cache the daemon holds, and every hash is a job on it ([`RANDOMX_CACHE_ACTOR.md`](RANDOMX_CACHE_ACTOR.md)). The text below is the contract as it stood while a C++ caller linked the export.
+> **Superseded (2026-11-14).** The export this section specifies, and the process-global `CacheStore` behind it, are no longer in the tree: the workspace has no C ABI (rule 125), and `CacheStore` is deleted. One crate, `shekyl-hasher`, owns every RandomX cache the daemon holds, and every hash is a job on it ([`RANDOMX_CACHE_ACTOR.md`](RANDOMX_CACHE_ACTOR.md)). The text below is the contract as it stood while a C++ caller linked the export.
 
 The hashing export is one function. The daemon does not call it: since
 the DRS-X flip the Rust ingest owns the chain and hashes through the
@@ -345,7 +345,7 @@ Semantics:
   called by the C++ chain at tip advance, on the premise that only C++
   block-handling code knew the canonical seedhash. The ingest's pin does
   both now (§6), and the export is deleted.
-- Return codes follow `40-ffi-discipline.mdc`: `SHEKYL_POW_RANDOMX_V2_OK`
+- Return codes follow `RULE_40_FFI_DISCIPLINE.md`: `SHEKYL_POW_RANDOMX_V2_OK`
   (`0`) on success; negatives for distinct failure modes
   (`ERR_NULL_PTR -1`, `ERR_DATA_TOO_LARGE -2`,
   `ERR_CACHE_DERIVE_FAILED -3`, `ERR_INTERNAL -4`; the last two are

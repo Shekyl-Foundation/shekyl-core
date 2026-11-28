@@ -8,7 +8,7 @@
 //! holds.
 //!
 //! The type is in every `pipeline` build, so `Follow` has one shape
-//! whatever features a build unifies (rule 25: a feature never changes a
+//! whatever features a build unifies (rule 125: a feature never changes a
 //! public type's shape). The `producer` feature gates the code that builds
 //! a seat ([`ProducerSeat::new`](crate::producer_seat::ProducerSeat::new))
 //! and the task that runs one (`bundle_producer`): a build without it has

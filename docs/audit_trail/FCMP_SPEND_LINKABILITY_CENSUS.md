@@ -1,12 +1,12 @@
 # PL — blast-radius census of the curve-tree leaf's 4th scalar (`h_pqc`)
 
-**Status:** RECORD — the rule-07 criterion-3 enumeration for the `PL-` round
+**Status:** RECORD — the rule-107 criterion-3 enumeration for the `PL-` round
 ([`FCMP_SPEND_LINKABILITY.md`](../design/FCMP_SPEND_LINKABILITY.md) §9), produced
 2026-09-13 at `dev` = `42333d34f`. Every `file:line` is a *records-was* claim
 at that sha: read at source, not inferred from a grep line. An implementation
 PR re-runs the sweep against its own `Base commit` and pastes the delta; this
 file is not re-anchored in place. Companion to the round document, in the
-rule-26 sibling-audit-trail shape — and filed under `docs/audit_trail/` since
+rule-126 sibling-audit-trail shape — and filed under `docs/audit_trail/` since
 2026-09-23 (moved from `docs/design/` by the tx_extra cutover, which deleted
 the C++ `tx_extra` codec, `construct_tx*` and `test_tx_utils.cpp` rows S0/S1/S5
 cite: a records-was register lives where the doc-claims gate reads one).
@@ -132,7 +132,7 @@ N grep hits inside one function are one site.
 | S0 | wallet-side replica | `rust/shekyl-curve-tree/src/client.rs:14-28` (module doc), `:66-69`, `:81-92` (`TxLeafInputs.leaf_hash_blob: Option<&[u8]>`), `:717-761` (`ingest_block` — `:752` `extract_leaf_hashes`, `:759` `per_output_h_pqc`) | Resolves each output's 4th scalar from the raw 0x07 blob at ingest. WIRE→STORE | Same. |
 | S0 | wallet-side replica | `rust/shekyl-curve-tree/src/segment.rs` (`LEAF_BYTES = SCALARS_PER_LEAF*32`, `const _: () = assert!(LEAF_BYTES == 128)`), `:88-95` (`leaf_bytes_to_scalars`) | Segment geometry. LAYOUT | Width. |
 | S0 | wallet-side replica | `rust/shekyl-curve-tree/src/served_frame.rs:18-22, 36-40, 53-58, 97-107, 204-208, 220-223, 293-297` (`ServedFrameHeader` — `segment_bytes = leaf_count × LEAF_BYTES`, padding bound) | Served-shard frame is a raw leaf array. WIRE (P2P) | Width. |
-| S0 | wallet-side replica | `rust/shekyl-curve-tree/src/store/redb_backend.rs:22` (`LEAVES_TABLE: TableDefinition<TreePosition, &[u8;128]>`), `:30-34` (pending rows = leaf ‖ 192-byte meta), `:75` (`SCHEMA_VERSION = 4`), `:364-366, 411-420` (serving reads by `LEAF_BYTES`), `:2057-2061` (`leaf_bytes_are_canonical` — each of 4 scalars must be canonical Selene), `:2171-2184` (`encode_leaf_meta` — `h_pqc` at `buf[81..113]`), `:2192-2221` (`decode_stored_leaf_meta` `:2206-2207`) | Wallet store persists the leaf **and** a second copy of `h_pqc` in leaf-meta. STORE | Meta layout `[81..113)` and `SCHEMA_VERSION` (this store is NOT under the rule-42 `schema-snapshot.yml`, which watches `shekyl-engine-state/**` only — a bump here is a manual duty). |
+| S0 | wallet-side replica | `rust/shekyl-curve-tree/src/store/redb_backend.rs:22` (`LEAVES_TABLE: TableDefinition<TreePosition, &[u8;128]>`), `:30-34` (pending rows = leaf ‖ 192-byte meta), `:75` (`SCHEMA_VERSION = 4`), `:364-366, 411-420` (serving reads by `LEAF_BYTES`), `:2057-2061` (`leaf_bytes_are_canonical` — each of 4 scalars must be canonical Selene), `:2171-2184` (`encode_leaf_meta` — `h_pqc` at `buf[81..113]`), `:2192-2221` (`decode_stored_leaf_meta` `:2206-2207`) | Wallet store persists the leaf **and** a second copy of `h_pqc` in leaf-meta. STORE | Meta layout `[81..113)` and `SCHEMA_VERSION` (this store is NOT under the rule-142 `schema-snapshot.yml`, which watches `shekyl-engine-state/**` only — a bump here is a manual duty). |
 | S0 | wallet-side replica | `rust/shekyl-curve-tree/src/assemble.rs:72-155` (`assemble_path` — `:153` `h_pqc: e.identity.h_pqc` into `ChunkLeaf`) | Path assembly reads the 4th scalar back from the drained leaf identity. WITNESS | Semantics. |
 | S0 | replica FFI | `rust/shekyl-ffi/src/curve_tree_replica_ffi.rs:74-82` (`ShekylCurveTreeReplicaTx { has_leaf_hash_blob, leaf_hash_blob, leaf_hash_blob_len, … }`), `:94-101` (`const _` ABI offset pins), `:200-240` (marshals to `TxLeafInputs`), `:359-365` (test) | C++→Rust replica feed of the raw 0x07 payload (used by `tests/core_tests/chaingen.cpp:323-382`). WIRE/S3 | Struct name/doc; ABI pins hold unless a field is added. |
 | S0 | leaf FFI | `rust/shekyl-ffi/src/legacy_curve_tree.rs:321-328` (`shekyl_curve_tree_scalars_per_leaf` = 4), `:512-560` (`shekyl_construct_curve_tree_leaf(output_key, commitment, h_pqc_ptr, leaf_out)` — doc `:514` "or 32 zero bytes if unavailable", `:556` → `construct_leaf`) | C ABI leaf constructor used by `src/blockchain_db/blockchain_db.cpp:608`. STORE | Doc stale (zero not admissible); parameter semantics. |
@@ -166,7 +166,7 @@ width/count changes.
 | S1 | (c) | Dummy-filler 0x07 builders: `rust/shekyl-daemon-rpc/tests/submit_fixtures/mod.rs:480-484`, `rust/shekyl-wire/tests/common/mod.rs:23-27`, `rust/shekyl-engine-core/src/engine/test_support.rs:982-986`, `tests/unit_tests/pqc_spend_fixture.h:65-93,161-164` (all `0x7b`/`'\x7b'` × `32·n`) | shape-rule tests | Stride only. |
 | S1 | gate | `rust/shekyl-oxide/CRYPTO_CONTENT_MANIFEST.sha256:29,32,35,37,38` (sha256 of `fcmps/src/{circuit,lib,prover/mod,tests,tree}.rs`) via `scripts/ci/check_vendored_crypto_manifest.sh` / `.github/workflows/vendored-crypto-content.yml:48` | — | Any circuit edit must `--update` the manifest (a sanctioned fork re-sync event). |
 | S1 | gate | `docs/design/CRYPTO_DOMAIN_REGISTRY.tsv:182` (`4 shekyl-pqc-leaf derivation.rs DOMAIN_PQC_LEAF`) via `scripts/ci/domain_registry_gate.sh` (`.github/workflows/grep-gates.yml:133`) + `rust/shekyl-crypto-pq/tests/domain_registry.rs` (`PRODUCTION_PINS` count) | — | Rename/move of the DST trips row-presence; a new mech-2/4 domain must be registered by hand (gate is explicitly incomplete for HKDF/Blake2b, `scripts/ci/domain_registry_gate.sh:100-107`). |
-| S1 | gate (does NOT fire) | `.github/workflows/schema-snapshot.yml` / `rust/shekyl-engine-state/schemas/*.snap` — grep for `h_pqc\|pqc\|leaf` over the schemas is empty; `h_pqc` is not persisted in the wallet ledger (`git grep h_pqc -- rust/shekyl-engine-state rust/shekyl-engine-file` = ∅) | — | Rule-42 snapshot gate is silent for this change. The curve-tree redb store (`SCHEMA_VERSION = 4`) and LMDB (`VERSION 13`) are outside that workflow. |
+| S1 | gate (does NOT fire) | `.github/workflows/schema-snapshot.yml` / `rust/shekyl-engine-state/schemas/*.snap` — grep for `h_pqc\|pqc\|leaf` over the schemas is empty; `h_pqc` is not persisted in the wallet ledger (`git grep h_pqc -- rust/shekyl-engine-state rust/shekyl-engine-file` = ∅) | — | Rule-142 snapshot gate is silent for this change. The curve-tree redb store (`SCHEMA_VERSION = 4`) and LMDB (`VERSION 13`) are outside that workflow. |
 | S1 | gate (does NOT fire) | `scripts/ci/check_golden_revision_bump.py:71-73` — subject is `rust/shekyl-shard-visual/tests/goldens/*.png` + `RENDER_REVISION` | — | Unrelated to leaves (false positive of the "golden" search). |
 
 ### S2 — wallet / engine
@@ -328,7 +328,7 @@ Not under `docs/test_vectors/` but equally frozen: `ct2_tier_{a,b}.json`,
 | `.github/workflows/grep-gates.yml:133` → `domain_registry_gate.sh` | **Yes** on rename/move of `DOMAIN_PQC_LEAF` / `shekyl-pqc-leaf`; **No** on a new unregistered domain | honest scope |
 | `.github/workflows/rust-audit-test.yml:403` `cargo test --workspace` | **Yes** — every (a)/(b) KAT reddens | |
 | C++ `unit_tests` (`tx_extra_pqc_field_shape`, `archival_serve_credit_*`, `json_serialization`, `fcmp`) | **Yes** for (b) archival fixtures and any width change | CMake fixture paths `tests/unit_tests/CMakeLists.txt:209-235` |
-| `schema-snapshot.yml` (rule 42) | **No** — nothing under `shekyl-engine-state/schemas` carries `h_pqc` | curve-tree redb `SCHEMA_VERSION = 4` and LMDB `VERSION 13` are manual duties |
+| `schema-snapshot.yml` (rule 142) | **No** — nothing under `shekyl-engine-state/schemas` carries `h_pqc` | curve-tree redb `SCHEMA_VERSION = 4` and LMDB `VERSION 13` are manual duties |
 | `check_golden_revision_bump.py` | **No** — shard-visual PNGs only | false positive of the "golden" search |
 | `.github/workflows/rust-audit-test.yml:186-208` fuzz inventory | **No** — checks file presence only; does not compile the fuzz crate | see (d)-1 |
 | `docs-gates.yml` (`check_doc_code_citations.py` etc.) | **Yes** for any doc citation whose `file:line` moves | the ~180 S4 passages |
@@ -454,12 +454,12 @@ Not under `docs/test_vectors/` but equally frozen: `ct2_tier_{a,b}.json`,
 
 ## 8. Pre-flight measurements — `PL-D3` opening leg (2026-09-14)
 
-Rule 26 B9: measured, not estimated. Vendored crate `full-chain-membership-proofs`
+Rule 126 B9: measured, not estimated. Vendored crate `full-chain-membership-proofs`
 with the opening leg implemented (uncommitted at measurement time, branch
 `feat/pl-d3-pedersen-leaf-commitment` off `dev` a6160a4bd), same box as the
 §6.1 baseline of the round document (16-thread i9-11950H, `--release`, other
 builds running concurrently — treat the timings as ordering evidence, not
-budgets; the rule-76 floor device is still owed).
+budgets; the rule-176 floor device is still owed).
 
 **Circuit rows (`Circuit::muls()` at the first layer, one input).** 97 before,
 **111** after: the opening leg costs **14 rows** (one `discrete_log` gadget over

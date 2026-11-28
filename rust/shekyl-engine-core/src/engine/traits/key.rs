@@ -677,8 +677,15 @@ pub(crate) struct TxInputSignature {
 /// accrete from the implementor's actual failure modes during M3a
 /// Commit 4's `LocalKeys` work. The bound is the named landing pad
 /// for additive variants per §8.2.
-#[allow(dead_code)] // M3a Commit 4 introduces the implementor; pre-impl trait surface is
-                    // referenced via doc-tests only at this commit.
+#[cfg_attr(
+    not(any(test, feature = "bench-internals")),
+    expect(
+        dead_code,
+        reason = "docs/FOLLOWUPS.md row \"The claim reroute through the key owner has no \
+                  production caller\": the ownership round's prepared-scan-batches package \
+                  wires try_claim_output in, or deletes it"
+    )
+)]
 pub(crate) trait KeyEngine: Send + Sync + 'static {
     /// Implementor-specific error. Convertible into
     /// [`KeyEngineError`] so [`Engine<S>`](super::super::Engine)

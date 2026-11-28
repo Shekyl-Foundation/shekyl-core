@@ -256,7 +256,7 @@ impl std::fmt::Debug for LeafStore {
 /// **Chunked rather than one `Vec`** because the serving loop holds one
 /// reader per in-flight connection. Materialising a whole segment would
 /// make that endpoint's concurrency cap a multiple of ~3.33 MB resident —
-/// a bound the rule-76 provisioning floor cannot pay, and one nothing in
+/// a bound the rule-176 provisioning floor cannot pay, and one nothing in
 /// the serving contract admits to. Peak cost here is one chunk, so the cap
 /// bounds egress and descriptors, which is what it claims to bound.
 ///
@@ -807,7 +807,7 @@ impl LeafStore {
         // every tick, and the only transition is false→true, so an
         // already-declared store answers with an MVCC read — no write
         // serialization, no commit. The durable write happens exactly
-        // once. This matters at the provisioning floor (rule 76): a
+        // once. This matters at the provisioning floor (rule 176): a
         // needless per-refresh fsync is flash wear on the Pi-class
         // devices a foundation node may run on. The read-then-write race
         // is benign — a concurrent declaration can only have written the
@@ -1933,7 +1933,7 @@ impl LeafStore {
     /// Without it a pin from a previous session — or from before a holdings
     /// drop — is invisible, and invisible pins are exactly the leak
     /// `ARCHIVAL_CHALLENGE_MECHANISM.md` §9.7 item 5 prices at ~13.6 GB
-    /// against a rule-76 Pi-4 floor.
+    /// against a rule-176 Pi-4 floor.
     ///
     /// # Errors
     ///

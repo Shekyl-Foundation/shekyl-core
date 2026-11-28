@@ -173,7 +173,7 @@ pub const MAX_REQUEST_BYTES: usize = 8 * 1024;
 /// costs descriptors, tasks, and one chunk each — not `N × 3.33 MB`. Keep
 /// it that way: a change that materialises whole shards silently
 /// reinterprets this constant as a `MAX_INFLIGHT × 3.33 MB` resident-memory
-/// budget, which at 64 is 213 MB and does not fit the rule-76 provisioning
+/// budget, which at 64 is 213 MB and does not fit the rule-176 provisioning
 /// floor. The W₂ rig derives the real value on that hardware; a rising
 /// [`PServeEndpoint::refused_count`] is the operator signal that the
 /// placeholder is binding.
