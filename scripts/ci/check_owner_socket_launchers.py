@@ -53,6 +53,8 @@ REQUIRED = (
     "rust/shekyl-daemon/tests/owning_connection.rs",
     "rust/shekyl-daemon/tests/service_rendezvous.rs",
     "rust/shekyl-daemon/tests/interrupt_inherited_ignore.rs",
+    "rust/shekyl-daemon/tests/refusal_log.rs",
+    "rust/shekyl-rpc-tunnel/tests/end_to_end.rs",
     "rust/shekyl-wire/tests/vectors/capture_coinbase.py",
     "rust/shekyl-curve-tree/tests/fixtures/gen_ct2_fixture.py",
     "scripts/bench/drs_bench.py",
@@ -63,6 +65,7 @@ REQUIRED = (
 # Files that match the shape and start no daemon process.
 NOT_A_SPAWN = {
     "scripts/ci/check_armed_lever_launchers.py": "a gate; its fixtures are the patterns it matches",
+    "scripts/ci/check_launcher_config_file.py": "a gate; its fixtures are the patterns it matches",
     "scripts/bench/test_drs_bench.py": "tests drs_bench's argv and artifact logic; spawns nothing",
     "rust/shekyl-daemon/src/run_tests.rs": "runs the daemon in-process with a test platform whose session directory is private",
     "rust/shekyl-daemon/src/verify.rs": "runs the walk in-process with a test platform whose session directory is private",
@@ -81,6 +84,9 @@ SERVICE = '"--service"'
 
 
 def is_launcher(text, suffix):
+    # The raw text first, as `L.may_launch` explains; "shekyld" likewise.
+    if "shekyld" not in text or not L.may_launch(text):
+        return False
     stripped = L.code(text, suffix)
     return L.SPAWN.search(stripped) is not None and "shekyld" in stripped
 

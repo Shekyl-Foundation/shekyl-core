@@ -15,6 +15,13 @@
 //! each. An empty bucket pauses that connection. It does not close it,
 //! and it does not drop the bytes. [`MessageClass::Session`] is the
 //! only class; the argument is what a later class fills.
+//!
+//! A grant is permission, and only tokens: what the operator reads back
+//! ([`Observed`], the recent speed) is what [`LinkBudget::moved`] was told
+//! reached or left the socket. The socket work holds the grant and reports
+//! what the kernel took; what it did not take comes back. A reader takes
+//! that grant only once the socket is readable, so a connection waiting
+//! for its peer holds no tokens and counts nothing.
 
 use std::collections::{HashMap, VecDeque};
 
@@ -89,42 +96,13 @@ struct Pace {
     /// part of the window.
     origin_ns: u64,
     started: bool,
-    saved: Option<SavedPace>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct SavedPace {
-    buckets: [u64; SPEED_BUCKETS],
-    slot_ns: u64,
-    origin_ns: u64,
-    started: bool,
 }
 
 impl Pace {
     fn observe(&mut self, n: u64, now: u64) {
-        self.saved = Some(SavedPace {
-            buckets: self.buckets,
-            slot_ns: self.slot_ns,
-            origin_ns: self.origin_ns,
-            started: self.started,
-        });
         self.advance(now);
         let newest = &mut self.buckets[SPEED_BUCKETS - 1];
         *newest = newest.saturating_add(n);
-    }
-
-    fn undo(&mut self) {
-        if let Some(saved) = self.saved.take() {
-            self.buckets = saved.buckets;
-            self.slot_ns = saved.slot_ns;
-            self.origin_ns = saved.origin_ns;
-            self.started = saved.started;
-        }
-    }
-
-    fn shrink(&mut self, n: u64) {
-        let newest = &mut self.buckets[SPEED_BUCKETS - 1];
-        *newest = newest.saturating_sub(n);
     }
 
     /// Move slots forward to `now`. A jump of a whole window or more
@@ -320,22 +298,12 @@ impl Lane {
         flow.packets = flow.packets.saturating_add(1);
     }
 
-    fn refund(&mut self, conn: u64, n: u64, whole_grant: bool) {
-        if n == 0 && !whole_grant {
-            return;
-        }
+    /// Tokens only: nothing granted was counted, so nothing comes off
+    /// the counts.
+    fn refund(&mut self, n: u64) {
         if let Some(bucket) = self.bucket.as_mut() {
             let room = bucket.rate.saturating_sub(bucket.tokens);
             bucket.tokens = bucket.tokens.saturating_add(n.min(room));
-        }
-        self.total.bytes = self.total.bytes.saturating_sub(n);
-        if let Some(flow) = self.per.get_mut(&conn) {
-            flow.bytes = flow.bytes.saturating_sub(n);
-            if whole_grant {
-                flow.pace.undo();
-            } else {
-                flow.pace.shrink(n);
-            }
         }
     }
 
@@ -350,7 +318,6 @@ impl Lane {
         }
         let Some(bucket) = self.bucket.as_mut() else {
             self.queue.pop_front();
-            self.note(conn, want, now);
             return Turn::Granted(want);
         };
         bucket.refill(now);
@@ -366,7 +333,6 @@ impl Lane {
         let n = want.min(bucket.tokens);
         bucket.tokens -= n;
         self.queue.pop_front();
-        self.note(conn, n, now);
         Turn::Granted(n)
     }
 }
@@ -437,7 +403,8 @@ impl LinkBudget {
         self.lane_mut(direction).record_message(conn);
     }
 
-    /// One connection asks to move `want` wire bytes.
+    /// One connection asks to move `want` wire bytes. A grant is tokens:
+    /// it counts nothing until [`Self::moved`] says the bytes moved.
     ///
     /// `class` is the schedule's input. With one class, the turn is the
     /// schedule.
@@ -458,12 +425,16 @@ impl LinkBudget {
         self.lane_mut(direction).leave(conn);
     }
 
-    /// Give unused tokens back. `whole_grant` means none of that grant
-    /// reached the socket, so the recent-speed mark for that grant comes
-    /// back with the tokens. A message records its packet when it finishes,
-    /// so a grant that never completed one has nothing to return.
-    pub fn refund(&mut self, direction: LinkDirection, conn: u64, bytes: u64, whole_grant: bool) {
-        self.lane_mut(direction).refund(conn, bytes, whole_grant);
+    /// Give unused tokens back: the part of a grant the socket did not
+    /// take. The counts are untouched; they never held it.
+    pub fn refund(&mut self, direction: LinkDirection, bytes: u64) {
+        self.lane_mut(direction).refund(bytes);
+    }
+
+    /// `n` wire bytes reached or left the socket on `conn` at `now`: the
+    /// counts and the recent speed. Tokens are the grant's business.
+    pub fn moved(&mut self, direction: LinkDirection, conn: u64, n: u64, now: u64) {
+        self.lane_mut(direction).note(conn, n, now);
     }
 
     #[must_use]
@@ -599,7 +570,51 @@ mod tests {
             budget.take(LinkDirection::Up, 3, MessageClass::Session, 4, SEC),
             Turn::Granted(4)
         );
-        assert_eq!(budget.connection(3).bytes_up, 8);
+    }
+
+    /// A grant is tokens. Only what moved is counted: a reader granted a
+    /// chunk while its peer is quiet has moved nothing.
+    #[test]
+    fn a_grant_counts_nothing_until_the_bytes_move() {
+        for direction in [LinkDirection::Up, LinkDirection::Down] {
+            let mut budget = LinkBudget::new();
+            budget.set(direction, Some(8_192), 0);
+            assert_eq!(
+                budget.take(direction, 2, MessageClass::Session, 8_192, 0),
+                Turn::Granted(8_192)
+            );
+            assert_eq!(budget.connection(2), super::Observed::default());
+            assert_eq!(budget.totals(), super::Observed::default());
+            assert_eq!(budget.speed(2, SEC / 2), (0, 0));
+            budget.moved(direction, 2, 100, SEC / 2);
+            let (bytes, total) = match direction {
+                LinkDirection::Up => (budget.connection(2).bytes_up, budget.totals().bytes_up),
+                LinkDirection::Down => {
+                    (budget.connection(2).bytes_down, budget.totals().bytes_down)
+                }
+            };
+            assert_eq!((bytes, total), (100, 100), "{direction:?}");
+        }
+    }
+
+    /// A refund is tokens back and nothing else: the next grant can use
+    /// them, and the counts stay what moved.
+    #[test]
+    fn a_refund_returns_tokens_and_leaves_the_counts() {
+        let mut budget = LinkBudget::new();
+        budget.set(LinkDirection::Down, Some(10), 0);
+        assert_eq!(
+            budget.take(LinkDirection::Down, 1, MessageClass::Session, 10, 0),
+            Turn::Granted(10)
+        );
+        budget.moved(LinkDirection::Down, 1, 3, 0);
+        budget.refund(LinkDirection::Down, 7);
+        assert_eq!(budget.connection(1).bytes_down, 3);
+        assert_eq!(
+            budget.take(LinkDirection::Down, 1, MessageClass::Session, 10, 0),
+            Turn::Granted(7)
+        );
+        assert_eq!(budget.connection(1).bytes_down, 3);
     }
 
     #[test]
@@ -611,10 +626,7 @@ mod tests {
         let rate = 1_000u64;
         let mut now = 0u64;
         for _ in 0..super::SPEED_BUCKETS {
-            assert_eq!(
-                budget.take(LinkDirection::Up, conn, MessageClass::Session, rate, now),
-                Turn::Granted(rate)
-            );
+            budget.moved(LinkDirection::Up, conn, rate, now);
             now += SEC;
         }
         assert_eq!(budget.speed(conn, now - SEC).0, rate);
@@ -625,31 +637,10 @@ mod tests {
         let mut budget = LinkBudget::new();
         let conn = 9u64;
         let rate = 1_000u64;
-        assert_eq!(
-            budget.take(LinkDirection::Up, conn, MessageClass::Session, rate / 2, 0),
-            Turn::Granted(rate / 2)
-        );
+        budget.moved(LinkDirection::Up, conn, rate / 2, 0);
         assert_eq!(budget.speed(conn, SEC / 2).0, rate);
-        assert_eq!(
-            budget.take(
-                LinkDirection::Up,
-                conn,
-                MessageClass::Session,
-                rate / 2,
-                SEC / 2
-            ),
-            Turn::Granted(rate / 2)
-        );
-        assert_eq!(
-            budget.take(
-                LinkDirection::Up,
-                conn,
-                MessageClass::Session,
-                rate / 2,
-                SEC + SEC / 2
-            ),
-            Turn::Granted(rate / 2)
-        );
+        budget.moved(LinkDirection::Up, conn, rate / 2, SEC / 2);
+        budget.moved(LinkDirection::Up, conn, rate / 2, SEC + SEC / 2);
         assert_eq!(budget.speed(conn, SEC + SEC / 2).0, rate);
     }
 
@@ -658,10 +649,7 @@ mod tests {
         let mut budget = LinkBudget::new();
         let conn = 5u64;
         let burst = 5_500u64;
-        assert_eq!(
-            budget.take(LinkDirection::Up, conn, MessageClass::Session, burst, 0),
-            Turn::Granted(burst)
-        );
+        budget.moved(LinkDirection::Up, conn, burst, 0);
         assert_eq!(budget.speed(conn, SEC - 1).0, burst);
         assert_eq!(budget.speed(conn, 5 * SEC).0, 785);
         assert_eq!(budget.speed(conn, 0).1, 0);
@@ -672,10 +660,7 @@ mod tests {
         let mut budget = LinkBudget::new();
         let conn = 6u64;
         let window = super::SPEED_BUCKETS as u64 * SEC;
-        assert_eq!(
-            budget.take(LinkDirection::Down, conn, MessageClass::Session, 5_500, 0),
-            Turn::Granted(5_500)
-        );
+        budget.moved(LinkDirection::Down, conn, 5_500, 0);
         assert_eq!(budget.speed(conn, window - 1).1, 100);
         assert_eq!(budget.speed(conn, window).1, 0);
         assert_eq!(budget.speed(conn, window + SEC).1, 0);
@@ -730,16 +715,17 @@ mod tests {
             budget.take(LinkDirection::Up, conn, MessageClass::Session, 6, SEC),
             Turn::Granted(4)
         );
+        budget.moved(LinkDirection::Up, conn, 8, SEC);
         assert_eq!(budget.totals().packets_up, 0);
         assert_eq!(budget.connection(conn).bytes_up, 8);
         budget.record_message(LinkDirection::Up, conn);
         assert_eq!(budget.totals().packets_up, 1);
         assert_eq!(budget.connection(conn).packets_up, 1);
-        budget.refund(LinkDirection::Up, conn, 4, true);
+        budget.refund(LinkDirection::Up, 4);
         assert_eq!(
             budget.totals().packets_up,
             1,
-            "a refund returns bytes, not the message"
+            "a refund returns tokens, not the message"
         );
     }
 }

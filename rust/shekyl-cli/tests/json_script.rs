@@ -298,6 +298,22 @@ fn a_one_shot_uses_the_prompt_grammar_and_exits() {
     );
 }
 
+/// How long a spawned daemon may take to listen. The tunnel's end-to-end
+/// test gives its daemon the same bound (`READY`).
+const DAEMON_READY: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// How often to try the listener while the daemon is still starting.
+const LISTEN_POLL: std::time::Duration = std::time::Duration::from_millis(200);
+
+/// The daemon's log file, inside its data directory. A refusal after the
+/// configuration names a log file is appended here.
+const DAEMON_LOG: &str = "shekyld.log";
+
+/// The daemon's standard error, inside its data directory. A refusal
+/// before the configuration names a log file is written here and nowhere
+/// else.
+const DAEMON_STDERR: &str = "daemon.stderr";
+
 /// A daemon this test owns. Drop kills, reaps, and removes the data
 /// directory, including when an assertion panics. Dropping a bare `Child`
 /// does not.
@@ -315,6 +331,10 @@ impl SpawnedDaemon {
         // one other accounts can enter (`config.data-dir.exposed`).
         shekyl_os_account::create_account_dir_all(&data_dir).expect("data dir");
         let port = rpc_port.to_string();
+        let log_file = data_dir.join(DAEMON_LOG).display().to_string();
+        // Kept, not discarded: a refusal before the configuration names a
+        // log file is on standard error alone.
+        let stderr = std::fs::File::create(data_dir.join(DAEMON_STDERR)).expect("stderr");
         // Both connectors off is the offline posture: no listener, no
         // dial, so no p2p port to pick (INPUT_GRAMMAR.md §5).
         let mut child = Command::new(bin);
@@ -322,6 +342,10 @@ impl SpawnedDaemon {
             .args([
                 "--network",
                 "testnet",
+                // The default file is the machine's (`/etc/shekyl`); a host
+                // that runs a testnet node keeps its settings there.
+                "--config-file",
+                "none",
                 "--clearnet",
                 "off",
                 "--tor",
@@ -335,12 +359,12 @@ impl SpawnedDaemon {
                 "--data-dir",
                 data_dir.to_str().expect("utf8"),
                 "--log-file",
-                &data_dir.join("shekyld.log").display().to_string(),
+                &log_file,
                 "--log-level",
                 "info",
             ])
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null());
+            .stderr(std::process::Stdio::from(stderr));
         let child = child.spawn();
         match child {
             Ok(child) => Self { child, data_dir },
@@ -348,6 +372,41 @@ impl SpawnedDaemon {
                 drop(std::fs::remove_dir_all(&data_dir));
                 panic!("spawn shekyld: {error}");
             }
+        }
+    }
+
+    /// Standard error and the log file. A refusal before the configuration
+    /// names a log file is in the first only; a later one is in both.
+    fn refusal(&self) -> String {
+        let stderr = std::fs::read_to_string(self.data_dir.join(DAEMON_STDERR)).unwrap_or_default();
+        let log = std::fs::read_to_string(self.data_dir.join(DAEMON_LOG)).unwrap_or_default();
+        format!("stderr:\n{stderr}\nlog:\n{log}")
+    }
+
+    /// Until the channel listener at `address` accepts. A daemon that exits
+    /// first fails at once, with its standard error and its log. One still
+    /// starting after [`DAEMON_READY`] fails then, with both. A loaded host
+    /// takes tens of seconds to make the channel key and open the store
+    /// before it listens.
+    fn wait_accepting(&mut self, address: &str) {
+        let deadline = std::time::Instant::now() + DAEMON_READY;
+        loop {
+            if std::net::TcpStream::connect(address).is_ok() {
+                return;
+            }
+            if let Some(status) = self.child.try_wait().expect("the daemon's status") {
+                panic!(
+                    "the daemon ended before it listened on {address}: {status}\n{}",
+                    self.refusal()
+                );
+            }
+            if std::time::Instant::now() >= deadline {
+                panic!(
+                    "the daemon did not listen on {address} within {DAEMON_READY:?}\n{}",
+                    self.refusal()
+                );
+            }
+            std::thread::sleep(LISTEN_POLL);
         }
     }
 }
@@ -380,17 +439,9 @@ fn daemon_script_drives_balance_refresh_and_a_refused_send() {
     // Owned from the moment the process exists. A panic in the readiness
     // or wallet assertions still kills and reaps it and removes its data
     // directory; dropping a bare `Child` does neither.
-    let daemon = SpawnedDaemon::spawn(&bin, rpc_port);
+    let mut daemon = SpawnedDaemon::spawn(&bin, rpc_port);
     let address = format!("127.0.0.1:{rpc_port}");
-    let mut up = false;
-    for _ in 0..50 {
-        if std::net::TcpStream::connect(&address).is_ok() {
-            up = true;
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(200));
-    }
-    assert!(up, "daemon did not accept RPC on {address}");
+    daemon.wait_accepting(&address);
 
     let config = common::empty_config();
     let root = config.path().parent().unwrap();
