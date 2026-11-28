@@ -133,20 +133,24 @@ fn tree_and_fcmp(
             OBlind::new(
                 EdwardsPoint(*T),
                 ScalarDecomposition::new(rerandomized.o_blind()).unwrap(),
-            ),
+            )
+            .unwrap(),
             IBlind::new(
                 EdwardsPoint(*FCMP_PLUS_PLUS_U),
                 EdwardsPoint(*FCMP_PLUS_PLUS_V),
                 ScalarDecomposition::new(rerandomized.i_blind()).unwrap(),
-            ),
+            )
+            .unwrap(),
             IBlindBlind::new(
                 EdwardsPoint(*T),
                 ScalarDecomposition::new(rerandomized.i_blind_blind()).unwrap(),
-            ),
+            )
+            .unwrap(),
             CBlind::new(
                 EdwardsPoint::generator(),
                 ScalarDecomposition::new(rerandomized.c_blind()).unwrap(),
-            ),
+            )
+            .unwrap(),
             super::k_blind(&leaf.pqc),
         ));
     }

@@ -493,24 +493,29 @@ fn random_output_blinds(
         OBlind::new(
             T,
             ScalarDecomposition::new(<Ed25519 as Ciphersuite>::F::random(&mut OsRng)).unwrap(),
-        ),
+        )
+        .unwrap(),
         IBlind::new(
             U,
             V,
             ScalarDecomposition::new(<Ed25519 as Ciphersuite>::F::random(&mut OsRng)).unwrap(),
-        ),
+        )
+        .unwrap(),
         IBlindBlind::new(
             T,
             ScalarDecomposition::new(<Ed25519 as Ciphersuite>::F::random(&mut OsRng)).unwrap(),
-        ),
+        )
+        .unwrap(),
         CBlind::new(
             G,
             ScalarDecomposition::new(<Ed25519 as Ciphersuite>::F::random(&mut OsRng)).unwrap(),
-        ),
+        )
+        .unwrap(),
         KBlind::new(
             J,
             ScalarDecomposition::new(<Ed25519 as Ciphersuite>::F::random(&mut OsRng)).unwrap(),
-        ),
+        )
+        .unwrap(),
     );
     println!(
         "Output blinds took {}ms to calculate",
@@ -527,18 +532,24 @@ fn blind_branches(
     let branch_blinds_start = std::time::Instant::now();
     let mut branches_1_blinds = vec![];
     for _ in 0..branches.necessary_c1_blinds() {
-        branches_1_blinds.push(BranchBlind::<<Selene as Ciphersuite>::G>::new(
-            params.curve_1_generators.h(),
-            ScalarDecomposition::new(<Selene as Ciphersuite>::F::random(&mut OsRng)).unwrap(),
-        ));
+        branches_1_blinds.push(
+            BranchBlind::<<Selene as Ciphersuite>::G>::new(
+                params.curve_1_generators.h(),
+                ScalarDecomposition::new(<Selene as Ciphersuite>::F::random(&mut OsRng)).unwrap(),
+            )
+            .unwrap(),
+        );
     }
 
     let mut branches_2_blinds = vec![];
     for _ in 0..branches.necessary_c2_blinds() {
-        branches_2_blinds.push(BranchBlind::<<Helios as Ciphersuite>::G>::new(
-            params.curve_2_generators.h(),
-            ScalarDecomposition::new(<Helios as Ciphersuite>::F::random(&mut OsRng)).unwrap(),
-        ));
+        branches_2_blinds.push(
+            BranchBlind::<<Helios as Ciphersuite>::G>::new(
+                params.curve_2_generators.h(),
+                ScalarDecomposition::new(<Helios as Ciphersuite>::F::random(&mut OsRng)).unwrap(),
+            )
+            .unwrap(),
+        );
     }
     println!(
         "{} C1 branch blinds and {} C2 branch blinds took {}ms to calculate",
@@ -607,7 +618,7 @@ fn input_for(
 fn test_single_input() {
     let (G, T, U, V, J, params) = random_params(1);
 
-    let output_blinds = random_output_blinds(G, T, U, V, J);
+    let output_blinds = || random_output_blinds(G, T, U, V, J);
 
     for layers in 1..=(TARGET_LAYERS + 1) {
         println!("Testing a proof with 1 input and {layers} layers");
@@ -618,12 +629,13 @@ fn test_single_input() {
 
         let branches = Branches::new(vec![path]).unwrap();
 
+        let output_blinds = output_blinds();
         let input = input_for(&output_blinds, &output, cm);
 
         let proof = Fcmp::prove(
             &mut OsRng,
             &params,
-            blind_branches(&params, branches, vec![output_blinds.clone()]),
+            blind_branches(&params, branches, vec![output_blinds]),
         )
         .unwrap();
 
@@ -693,19 +705,19 @@ fn test_malleated_proofs() {
 
     for paths in [1, 2] {
         for layers in [1, 2] {
-            let (paths, root) = random_paths(&params, layers, paths);
+            let (paths_points, root) = random_paths(&params, layers, paths);
 
             let mut output_blinds = vec![];
-            for _ in 0..paths.len() {
+            for _ in 0..paths {
                 output_blinds.push(random_output_blinds(G, T, U, V, J));
             }
 
             let mut inputs = vec![];
-            for (path, ob) in paths.iter().zip(&output_blinds) {
+            for (path, ob) in paths_points.iter().zip(&output_blinds) {
                 inputs.push(input_for(ob, &path.output, path.output_cm));
             }
 
-            let branches = Branches::new(paths.clone()).unwrap();
+            let branches = Branches::new(paths_points).unwrap();
 
             let mut buf = vec![];
             {
@@ -724,7 +736,7 @@ fn test_malleated_proofs() {
                 while buf[i] == existing_byte {
                     buf[i] = u8::try_from(OsRng.next_u64() & u64::from(u8::MAX)).unwrap();
                 }
-                if let Ok(proof) = Fcmp::read(&mut buf.as_slice(), paths.len(), layers) {
+                if let Ok(proof) = Fcmp::read(&mut buf.as_slice(), paths, layers) {
                     let mut verifier_1 = generalized_bulletproofs::Generators::batch_verifier();
                     let mut verifier_2 = generalized_bulletproofs::Generators::batch_verifier();
 
@@ -797,8 +809,6 @@ fn prove_benchmark() {
     let (G, T, U, V, J, params) = random_params(8);
 
     for paths in 1..=4 {
-        let (paths, _root) = random_paths(&params, TARGET_LAYERS, paths);
-
         let mut set_size = 1u64;
         for i in 0..TARGET_LAYERS {
             if i % 2 == 0 {
@@ -808,32 +818,38 @@ fn prove_benchmark() {
             }
         }
 
-        let branches = Branches::new(paths.clone()).unwrap();
+        let mut total_time = 0;
+        for _ in 0..RUNS {
+            let (paths_points, _root) = random_paths(&params, TARGET_LAYERS, paths);
 
-        let prove_start = std::time::Instant::now();
-        for _ in 0..10 {
+            let branches = Branches::new(paths_points).unwrap();
+
+            let prove_start = std::time::Instant::now();
+
             let mut output_blinds = vec![];
-            for _ in 0..paths.len() {
+            for _ in 0..paths {
                 output_blinds.push(random_output_blinds(G, T, U, V, J));
             }
 
             let proof = Fcmp::prove(
                 &mut OsRng,
                 &params,
-                blind_branches(&params, branches.clone(), output_blinds),
+                blind_branches(&params, branches, output_blinds),
             )
             .unwrap();
 
             core::hint::black_box(proof);
+
+            total_time += prove_start.elapsed().as_millis();
         }
         #[allow(clippy::print_literal)]
         {
             println!(
                 "{} for {RUNS} {}-input FCMPs with a set size of {} took an average of {}ms each",
                 "Sequentially proving",
-                paths.len(),
+                paths,
                 set_size,
-                prove_start.elapsed().as_millis() / u128::try_from(RUNS).unwrap()
+                total_time / u128::try_from(RUNS).unwrap()
             );
         }
     }

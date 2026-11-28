@@ -27,7 +27,12 @@ Upstream tracking reference (the single source of truth for "where fixes go"):
 Vendored snapshot metadata + integrity:
 
 - `rust/shekyl-oxide/UPSTREAM_MONERO_OXIDE_COMMIT` — pinned commit
-  (`c753b3475fc98c3eb32f7036e2c392a6242585bc` on `chore/crypto-resync-from-tip`, the merge of fork PR #10,
+  (`6b73e4d5df6059a8df9a55e1c0c70e766b8729dd`, the head of fork PR #12: upstream
+  `fcmp++`'s eight commits of 2026-11-26 (`cc4812f`..`63e7e7d`), which remove the
+  Barycentric divisor calculator, compute divisors with the rewritten `Poly`, make
+  the blind constructors return `Option`, make blinds single-use and zeroize the
+  SAL multisig. Below it, `dae42d0` (fork PR #11, `Fcmp::proof_size` a `const fn`)
+  and `c753b3475f`, the merge of fork PR #10,
   `LinComb::evaluate`'s row sum statically dispatched, on top of the merge of fork PR #9 (`6bf40e5118`):
   `generalized-bulletproofs` correct in every build. Its inner-product prover
   takes no opening point; its vector lengths hold in every build; its prover is
@@ -36,7 +41,7 @@ Vendored snapshot metadata + integrity:
   (proving, verifying). Before it, `4ea2c03215` (fork PR #8: upstream
   `497f60b`'s multiexp hunks, multiexp 0.5 for a constant-time prover, MSRV
   1.81), whose parent `3abb123` carries the crypto tree of `2485a176`, the
-  tip named in the Q6 re-vet. Synced 2026-11-23.)
+  tip named in the Q6 re-vet. Synced 2026-11-28.)
 - `rust/shekyl-oxide/CRYPTO_CONTENT_MANIFEST.sha256` — the A1 content gate: the
   vendored crypto subtree is verified byte-for-byte against this manifest on
   push/PR (`scripts/ci/check_vendored_crypto_manifest.sh`), so an in-place edit
@@ -57,8 +62,14 @@ the fork's `crypto/` at the pin with the workspace `rustfmt.toml` and diffing:
   is the `K`-point commitment shape (`output_cm`, `leaves_cm_x`); the fork's
   `fcmps` still carries the June `EXTRA_LEAF_SCALARS` shape. Upstream `fcmps`
   fixes are ported by hand into this crate and re-vetted against the Q6 freeze;
-  a wholesale copy from the fork would delete PL-D3. Upstream has shipped no
-  `fcmps` logic change since `0662298`. Of `497f60b`'s dependency reconciliation,
+  a wholesale copy from the fork would delete PL-D3. Upstream's 2026-11-26
+  commits are its first `fcmps` change since `0662298`, and are ported: the blind
+  constructors return `Option` (`None` when a divisor cannot be normalized), blinds,
+  paths and branches lose `Clone` and blinds are documented single-use, the tape
+  stores `Box`, and tests take `recursion_limit = "256"`. PL-D3's `KBlind` takes
+  the `Option` and documents why its scalar, the opening of the output's on-chain
+  commitment, is the one blind reused on every spend. Fork PR #11's
+  `Fcmp::proof_size` `const fn` is ported by shekyl-core #1543. Of `497f60b`'s dependency reconciliation,
   the multiexp hunks are ported (multiexp 0.5 and `subtle`, with the MSRV 1.81
   multiexp 0.5 needs); the rest of that commit (the `zeroize_derive` floors,
   `tap`, and the edits to `helioselene`, `divisors` and the gadget crates) is not

@@ -605,8 +605,9 @@ Format: **ID — item.** *(status)* disposition / what's needed.
   tx; `shekyl-pow-randomx` consumes the blob. Rename the crate (it's more than
   "tx-wire"); see §1/§4.
 - **Q6 — proof / Bp+ canonical-serialization coverage.** *(RESOLVED → freeze by
-  reference; **re-vetted 2026-11-23 on pin `c753b3475f`** (the merge of fork PR #10, after #9,
-  the live pin), on 2026-11-21 on `4ea2c03215` (fork PR #8), and before it on 2026-09-29 on `2485a176` (merged into the fork as
+  reference; **re-vetted 2026-11-28 on pin `6b73e4d5df`** (fork PR #12, upstream's
+  2026-11-26 commits, the live pin), on 2026-11-23 on `c753b3475f` (the merge of fork PR #10,
+  after #9), on 2026-11-21 on `4ea2c03215` (fork PR #8), and before it on 2026-09-29 on `2485a176` (merged into the fork as
   `3378433c`, with an identical crypto tree), earlier that day on `a08001f14c` and
   on 2026-06-25 on `2753111c50`)* The wire layer
   length-prefixes the FCMP++ proof as **opaque bytes** (`shekyl-wire`
@@ -692,6 +693,17 @@ Format: **ID — item.** *(status)* disposition / what's needed.
   Bp+ and pseudo-outs were byte-identical at 1/1, 2/3, 8/4 and 2/24
   inputs/depth. #10 makes the constraint evaluator's row sum statically dispatched,
   the same values in the same order. The freeze **holds** at `c753b3475f`.
+
+  **Re-vet (2026-11-28, pin `c753b3475f` → `6b73e4d5df`, fork PR #12).** Upstream
+  `fcmp++`'s eight commits of 2026-11-26 remove the Barycentric divisor calculator
+  and compute each blind's divisor with the rewritten `Poly`. They also make the
+  blind constructors return `Option`, make blinds single-use and zeroize the SAL
+  multisig. The divisor is a prover witness: for an honest input both
+  calculators produce the same normalized divisor, which the tape writes within
+  the same degree bounds. The verifier computes none, and the circuit, its
+  gadgets and the transcript are unchanged. Proof bytes are pinned, and
+  `a_seeded_proof_is_pinned_byte_for_byte` (shekyl-fcmp) passes unchanged at the
+  new pin. The freeze **holds** at `6b73e4d5df`.
 - **Q7 — tag-numbering decision.** *(RESOLVED → clean dense renumber)* Monero is a
   proven *pattern*, not a *basis*: tags renumbered to the §2.0 dense scheme
   (inputs `0x00`–`0x04`, outputs `0x00`–`0x01`, ct `Null=0x00`/`Fcmp=0x01`); dead

@@ -55,6 +55,42 @@ pub use crate::batch_weights::{
     FCMP_MEMBERSHIP_ONLY_BATCH_WEIGHTS_CUSTOMIZATION, FCMP_PP_BATCH_WEIGHTS_CUSTOMIZATION,
 };
 
+/// A blind drawn fresh for one proof, whose divisor came out unusable.
+///
+/// A divisor is unusable when its leading `x` coefficient is zero, so it cannot be
+/// normalized (a property of the divisor scheme, not of the inputs). The chance is about
+/// one in the curve's order for a random blind, and these blinds are drawn from the
+/// prover's RNG, so proving again draws new ones.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum FreshBlind {
+    /// One of an input's rerandomization blinds.
+    #[error("input {input_index}'s {blind} rerandomization blind")]
+    Rerandomization {
+        input_index: usize,
+        blind: RerandomizationBlind,
+    },
+    /// A branch blind of the Selene or Helios layers.
+    #[error("a branch blind")]
+    Branch,
+}
+
+/// Which of an input's four rerandomization blinds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum RerandomizationBlind {
+    /// The blind on the output key `O`.
+    #[error("O")]
+    O,
+    /// The blind on the key image generator `I`.
+    #[error("I")]
+    I,
+    /// The blind on `I`'s blind.
+    #[error("I-blind-blind")]
+    IBlindBlind,
+    /// The blind on the amount commitment `C`.
+    #[error("C")]
+    C,
+}
+
 /// Errors during FCMP++ proof construction.
 #[derive(Debug, Error)]
 pub enum ProveError {
@@ -100,6 +136,18 @@ pub enum ProveError {
 
     #[error("scalar decomposition failed (zero blinding factor)")]
     ScalarDecompositionFailed,
+
+    /// A fresh blind's divisor was unusable; proving again draws new blinds.
+    #[error("{blind}'s divisor is unusable; proving again draws new blinds")]
+    FreshBlindDivisorUnusable { blind: FreshBlind },
+
+    /// The PQC leaf blind's divisor was unusable. That blind is the opening `r` of the
+    /// output's on-chain commitment, fixed when the output was created, so no retry
+    /// helps: this output cannot be spent.
+    #[error(
+        "input {input_index}'s PQC leaf blind has an unusable divisor: this output cannot be spent"
+    )]
+    LeafBlindDivisorUnusable { input_index: usize },
 
     #[error("upstream proof generation failed: {0}")]
     UpstreamError(String),
@@ -337,33 +385,44 @@ fn assemble_input_path(
             field: "pqc_leaf_blind",
         })?;
 
+    let unusable = |blind| ProveError::FreshBlindDivisorUnusable {
+        blind: FreshBlind::Rerandomization {
+            input_index: idx,
+            blind,
+        },
+    };
     let output_blind = OutputBlinds::new(
         OBlind::new(
             EdwardsPoint(*T),
             ScalarDecomposition::new(rerand.o_blind())
                 .ok_or(ProveError::ScalarDecompositionFailed)?,
-        ),
+        )
+        .ok_or_else(|| unusable(RerandomizationBlind::O))?,
         IBlind::new(
             EdwardsPoint(*FCMP_PLUS_PLUS_U),
             EdwardsPoint(*FCMP_PLUS_PLUS_V),
             ScalarDecomposition::new(rerand.i_blind())
                 .ok_or(ProveError::ScalarDecompositionFailed)?,
-        ),
+        )
+        .ok_or_else(|| unusable(RerandomizationBlind::I))?,
         IBlindBlind::new(
             EdwardsPoint(*T),
             ScalarDecomposition::new(rerand.i_blind_blind())
                 .ok_or(ProveError::ScalarDecompositionFailed)?,
-        ),
+        )
+        .ok_or_else(|| unusable(RerandomizationBlind::IBlindBlind))?,
         CBlind::new(
             EdwardsPoint::generator(),
             ScalarDecomposition::new(rerand.c_blind())
                 .ok_or(ProveError::ScalarDecompositionFailed)?,
-        ),
+        )
+        .ok_or_else(|| unusable(RerandomizationBlind::C))?,
         KBlind::new(
             EdwardsPoint(*PQC_LEAF_COMMITMENT_J),
             ScalarDecomposition::new(pqc_leaf_blind)
                 .ok_or(ProveError::ScalarDecompositionFailed)?,
-        ),
+        )
+        .ok_or(ProveError::LeafBlindDivisorUnusable { input_index: idx })?,
     );
 
     if data.leaf_outputs.is_empty() {
@@ -484,20 +543,26 @@ fn prove_membership_circuit<R: RngCore + CryptoRng>(
 
     let c1_blinds: Vec<_> = (0..c1_blind_count)
         .map(|_| {
-            Ok(BranchBlind::<<Selene as Ciphersuite>::G>::new(
+            BranchBlind::<<Selene as Ciphersuite>::G>::new(
                 c1_h,
                 ScalarDecomposition::new(<Selene as Ciphersuite>::F::random(&mut *rng))
                     .ok_or(ProveError::ScalarDecompositionFailed)?,
-            ))
+            )
+            .ok_or(ProveError::FreshBlindDivisorUnusable {
+                blind: FreshBlind::Branch,
+            })
         })
         .collect::<Result<_, ProveError>>()?;
     let c2_blinds: Vec<_> = (0..c2_blind_count)
         .map(|_| {
-            Ok(BranchBlind::<<Helios as Ciphersuite>::G>::new(
+            BranchBlind::<<Helios as Ciphersuite>::G>::new(
                 c2_h,
                 ScalarDecomposition::new(<Helios as Ciphersuite>::F::random(&mut *rng))
                     .ok_or(ProveError::ScalarDecompositionFailed)?,
-            ))
+            )
+            .ok_or(ProveError::FreshBlindDivisorUnusable {
+                blind: FreshBlind::Branch,
+            })
         })
         .collect::<Result<_, ProveError>>()?;
 

@@ -25,21 +25,21 @@ impl<G: DivisorCurve> ScalarMulAndDivisor<G>
 where
     G::Scalar: Zeroize + PrimeFieldBits,
 {
-    fn new(A: G, scalar: &ScalarDecomposition<G::Scalar>) -> Self {
+    fn new(A: G, scalar: &ScalarDecomposition<G::Scalar>) -> Option<Self> {
         let point = Zeroizing::new(A * scalar.scalar());
         let (x, y) = G::to_xy(*point).expect("zero scalar was decomposed");
-        let divisor = scalar.scalar_mul_divisor(A).normalize_x_coefficient();
-        ScalarMulAndDivisor {
+        let divisor = scalar.scalar_mul_divisor(A).normalize_x_coefficient()?;
+        Some(ScalarMulAndDivisor {
             point,
             x,
             y,
             divisor,
-        }
+        })
     }
 }
 
 /// A blind, prepared for usage within the circuit.
-#[derive(Clone, Zeroize)]
+#[derive(Zeroize)]
 pub(crate) struct PreparedBlind<G: DivisorCurve>
 where
     G::Scalar: Zeroize + PrimeFieldBits,
@@ -52,17 +52,17 @@ impl<G: DivisorCurve> PreparedBlind<G>
 where
     G::Scalar: Zeroize + PrimeFieldBits,
 {
-    fn new(A: G, scalar: ScalarDecomposition<G::Scalar>) -> Self {
-        let scalar_mul_and_divisor = ScalarMulAndDivisor::new(A, &scalar);
-        PreparedBlind {
+    fn new(A: G, scalar: ScalarDecomposition<G::Scalar>) -> Option<Self> {
+        let scalar_mul_and_divisor = ScalarMulAndDivisor::new(A, &scalar)?;
+        Some(PreparedBlind {
             scalar,
             scalar_mul_and_divisor,
-        }
+        })
     }
 }
 
 /// A blind for `O` (the output's key).
-#[derive(Clone, Zeroize)]
+#[derive(Zeroize)]
 pub struct OBlind<G: DivisorCurve>(pub(crate) PreparedBlind<G>)
 where
     G::Scalar: Zeroize + PrimeFieldBits;
@@ -72,17 +72,22 @@ where
 {
     /// Construct a new blind for `O`.
     ///
+    /// `scalar` MUST be consumed just once, for a single blind, across any/all contexts.
+    ///
     /// This will calculate a divisor and is computationally non-trivial.
-    pub fn new(T: G, scalar: ScalarDecomposition<G::Scalar>) -> Self
+    ///
+    /// This will return `None` (in variable time) if the divisor wasn't usable. This function
+    /// otherwise executes in constant time.
+    pub fn new(T: G, scalar: ScalarDecomposition<G::Scalar>) -> Option<Self>
     where
         G::Scalar: Zeroize + PrimeFieldBits,
     {
-        Self(PreparedBlind::new(T, scalar))
+        PreparedBlind::new(T, scalar).map(Self)
     }
 }
 
 /// A blind for `I` (the output's key image generator).
-#[derive(Clone, Zeroize)]
+#[derive(Zeroize)]
 pub struct IBlind<G: DivisorCurve>
 where
     G::Scalar: Zeroize + PrimeFieldBits,
@@ -97,17 +102,22 @@ where
 {
     /// Construct a new blind for `I`.
     ///
+    /// `scalar` MUST be consumed just once, for a single blind, across any/all contexts.
+    ///
     /// This will calculate two divisors (distinct from the other blinds which only calculate one
     /// each) and is computationally non-trivial.
-    pub fn new(U: G, V: G, scalar: ScalarDecomposition<G::Scalar>) -> Self {
-        let u = ScalarMulAndDivisor::new(U, &scalar);
-        let v = ScalarMulAndDivisor::new(V, &scalar);
-        IBlind { scalar, u, v }
+    ///
+    /// This will return `None` (in variable time) if either of the divisors weren't usable. This
+    /// function otherwise executes in constant time.
+    pub fn new(U: G, V: G, scalar: ScalarDecomposition<G::Scalar>) -> Option<Self> {
+        let u = ScalarMulAndDivisor::new(U, &scalar)?;
+        let v = ScalarMulAndDivisor::new(V, &scalar)?;
+        Some(IBlind { scalar, u, v })
     }
 }
 
 /// A blind for `I`'s blind.
-#[derive(Clone, Zeroize)]
+#[derive(Zeroize)]
 pub struct IBlindBlind<G: DivisorCurve>(pub(crate) PreparedBlind<G>)
 where
     G::Scalar: Zeroize + PrimeFieldBits;
@@ -117,14 +127,19 @@ where
 {
     /// Construct a new blind for `I`'s blind.
     ///
+    /// `scalar` MUST be consumed just once, for a single blind, across any/all contexts.
+    ///
     /// This will calculate a divisor and is computationally non-trivial.
-    pub fn new(T: G, scalar: ScalarDecomposition<G::Scalar>) -> Self {
-        Self(PreparedBlind::new(T, scalar))
+    ///
+    /// This will return `None` (in variable time) if the divisor wasn't usable. This function
+    /// otherwise executes in constant time.
+    pub fn new(T: G, scalar: ScalarDecomposition<G::Scalar>) -> Option<Self> {
+        PreparedBlind::new(T, scalar).map(Self)
     }
 }
 
 /// A blind for `C` (the output's commitment).
-#[derive(Clone, Zeroize)]
+#[derive(Zeroize)]
 pub struct CBlind<G: DivisorCurve>(pub(crate) PreparedBlind<G>)
 where
     G::Scalar: Zeroize + PrimeFieldBits;
@@ -134,15 +149,20 @@ where
 {
     /// Construct a new blind for `C`.
     ///
+    /// `scalar` MUST be consumed just once, for a single blind, across any/all contexts.
+    ///
     /// This will calculate a divisor and is computationally non-trivial.
-    pub fn new(G: G, scalar: ScalarDecomposition<G::Scalar>) -> Self {
-        Self(PreparedBlind::new(G, scalar))
+    ///
+    /// This will return `None` (in variable time) if the divisor wasn't usable. This function
+    /// otherwise executes in constant time.
+    pub fn new(G: G, scalar: ScalarDecomposition<G::Scalar>) -> Option<Self> {
+        PreparedBlind::new(G, scalar).map(Self)
     }
 }
 
 /// The blind `r` over `J` opening the PQC leaf commitment `CM = k·G_k + r·J`
 /// (Shekyl `PL-D3`).
-#[derive(Clone, Zeroize)]
+#[derive(Zeroize)]
 pub struct KBlind<G: DivisorCurve>(pub(crate) PreparedBlind<G>)
 where
     G::Scalar: Zeroize + PrimeFieldBits;
@@ -152,14 +172,26 @@ where
     G::Scalar: Zeroize + PrimeFieldBits,
 {
     /// Prepare the blind `r` over the generator `J`.
-    pub fn new(J: G, scalar: ScalarDecomposition<G::Scalar>) -> Self {
-        Self(PreparedBlind::new(J, scalar))
+    ///
+    /// Unlike the other blinds, `r`'s value is not single-use, by design: it is the opening
+    /// of the output's on-chain commitment `CM`, fixed when the output was created, and every
+    /// attempt to spend the output proves with the same `r`. Reuse is sound here because `r`
+    /// opens a fixed commitment rather than hiding a public point, and the key image already
+    /// links every spend of the output. The value object is still consumed once per proof.
+    ///
+    /// This will calculate a divisor and is computationally non-trivial.
+    ///
+    /// This will return `None` (in variable time) if the divisor wasn't usable. Because `r` is
+    /// fixed, a `None` here is not cured by retrying: the output cannot be spent. This function
+    /// otherwise executes in constant time.
+    pub fn new(J: G, scalar: ScalarDecomposition<G::Scalar>) -> Option<Self> {
+        PreparedBlind::new(J, scalar).map(Self)
     }
 }
 
 /// All of the blinds used for an output, prepared for usage within the circuit.
 #[allow(clippy::struct_field_names)]
-#[derive(Clone, Zeroize)]
+#[derive(Zeroize)]
 pub struct OutputBlinds<G: DivisorCurve>
 where
     G::Scalar: Zeroize + PrimeFieldBits,
@@ -176,6 +208,8 @@ where
     G::Scalar: Zeroize + PrimeFieldBits,
 {
     /// Construct a new blinded output.
+    ///
+    /// These blinds MUST be consumed just once across any/all contexts.
     pub fn new(
         o_blind: OBlind<G>,
         i_blind: IBlind<G>,
@@ -217,7 +251,7 @@ where
 }
 
 /// A blind for a branch.
-#[derive(Clone, Zeroize)]
+#[derive(Zeroize)]
 pub struct BranchBlind<G: DivisorCurve>(pub(crate) PreparedBlind<G>)
 where
     G::Scalar: Zeroize + PrimeFieldBits;
@@ -227,8 +261,13 @@ where
 {
     /// Construct a new blind for a branch.
     ///
+    /// `scalar` MUST be consumed just once, for a single blind, across any/all contexts.
+    ///
     /// This will calculate a divisor and is computationally non-trivial.
-    pub fn new(H: G, scalar: ScalarDecomposition<G::Scalar>) -> Self {
-        Self(PreparedBlind::new(H, scalar))
+    ///
+    /// This will return `None` (in variable time) if the divisor wasn't usable. This function
+    /// otherwise executes in constant time.
+    pub fn new(H: G, scalar: ScalarDecomposition<G::Scalar>) -> Option<Self> {
+        PreparedBlind::new(H, scalar).map(Self)
     }
 }

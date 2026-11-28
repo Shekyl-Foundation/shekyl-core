@@ -22,7 +22,10 @@ pub mod tree;
 pub use leaf::{PqcKeyScalar, PqcLeafScalar, ShekylLeaf};
 #[cfg(feature = "multisig")]
 pub use proof::ProveInputLeafChunk;
-pub use proof::{BranchLayer, ProveError, ProveInput, ProveResult, ShekylFcmpProof, VerifyError};
+pub use proof::{
+    BranchLayer, FreshBlind, ProveError, ProveInput, ProveResult, RerandomizationBlind,
+    ShekylFcmpProof, VerifyError,
+};
 pub use tree::{
     construct_leaf, ed25519_point_to_selene_scalar, HashGrowResult, HashTrimResult, LayerUpdate,
     LeafInput, TreeOp, HELIOS_CHUNK_WIDTH, LEAF_CHUNK_SCALARS, SCALARS_PER_LEAF,
