@@ -229,6 +229,10 @@ Restating them is a decision this record does not make.
 
 **The floor in `RANDOMX_V2_MINING_ASYMMETRY.md`** is Appendix B.1: this device's single-thread latency and four-core aggregate rate, before and after the change, with the §2 provenance.
 
+**x86_64 on the shared build VM, a sanity figure only:** at the head, 723.3 ms per single-thread hash against 716.0 ms before the change (about +1 %), three interleaved rounds under a load of 7 to 10 from other work on the VM. The x86_64 block's operand is the table's address plus four times the mode, with no load in front (checked in the disassembly).
+
+**Other platforms.** `FpEnv::DEFAULT` assumes a new thread starts at the fixed nearest word; `a_new_thread_starts_at_the_fixed_nearest_word` holds it. The crate's tests, that one included, pass on Linux x86_64 and aarch64, macOS aarch64 and Windows x86_64 (MSVC). At the head, the long oracle fuzz (20M cases per cell) passes on Linux x86_64, macOS aarch64 and Windows x86_64, and the long census (8 × 64 hashes) on Linux x86_64 and macOS aarch64.
+
 **Owed: x86_64 on bare metal.** These re-measurements are to be repeated for x86_64 on bare metal, not on the shared build VM. No bare-metal x86_64 host is free for it yet.
 
 ## 8. Open
