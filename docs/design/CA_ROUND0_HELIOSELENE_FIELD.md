@@ -243,11 +243,118 @@ prediction below is untested.
 
 ## 5. Equivalence, measured
 
-*Pending.*
+shekyl-dev `tools/ca-round0-field/equiv` (commit `b4cefe4`) evaluates
+every observable of the current field against (a) and (d) and compares
+the encodings:
+- the 17 field observables: add, sub, neg, mul, square, double, invert,
+  sqrt, `sqrt_ratio`, `pow`, `is_zero`/`is_odd`, the bit
+  decomposition, `wide_reduce`, `from_uniform_bytes`, `from_repr` on
+  arbitrary bytes, and both equalities;
+- the `PrimeField` constants;
+- `Field::random` from identical seeded streams;
+- both curves: generators, a scalar multiple each, and the decompression
+  and doubling of arbitrary 32-byte encodings.
+
+The current field is the fork at `c753b3475f`, the vendored pin. The
+run was on a build VM, release profile, rustc 1.94.0:
+
+| Family | Inputs | Result |
+| --- | --- | --- |
+| Structured, exhaustive within the family | 514 operands pairwise (264,196 pairs: 0, 1, p−1, p−2, every 2^k and every 2^k − 1 below 2^255), every single-bit 512-bit wide input plus all-zero and all-one (514), 130 encodings at and above p and above 2^255 | 0 mismatches |
+| Random | 1,000,000 tuples, seed 20261128 | 0 mismatches |
+| `Field::random` | 10,000 seeded streams | 0 mismatches |
+| Curves | 10,000 scalars and encodings | 0 mismatches |
+| **All** | **21,572,292 comparisons** | **0 mismatches** |
+
+**The prototypes in core** (`overlay.sh`, on the same build VM, against
+core `8b5f8e2674`). Each variant was laid over the vendored helioselene.
+`cur` is the vendored crate itself:
+- the suites: `cargo test --release` of `shekyl-fcmp`,
+  `shekyl-fcmp-proofs`, `shekyl-curve-tree`, `shekyl-curve-generators`
+  and `shekyl-crypto-pq`;
+- the KATs: `shekyl-engine-core`'s `tx_weight_kat`, which signs whole
+  transactions.
+
+| Variant | Suites | `tx_weight_kat` | `a_seeded_proof_is_pinned_byte_for_byte` | Crate's own tests |
+| --- | --- | --- | --- | --- |
+| `cur` | 747 passed, 0 failed, 13 ignored | 3 passed, 1 ignored (the timing test) | ok | — |
+| (a) | 747 passed, 0 failed, 13 ignored | 3 passed, 1 ignored | ok | 10 of 10 |
+| (d) | 747 passed, 0 failed, 13 ignored | 3 passed, 1 ignored | ok | 12 of 12 |
+
+The pinned KAT hashes a seeded depth-1 proof and its pseudo-outs (digest
+`dcb32df4…`). So a proof built on (a) or (d) is byte-for-byte the proof
+built on the current field. The captures are in shekyl-dev
+`infrastructure/captures/ca-round0-prototypes/2026-11-28/`.
+
+Not yet covered here:
+- the prototypes on aarch64, which the floor run will build;
+- BINSEC on (a) and (d), which is acceptance item 5 and is run for the
+  shape Rick rules.
+
+**What the one-proof timing will measure.** Upstream monero-oxide's
+commits of 2026-11-26 delete the Barycentric divisor calculator that the
+current pin's prover uses for every blind (`3383652`), and make the
+`Poly` path the prover's (`46135ae638`). DRS-X is putting that resync to
+Rick (shekyl-dev `claude/OXIDE_UPSTREAM_2026-11-26_ASSESSMENT.md`). If
+the resync is ruled first, the one-proof timings are taken on the
+resynced pin. Each prototype's `point.rs` is then rebased onto the new
+`DivisorCurve` impl first. The field's mul and square figures do not
+depend on it.
 
 ## 6. `CA-1` beyond `HelioseleneField`
 
-*Pending.*
+`cargo audit` reads the lock, so `CA-1`'s ignore can be dropped only when
+no crates.io crate on crypto-bigint 0.5 remains in any lock. From §2.3,
+that needs every one of these:
+
+1. **`dalek-ff-group` 0.5.0 (`Field25519`), the consumer that carries
+   `CA-1`'s secrets.**
+   - Nothing released replaces it. The code that does is serai `next`'s
+     `dalek-ff-group`, on `prime-field`, unreleased.
+   - Taking it now means `[patch.crates-io]` to a serai git revision for
+     `dalek-ff-group`, with `ciphersuite` going to serai's `0.4.99` shim
+     (`patches/ciphersuite`), as serai's own workspace does.
+   - It also means migrating every call to the API it drops:
+     - helioselene's `Field25519::from_u256` constants and
+       `Field25519::wide_reduce`;
+     - `ec-divisors`' `from_u256` constants and its `DynResidue`
+       `const` evaluations;
+     - `shekyl-curve-generators`' `from_u256(U256::from_le_bytes(hash))`
+       in hash-to-point. Its replacement must reduce a 256-bit value
+       mod p exactly as today. `from_bytes` refuses non-canonical input,
+       so the replacement is `FromUniformBytes<64>` over the 32 bytes
+       zero-extended.
+   - `Field25519` is a consensus field: the daemon verifies FCMP++ proofs
+     over it. The swap must therefore be bit-identical, checked as §5
+     checks `HelioseleneField`, and it is a consensus-boundary change in
+     its own PR (`107-consensus-atomic-cutovers`,
+     `126-sub-pr-design-discipline`).
+2. **`ciphersuite` 0.4.2 from crates.io.** It lists `dalek-ff-group`
+   0.4.6, `elliptic-curve` 0.13.8 and `minimal-ed448` 0.4.2 as optional
+   dependencies, so all three stay in the lock while it does. That is
+   true even though only `shekyl-wss-q1b-bench` (`ciphersuite/ed25519`)
+   compiles one of them. They leave with item 1's shim, or with a
+   `ciphersuite` release on crypto-bigint 0.7.
+3. **`ec-divisors` and `shekyl-curve-generators`** move with item 1.
+   Their crypto-bigint uses are `const` constructors and public-input
+   reductions, not secret arithmetic.
+4. **helioselene after (a) or (d).**
+   - It keeps crypto-bigint 0.5 for the curve macro's `const` constants,
+     and in (d) for `red512`'s input type.
+   - Both go when item 1 lands. The constants become byte constants,
+     and in (d) `red512` takes limbs.
+5. **The other locks** follow core:
+   - the ten fuzz workspaces;
+   - `docs/formal/checkct/dynamic`, which keeps 0.5.5 on purpose as an
+     instrument of the old code;
+   - the GUI wallet's `src-tauri`, in its paired PR.
+
+So `CA-1` closes in two steps, whichever field shape is chosen:
+- **The field port.** It removes crypto-bigint 0.5 from
+  `HelioseleneField`'s arithmetic.
+- **The `Field25519` and `ciphersuite` move.** It removes it from the
+  lock. That move waits on serai: a release, or Rick's ruling to pin
+  `next` by revision.
 
 ## 7. The acceptance bar for a port
 
@@ -269,7 +376,30 @@ prediction below is untested.
 
 ## 8. The wallet's threat-model note for releases before the fix
 
-*Pending.*
+`CA-2`'s close criterion asks for a note in the wallet's threat model for
+the releases that predate the fix. Proposed text, as a new row of
+[`THREAT_MODEL_WALLET.md`](../THREAT_MODEL_WALLET.md)'s adversary-surface
+index:
+
+> **T8 — a timing observer on the proving machine (`CA-2`).** On x86_64,
+> releases up to and including *[the last release before the fix]* build
+> FCMP++ proofs with `HelioseleneField` multiplication and squaring whose
+> cycle count depends on the operands' values. It was measured on Intel
+> Tiger Lake cores and one other x86_64 host, and not on the Pi 4's
+> Cortex-A72.
+>
+> A process or virtual machine sharing the proving machine's CPU, with a
+> fine-grained clock, could learn a few bits per operation about the
+> values in the blinded membership path. Over the thousands of operations
+> in one proof, that could link the spend to the output it spends.
+>
+> It is not reachable over the network, and verification on the daemon
+> uses only public data. Until the fix ships, build transactions on a
+> machine whose CPU you do not share with software you do not trust.
+> Fixed in *[release]*.
+
+The note lands with the fix's release, or now, since alpha releases
+already predate it. That timing is Rick's call (§9).
 
 ## 9. Questions for Rick
 
