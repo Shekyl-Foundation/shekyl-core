@@ -6109,12 +6109,14 @@ async fn e2e_drain_wire_shape_matches_a_real_transfer() {
         else {
             panic!("the drain is an FCMP++ spend with its proof")
         };
-        let depth = u8::try_from(prunable.tree_depth).expect("a proof depth fits u8");
+        // The wire carries the curve-tree depth, one less than the proof's
+        // layer count, which is what the fee model takes.
+        let layers = u8::try_from(prunable.tree_depth + 1).expect("tree_depth + 1 fits u8");
         let transfer_fee = super::tx_fee_model::converge_fee(
             &fee_estimates.economy,
             super::tx_fee_model::InputCount::clamped(1),
             super::tx_fee_model::OutputCount::clamped(2),
-            depth,
+            layers,
             &[],
             0,
         )

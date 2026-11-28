@@ -402,12 +402,14 @@ async fn the_exit_authorizes_under_bond_spend_pk_never_the_identity_key() {
             .find(|i| matches!(i, Input::BondPost(_)))
             .expect("the exit carries its bond-post input");
         let fcmp_inputs = tx.prefix.inputs.iter().filter(|i| i.is_spend()).count();
-        let depth = u8::try_from(prunable.tree_depth).expect("a proof depth fits u8");
+        // The wire carries the curve-tree depth, one less than the proof's
+        // layer count (the daemon reads `fcmp_layers = tree_depth + 1`).
+        let layers = u8::try_from(prunable.tree_depth + 1).expect("tree_depth + 1 fits u8");
         assert_eq!(
             shekyl_tx_weight::predict_weight_with_extra_input(
                 shekyl_tx_weight::InputCount::clamped(fcmp_inputs),
                 shekyl_tx_weight::OutputCount::clamped(tx.prefix.outputs.len()),
-                shekyl_tx_weight::ProofLayers::new(depth).expect("the exit's depth"),
+                shekyl_tx_weight::ProofLayers::new(layers).expect("the exit's layers"),
                 EXIT_FEE,
                 bond_input.serialized_len().expect("a written input"),
             ),
