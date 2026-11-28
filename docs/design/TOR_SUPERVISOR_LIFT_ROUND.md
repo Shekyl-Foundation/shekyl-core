@@ -592,22 +592,33 @@ lines cannot reach another process's file through this code.
 ## 7. `TSR-Q22`: who hears "unreachable"
 
 The persona's verdict reaches the operator through the wallet's own surface.
+That surface is the wallet lane's reader, as built on its branch
+`feat/operator-alarm-reader` (not yet a PR, and not on `dev` at the pin).
+The names below are that branch's: the one-board `Engine`, the reader's
+methods, `DisarmedReason::Unreported`, `CheckGuard`, `report_not_serving`,
+and Part M's `IG-Q115` and `IG-Q119`. This round cites them as proposals and moves with them if they
+change in review.
 
 - **Producer.** The instance's host `inbound` method (§3.1).
 - **Board.** One `OperatorAlarms` per wallet, held on the `Engine` for the
   wallet's open span. The cadence driver and serving starts write to the same
   board.
-- **Readers.** The wallet lane's reader: a wallet RPC method and a CLI status
-  line. The method's names go to the grammar lane.
+- **Readers.** The wallet lane's reader: the wallet RPC methods
+  `operator_alarm` and `operator_alarm_acknowledge`, and the CLI command
+  `operator alarm` (`wallet_rpc.yaml` 0.28.0). Their names are `IG-Q115` in
+  [`INPUT_GRAMMAR.md`](INPUT_GRAMMAR.md) Part M, where the wallet lane
+  recommends `wallet alarm`.
 
 **The record, agreed between the two lanes (2026-11-28):**
 
 1. **The condition.** `AlarmCondition::OnionReachability` ("challengers can
    reach this persona's onion") is separate from `TransportLiveness`.
-   - Until `TSR-W3` arms it, the row shows "not checked" and its disarmed reason
-     says this build has no producer.
-   - After that, the existing reasons apply: `TransportNotReady`,
-     `TransportStopped` and `NotServing`.
+   - Every row starts disarmed as `DisarmedReason::Unreported` (wire
+     `unreported`: no check is reporting). The onion row stays there until
+     `TSR-W3` arms it.
+   - After that, the board's other reasons apply. Their wire names are
+     proposed in Part M, `IG-Q119`: `transport-unready`, `TransportStopped`
+     and `host-down`.
 2. **The detail.** It is `shekyl_tor_status::Onion` (state, age in awake
    seconds, cause; `shekyl-tor-status/src/lib.rs:678–686`). That is the same
    vocabulary as `daemon_status`, and the wallet RPC carries the same object.
@@ -633,15 +644,66 @@ The persona's verdict reaches the operator through the wallet's own surface.
    address, no service id, and no time on any clock but the age. The wallet
    lane holds every row on the board, and its RPC object, to that.
 
+The wallet lane's review on #1578 raised three more points. The proposals
+below answer them, and **Rick rules the first two**.
+
+8. **`publishing`, and a verdict that has gone stale (`TSR-F25`).** An alarm
+   is live only while the onion is unreachable, so `publishing` had no place
+   on the row. A host that is alive but never probes would keep its last
+   verdict armed. The board's `CheckGuard` sees a producer that ends, not one
+   that has gone silent.
+   - **The bound.** The proposal is one bound, `VERDICT_FRESH`, derived from
+     the core's own constants, never a literal:
+     - `DESCRIPTOR_LIFETIME`, 3 h (`core/mod.rs:231`). A healthy instance
+       begins a round within it, or the core republishes to force one
+       (`core/probe.rs:315–335`);
+     - plus `ROUND_WAIT`;
+     - plus `PROBE_AFTER_MAX`;
+     - plus two probe bounds (`PROBE_WITHIN`), for the first attempt and the
+       attempt after the refetch.
+
+     In a healthy instance a verdict is never older than that.
+   - **The row**, by state:
+     - **Armed and clean:** only a `Reachable` verdict younger than
+       `VERDICT_FRESH`.
+     - **Live:** `Unreachable`, at any age. It is an episode until reachable.
+     - **Disarmed**, with a reason Part M names (proposed "the first check is
+       pending"): `NotOffered`, and `Publishing` younger than the bound.
+     - **Past the bound** (`Publishing` or `Reachable` with no newer verdict):
+       a **live alarm** that reachability is unknown.
+   - **Unknown is an alarm, not a disarm.** For a bonded persona, reachability
+     unknown for longer than the healthy maximum is a failure mode (rule 82),
+     not a quiet "not checked". The live alarm needs one new cause beside the
+     seven, proposed `unchecked`. That is an addition to `shekyl-tor-status`'s
+     wire type, so a minor version bump. The alternative is the wallet lane's
+     suggestion: a disarmed reason past the bound. It is honest, but it does
+     not alarm. **Rick rules which.**
+9. **A full serving cap.** Recognition sits behind the cap (§4.2), so a full
+   cap shows on this row as unreachable (`probe-missed`) with no capacity
+   reading beside it. `refused` is on no alarm today. `serve_health` raises on
+   signing, lookups and accepts, not on the cap.
+   - The proposal is that `TSR-W3` adds `refused` to `ServeHealth`, as a
+     capacity reading.
+   - The persona's words for `probe-missed` name both causes: the onion path,
+     and a serving cap that is full. When the capacity reading is live, they
+     point to it, so an operator under load is not sent to look at Tor.
+   - Rick rules whether `refused` joins `ServeHealth` or gets a row of its own.
+10. **Guard and teardown.** `TSR-W3`'s producer holds
+    `OperatorAlarms::check_guard(&[AlarmCondition::OnionReachability])` for
+    the instance's life. The serving task's not-serving report
+    (`report_not_serving`, `serving/task.rs`) also takes the onion row, so a
+    stopped host reads `host-down` on it, as on the board's other rows.
+
 **A correction to what I told the wallet lane.** I said "the bound decides"
 for a probe that was not dialed. It does not. A probe that was not dialed
 gives no verdict either way. For a persona, the persistent causes of an
 undialed probe are no SOCKS route, no onion yet, or a mint refused. Each of
 those comes with a Tor that is not `Running`. Leaving `Running` resets the
 verdict (`core/running.rs:38–44`), and the transport's disarm reasons cover
-the row. One case stays open: a hostile host whose `mint_probe` always
-returns `None` while Tor runs keeps a stale verdict. Its age shows that, but
-no type forbids it (`TSR-F25`).
+the row. One case is left: a hostile host whose `mint_probe` always returns
+`None` while Tor runs. No type forbids it (`TSR-F25`). Item 8's bound turns
+its stale verdict into a value on the board, instead of something a reader
+has to work out from the age.
 
 **The split between the PRs.** The wallet lane's PR adds the condition and its
 disarmed row, with no variant and no payload. `TSR-W3` adds three things
@@ -785,8 +847,8 @@ Attacker objectives:
 | **W1: the daemon and a persona process on one host** (it replaces the brief's principal case, Rick 2026-11-28). Roots, logs, timing | **`TSR-F19` roots.** The sweep crossing processes is closed by `InstanceRoot` (§5.2). **`TSR-F20` timing.** The shared triggers are listed below; one is enough to link | Roots: absorbed (§5.2). Logs: absorbed (§3.5, §5.4). Timing: see `TSR-F20` |
 | **W2: a reader of the wallet's log or RPC links onions** (O5) | **`TSR-F21`.** The persona's onion never appears in a `Said`, a status, the alarm record or the RPC. Three surfaces need checking at `TSR-W3`: Tor's relayed lines, error `Display`s and kameo's id lines (§3.5, §5.1) | Absorbed: the `Said` design and the `WSS-20` gate. Forward action: `TSR-W3`'s `WSS-20` row and log-filter check |
 | **W3: two personas on one schedule** | **`TSR-F22`.** Two wallet processes have two roots, two engines and two draw sources, so their probe delays are independent. They are still not separable from the shared triggers of `TSR-F20`. One persona per machine stays the recommendation (`tor_config.rs:40–50`) | Absorbed as a discipline note, already stated in code. No mechanism closes shared fate |
-| **W4: a forged or replayed probe** (O2, O4) | **`TSR-F23`.** A forgery needs a live 256-bit nonce: 2⁻²⁵⁶ per guess per live slot. A replay finds an empty slot (§4.4). The comparison is constant time over fixed slots (§4.3). A miss falls through to the normal path, so an observer sees no probe-shaped oracle. Flooding the cap forces misses: the row reads a true "unreachable", and republishes follow on the hold (§4.6) | Absorbed |
-| **W5: a hostile host** (O6). Publish before a pin, skip a probe, share an instance | **`TSR-F24` publish before a pin.** Forbidden by type. A persistent onion's publish takes `VanguardsActive` (`TSR-W1`), and a persona is always persistent. **`TSR-F25` skip a probe.** **Not** forbidden by type. A host whose `mint_probe` returns `None` while Tor runs keeps a stale verdict, which only its age shows. **`TSR-F26` share an instance.** Forbidden: the instance takes its host by value, is not `Clone`, and owns its root, whose OS lock refuses a second claim (§5.2) | F24 and F26: absorbed. F25: forward action to `TSR-W3`. Rick may rule a bound on consecutive undialed rounds that turns into an unreachable verdict. That would be a new cause, and so a wire change under rule 142 |
+| **W4: a forged or replayed probe** (O2, O4) | **`TSR-F23`.** A forgery needs a live 256-bit nonce: 2⁻²⁵⁶ per guess per live slot. A replay finds an empty slot (§4.4). The comparison is constant time over fixed slots (§4.3). A miss falls through to the normal path, so an observer sees no probe-shaped oracle. Flooding the cap forces misses: the row reads a true "unreachable", and republishes follow on the hold (§4.6). There is no capacity reading beside it until `refused` is on an alarm (§7 item 9) | Absorbed. Capacity: forward action to `TSR-W3` (§7 item 9) |
+| **W5: a hostile host** (O6). Publish before a pin, skip a probe, share an instance | **`TSR-F24` publish before a pin.** Forbidden by type. A persistent onion's publish takes `VanguardsActive` (`TSR-W1`), and a persona is always persistent. **`TSR-F25` skip a probe.** **Not** forbidden by type. A host whose `mint_probe` returns `None` while Tor runs keeps a stale verdict, which only its age shows. **`TSR-F26` share an instance.** Forbidden: the instance takes its host by value, is not `Clone`, and owns its root, whose OS lock refuses a second claim (§5.2) | F24 and F26: absorbed. F25: forward action to `TSR-W3`, through §7 item 8's `VERDICT_FRESH`. Past that bound the row is a live alarm with a new cause (`unchecked`, a wire addition) or a disarm, as Rick rules |
 
 **`TSR-F20`: the shared triggers**, for a daemon and a persona on one host.
 The probe draws are uniform over 15–60 s
@@ -822,5 +884,10 @@ None of these are in a PR body.
    brief's line (§4.2).
 3. The daemon's root: (a) `<data-dir>/tor/`, or (b) the data directory (§5.2).
 4. The lift as two PRs, L1 and L2, or one (§9.1).
-5. `TSR-F25` and `TSR-F27` for `TSR-W3`: a bound on undialed probes, and a
-   delay after a shared trigger.
+5. For `TSR-W3`, three questions:
+   - **`publishing` and a stale verdict past `VERDICT_FRESH`** (§7 item 8,
+     `TSR-F25`): a live alarm with a new `unchecked` cause (a wire addition),
+     or a disarm;
+   - **`refused`** (§7 item 9): whether it joins `ServeHealth` or gets a row
+     of its own;
+   - **a delay after a shared trigger** (`TSR-F27`).
