@@ -28,7 +28,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use shekyl_capped_stream::{node_gate, process_write_stall};
-use shekyl_clearnet::{channel_choice, zero_tally, ClearnetOption, Linger};
+use shekyl_clearnet::{channel_choice, zero_tally, Linger};
 use shekyl_dialer::Dialer;
 use shekyl_p2p_session::{
     Board, CoreSyncData, Intervals, Owners, Parts, PerConnector, ProbeHandshake, SessionConfig,
@@ -423,12 +423,7 @@ impl Network {
         let inner = &self.inner;
         let mut listening = Listening::default();
         if let Some(clearnet) = &plan.clearnet {
-            let option = if clearnet.encrypt {
-                ClearnetOption::On
-            } else {
-                ClearnetOption::Off
-            };
-            let kind = channel_choice(ConnectorId::Clearnet.column(), option)
+            let kind = channel_choice(ConnectorId::Clearnet.column())
                 .map_err(|e| StartError::Channel(format!("{e:?}")))?;
             let tally = Arc::new(zero_tally());
             let mut listeners = Vec::with_capacity(clearnet.listen.len());

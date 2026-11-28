@@ -33,6 +33,7 @@
 use std::future::Future;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use tokio::sync::watch;
 
@@ -86,10 +87,12 @@ pub(super) enum Answer {
         outcome: Result<ServiceId, DaemonTorPublishError>,
     },
     /// A guard pin's outcome, and the manager it took, coming home. A
-    /// managed pin is a witness or a fault.
+    /// managed pin is a witness or a fault. `took` is the pin's awake time
+    /// from its send, on the clock the reply bound runs on.
     Guards {
         manager: Box<VanguardManager>,
         outcome: Result<VanguardsActive, VanguardsAbort>,
+        took: Duration,
     },
 }
 
@@ -645,8 +648,12 @@ impl Drive {
     pub(super) fn answered(&mut self, number: u64, answer: Answer) -> Vec<Input> {
         // A pin's manager comes home whatever the core still waits on.
         let answer = match answer {
-            Answer::Guards { manager, outcome } => {
-                return self.guards_answered(number, *manager, outcome);
+            Answer::Guards {
+                manager,
+                outcome,
+                took,
+            } => {
+                return self.guards_answered(number, *manager, outcome, took);
             }
             other => other,
         };

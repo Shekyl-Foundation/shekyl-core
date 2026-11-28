@@ -165,11 +165,13 @@ where
         Engine::drain_balance_aggregate(engine).await
     }
 
-    /// Start P-scan iff this wallet is a staker.
+    /// Start P-scan iff this wallet is a staker. `node` is the wallet's own
+    /// node: signing a stake at its due block fills the shards it owes from it.
     pub async fn start_pscan_if_staker(
         engine: Arc<RwLock<Engine<S, D, L, E, R, P, WalletFile>>>,
+        node: &shekyl_rpc_transport::DaemonTarget,
     ) -> Result<Option<PScanHandle>, PScanStartError> {
-        Engine::start_pscan_if_staker(engine).await
+        Engine::start_pscan_if_staker(engine, node).await
     }
 
     /// Start the serving host iff this wallet is a staker with an active persona.

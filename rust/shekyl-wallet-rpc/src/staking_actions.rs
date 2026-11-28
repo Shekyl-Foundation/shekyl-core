@@ -271,11 +271,15 @@ pub(crate) async fn unstake(
         (shared, state.daemon.clone())
     };
     let outcome = StakeFacade::unstake(shared, &daemon).await?;
-    let result: UnstakeResult = match outcome {
-        UnstakeOutcome::Broadcast { tx_hash } => sealed_submit_result(tx_hash.to_string(), None),
-        UnstakeOutcome::AlreadyInChain { tx_hash, height } => {
-            sealed_submit_result(tx_hash.to_string(), Some(height))
-        }
+    let result = match outcome {
+        UnstakeOutcome::Broadcast { tx_hash } => UnstakeResult::Broadcast {
+            tx_hash: tx_hash.to_string(),
+        },
+        UnstakeOutcome::AlreadyInChain { tx_hash, height } => UnstakeResult::AlreadyInChain {
+            tx_hash: tx_hash.to_string(),
+            confirmed_height: i64::try_from(height).unwrap_or(i64::MAX),
+        },
+        UnstakeOutcome::Withdrawn => UnstakeResult::Withdrawn,
     };
     serde_json::to_value(result)
         .map_err(|e| WalletRpcError::InternalError(format!("serialize unstake: {e}")))

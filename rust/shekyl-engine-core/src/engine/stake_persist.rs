@@ -81,6 +81,23 @@ impl PersistedBondTicket {
         self.p_slot
     }
 
+    /// The ticket for signing a plan at its due block
+    /// (`ARCHIVAL_BOND_POST_DELAY.md` BD-Q3): the request's
+    /// [`Engine::persist_bond_record`] already committed `p_slot` durably and
+    /// consumed its ticket to plan, so the witness at due is that durable
+    /// record itself. `bonded` is the ledger's `bonded_slots`; `None` when
+    /// `p_slot` is not in it, so a ticket still cannot exist without the
+    /// commit having happened.
+    ///
+    /// This is the reopening the type's doc names: a caller that re-signs an
+    /// already-persisted record. One plan is signed once; a post never sent is
+    /// re-signed only in place of itself (BD-Q3 Rule 1), so one commit still
+    /// authorizes one live post.
+    #[must_use]
+    pub(crate) fn for_recorded_slot(bonded: &[u32], p_slot: PSlot) -> Option<Self> {
+        bonded.contains(&p_slot.index()).then_some(Self { p_slot })
+    }
+
     /// Test-only ticket constructor for negative-control tests that need a
     /// ticket without going through the real `Engine::persist_bond_record`
     /// path (e.g. slot-mismatch tests that need a ticket for a specific slot

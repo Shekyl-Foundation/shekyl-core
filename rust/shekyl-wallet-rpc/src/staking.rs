@@ -250,7 +250,9 @@ pub(crate) fn kind_wire(kind: RecordKind) -> &'static str {
 
 fn in_flight_entry(r: &InFlightRecord) -> InFlightEntry {
     let (state, funds_return_at) = match r.state {
-        InFlightState::Pending => ("pending", None),
+        // A plan not yet signed is `pending` (WR-Q1); its wait, if any, is
+        // the entry's reason.
+        InFlightState::Planned { .. } | InFlightState::Pending => ("pending", None),
         InFlightState::Dispatched => ("dispatched", None),
         InFlightState::Refused {
             funds_return_at, ..
@@ -277,6 +279,9 @@ fn outcome_entry(o: &ReportedOutcome) -> StakingOutcomeEntry {
         OutcomeKind::Expired => "expired",
         OutcomeKind::EndedUnconfirmed(_) => "ended_unconfirmed",
         OutcomeKind::SpentElsewhere => "spent_elsewhere",
+        OutcomeKind::Withdrawn => "withdrawn",
+        OutcomeKind::Unbondable => "unbondable",
+        OutcomeKind::WaitedOut => "waited_out",
     };
     StakingOutcomeEntry {
         kind: kind_wire(o.kind).to_owned(),

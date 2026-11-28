@@ -28,11 +28,8 @@
 //! [`HandshakeTally`] counts those skips against the handshakes that were
 //! computed. D10's flood test reads that pair.
 //!
-//! Before the flip, ruling 4's exception is still in force. The option off
-//! omits the Noise layer the declaration adds, and the socket bytes are the
-//! session bytes, which is what the differential harness compares with
-//! epee. The option on follows [`stack_plan`]. Neither arm matches on a
-//! network's identity.
+//! The channel follows [`stack_plan`], which adds Noise on clearnet. No
+//! option turns it off, and nothing here matches on a network's identity.
 //!
 //! [`Listener::dial`] checks the addressing cell and then opens an
 //! outbound socket. A proxy is SOCKS5 CONNECT (`shekyl-socks`). The
@@ -111,42 +108,26 @@ pub enum ChoiceError {
     LayerNotBuilt,
 }
 
-/// The option, until the flip deletes the off arm.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ClearnetOption {
-    /// Ruling 4. The declaration's Noise layer is not added.
-    Off,
-    /// Follow the declaration's stack plan.
-    On,
-}
-
-/// Plaintext or Noise, from the column's plan and the option.
+/// The channel the column's plan names.
 ///
-/// Off omits whatever layer the plan adds. On builds that layer. The
-/// column is an argument. The function does not match on a connector id.
-pub fn channel_choice(
-    column: NetworkColumn,
-    option: ClearnetOption,
-) -> Result<ChannelChoice, ChoiceError> {
+/// The column is an argument. The function does not match on a connector
+/// id.
+pub fn channel_choice(column: NetworkColumn) -> Result<ChannelChoice, ChoiceError> {
     let layers = match stack_plan(column) {
         StackPlan::Ready { layers } => layers,
         StackPlan::NotUsable => return Err(ChoiceError::NotUsable),
     };
-    // Off is ruling 4's exception. An empty plan is a network that already
-    // encrypts. The bytes are the same; the reason is not.
-    #[allow(clippy::match_same_arms)]
-    match (option, layers) {
-        (ClearnetOption::Off, _) => Ok(Choice::Plain),
-        (ClearnetOption::On, []) => Ok(Choice::Plain),
-        (ClearnetOption::On, [AddedLayer::Noise]) => Ok(Choice::Noise),
-        (ClearnetOption::On, _) => Err(ChoiceError::LayerNotBuilt),
+    // An empty plan is a network that already encrypts.
+    match layers {
+        [] => Ok(Choice::Native),
+        [AddedLayer::Noise] => Ok(Choice::Noise),
+        _ => Err(ChoiceError::LayerNotBuilt),
     }
 }
 
 /// What the caller supplies. None of the spans or the budget live here.
 pub struct Config {
     pub listen: SocketAddr,
-    pub option: ClearnetOption,
     pub column: NetworkColumn,
     pub network_id: NetworkId,
     pub ceiling: InboundCeiling,
@@ -264,7 +245,7 @@ pub fn listen<C>(
 where
     C: Clock + Clone + Send + Sync + 'static,
 {
-    let kind = channel_choice(config.column, config.option).map_err(|_| {
+    let kind = channel_choice(config.column).map_err(|_| {
         std::io::Error::new(std::io::ErrorKind::InvalidInput, "column is not usable")
     })?;
     let handle = pool.handle().clone();

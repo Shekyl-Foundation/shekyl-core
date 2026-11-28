@@ -475,7 +475,7 @@ mod tests {
         assert!(
             code.contains("DrainIntent::Payment(")
                 && !code.contains("TerminalSweep")
-                && !code.contains("TerminalExitObserved"),
+                && !code.contains("NoExitOwed"),
             "this façade sends the user-target Payment intent ONLY — the \
              terminal sweep and its witness mint belong to collect_unstaked \
              (unstake_facade), whose exited-persona resolution this \

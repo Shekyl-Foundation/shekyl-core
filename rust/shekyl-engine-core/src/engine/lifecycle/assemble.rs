@@ -618,9 +618,9 @@ fn load_open_staking_evidence(
         Some(bytes) => {
             shekyl_engine_state::pending_post_block::PendingPostBlock::from_postcard_bytes(&bytes)
                 .map_err(|e| format!("pending seal decode failed: {e}"))?
-                .posts()
-                .iter()
-                .map(|p| p.p_slot.to_raw())
+                .stake_slots()
+                .into_iter()
+                .map(shekyl_types::PSlot::to_raw)
                 .collect()
         }
         None => std::collections::BTreeSet::new(),

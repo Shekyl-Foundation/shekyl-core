@@ -18,7 +18,7 @@ const NIGHTLY_FIXTURE: &str = concat!(
     "/tests/fixtures/economies_nightly_narration.txt"
 );
 /// The nightly slice's committed derived table.
-const NIGHTLY_TABLE_FIXTURE: &str = concat!(
+pub(super) const NIGHTLY_TABLE_FIXTURE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/tests/fixtures/economies_nightly_table.csv"
 );

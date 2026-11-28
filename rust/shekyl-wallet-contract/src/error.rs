@@ -378,7 +378,8 @@ wallet_rpc_error_codes! {
     /// Stake: funding not ready (W1-clean refusal — fund the persona /
     /// let the scan catch up, then retry).
     StakeNotReady = -29500 => "STAKE_NOT_READY",
-    /// Stake: a signed bond post is already awaiting dispatch.
+    /// Stake: a stake is already in flight (a plan waiting for its due
+    /// block, or a signed post awaiting its send).
     StakeInFlight = -29501 => "STAKE_IN_FLIGHT",
     /// Stake: the wallet already holds a confirmed bond (idempotency).
     AlreadyStaked = -29502 => "ALREADY_STAKED",
@@ -531,6 +532,10 @@ wallet_rpc_error_codes! {
     /// Stake: the node could not be read while filling the persona body
     /// store. Nothing was posted; check the node and retry.
     StakeDaemonUnreachable = -29544 => "STAKE_DAEMON_UNREACHABLE",
+    /// Stake: a stake ended without bonding and its funds are still
+    /// returning to the principal balance; staking again waits until they
+    /// arrive (`ARCHIVAL_BOND_POST_DELAY.md` §3.6).
+    StakeFundsReturning = -29545 => "STAKE_FUNDS_RETURNING",
     /// `verify_message`: well-formed, intact, and **not** a valid signature
     /// by the claimed address over this message on this network. An answer,
     /// not a fault (SM-R-6).
@@ -1140,9 +1145,9 @@ pub enum WalletRpcError {
         /// secrets or amounts.
         detail: String,
     },
-    /// Stake: a signed bond post is already sealed and awaiting its
-    /// scheduled broadcast; no action needed.
-    #[error("stake already in flight: the bond will broadcast at its scheduled time")]
+    /// Stake: a stake is already in flight — a plan waiting for its due
+    /// block, or a signed post awaiting its send; no action needed.
+    #[error("a stake is already in flight: its bond is signed and sent at its due time")]
     StakeInFlight,
     /// Stake: the persona's spendable funding is fragmented across more
     /// outputs than one bond post can carry (W1-clean; the funding is
@@ -1557,6 +1562,13 @@ pub enum WalletRpcError {
         /// The transport's reason.
         detail: String,
     },
+    /// `stake` (`-29545`): an ended stake's funds are still returning.
+    #[error(
+        "your last stake ended without bonding and its funds are still returning to your \
+         balance; you can stake again once they arrive. While the network fee is above what \
+         they hold, they return once the fee falls"
+    )]
+    StakeFundsReturning,
 
     /// `verify_message` (`-29800`): the signature is well-formed and intact
     /// but does not verify for that address, message, and network. This is
@@ -1717,6 +1729,7 @@ impl WalletRpcError {
             Self::StakeBodyStoreFailed { .. } => WalletRpcErrorCode::StakeBodyStoreFailed,
             Self::StakeDaemonSyncing => WalletRpcErrorCode::StakeDaemonSyncing,
             Self::StakeDaemonUnreachable { .. } => WalletRpcErrorCode::StakeDaemonUnreachable,
+            Self::StakeFundsReturning => WalletRpcErrorCode::StakeFundsReturning,
             Self::MessageSigVerifyFailed => WalletRpcErrorCode::MessageSigVerifyFailed,
             Self::MessageSigCorrupted => WalletRpcErrorCode::MessageSigCorrupted,
             Self::MessageSigUnsupportedScheme { .. } => {

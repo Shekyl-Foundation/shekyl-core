@@ -86,7 +86,7 @@ use super::traits::key::{
 /// Mirrors [`LocalKeys`]'s owned key material.
 /// The actor's single-threaded message loop serializes access to `keys`.
 pub(crate) struct KeyActor {
-    /// Wallet key material and derived scalars for signing.
+    /// The wallet's key material.
     local: LocalKeys,
 }
 

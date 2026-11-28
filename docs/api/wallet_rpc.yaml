@@ -346,8 +346,8 @@
 #                            operation that reaches the daemon)
 #   -29300..-29399           proofs (RESERVED range)
 #   -29400..-29499           transfers / history queries
-#   -29500..-29599           staking (-29500..-29506, -29512 and
-#                            -29538..-29544 (the fill, WSS-Q4) live on
+#   -29500..-29599           staking (-29500..-29506, -29512,
+#                            -29538..-29544 (the fill, WSS-Q4) and -29545 live on
 #                            `stake`; -29507..-29511 live on `drain`
 #                            (WI-RPC-5); -29513..-29522 and -29528 live on
 #                            `unstake` and -29523..-29527 and -29529 on
@@ -613,7 +613,17 @@ info:
   # A call that exceeds its own bound is -29225 CHANNEL_BUDGET, distinct
   # from a connection the node closed (-29223) and from a revocation
   # (-29226 CHANNEL_REVOKED).
-  version: 0.26.0
+  # 0.27.0: a stake is signed at its due block (BD-Q2, BD-Q3; how a plan
+  # ends, ruled 2026-11-26). unstake withdraws a stake that is still a plan:
+  # UnstakeResult gains verdict WITHDRAWN, with no tx_hash (nothing was
+  # sent); a signed stake still answers -29515 (confirming). staking_info: a
+  # planned stake is in_flight `pending`, and its reason says what a due
+  # stake is waiting on; outcomes gain `withdrawn`, `unbondable` and
+  # `waited_out`, each returning the stake's funds to the principal balance.
+  # stake gains -29545 STAKE_FUNDS_RETURNING: while an ended stake's funds
+  # are returning, a new stake refuses with that reason, not -29501.
+  # api_version stays 1.
+  version: 0.27.0
   description: >
     JSON-RPC 2.0 interface served by `shekyl-wallet-rpc` (Phase 4 of the
     wallet rewrite; replaces the C++ `wallet_rpc_server`). One wallet-bearing
@@ -1028,6 +1038,7 @@ components:
         - -29542   # STAKE_BODY_STORE_FAILED
         - -29543   # STAKE_DAEMON_SYNCING
         - -29544   # STAKE_DAEMON_UNREACHABLE
+        - -29545   # STAKE_FUNDS_RETURNING
         - -29800   # MSG_SIG_VERIFY_FAILED
         - -29801   # MSG_SIG_CORRUPTED
         - -29802   # MSG_SIG_UNSUPPORTED_SCHEME
@@ -1608,9 +1619,10 @@ components:
                                           (not a staker, or no active
                                           persona) — stake_in mints no new
                                           codes (WI-RPC-5 F-2 pin)
-          -29501 STAKE_IN_FLIGHT          stake: a signed bond post is
-                                          already sealed awaiting its
-                                          scheduled broadcast
+          -29501 STAKE_IN_FLIGHT          stake: a stake is in flight, a
+                                          plan waiting for its due block or
+                                          a signed bond post awaiting its
+                                          send
           -29502 ALREADY_STAKED           stake: a confirmed bond exists
                                           for a bonded persona (idempotent
                                           refusal)
@@ -1973,6 +1985,11 @@ components:
                                           while filling the body store
                                           (data.detail). Nothing was
                                           posted; check the node and retry
+          -29545 STAKE_FUNDS_RETURNING    stake: the last stake ended
+                                          without bonding and its funds are
+                                          still returning to the principal
+                                          balance; staking again waits until
+                                          they arrive
           -29800 MSG_SIG_VERIFY_FAILED    verify_message: well-formed,
                                           checksum-intact, and NOT a valid
                                           signature by that address over
@@ -3646,7 +3663,12 @@ components:
           type: string
           description: >
             Values at this contract version. `pending`: saved, not yet
-            sent. `dispatched`: sent and still able to land. `refused`: a
+            sent. A stake is `pending` from the request until it is sent
+            at its due block; while it is due and cannot yet be sent,
+            `reason` says why (a fee above its funds, a node that cannot be
+            reached), and a stake that waits too long for a reason that
+            does not clear stops and its funds come back (outcome
+            `waited_out`). `dispatched`: sent and still able to land. `refused`: a
             node refused it and its end date has not passed. Not final:
             nothing more is sent, and the record stays until
             funds_return_at, because only the chain can say whether it
@@ -3724,6 +3746,14 @@ components:
             whether it landed; a node's refusal does not make it
             `rejected`, and its sentence is kept in `reason`. `spent_elsewhere`: some of its funds were
             spent by another transaction, which should not happen.
+            `withdrawn`: the owner withdrew a stake before it was sent
+            (unstake). `unbondable`: a stake could not be made because the
+            wallet's node no longer holds the archive data it would keep.
+            `waited_out`: a stake was due but could not be sent for too
+            long. Nothing was sent for any of these three, nor for a
+            `spent_elsewhere` stake that was never sent; their funds are
+            returned to the principal balance by a drain, shown in
+            in_flight until it lands.
         reason:
           type: string
           description: >
@@ -3738,8 +3768,9 @@ components:
           type: string
           description: >
             `returned`: the funds it held are spendable again (for
-            `spent_elsewhere`, the unspent rest). `none_held`: it held
-            none (`ended_unconfirmed`).
+            `spent_elsewhere`, the unspent rest), or, for a stake that
+            ended before it was sent, are being returned to the principal
+            balance. `none_held`: it held none (`ended_unconfirmed`).
 
     AcknowledgeStakingOutcomeParams:
       type: object
@@ -3946,28 +3977,36 @@ components:
 
     UnstakeResult:
       type: object
-      required: [tx_hash, verdict]
+      required: [verdict]
       description: >
-        The exit was durably sealed BEFORE dispatch (persist-then-send)
-        and then submitted; the DrainResult dispatch-verdict shape. When
-        the network confirms it, collect_unstaked completes the arc.
-        Failure dispositions are first-class here because the path is
-        irreversible: -29521 means the seal was RELEASED (retry at will);
-        -29522 means it is HELD funds-safe until it lands or its end date
-        passes (do not re-fire; staking_info names the height) — see the
-        code table. A seal saved but not confirmed on disk sent nothing:
-        it was removed, and the save's own code answers by cause (-29120,
-        -29128..-29134), after which a retry exits the same bond.
+        Either the exit's receipt or the withdrawal of a stake that was
+        still a plan. The exit was durably sealed BEFORE dispatch
+        (persist-then-send) and then submitted; the DrainResult
+        dispatch-verdict shape. When the network confirms it,
+        collect_unstaked completes the arc. Failure dispositions are
+        first-class here because the path is irreversible: -29521 means
+        the seal was RELEASED (retry at will); -29522 means it is HELD
+        funds-safe until it lands or its end date passes (do not re-fire;
+        staking_info names the height) — see the code table. A seal saved
+        but not confirmed on disk sent nothing: it was removed, and the
+        save's own code answers by cause (-29120, -29128..-29134), after
+        which a retry exits the same bond. A stake not yet sent is
+        withdrawn instead (verdict WITHDRAWN): nothing is posted, the
+        stake's outcome is `withdrawn`, and its funds return to the
+        principal balance by a drain the wallet sends; a stake already
+        signed is not withdrawn and answers -29515.
       properties:
         tx_hash:
           $ref: "#/components/schemas/Hex32"
+          description: Present iff verdict is BROADCAST or ALREADY_IN_CHAIN.
         verdict:
           type: string
-          enum: [BROADCAST, ALREADY_IN_CHAIN]
+          enum: [BROADCAST, ALREADY_IN_CHAIN, WITHDRAWN]
           description: >
             BROADCAST is the normal arm; ALREADY_IN_CHAIN means a
             previously-sealed identical exit was found confirmed at
-            submit time.
+            submit time; WITHDRAWN means the stake was still a plan and
+            was withdrawn, with no transaction.
         confirmed_height:
           type: integer
           format: int64

@@ -105,24 +105,15 @@ impl StakeEngine {
         Ok(())
     }
 
-    /// Steps 1–5 shared verbatim by the [`PlanBondPost`](crate::engine::stake_engine::persona::PlanBondPost) and [`AssembleBond`](crate::engine::stake_engine::bond::AssembleBond)
-    /// handlers: validate the handle, cross-check it against the ticket's slot,
-    /// preflight the OS entropy source, draw the guarded entry gap, plan the
-    /// entry seam, and emit the GF-7 hooks. Returns the validated handle slot and
-    /// the placement plan.
-    ///
-    /// This is the **single definition** of a security-relevant sequence — the
-    /// RNG source preflight, the double-jitter degeneracy guard, the
-    /// timing-decorrelation plan, and the observer emission. Both bond handlers
-    /// must run it identically; keeping it in one place means a future change to
-    /// the draw/guard discipline (a stronger degeneracy check, a new observer
-    /// event) lands once rather than silently diverging between two copies and
-    /// weakening the timing firewall in the un-updated path with no compile error.
-    pub(crate) fn validate_and_draw_bond_offset(
-        &mut self,
+    /// Steps 1–2 shared by the [`PlanBondPost`](crate::engine::stake_engine::persona::PlanBondPost)
+    /// and [`AssembleBond`](crate::engine::stake_engine::bond::AssembleBond)
+    /// handlers: validate the handle and cross-check it against the ticket's
+    /// slot. Returns the validated handle slot.
+    pub(crate) fn validate_bond_handle(
+        &self,
         handle: &PersonaHandle,
         ticket_slot: PSlot,
-    ) -> Result<(PSlot, BlockCount), StakeEngineError> {
+    ) -> Result<PSlot, StakeEngineError> {
         // 1. Validate the handle: generation currency + slot membership.
         self.validate_handle(handle)?;
 
@@ -135,7 +126,28 @@ impl StakeEngine {
                 ticket_slot,
             });
         }
+        Ok(handle_slot)
+    }
 
+    /// The bond-post delay draw, taken **once**, at the request
+    /// ([`PlanBondPost`](crate::engine::stake_engine::persona::PlanBondPost)),
+    /// after [`Self::validate_bond_handle`]: preflight the OS entropy source,
+    /// draw the guarded entry gap, and emit the GF-7 hooks. Returns the draw
+    /// `s ~ U[0, W]` the plan persists (`ARCHIVAL_BOND_POST_DELAY.md` BD-Q2).
+    ///
+    /// Assembly at the due block never draws: a second sample biases the post
+    /// earlier, so [`AssembleBond`](crate::engine::stake_engine::bond::AssembleBond)
+    /// validates the handle and nothing else.
+    ///
+    /// This is the **single definition** of a security-relevant sequence — the
+    /// RNG source preflight, the degeneracy guard and the observer emission.
+    // `self` carries the GF-7 observer the draw emits to; a build without the
+    // hooks reads nothing else of it.
+    #[cfg_attr(not(feature = "gf7-hooks"), allow(clippy::unused_self))]
+    pub(crate) fn draw_bond_delay(
+        &mut self,
+        handle_slot: PSlot,
+    ) -> Result<BlockCount, StakeEngineError> {
         // 3. Preflight the OS entropy source (Round 3 — source failure, fail-loud).
         //    `GapRng::next_u64` is infallible; a source failure therefore must be
         //    caught here via `try_fill_bytes` before calling `draw_entry_gap`.
@@ -159,12 +171,15 @@ impl StakeEngine {
         // gated, at session start) is wired in `on_start` — see
         // `run_session_self_cert` and the `conformance` feature.
 
-        // 5. The bond post fires `spread` blocks after the private intent `t0`.
-        //    There is no second event to order and no plan to build: only the
-        //    post is chain-attributable, the funding transfer is the unnamed
-        //    CT-hidden FCMP++ input (`ARCHIVAL_FIREWALL_GATE6.md` pass-4 (d) +
-        //    note 8), so the order coin was retired and the offset *is* the draw.
+        // 5. The bond post is due `spread` blocks after its funding's anchor
+        //    (BD-Q2). There is no second event to order: only the post is
+        //    chain-attributable, the funding transfer is the unnamed CT-hidden
+        //    FCMP++ input (`ARCHIVAL_FIREWALL_GATE6.md` pass-4 (d) + note 8),
+        //    so the order coin was retired and the delay *is* the draw.
         let bond_post_offset_blocks = BlockCount::from_raw(spread);
+        // The slot is read only by the GF-7 emission below.
+        #[cfg(not(feature = "gf7-hooks"))]
+        let _ = handle_slot;
 
         // GF-7 hooks-spec §3: emit the draw-consumption and schedule events to
         // the injected observer. Sim-facing only — this block is compiled out
@@ -185,7 +200,7 @@ impl StakeEngine {
             });
         }
 
-        Ok((handle_slot, bond_post_offset_blocks))
+        Ok(bond_post_offset_blocks)
     }
 
     /// Project the public identity of a held slot. The caller must have

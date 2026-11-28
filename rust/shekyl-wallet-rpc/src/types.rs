@@ -1098,10 +1098,32 @@ pub struct DrainResult {
     pub confirmed_height: Option<i64>,
 }
 
-/// `unstake` result (PR-C): the sealed-then-dispatched exit's receipt.
-/// Same dispatch-verdict shape as [`DrainResult`] (both pipelines seal
-/// before dispatch); a type alias so the two cannot drift.
-pub type UnstakeResult = DrainResult;
+/// `unstake` result (PR-C): the sealed-then-dispatched exit's receipt, or
+/// the withdrawal of a stake that was still a plan
+/// (`ARCHIVAL_BOND_POST_DELAY.md` BD-Q3 as ruled 2026-11-26). Internally
+/// tagged on `verdict`, so the exit arms keep the [`DrainResult`] wire shape
+/// (`tx_hash`, `verdict`, `confirmed_height` iff `ALREADY_IN_CHAIN`) and the
+/// withdrawal carries no transaction because none was sent.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "verdict", rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum UnstakeResult {
+    /// The exit was sealed and broadcast.
+    Broadcast {
+        /// Transaction hash (lowercase hex).
+        tx_hash: String,
+    },
+    /// A previously-sealed identical exit was found confirmed at submit
+    /// time.
+    AlreadyInChain {
+        /// Transaction hash (lowercase hex).
+        tx_hash: String,
+        /// The daemon-claimed confirming height (untrusted display metadata).
+        confirmed_height: i64,
+    },
+    /// The stake was still a plan and was withdrawn. Nothing was sent; its
+    /// funds return to this wallet.
+    Withdrawn,
+}
 
 /// `collect_unstaked` result (PR-C). Internally tagged to match
 /// [`shekyl_engine_core::CollectOutcome`]: a `SWEPT` arm *requires*
