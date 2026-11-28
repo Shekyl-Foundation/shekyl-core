@@ -29,7 +29,7 @@
 //! move with the draw; the manifest records the spread.
 //!
 //! `c5.rs` stays: it is the instrument a floor run times with. A count
-//! here is the CI runner's x86 and never a floor figure (rule 76).
+//! here is the CI runner's x86 and never a floor figure (rule 176).
 
 use std::hint::black_box;
 

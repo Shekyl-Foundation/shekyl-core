@@ -723,7 +723,7 @@ impl<VF> From<VF> for ViewRead<VF> {
 ///
 /// A mismatch needs a reorg at least `SEEDHASH_EPOCH_LAG` (64) blocks deep
 /// between the two stages; two such reorgs during one block's admission is
-/// not an organic condition (rule 75: the rationale for the value). After
+/// not an organic condition (rule 175: the rationale for the value). After
 /// the last attempt the block is dropped as unproven and the driver does
 /// nothing further with it — a fresh relay starts a fresh
 /// [`FormAttempt::FIRST`]. The peer that relayed it is not penalised: the

@@ -47,7 +47,7 @@
 ///   the ceiling past `50M / 600` turns it red, forcing this derivation to be
 ///   re-run rather than silently under-covering.
 ///
-/// **Bounds for safe adjustment** (rule 75). Must satisfy
+/// **Bounds for safe adjustment** (rule 175). Must satisfy
 /// `0 < EXIT_FEE_RESERVE_ATOMIC < rung`, the rung the archival bond floor
 /// (asserted below and, against the floor, in `shekyl-engine-core`).
 /// Re-grounded against the tiling cover model (`ARCHIVAL_COVER_DRAW.md`,

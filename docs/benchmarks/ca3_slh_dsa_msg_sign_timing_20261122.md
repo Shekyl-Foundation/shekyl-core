@@ -104,7 +104,7 @@ drawn first from the stream. Every device draws the same ones.
 - **The maintainer's Windows laptop (Intel Core i9-11950H, Tiger Lake).**
   Target `x86_64-pc-windows-msvc` with `+crt-static`, no `RUSTFLAGS`.
 - **The floor device: the second Raspberry Pi 4, the 4 GB board** (rule
-  76's floor; Cortex-A72; no SSD).
+  176's floor; Cortex-A72; no SSD).
   - Target `aarch64-unknown-linux-gnu`, built on the device at `-j 2`.
   - Under a quiet claim, queued after `CA-3`'s FN-DSA run and the ML-DSA
     run.

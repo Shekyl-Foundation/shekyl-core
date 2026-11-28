@@ -7,7 +7,7 @@
 
 # The rule
 
-Rule 25 (Rick, 2026-11-18): a variant of a `pub` enum, and a `pub` field
+Rule 125 (Rick, 2026-11-18): a variant of a `pub` enum, and a `pub` field
 of a `pub` struct, in a workspace crate carries no `#[cfg(...)]` that
 names a feature. The member exists in every build; the feature gates the
 code that constructs or fills it. Cargo unifies features across a build,
@@ -461,7 +461,7 @@ def check(root: Path, allowed: dict[tuple[str, str, str], str]) -> int:
             print(
                 f"::error file={path},line={line}::{kind}::{member} is gated by `{attr}`: "
                 "a variant of a pub enum or a pub field of a pub struct exists in every build; "
-                "gate the code that constructs it instead (rule 25)"
+                "gate the code that constructs it instead (rule 125)"
             )
             failed = 1
     for key, owner in sorted(allowed.items()):

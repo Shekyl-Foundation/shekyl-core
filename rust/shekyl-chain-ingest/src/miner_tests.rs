@@ -108,7 +108,7 @@ const SEARCH_HASHES: u64 = EXPECTED_MULTIPLE * EXPECTED_HASHES;
 /// workers stopped hashing, or the host starved them for this long. Not a
 /// verdict on the search, which only the hash count gives. Twenty minutes
 /// is far past the 120 hashes at the floor device's 1.25 s each, about
-/// 2.5 minutes on one worker (rule 76, `DRS_X_STORE_FLIP.md` PR2-Q2).
+/// 2.5 minutes on one worker (rule 176, `DRS_X_STORE_FLIP.md` PR2-Q2).
 const HANG_AFTER: Duration = Duration::from_secs(20 * 60);
 
 /// How often the wait reads the miner's count while no block has come.

@@ -1,3 +1,10 @@
+---
+description: Address-format discipline. One canonical lowercase Bech32m string per address, decoders refuse every other spelling, and no new HRP without a specification. Apply when adding, encoding, parsing or displaying an address or an HRP.
+alwaysApply: false
+scope: estate
+repos: [core, gui]
+---
+
 # Address Format Discipline
 
 Resist address-format proliferation. Bitcoin's multisig ecosystem

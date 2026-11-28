@@ -73,7 +73,7 @@
 //! a consensus surface, onion registration, or the W₂ rig. The rig extends
 //! this loop with the concurrent-batch measurement shape (§9); the
 //! placeholder [`serve::MAX_INFLIGHT`] (SPIKE-PIN-2) is derived there on
-//! the provisioning-floor hardware (rule 76).
+//! the provisioning-floor hardware (rule 176).
 //!
 //! # Privacy invariants (carried from the SP-T3 spike as tests, not memories)
 //!

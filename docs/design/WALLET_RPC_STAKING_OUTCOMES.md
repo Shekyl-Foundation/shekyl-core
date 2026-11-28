@@ -399,7 +399,7 @@ gain a match (WR-Q3).
   handle is named (WR-Q5).
 
 **Schema.** `PENDING_POST_VERSION` 12 → 13, refuse-not-migrate, schema
-snapshot (rule 42), shared with WR-Q3's `reference_height`.
+snapshot (rule 142), shared with WR-Q3's `reference_height`.
 
 **Falsifier.** `a_terminal_verdict_holds_the_post_and_never_resends`
 (`engine/pscan/dispatch_tests.rs`) and
@@ -436,7 +436,7 @@ became the return at `funds_return_at`.
 **The reference height is durable.** Each pending record gains
 `reference_height: BlockHeight`, written at assembly, where the height is
 already in hand (`reference.height`; `release_dispatch.rs:506`). Schema
-v13, refuse old files (rule 42), shared with WR-Q2. The transaction
+v13, refuse old files (rule 142), shared with WR-Q2. The transaction
 itself carries only a block hash (`rv.referenceBlock`,
 `blockchain.cpp:3600-3601`), and resolving that hash every tick through
 the wallet's own chain view could fail to answer.

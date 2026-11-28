@@ -520,7 +520,7 @@ own `db_wtxn_guard` (a no-op under a batch, its own transaction
 otherwise) around a single `set_archival_serve_credit_bit`, so it is
 atomic by construction, and it is **nettype-fenced**: the first thing it
 does is refuse unless `m_nettype == FAKECHAIN` (`:5242`), which is
-rule 71's shape — the divergence is named, loud, and confined to the
+rule 171's shape — the divergence is named, loud, and confined to the
 test network rather than branching consensus behaviour. **Verdict: PASS.**
 
 **Two test-support writers** complete the write-path census and are named
@@ -1663,19 +1663,19 @@ value, no padding slack, no platform-dependent integer width, no float.
 **A late encoding change is consensus-visible, not a refactor.**
 
 **That last sentence has mechanical enforcement behind it since DRS-E1
-increment 2 (2026-09-14).** Rule 42's `schema-snapshot.yml` runs the chain
+increment 2 (2026-09-14).** Rule 142's `schema-snapshot.yml` runs the chain
 store's `codec::snapshot_tests`: every `codec::Canonical` impl's fixture
 encodings, the table catalogue (`schemas/tables.snap`), and the
 property-cell catalogue (`schemas/properties.snap`) are pinned, and any
 snapshot change requires `SCHEMA_VERSION` (`src/codec/schema_version.rs`) to
 be numerically greater at the PR head than at its base. *Superseded text,
-retained:* at the freeze (`ba4b3c73a`) rule 42 was scoped by globs to the
+retained:* at the freeze (`ba4b3c73a`) rule 142 was scoped by globs to the
 wallet crates and `rust/shekyl-chain-store` was outside them, so the codec
 stability this section depends on was a convention, not a gate; DRS-0 slice
 C's §11.1 stated the matching store-side rule with the same gap, and
-extending rule 42 to the crate was escalated as a rules change rather than
+extending rule 142 to the crate was escalated as a rules change rather than
 assumed. That escalation is discharged; the gate is described in
-[`42-serialization-policy.mdc`](../.cursor/rules/42-serialization-policy.mdc)
+[`142-serialization-policy.mdc`](../.cursor/rules/142-serialization-policy.mdc)
 §"Chain-store codec snapshot".
 
 **§6.3 independence, made checkable per value type:** *can the canonical

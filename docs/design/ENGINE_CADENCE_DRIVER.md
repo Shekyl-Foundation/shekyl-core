@@ -164,7 +164,7 @@ silent when the chain does, so the loop carries a wall-clock watchdog
 *on the tick*: if no height advance is observed for
 `CHAIN_STALL_ALARM_SECONDS` (provisioned at 30 minutes = 15 blocks at
 the 120 s target; rationale and bounds in the constant's doc per rule
-75), the driver raises the `ChainProgress` operator alarm and keeps
+175), the driver raises the `ChainProgress` operator alarm and keeps
 polling. The alarm clears on the next observed advance. Legs do not
 fire while stalled — firing against a known-stale view is the thing
 the tick base exists to prevent.
@@ -302,7 +302,7 @@ driver owns retry across calls.
 ### Leg 3 — per-epoch claim (every tick; may no-op)
 
 Fires on settlement close, uniform across all wallets, **no jitter** —
-see §4. Reads epoch geometry as **data** (rule 71): the leg computes
+see §4. Reads epoch geometry as **data** (rule 171): the leg computes
 "newly settled epoch" from the tip height and
 `effective_settlement_epoch_blocks()`; there is no nettype control
 flow and no driver-local "regtest ticks fast" skip. The test

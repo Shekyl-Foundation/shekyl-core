@@ -214,7 +214,7 @@ The choice the Phase 1 stub left open ("newtype everywhere" vs
   `ChainTip.chain_height` / `BlockHashAt.chain_height` /
   `BlockHeaderAt.chain_height` / `BlockAt.chain_height`, and
   `Rpc::get_height` are named clocks that return `ChainCount`.
-- **C8 C++ daemon glue stays `u64`.** Rule 20: this campaign does not
+- **C8 C++ daemon glue stays `u64`.** `RULE_20_RUST_VS_CPP`: this campaign does not
   retype C++. The wire table still names those producers so a Rust
   consumer cannot guess.
 - **C9 `compile_fail` per conversion boundary** lands in the retype PR
@@ -335,7 +335,7 @@ quantity.
   `BlockHeight`; `anchor_t0` / due / alarm / dispatch `at` retyped
   together (WI-3 R2-1). No numeric change (Phase 1 pin: a 3-block chain
   still reports 3). Persisted stamp fields took schema bump
-  `PENDING_POST_VERSION` 10 → 11 (rule 42; postcard bytes identical).
+  `PENDING_POST_VERSION` 10 → 11 (rule 142; postcard bytes identical).
   C9 `compile_fail`s land in `shekyl-types` crate docs. Instant±span
   algebra for height and count is one family (`block_axis.rs`);
   exclusive-end ordinals convert back with `from_next_height`; due

@@ -40,7 +40,7 @@ const CONSOLE: &str = "console";
 /// Unix epoch, little-endian.
 const CONSOLE_RESET: &str = "console-reset";
 
-/// A record's first byte: its version (rule 42's discipline for persisted
+/// A record's first byte: its version (rule 142's discipline for persisted
 /// state: a change of shape is a new version, refused by an older reader).
 pub const RECORD_VERSION: u8 = 1;
 

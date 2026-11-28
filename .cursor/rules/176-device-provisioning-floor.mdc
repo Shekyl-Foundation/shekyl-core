@@ -5,6 +5,7 @@ globs:
   - rust/shekyl-relay-privacy/**
   - rust/shekyl-relay/**
   - docs/design/DAEMON_RELAY_PRIVACY.md
+scope: core
 ---
 
 # Device Provisioning Floor
@@ -79,7 +80,7 @@ their existing hardware qualifies.
 
 The floor is **freeze-coupled**: constants derived from it are network-wide, so
 raising it shortens them for everyone — a coordinated change to a privacy
-constant, which [`75-system-autonomy`](75-system-autonomy.mdc) exists to
+constant, which [`175-system-autonomy`](175-system-autonomy.mdc) exists to
 minimise. The two errors are **not symmetric**:
 
 - **Floor set too low** → constants are generous → everyone sees the cost,

@@ -32,7 +32,7 @@ use crate::header::RequestHeader;
 /// `ArchivalBondValue` endpoint column at the drawable snapshot, `EU-D4`),
 /// never from a vin and never from a response. The crate cannot check
 /// where the bytes came from; the type is what the review checks. The
-/// bond wire itself stays a bare array (rule 42).
+/// bond wire itself stays a bare array (rule 142).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct ServingEndpoint([u8; 32]);
 
@@ -94,7 +94,7 @@ pub(crate) fn verifies(
 /// (`SF-D7` amendment). The types carry that obligation: a
 /// [`ServingEndpoint`] is minted from record bytes, and a key type parses
 /// only its canonical encoding. A call site constructing either from wire
-/// or response bytes is the review's rule-19 catch, not this crate's.
+/// or response bytes is the review's rule-119 catch, not this crate's.
 ///
 /// The key is the persona's **receipt key** (`receipt_sign_pk`, hybrid
 /// scheme 3). A fetch against the target reads a receipt-width envelope

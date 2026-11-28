@@ -9,7 +9,7 @@ after §2.7 C0 co-lands on `dev`. Planning doc branch:
 `feat/stage-1-pr7-economics-engine-design` → PR to `dev`. Opened from `dev`
 tip `2cf4cbfde` (post–PR #82 `PersistenceEngine` design merge). This document
 follows [`STAGE_1_PER_PR_TEMPLATE.md`](../design/STAGE_1_PER_PR_TEMPLATE.md) and cites
-[`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
+[`126-sub-pr-design-discipline.mdc`](../../.cursor/rules/126-sub-pr-design-discipline.mdc)
 explicitly.
 
 **Round 0 reopen criterion (trait identity / scope guard) is NOT triggered** —
@@ -59,7 +59,7 @@ and `feat/stage-1-pr7-economics-engine` as siblings off post–7-base `dev`. Pha
     not theft. Anchors `burn_amount` threat narrowing (§3.2).
 - **Per-PR template / process.**
   [`STAGE_1_PER_PR_TEMPLATE.md`](../design/STAGE_1_PER_PR_TEMPLATE.md),
-  [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc).
+  [`126-sub-pr-design-discipline.mdc`](../../.cursor/rules/126-sub-pr-design-discipline.mdc).
 - **Prior PRs (shape precedent).**
   [`STAGE_1_PR_2_LEDGER_ENGINE.md`](../completed/STAGE_1_PR_2_LEDGER_ENGINE.md),
   [`STAGE_1_PR_6_PERSISTENCE_ENGINE.md`](STAGE_1_PR_6_PERSISTENCE_ENGINE.md).
@@ -1312,7 +1312,7 @@ must branch from that merge commit; C2a′ is an ancestor by branch topology (H3
 **Out of scope:** wallet `EconomicsEngine` trait (7-trait), Phase 0 §2.7
 amendment, new economics parameters.
 
-## `07-consensus-atomic-cutovers.mdc` disposition
+## `107-consensus-atomic-cutovers.mdc` disposition
 
 | Criterion | Met? | Note |
 |-----------|------|------|
@@ -2049,6 +2049,6 @@ on the other's trait methods; Stage 1 closeout requires both slots on `dev`.
 
 *Template:* [`STAGE_1_PER_PR_TEMPLATE.md`](../design/STAGE_1_PER_PR_TEMPLATE.md).
 *Spec:* [`V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md) §2.7+.
-*Process:* [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc).
+*Process:* [`126-sub-pr-design-discipline.mdc`](../../.cursor/rules/126-sub-pr-design-discipline.mdc).
 *Calibration:* [`DESIGN_CONCEPTS.md`](../DESIGN_CONCEPTS.md),
 [`design/REWARD_EMISSION_LEG.md`](../design/REWARD_EMISSION_LEG.md).

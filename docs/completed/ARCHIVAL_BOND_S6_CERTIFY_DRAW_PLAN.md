@@ -13,7 +13,7 @@ PR #163 (2c-2b) merges**, because S6 wiring consumes 2c-2b substrate:
 **Parent design:** `ARCHIVAL_BOND_REQUEST_2C2B_PLAN.md` §3.3 (S6 design settled),
 §4 R0-D4 (sample size pinned + measured); `ARCHIVAL_FIREWALL_GATE6.md` §10.12;
 `shekyl-standoff` crate doc (single-source + float-free-production doctrine).
-**Process rule:** `26-sub-pr-design-discipline.mdc` (opt-in; cited because this
+**Process rule:** `126-sub-pr-design-discipline.mdc` (opt-in; cited because this
 touches the gate-6 firewall RNG surface — but **scoped tighter than 2c-2b**: the
 design is already settled in 2c-2b §3.3, so this is a **2-round** effort, not 6).
 **Status:** **IMPLEMENTED (2026-06-20) — Rounds 1 + 2 closed (§2.2), R0-D#
@@ -270,7 +270,7 @@ but verify, since the failure mode is a panic, not a graceful error).
 Round-1 first action is now *implementation* of this shape + the empty-enum
 compile check, not investigation.
 
-### Round plan (rule 26, tightened)
+### Round plan (rule 126, tightened)
 
 - **Round 1 — implement the gating + failure path (DQ1/DQ2/DQ3).** DQ2 is now
   resolved (§2.1) — this round **implements** the `StakeEngineStartError` shape +

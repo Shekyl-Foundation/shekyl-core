@@ -6,7 +6,7 @@
 §8.0).** Owns no open residue. Ground at writing: `dev@e951cd309` (§0).
 Identifier families **`SCV-`** (findings) and **`SCV-Q`** (questions) are
 registered in [`IMPLEMENTATION_INDEX.md`](../design/IMPLEMENTATION_INDEX.md) §2
-(rule 94).
+(rule 194).
 
 **The short version.** The brief asked how to build CEN-J8–J10 in Rust from
 `PDM-Q6` item 4's re-keyed preimage. The answer is that J8–J10, as censused,
@@ -52,7 +52,7 @@ above a **height**. So `archival_bond_holds_shard(…, h_fire)`
 the shard. That happens when `H_fire` lands on `H_close(e + 1)`, the
 height at which epoch `e`'s slash connects. The Rust `holds_shard_at`
 agrees with the predicate and the C++ does not. The disposition is **no
-C++ fix** (rule 20), the same as `SO-D8` Q15's prohibition (§2.5).
+C++ fix** (`RULE_20_RUST_VS_CPP`), the same as `SO-D8` Q15's prohibition (§2.5).
 
 CEN-I18's vacuity on the credit form is correct, as the brief says
 (`tx_against_tests.rs:668`). `census.rs:492–494` lists J8–J10 as `pending`,
@@ -266,8 +266,8 @@ SO-D8 §8, which this document cites rather than duplicates.
 | *(new)* SO-D9 (i) | — | `epoch(h) = E` at the operand `h` | ruled, lands as a new row |
 
 The new `CEN-` ids are minted at Slice C (SO-D8 §8). This round mints none.
-The **validation surface is one** (rule 19): J3, J7, J8, J9 and J10 change
-together with J1/J2's wire (the `h` field, rule 42). Slice 8 cannot land
+The **validation surface is one** (rule 119): J3, J7, J8, J9 and J10 change
+together with J1/J2's wire (the `h` field, rule 142). Slice 8 cannot land
 J8–J10 as a unit separate from that surface.
 
 ---
@@ -355,7 +355,7 @@ them.
 | --- | --- | --- | --- |
 | **SCV-1** | **The successor's authorization waits in a circle, and the lane on the circle has closed.** (1) SO-D8 §8 precondition 2 (`:2274–2288`): membership against `assignment(h)` and dedup `(P,s,E,h)` "wait here, with the writer call site", and the falsifier is "a production caller of the settlement write on the Rust apply/slash path". (2) DRS-E4 §2.2 (`docs/completed/DRS_E4_ARCHIVAL_WRITER.md:338`) scopes "the settlement writer … out: blocked on the per-challenge admission cutover". (3) `ARCHIVAL_SETTLEMENT_WRITER.md` §5.1 (`:324`) says the writer "cannot be live before the cutover". Each document hands the unit to the other, and DRS-E4 is closed as record. No open lane can fire precondition 2's falsifier. This is a deferral whose blocker is a deferral (rule 22, "Two forms a deferral takes when nobody chose it"), and it now has no owner. The same event goes by four names: "the cutover", "the assignment cutover", "the per-challenge admission cutover", "E4 / S-ARCH". | the three cites | maintainer — `SCV-Q3` |
 | **SCV-2** | `PDM-Q6` item 4 row 1's signed bounds term is unreconciled with `SF-D8`, and under `SHT-Q2` it binds nothing (§2.2). Four places carry it forward as the successor: the C++ comment above the live gate (`blockchain.cpp:4750`), the FOLLOWUPS J8–J10 row (`:21`), the census J8 and J10 notes (`CONSENSUS_RULE_CENSUS.md:491`, `:493`), and the brief. | PDM `:794–797`, `:850`; `ARCHIVAL_SHARD_FETCH.md` `SF-D8`; `shard_of` | maintainer — `SCV-Q2` |
-| **SCV-3** | No single document states the R-B record's layout. SO-D8 §2.1 item 1 says "the RF round reopens" (`h` on the kept side, rule 42), but `ARCHIVAL_RESPONSE_FORMAT.md` records no reopen. The `PDM-Q6` item-4 rule ("reopenings get a dated sub-section in the owning doc") is unmet in RF, CREDIT_WIRE and PER_CHALLENGE_RECORD. A grep for `PDM`, `SHT`, `tx_id` and "tx unit" returns zero hits in each. So item 4's own reversion falsifier ("the owning doc's dated sub-section cites no leaf-specific premise") cannot be evaluated. | PDM `:843–845`, `:866–868`; RF banner | Slice C's precondition (§6 sizing) |
+| **SCV-3** | No single document states the R-B record's layout. SO-D8 §2.1 item 1 says "the RF round reopens" (`h` on the kept side, rule 142), but `ARCHIVAL_RESPONSE_FORMAT.md` records no reopen. The `PDM-Q6` item-4 rule ("reopenings get a dated sub-section in the owning doc") is unmet in RF, CREDIT_WIRE and PER_CHALLENGE_RECORD. A grep for `PDM`, `SHT`, `tx_id` and "tx unit" returns zero hits in each. So item 4's own reversion falsifier ("the owning doc's dated sub-section cites no leaf-specific premise") cannot be evaluated. | PDM `:843–845`, `:866–868`; RF banner | Slice C's precondition (§6 sizing) |
 | **SCV-4** | **The pass record has two ruled carriers.** CEN-B4 verifies `SF-D8` countersignatures in the block's attestation witness, recomputed against the header's `attestation_root` (census `:338`; `ARCHIVAL_CREDIT_WIRE.md` §3 shape 4; landed C++ `verify_block_attestation`). SO-D8 Q9 (§7.6, RULED 2026-09-16) puts records in ordinary `serve_credit_only` transactions, "never the coinbase", with residence per `RF-D10`. Both verify through the same function (§2.2), so the verify code is one. The **carrier** is two. | census B4; SO-D8 §2.1 item 8; `SETTLEMENT_WRITER.md:651–654` | maintainer — `SCV-Q4` |
 | **SCV-5** | SO-D9's sentence that "(i) on the R-A operand flips exactly one block per epoch" is not true at this pin. J7's window is `h_seal(E) < h ≤ last_block(E)`, with `h_seal = E·SEB + 1` (`constants.rs:78`) and `last_block = (E+1)·SEB − 1` (`settlement_schedule.rs:171`; the rename at `9ca950f4a` was value-preserving). Every admissible slot is therefore inside epoch `E`, and (i) evaluated at the connecting height is implied by J7 and cannot fail on its own. **Moot**, because (i) lands on R-B's operand `h`, where it is independent. This is recorded so that nobody writes a `CenRow` at the R-A operand whose negative fixture J7 refuses first. | FOLLOWUPS `:225`; SO-D8 `:2312` | Slice C (the SO-D9 row's fixture) |
 | **SCV-6** | The bond-admission closed-and-final shard predicate, which now carries J8's "the shard exists" job, is RULED and unbuilt. Its FOLLOWUPS row says it is "gated on the A4 length rows (S-CHAIN-W) and S-PRUNE deriving `b_*`". Both gates dissolved by ruling: `PDM-Q6` item 5 says "A4 is not owed" (2026-09-23), and `SHT-Q2` retired `b_*` for `shard_of(cumulative_archival_len)`, which `closed_shards_through` reads today. A fired condition read as pending. | FOLLOWUPS `:205`; PDM `:975` | slice 8 (a 4.J bond row) |
@@ -363,7 +363,7 @@ them.
 | **SCV-8** | Under R-B, `SLK-Q1`'s premise that the fold is asked at `h_fire ∈ (H_seal, H_close]` loses its height term: `H_fire`'s function is deleted, and its successor is unwritten (`SCV-12`). The horizon arithmetic re-derives once `SCV-12` is answered, not before. | `DRS_E4_SLASH_LOG_ROUND.md` §2 | the `SLK-` round |
 | **SCV-9** | The deleted mirror **had** a production caller. Until #937 merged, the Rust validator's G7 called `serve_credit_decisions::serve_credit_block_unique`. The brief's "zero production callers" was true of D-SC-A/B (the gate mirror) and false of D-SC-C. Commit `583214b5f` re-homed G7 to `second_occurrence` (`rules/body.rs:316`), so this is not a defect in #937. It is a precision note on a claim that will otherwise be cited as precedent. | `583214b5f` | record |
 | **SCV-10** | The FOLLOWUPS J8–J10 row labels the rows "J8 (seal on chain), J9 (fire-height schedule) and J10 (the leaf-preimage signature)". The census defines seal-on-chain as **J7**, J8 as holding at `H_fire`, J9 as the derived leaf index, and J10 as the response verify (`CONSENSUS_RULE_CENSUS.md:490–493`). | `docs/FOLLOWUPS.md:21` | Slice C's FOLLOWUPS re-key (§6 commit 5) |
-| **SCV-11** | Leaf-unit and `T`-era text is still stated as current in the docs Slice C reads first. The grep surface is `rg -n 'LeafStore::frozen_segment\|segment_subroot_rk\|\(b_k, b_\{k\+1\}\)\|k·T' docs/design`. Owners: RF (`:501–556`, `:579–585`), PER_CHALLENGE_RECORD (`:175–181`), CREDIT_WIRE (`:59–64`; its banner still says "Round opened … No wire byte-layout is pinned yet" against its own `:342` "RESOLVED"), CHALLENGE_MECHANISM (`:108–114`, `:163`), and PDM item 4 (`:850–856`, `T`). Separately, five documents attribute "the test IS a read" to `ARCHIVAL_CHALLENGE_MECHANISM.md` §9. It is `ARCHIVAL_TEST_EQUALS_JOB_SEQUENCING.md` §9 (`:988`). | the grep | each owning doc; **not this PR** (rule 26: not a redesign) |
+| **SCV-11** | Leaf-unit and `T`-era text is still stated as current in the docs Slice C reads first. The grep surface is `rg -n 'LeafStore::frozen_segment\|segment_subroot_rk\|\(b_k, b_\{k\+1\}\)\|k·T' docs/design`. Owners: RF (`:501–556`, `:579–585`), PER_CHALLENGE_RECORD (`:175–181`), CREDIT_WIRE (`:59–64`; its banner still says "Round opened … No wire byte-layout is pinned yet" against its own `:342` "RESOLVED"), CHALLENGE_MECHANISM (`:108–114`, `:163`), and PDM item 4 (`:850–856`, `T`). Separately, five documents attribute "the test IS a read" to `ARCHIVAL_CHALLENGE_MECHANISM.md` §9. It is `ARCHIVAL_TEST_EQUALS_JOB_SEQUENCING.md` §9 (`:988`). | the grep | each owning doc; **not this PR** (rule 126: not a redesign) |
 | **SCV-12** | **"The fire height" has no referent under R-B.** SO-D8 §8's enumeration row asks `holds_shard_of` "at the fire height" (Q3 (3.3)). The same section's "Deleted" row removes the `challenge_fire_height` path. Nothing in SO-D8 names the replacement. The draw block `h` is the natural reading, but it is a reading. This is a term in the holding predicate's operand, the place the brief's §8 says the height/count family recurs. `ARW-27` shows where the choice bites: epoch `e`'s slash connects at `slash_deadline_height(e) = H_close(e + 1)` (`settlement_schedule.rs:190`), inside `e + 1`'s range. So whatever height replaces `H_fire` must state which side of a same-block slash it reads, and the answer must be strictly-above, as `holds_shard_at` is. | SO-D8 §8 (enumeration and "Deleted" rows); `:1347` | Slice C's pre-flight; `SLK-Q1` |
 | **SCV-13** | **PR #937's closing banner points slice 8's pass admission at one leg of it.** `docs/completed/DRS_E4_ARCHIVAL_WRITER.md:25–26` says "slice 8's pass admission is `ARCHIVAL_SHARD_FETCH.md` `SF-D8`'s", and `:1541` calls that file "slice 8's doc". `SF-D8` owns `P`'s signed message and the anchor window. It does not specify membership in `assignment(h)`, the `W₂` deadline, witness authentication, the `(P, s, E, h)` dedup, or the carrier; those are SO-D8 §8's (§2.2, §3). A slice 8 built from `SF-D8` alone admits a `P`-countersigned read for a pair nobody was assigned, which is SO-D8 §8 evidence item 8, collusion. The same shape as `SCV-2`: one ruling's leg read as the whole rule. | banner `:25–26`, §9 `:1541`; SF doc status block | `SCV-Q3` |
 
@@ -378,7 +378,7 @@ Commits 4 and 5 (the `DEL-008` gate and the pointers) land with the
 rulings, in the PR that records them. The table below is the plan as
 written.*
 
-Commit 1 is this Round-0 document, which lands before any ruling: rule 26
+Commit 1 is this Round-0 document, which lands before any ruling: rule 126
 halts implementation, not the pre-flight record. Commits 2–5 cut only
 **after §8 is ruled**. None of them is Slice C's; SO-D8 §8 is Slice C's
 plan.
@@ -402,7 +402,7 @@ What it needs before it can cut:
 
 1. the circle in `SCV-1` broken: one owner for admission rows plus the writer call site;
 2. Q9's set-commitment bytes ruled (§7.6.1, PROPOSED);
-3. the R-B record layout written once (`SCV-3`, the RF reopen with its rule-42 bump);
+3. the R-B record layout written once (`SCV-3`, the RF reopen with its rule-142 bump);
 4. `SCV-4`'s carrier ruled;
 5. the bond-admission shard predicate (`SCV-6`) built or ruled independent.
 
@@ -444,7 +444,7 @@ of 4.J (J19–J26); bond-post rows J11–J18 beyond `SCV-6`; the economics of
 unpaid inclusion (FOLLOWUPS `:227`).
 
 **No test was run.** This is a documentation round, and none of its claims
-is a measurement. Rule 26's artifact execution applies to Slice C's
+is a measurement. Rule 126's artifact execution applies to Slice C's
 pre-flight, not here.
 
 ---

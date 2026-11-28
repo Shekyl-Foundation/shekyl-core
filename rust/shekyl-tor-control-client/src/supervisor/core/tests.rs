@@ -53,6 +53,7 @@ fn policy() -> Policy {
         clock_behind_after: super::CLOCK_BEHIND_AFTER,
         republish_after: super::REPUBLISH_AFTER,
         reply_bound: super::REPLY_BOUND,
+        vanguards: crate::vanguard_rotation::VanguardsMode::Off,
     }
 }
 
@@ -1316,6 +1317,7 @@ mod descriptor_rounds;
 mod directories;
 mod directory_silence;
 mod directory_uploads;
+mod guards;
 mod onion_path;
 mod overdue;
 mod pace;

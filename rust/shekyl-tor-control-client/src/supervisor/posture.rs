@@ -142,6 +142,16 @@ pub enum InboundCause {
     /// Clients reach whichever copy is newest. A republish would only race
     /// it, so none is sent.
     PublishedElsewhere,
+    /// The onion keeps its second-layer guards, and Tor refused their pins
+    /// (`TSR-W1`). The onion is not published until they are pinned. The
+    /// pinned Tor should accept them, so this is a defect to report; the pin
+    /// is asked again at the cap.
+    GuardsRefused,
+    /// The onion keeps its second-layer guards, and Tor's view of the
+    /// network could not fill the set (`TSR-W1`). The onion is not published
+    /// until they are pinned; the pin is asked again when Tor's consensus
+    /// changes.
+    GuardsUnfilled,
 }
 
 /// Can peers reach this node's onion (`TOR_SUPERVISOR.md` §4.1), in the

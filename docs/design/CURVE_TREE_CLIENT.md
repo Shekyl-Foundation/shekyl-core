@@ -161,7 +161,7 @@ The two **age** constants (distinct — do not conflate, §5.4):
 
 A dedicated crate is justified (`15-deletion-and-debt.mdc` — not ceremony): it
 carries persistent state (leaf store), a sync/reorg state machine, and parses
-**untrusted daemon input** (`20-rust-vs-cpp-policy.mdc` → Rust). It is a distinct
+**untrusted daemon input** (`RULE_20_RUST_VS_CPP.md` → Rust). It is a distinct
 concern from signing (`shekyl-tx-builder`) and scanning (`shekyl-scanner`).
 Reuses `shekyl-fcmp::tree` for crypto.
 
@@ -414,7 +414,7 @@ here as a migration, and it is worth setting down why:
   §7–§8, partitions that work by unit, and the leaf-store items have no subject
   once the proving state is not a store (§8 (iii) there). The CT-1 decision
   below stands as the record of what was built — and is Rust by default under the
-  untrusted-input→Rust policy (`20-rust-vs-cpp-policy.mdc`). So "shift to heed"
+  untrusted-input→Rust policy (`RULE_20_RUST_VS_CPP.md`). So "shift to heed"
   is not a migration question — it is *which Rust persistence for a new
   component*, decided on the wallet store's own merits.
 
@@ -431,7 +431,7 @@ small enough for a tiny sidecar store. So the honest first question is **flat
 mmap'd leaf array + small metadata store vs a general KV engine for the whole
 thing** — not heed-vs-LMDB. If a single KV engine is chosen for everything, then
 **heed** (LMDB format/semantics, mmap zero-copy, single-writer fits the one sync
-task) vs **redb** (pure-Rust, no C/FFI, `10-shekyl-first.mdc`-aligned, no
+task) vs **redb** (pure-Rust, no C/FFI, `110-shekyl-first.mdc`-aligned, no
 pre-sized map) is the real choice — but decided on this store, not as a referendum
 on the daemon's engine.
 
@@ -709,7 +709,7 @@ get_curve_tree_leaves { start_index: u64, count: u64 }
   `shekyl-fcmp::tree`) equals the `curve_tree_root` for `reference_height`
   (against the checkpoint root, and against the block header root). This KAT is
   the §1 DoD gate and lives with the prerequisite.
-- **C++ PR**, separate from this Rust client. Per `10-shekyl-first.mdc` the
+- **C++ PR**, separate from this Rust client. Per `110-shekyl-first.mdc` the
   client design (Rust, shekyl-core) is primary; the daemon endpoint is the
   lower-priority enabling change.
 
@@ -1437,7 +1437,7 @@ ask there would stall bond signing behind bulk redb reads.
   move off the shared reader onto messages.
 - **The copy is per chunk.** `serve.rs` records that whole-body copies make
   `MAX_INFLIGHT` (64) × 3.33 MB = 213 MB resident, which does not fit the
-  rule-76 floor. So the owner hands out one storage chunk (≤ 64 KiB) per
+  rule-176 floor. So the owner hands out one storage chunk (≤ 64 KiB) per
   reply, an owned copy: resident cost stays one chunk per connection, at
   about 52 round trips per shard. This narrows Q2's whole-body copy to the
   granularity the floor allows.

@@ -16,7 +16,7 @@
 //! participates in the same request-path composition as the timing types.
 //!
 //! **Home rationale.** `BlockSpan` has a single consumer today
-//! (this crate). Per `18-type-placement.mdc`, promoting them to `shekyl-types`
+//! (this crate). Per `118-type-placement.mdc`, promoting them to `shekyl-types`
 //! waits for a second consumer — `21-reversion-clause-discipline.mdc` reopening
 //! criterion: "a downstream crate names one of these types in its public API."
 

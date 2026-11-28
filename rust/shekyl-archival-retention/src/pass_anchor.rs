@@ -122,7 +122,7 @@ pub const PASS_ANCHOR_LAG_BLOCKS: BlockCount =
 ///
 /// `W₂` is the schedule's
 /// ([`SettlementSchedule::challenge_response_blocks`](crate::SettlementSchedule::challenge_response_blocks)),
-/// so this is rule-set data and is asked of every rule set (rule 71); `L`
+/// so this is rule-set data and is asked of every rule set (rule 171); `L`
 /// and the depth are [`PASS_ANCHOR_LAG_BLOCKS`] and
 /// [`PASS_ANCHOR_DEPTH_BLOCKS`]. A schedule whose epoch is too short to
 /// have a window satisfies it: no bundle is admissible under it at all.

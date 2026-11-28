@@ -3,7 +3,10 @@ description: Usability-first design principles for end-user-facing Shekyl interf
 globs:
   - rust/shekyl-cli/**
   - rust/shekyl-wallet*/**
-  - shekyl-gui-wallet/**
+  - src/**
+  - src-tauri/**
+scope: estate
+repos: [core, gui]
 ---
 
 # Usability

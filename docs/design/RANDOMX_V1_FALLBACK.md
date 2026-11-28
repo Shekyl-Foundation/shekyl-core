@@ -84,7 +84,7 @@ Kept from the v2 plan:
 - No `RX_BLOCK_VERSION`.
 - No PoW `major_version` / `hf_version` dispatch.
 - No env-var overrides of consensus constants.
-- Derived-first verifier design per `18-type-placement.mdc`.
+- Derived-first verifier design per `118-type-placement.mdc`.
 - `shekyl-pow-randomx` has no C ABI and no module-level runtime-mutable
   state.
 - C ABI lives in `shekyl-ffi`.

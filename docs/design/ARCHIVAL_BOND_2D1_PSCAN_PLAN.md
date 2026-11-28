@@ -9,7 +9,7 @@ closes `TM-3`; cross-reference table marks what 2d-1 can/can't address) — for 
 terminal-bond predicate exists (`Release` + Full-retirement) with `W` single-sourced from
 config for production; the cover output's *form* is verified-covered (no recovery carve-out;
 FA-6 false-negative-free modulo negligible KEM decap) and its sender corrected to the
-**principal**. Rounds accrete in this one doc. **Process rule:** `26-sub-pr-design-discipline.mdc`
+**principal**. Rounds accrete in this one doc. **Process rule:** `126-sub-pr-design-discipline.mdc`
 (firewall-load-bearing — getting the isolation boundary wrong is a privacy break, not
 a refactor, so the boundary is decided *first* and the rest derived from it).
 
@@ -514,7 +514,7 @@ enable** (rule-21) — not built now. Reasoning: the seam is a refactor of the *
 scanner's per-output path whose only purpose is to make a **rule-21-deferred** swap cheap;
 building it now is pre-provisioning flexibility for a maybe-never trigger, which
 [`21-reversion-clause-discipline`](../../.cursor/rules/21-reversion-clause-discipline.mdc)
-and [`70-modular-consensus`](../../.cursor/rules/70-modular-consensus.mdc) (no speculative
+and [`170-modular-consensus`](../../.cursor/rules/170-modular-consensus.mdc) (no speculative
 scaffolding) say to avoid. When a co-tenancy target reopens the CT-everything tax, the seam
 and its impl land together — the re-architecture cost is real but paid against a real target,
 not pre-paid. The CT compare (the correct-now half) did *not* wait on the seam.
@@ -731,7 +731,7 @@ DQ5/DQ6). Two refinements over the sketch above, with their rationale:
 
 **PR-B (remaining SP-5):** the driving P-scan **task** + injectable cadence (`ScanSchedule`);
 the **new sealed P-isolated cursor/inflow persistence** (the write-discipline: persist outputs
-→ seal cursor; rule-42 schema + version const — the genesis-freeze-sensitive surface that
+→ seal cursor; rule-142 schema + version const — the genesis-freeze-sensitive surface that
 motivated the split); `PFundingInflow` finalization at epoch-close; `Engine::start_pscan`
 wiring; and the DQ8 retirement/union-shrink reading consensus `W`. `block_source` and `inflow`
 keep their transient `#[allow(dead_code)]` until that task wires them.
@@ -746,7 +746,7 @@ points on the file-backed engine (`engine/pscan/start.rs`): `Engine::start_pscan
 (the auto-start lifecycle call — a staker gets its P-scan at production settings, a non-staker
 gets `Ok(None)`) and `Engine::start_pscan` (the on-demand entry, mirroring `start_refresh`;
 `NoStakeEngine` for a non-staker). Both run `PScanConfig::production()` at
-`DEFAULT_PSCAN_CADENCE` (60 s; rule-75 rationale + bounds on the constant); the
+`DEFAULT_PSCAN_CADENCE` (60 s; rule-175 rationale + bounds on the constant); the
 config-injectable seam stays `pub(crate)` as `start_pscan_with` for tests. The `PScanHandle`
 is **embedder-held, not engine-held**: the running task's store holds a strong engine arc, so
 engine-held storage would make the pair immortal; embedder-held makes "close stops the task"
@@ -1078,11 +1078,11 @@ independent gates that the `pending_releases` precedent only *looked* fused:
   argument is unchanged); no deployed
   wallet (RC tags included) has ever persisted
   a v1 `.wallet.pscan`, so nothing reads v1 forward → **no migration code**.
-- *The version number* is gated on **rule-42's snapshot guard** — a post-merge `.snap` diff forces
+- *The version number* is gated on **rule-142's snapshot guard** — a post-merge `.snap` diff forces
   the paired constant to move in the same PR (mechanical, persistence-independent). `pending_releases`
   needed no bump only because it rode v1's *creating* PR (a fresh `+` const line — a new, not a
   changed, version); this is a post-merge amend, so the bump is **forced**. It also honestly marks
-  the real `height → verified-frontier` shape change. No rule-42 escape was taken: suppressing the
+  the real `height → verified-frontier` shape change. No rule-142 escape was taken: suppressing the
   guard to preserve a "true amend" would weaken a mechanical, self-documenting invariant on
   sealed funds-bearing state to save one integer — a bad trade.
 
@@ -1114,7 +1114,7 @@ in-memory, per-session match set would be structurally absent exactly when SP-R0
 is also the *superset*: it supports corroboration at observation-time **or** retire-time, so it
 does not bet on SP-R0's still-settling shape. The accrual accumulates matches inside the same
 all-or-nothing `ingest` commit as the funding deltas, and converts them to the state-shaped twin
-`BondPostRecord` at the seal (rule 18, like the cursor/accrual split).
+`BondPostRecord` at the seal (rule 118, like the cursor/accrual split).
 
 **The match set is the most privacy-sensitive field in `PScanState`.** It is `P`'s
 persona-activity history (id × height × post-kind) — the exact thing the firewall keeps

@@ -37,7 +37,7 @@ shekyl-units = { path = "../shekyl-units", default-features = false }
 # `postcard_schema::Schema` is opt-in: only crates that persist these
 # newtypes into snapshot-checked blocks (today `shekyl-engine-state`) need
 # the derive. Foundational consumers (difficulty, consensus, economics)
-# stay free of the dependency. See `42-serialization-policy.mdc` for why the
+# stay free of the dependency. See `142-serialization-policy.mdc` for why the
 # named schema matters once a type lands in a persisted block. The `schema`
 # feature implies `std` via postcard-schema's `use-std`; the default build
 # does not.

@@ -1,6 +1,8 @@
 ---
 description: System-level design discipline. Apply to all changes.
 alwaysApply: true
+scope: estate
+repos: [core, gui, prism]
 ---
 
 # Shekyl is a system, not a feature collection

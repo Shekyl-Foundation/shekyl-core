@@ -42,7 +42,7 @@
 # Consumers depend on the version constant to recognize incompatible
 # bundles — letting a schema drift land without a version bump is a
 # silent data corruption risk (see `docs/MID_REWIRE_HARDENING.md` §3.4
-# and `.cursor/rules/42-serialization-policy.mdc`). For the chain store
+# and `.cursor/rules/142-serialization-policy.mdc`). For the chain store
 # the codec is also the digest's fold input, so a silent codec move is a
 # consensus-oracle move; and a table added, removed or re-keyed is a
 # layout change an old binary trips over at `open_table`, which is why
@@ -67,7 +67,7 @@ on:
       # `shekyl-oxide` crates. That closure is twelve first-party crates
       # plus vendored ones today and moves whenever a manifest does. Every
       # first-party and vendored crate is a path dependency under `rust/`
-      # (rule 25), so `rust/**` is the closure by construction -- there is no
+      # (rule 125), so `rust/**` is the closure by construction -- there is no
       # list here to drift. `workflow_gates_this_crate` derives the closure
       # from the manifests and asserts this trigger covers each member, so
       # narrowing this pattern goes red. An external encoder changing (a
@@ -75,6 +75,7 @@ on:
       # change, which is under the same pattern.
       - "rust/**"
       - ".github/workflows/schema-snapshot.yml"
+      - "scripts/ci/snapshot_header_only.py"
   # The push run on `dev` saves the build cache the pull requests restore
   # (the cache step below), and tests the snapshots on what the merges made.
   push:
@@ -226,6 +227,31 @@ jobs:
           echo "Files changed in this PR:"
           echo "${CHANGED}" | sed 's/^/  /'
           echo
+
+          # A snapshot's generated header, its leading run of `#` lines, is
+          # not its format: a change confined to it (a reworded header, a
+          # renumbered rule citation) moves no byte of any encoding and owes
+          # no version bump (ruled 2026-11-27). The script prints each
+          # changed snapshot whose body is the same at the merge base and
+          # the head, and those leave the list below; an added or deleted
+          # snapshot always stays. A `#` line after a snapshot's first body
+          # line is body, so changing it still owes the bump, and the script
+          # refuses any snapshot at the head that has one. Its selftest runs
+          # first, so the filter is tested before it is trusted.
+          python3 scripts/ci/snapshot_header_only.py --selftest
+          MERGE_BASE=$(git merge-base "${BASE_SHA}" "${HEAD_SHA}")
+          # An assignment, not a pipe: the script's exit is the verdict
+          # (rule 46), and `set -e` stops the step on a refusal.
+          mapfile -t CHANGED_LIST <<< "${CHANGED}"
+          HEADER_ONLY=$(python3 scripts/ci/snapshot_header_only.py \
+            --base "${MERGE_BASE}" --head "${HEAD_SHA}" "${CHANGED_LIST[@]}")
+          if [ -n "${HEADER_ONLY}" ]; then
+            echo "Snapshots whose only change is their # header (no format change, no bump owed):"
+            echo "${HEADER_ONLY}" | sed 's/^/  /'
+            echo
+            # grep exits 1 when every changed file was header-only; 2 is an error.
+            CHANGED=$(grep -Fxv -f <(echo "${HEADER_ONLY}") <<< "${CHANGED}" || [ $? -eq 1 ])
+          fi
 
           FAIL=0
           for entry in "${PAIRS[@]}"; do
@@ -444,7 +470,7 @@ jobs:
           One or more persisted-block schema changes landed without a
           matching version-constant bump. See
           `docs/MID_REWIRE_HARDENING.md` §3.4 for the required pairing,
-          and `.cursor/rules/42-serialization-policy.mdc` for the policy
+          and `.cursor/rules/142-serialization-policy.mdc` for the policy
           rationale. To fix:
 
             1. Decide whether the schema change is intentional.

@@ -135,6 +135,19 @@ impl ConsensusView {
     }
 }
 
+/// One eligible router entry for `GETINFO ns/all`, as Tor writes it: the
+/// guard manager's tests answer the consensus read with these.
+#[cfg(test)]
+pub(crate) fn ns_all_entry(fingerprint: [u8; 20], bandwidth: u64) -> String {
+    let identity = super::encoding::base64_encode_padded(&fingerprint);
+    let identity = identity.trim_end_matches('=');
+    format!(
+        "r relay {identity} digest 2026-11-27 00:00:00 192.0.2.1 9001 0\n\
+         s Fast Guard Running Stable Valid V2Dir\n\
+         w Bandwidth={bandwidth}\n"
+    )
+}
+
 /// Parse the candidate relay set from a `GETINFO ns/all` reply.
 ///
 /// Malformed or incomplete entries (no parseable identity) are skipped rather

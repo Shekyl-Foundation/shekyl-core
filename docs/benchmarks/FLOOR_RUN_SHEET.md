@@ -8,13 +8,13 @@ lists equal. A row leaves this sheet when its capture lands and the ledger
 row turns current, or when the ledger gives it another disposition.
 
 The device is the floor of
-[`76-device-provisioning-floor`](../../.cursor/rules/76-device-provisioning-floor.mdc),
+[`176-device-provisioning-floor`](../../.cursor/rules/176-device-provisioning-floor.mdc),
 the Raspberry Pi 4 Model B. The session is claimed on the shared estate
 before it starts (rule 38); hosts are named by role here (rule 37). Each
 session's record is a dated file under `docs/benchmarks/`, registered
 before the run, with the conditions the earlier record of the same session
 kept (governor, temperature, what else ran). A count from the CI runner
-does not stand in for any row here: these are device times (rule 76).
+does not stand in for any row here: these are device times (rule 176).
 
 Rows needing chain state only the chain forge builds are not here. They
 are the ledger's `forge` rows, which name the event they wait on.

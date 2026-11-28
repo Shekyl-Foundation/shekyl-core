@@ -64,7 +64,7 @@ CRYPTO_CRATES = (
     "shekyl-curve-primitives",
     "shekyl-onion-key",  # v3 onion seed expansion and its public key
 )
-# Vendored downstream (rule 10); not ours to police.
+# Vendored downstream (rule 110); not ours to police.
 EXCLUDED_CRATES = ("shekyl-oxide",)
 TEST_DIRS = {"tests", "benches", "fuzz", "examples"}
 SKIP_DIRS = {"target", ".git", "node_modules"}

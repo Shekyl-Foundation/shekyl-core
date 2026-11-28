@@ -25,7 +25,7 @@ use super::{
 /// signed at its due block (`ARCHIVAL_BOND_POST_DELAY.md` BD-Q3: "the
 /// holdings descriptor (the posture)", new in v15).
 ///
-/// The persisted twin of engine-core's `StakePosture` (rule 18: the
+/// The persisted twin of engine-core's `StakePosture` (rule 118: the
 /// state-shaped copy lives with the record that persists it), carrying the
 /// holdings the bond posts at its due block.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, postcard_schema::Schema)]

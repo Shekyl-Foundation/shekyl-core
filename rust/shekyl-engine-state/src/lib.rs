@@ -24,7 +24,7 @@
 //!   there.
 //!
 //! The serialization-format policy for this crate is pinned by
-//! `.cursor/rules/42-serialization-policy.mdc` (added in Commit 2n): the ledger blocks
+//! `.cursor/rules/142-serialization-policy.mdc` (added in Commit 2n): the ledger blocks
 //! defined here use `postcard` for on-disk storage. The earlier JSON metadata bundle in
 //! `shekyl-crypto-pq` (identity + settings) was a superseded first draft and has been
 //! deleted; identity is carried in the encrypted `.wallet.keys` envelope, and user

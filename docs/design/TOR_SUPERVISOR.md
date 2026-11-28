@@ -23,9 +23,9 @@ daemon-configuration lane's, carrying Rick's rulings of 2026-10-14; those and
 the rulings on this round's questions are §1. Implementation follows §12's
 increments, after §10's pre-flight measurements and the prerequisites
 `TSR-F12` (DC-F12) and `TSR-F17` (#1083).
-Identifier families (registered at birth, rule 94): `TSR-F1…TSR-FN` findings,
+Identifier families (registered at birth, rule 194): `TSR-F1…TSR-FN` findings,
 `TSR-Q1…TSR-QN` questions, `TSR-M1…TSR-MN` the measurements that set every
-bound. Rule 26 is cited: the round changes a process lifecycle every connector
+bound. Rule 126 is cited: the round changes a process lifecycle every connector
 depends on, an FFI boundary, and the threat posture of the node's Tor identity.
 
 **Read at:** `shekyl-core` `dev` `bd444b715`, the merge of PR-3 (#1056),
@@ -86,7 +86,7 @@ The relay is deliberately absent from that table; see `TSR-F9`.
 | `TSR-Q12`: the operator sees the reason through RPC (Rick, 2026-10-20) | The `status` grant (`RPC_CHANNEL.md` §6.1; outside the `view` preset, so the node's own CLI and GUI) carries: the posture, which is the `tor` and `clearnet` settings; the Tor state, as §4.3's projection (Restarting, Restarting (held), Bootstrapping, Usable, Degraded); the cause, as a typed §5 value, and that cause's detail, not English text; since when, and the respawn count; whether the node is syncing, and over what; `OwnTx`, from the posture table; and the fixes that apply, as `ManagedTorFix` values from the posture table. Cause advice and those fixes are typed values, never sentences: clock, directory, file-limit and upgrade advice are the cause's detail, not `ManagedTorFix` variants. The `health` grant keeps `TSR-Q4`'s one boolean: Tor's state and timing would let an outsider tie the RPC endpoint to the onion's lifetime (§8). One rendering: a single Rust function in a shared crate turns the typed values into words, under rule 81; `shekyl-cli` uses it, the GUI uses it or its exact strings, and the daemon's posture log line renders from it, so the log and both clients say the same thing. The wallet's send flow reads `OwnTx` from Status before broadcasting, as the posture table defines. Health is not that signal. Who builds what: increment 3 exposes all of it as one typed read and renders the posture line from the same values (§12); the RW round ([`RPC_WIRE.md`](RPC_WIRE.md)) names the Status and Health fields. The GUI's daemon, running as the same user, is RT-15's owner case, and no leg carries that grant yet: `RPC_CHANNEL.md` RT-15's owner-only socket or pipe is RT-W10's to build and is not authorized (§13), so the sidecar reaches Status over the owning connection the GUI launches it with (`GS-Q1`, Rick 2026-10-22; core increment `GS-C3`, the GUI sync lane), and RT-W10's leg follows for every other same-user client. A GUI pointed at a service-mode daemon, another user's or another machine's goes over the channel and sees Status only if its enrollment grants it; the plaintext loopback listener carries only the `view` preset, which has no Status; `shekyl-cli` and `shekyl-gui-wallet` display it, the GUI's item tracked in that repository |
 | `TSR-Q13`: polling, and typed values on the wire (Rick, 2026-10-20) | Clients read Status on their normal refresh: state changes are rare and already announced in the log. Pushed events wait until the RW round has a subscription mechanism. The wire carries typed causes, their detail, `OwnTx`, and `ManagedTorFix` values, never sentences: sentences would be reworded differently by each client and could not be translated, while typed values keep the meaning fixed and leave the words to the one renderer (`TSR-Q12`) |
 | `TSR-Q14`: Tor does Tor (Rick, 2026-10-25) | The managed Tor's own judgment governs everything Tor already does: circuits, path selection, guard and network liveness, retries. The supervisor reads Tor's statements and reports them; it never infers a Tor-domain verdict from its own traffic. Our evidence covers only what Tor cannot see: our process, our control connection, and our own onion's reachability. Consistent with it: the liveness sample (a wedged process is ours), backoff and respawn (ours), and `SocksTimeout`, `ExtendedErrors` and `IsolateSOCKSAuth` (configuring Tor, not replacing it). Withdrawn under it: an External verdict from this node's dial replies, and counting `CIRC`/`ORCONN` events. The probe (§4.5) answers one question, whether the node is reachable at its own onion, and grows into no circuit-health monitor. **Restated 2026-11-15 (Rick):** the probe is not a monitor of each circuit; when asked, the manager is the best-placed component to say whether the onion path works, and it answers (§4.5a). The dialer asks it through the Tor connector and no longer infers that from its own traffic; no Tor-domain verdict is inferred from this node's traffic |
-| `TSR-Q15`: a persistent onion, the operator's key (Rick, 2026-11-21) | A managed Tor may publish the operator's onion at every boot: `tor-onion-key-file` names Tor's own `hs_ed25519_secret_key`, as a seed node's compiled onion needs, so the Tor that serves it is the one the daemon supervises rather than one run beside it. The walk loads the key once, opened and judged before any byte is copied (on Unix the open handle is judged first, and only this account and the superuser may reach it, so a systemd credential qualifies; on Windows the open handle is judged too: the open shares reading only, so the name cannot be renamed, replaced or written while it is held, a reparse point at the name is refused, a directory is refused, and the handle's own descriptor is judged in one read (owner, access list, and no-read-up label together)) and parsed where onion secrets live, and the start hands that identity to Tor; a key named and not usable refuses the start, never a fallback to a new onion. Its guards persist (`TSR-Q2`): Tor's `state` file, copied into a fresh directory at launch and back after a clean stop of a Tor that bootstrapped, in `tor-guard-state-<service id>` beside the directory cache, so a key changed or removed never starts with another onion's guards. Stock Tor keeps its second-layer guards in memory only; keeping them is the next increment's, and until it lands a persistent onion is not recommended to an operator with clearnet off. A second Tor on the same key is named, never raced: §4.5, "Another publisher". Moving a host from a Tor run beside the daemon to this stops that Tor first, or the host is its own second publisher |
+| `TSR-Q15`: a persistent onion, the operator's key (Rick, 2026-11-21) | A managed Tor may publish the operator's onion at every boot: `tor-onion-key-file` names Tor's own `hs_ed25519_secret_key`, as a seed node's compiled onion needs, so the Tor that serves it is the one the daemon supervises rather than one run beside it. The walk loads the key once, opened and judged before any byte is copied (on Unix the open handle is judged first, and only this account and the superuser may reach it, so a systemd credential qualifies; on Windows the open handle is judged too: the open shares reading only, so the name cannot be renamed, replaced or written while it is held, a reparse point at the name is refused, a directory is refused, and the handle's own descriptor is judged in one read (owner, access list, and no-read-up label together)) and parsed where onion secrets live, and the start hands that identity to Tor; a key named and not usable refuses the start, never a fallback to a new onion. Its guards persist (`TSR-Q2`): Tor's `state` file, copied into a fresh directory at launch and back after a clean stop of a Tor that bootstrapped, in `tor-guard-state-<service id>` beside the directory cache, so a key changed or removed never starts with another onion's guards. Stock Tor keeps its second-layer guards in memory only, so the daemon pins and keeps them with the guard manager the wallet's Tor uses (`TSR-W1`): its state file is in the same directory, and the onion is not published on a Tor until its guards are pinned there (§4.4, guard pinning). With them kept, a persistent onion suits an operator with clearnet off as well. A second Tor on the same key is named, never raced: §4.5, "Another publisher". Moving a host from a Tor run beside the daemon to this stops that Tor first, or the host is its own second publisher |
 | `TSR-Q6`: the private-network cases | Best effort, not a gate. The private network is chutney or a hand-built `TestingTorNetwork` from the pinned bundle, at the implementer's choice; it runs §7's two cases if it can be made to work, is never a latency source, and its absence blocks nothing |
 
 ### Posture while the managed Tor is down — RULED 2026-10-20 (`TSR-Q10`, `TSR-Q11`)
@@ -181,6 +181,7 @@ says which and why.
 | The managed tor inherits its owning control connection (`__OwningControllerFD`); it opens no control port and writes no cookie. The launch surface is a closed, tested option list | `rust/shekyl-tor-control-client/src/control/launch.rs` `managed_tor_command`, `tor_end`, and its test `launch_option_names` |
 | `SocksPort` is `auto ExtendedErrors`, so onion failures come back as `0xF0`–`0xF7` | `rust/shekyl-tor-control-client/src/control/actor.rs` `SocksPort` (`Auto` renders `auto ExtendedErrors`) |
 | The pin is checked before every spawn, including a respawn, and each launch carries the witness its own check accepted (`TSR-F6`): the driver holds no binary, so it cannot be asked to launch without one. `LaunchDirectory` is the policy; `DirectoryPlan` is that policy read against the directory actually held (Rick, 2026-11-12) | `rust/shekyl-daemon/src/tor/mod.rs` `pin`; `rust/shekyl-tor-control-client/src/supervisor/core/mod.rs` `Input::PinAccepted`, `Launch`, `LaunchDirectory`, `DirectoryPlan`, `Action::Spawn` |
+| A persistent onion's second-layer guards are pinned on each Tor before its onion is published, by the guard manager the wallet's Tor also uses; the manager goes with the pin request and comes home with its answer, and a publish goes only through the pin confirmed on that Tor (`TSR-W1`) | `rust/shekyl-tor-control-client/src/vanguard_rotation.rs` `VanguardManager`; `rust/shekyl-tor-control-client/src/supervisor/core/guards.rs` `guards_allow_publish`; `rust/shekyl-daemon/src/tor/guards.rs` `send_pin`, `guards_answered`; `rust/shekyl-tor-control-daemon/src/ephemeral/asker.rs` `ControlAsker::pinned` |
 | The wallet's supervisor re-verifies the pin at every spawn, never gives up, and publishes the SOCKS route as data on a watch, read at use time | `rust/shekyl-tor-control-wallet/src/service.rs` module documentation, `WalletTorControl::posture` and `current_socks` |
 | The dialer checks the connector's readiness before it draws (`TSR-F1`); a failed dial is the judge's to decide, and leaves the lists only on proof of misbehaviour (`Verdict::Drop`), otherwise it is counted or excused | `rust/shekyl-dialer/src/owner/mod.rs` `Dialer::choose` (`readiness` first); `rust/shekyl-peerlist/src/peerlist.rs` `Peerlist::apply` (`DialOutcome::DialFailed`) |
 | The Tor owner loop wakes every 0.5–1.5 s | `rust/shekyl-transport-layer/src/profile.rs` `WAKE`, drawn by `rust/shekyl-dialer/src/pace.rs` `next_wake_nanos` |
@@ -571,6 +572,7 @@ faults in the Tor process, so only those respawn:
 | Process | child exit; control EOF or desync; reply past bound; outbound dead past a bound with no external cause standing; a bootstrap stranded by a clock jump (§5, "Stranded after a clock jump"): Tor reported `CLOCK_JUMPED`, then neither the percent nor the bytes moved for the bound, so its retries sit on the clock that was wrong; a slow mirror always has bytes arriving (Rick, 2026-10-30) | respawn |
 | Install | pin fails at spawn, or discovery finds nothing (`TSR-F6`) | no spawn, so the binary is not executed; the daemon starts (the posture table); announce; retry at the cap |
 | Local resource | data directory unwritable or out of space (a fresh spawn sweeps what earlier incarnations left, then checks; a directory kept for an in-boot respawn is not swept); `TOO_MANY_CONNECTIONS` | no spawn (or, for the open-file limit, no respawn); announce; retry at the cap |
+| Guard pinning | a persistent onion's second-layer guards (`TSR-W1`; Rick, 2026-11-27), pinned on each Tor after it reaches Running and before its onion is published, and again at each expiry. The pipeline (consensus, compute, `SETCONF`, save) is one request. Tor refuses the pins' `SETCONF`; Tor's view cannot fill the set (too few eligible relays, too few entries decoded, or no consensus to read); the random source refuses the draw. A control failure or a reply past its bound is a Process fault, as for any request | the first pin on a Tor fails closed: no `ADD_ONION` until the guards are pinned, and the onion's facet names why (`guards-refused`, `guards-unfilled`). A later Tor does not keep the previous offer: until its pin is confirmed the facet is not offered, and a failed pin names itself there. A clock already named keeps its cause; when that clock clears, the pin's cause stands. A refusal is a defect to report: never respawn (a new Tor refuses them again); retry at the cap. An unfilled set waits: never respawn; retry when the consensus clock reads a new `valid-after`. A refused random source ends the supervisor. A rotation that fails on a Tor already pinned keeps serving on the confirmed set, which Tor still holds; it is said, and retried the same way. A save that fails after a confirmed pin is a warning, never an end: the set is right and held in memory, and only a restart would draw again |
 
 A stalled bootstrap is not a cause in any class (Rick, 2026-10-19). In the
 pre-flight's 300 cold runs every stall ended on its own, with no problem event
@@ -1659,6 +1661,8 @@ that detail, not variants of `ManagedTorFix`.
 | Onion unreachable | two consecutive probes past their bound, the second after `HSFETCH`, or a directory check that misses twice (§4.5) | Degraded (inbound) | peers cannot reach this node through Tor right now, and its address is being published again; no fix, after the outbound cause and its fix when one stands | none | republish (`DEL_ONION`, then `ADD_ONION`) when the backoff allows; a refused republish is a process fault |
 | Clock behind the network | `consensus/valid-after` ahead of the wall time by more than `TSR-M13` (360 s), at a liveness sample, Bootstrapping or Running (§4.2). Clears when a sample is inside the tolerance, including a fixed consensus that aged there. That clear does not retire a standing "Clock skew" | Degraded (inbound) | this computer's clock is at least N behind the Tor network's; others may not be able to reach this node; check this computer's date and time (N from `Status::clock_behind`). Beside "Clock skew" it is that row's one sentence, with Tor's figure. The bootstrap's progress line is not said while it stands, since it would carry the clock again | none | none: no republish and no probe until it clears |
 | Uploads refused | a round in which more than half of the uploads ended `UPLOAD_REJECTED` (§4.2) | Degraded (inbound) | the Tor network is not accepting this node's address right now; others may not be able to reach this node | none | none: no republish and no probe until a round in which an upload succeeded is not refused |
+| Guards refused | a persistent onion's first guard pin on this Tor, its `SETCONF` refused (§4.4, guard pinning) | Degraded (inbound) | Tor refused this node's guard settings, so its address is not published; a fault in this release, to report; the node keeps trying | none | no publish; retry the pin at the cap; never respawn |
+| Guards unfilled | a persistent onion's first guard pin on this Tor, its set not filled from Tor's view (§4.4, guard pinning) | Degraded (inbound) | Tor does not yet know enough of the network to choose this node's guards, so its address is not published yet | none | no publish; retry the pin at the next consensus; never respawn |
 | Tor exited or wedged | exit, EOF, reply bound | Restarting | none unless repeated; then the count and the last exit, and where the previous log is | none | respawn |
 | Tor install defect | the pin gate at spawn | Restarting (held) | the file that failed the pin. The binary is not executed | `RestoreManaged`, plus the fixes the posture table offers | retry at the cap; the message repeats once per cap |
 | No Tor installed | discovery finding nothing | Restarting (held) | none was found. `tor-file` may name a bundle that passes the pin | `RestoreManaged`, plus the fixes the posture table offers | retry at the cap; the message repeats once per cap |
@@ -2088,7 +2092,7 @@ seven-day soaks run after the alpha.12 fleet deploy (Rick, 2026-11-08).
 Then the seven-day soak per platform, the posture line and the RPC fields as
 the record. PR-3's hundred-stop rig is not an acceptance basis.
 
-## 8. Threat-model addenda (rule 26 A3)
+## 8. Threat-model addenda (rule 126 A3)
 
 | Objective | How | Route |
 | --- | --- | --- |
@@ -2117,7 +2121,7 @@ the record. PR-3's hundred-stop rig is not an acceptance basis.
 
 ## 10. Bounds to measure (FOLLOWUPS rows)
 
-Each on the Pi 4, which sets the value (rule 76), and on one x86 host as a
+Each on the Pi 4, which sets the value (rule 176), and on one x86 host as a
 diagnostic. No figure is set before its row lands. The pre-flight rows were
 measured on 2026-10-19 on the floor device (Pi 4, Ubuntu 26.04.1 aarch64) with
 tor 0.4.9.14 (16.0a14), launched as `TSR-Q7` rules (an inherited owning control
@@ -2166,7 +2170,7 @@ The Windows and Linux stop-path figures (closing our end, and the parent's
 `abort()`, each exiting Tor within about 20 ms; C4, C5) are evidence for the
 stop path, not a bound.
 
-**Pre-flight (rule 26).** `TSR-M1`, `TSR-M3` to `TSR-M7`, `TSR-M9` and
+**Pre-flight (rule 126).** `TSR-M1`, `TSR-M3` to `TSR-M7`, `TSR-M9` and
 `TSR-M10` need only today's managed Tor and a SOCKS self-dial, and are measured
 before increment 3 (§12), the first increment whose code uses a bound they set;
 increment 2 uses none. They were taken on 2026-10-19, after the re-pin, on the Tor that ships
@@ -2243,11 +2247,17 @@ challenges and says nothing. The manager is lifted into shared code; the
 missing checks are not added to the wallet's supervisor. Three work items,
 in this order, all done before any outside staker runs a persona:
 
-- **`TSR-W1`:** the guard manager (`vanguard_rotation.rs`) moves to shared
-  code and the daemon's persistent onion uses it (`TSR-Q15`). It is lifted,
-  not written a second time.
+- **`TSR-W1`:** the guard manager (`vanguard_rotation.rs`) is in shared
+  code (`shekyl-tor-control-client`), lifted, not written a second time, and
+  the daemon's persistent onion uses it (`TSR-Q15`; §4.4, guard pinning).
+  The pipeline is one request off the loop; the manager's state goes with
+  it and comes back with the answer; the core pins before it publishes
+  (Rick, 2026-11-27, option B). Expiry is wall time: each host checks it
+  after a wake, and the wallet's old supervisor sleeps no longer than the
+  manager's re-check bound. Until `TSR-W3` the wallet's old supervisor keeps
+  its own remedy, ending the incarnation on any failed pin.
 - **`TSR-W2`:** the driver moves to a shared crate, after a Round 0 design
-  PR (rule 26) that settles the host interface, what stays out of the crate,
+  PR (rule 126) that settles the host interface, what stays out of the crate,
   one instance per identity domain, and three additions to the constraints
   below: each instance's log lines kept apart, each instance's own jitter,
   and who hears a persona's "unreachable". The lifted driver splits a
@@ -2282,7 +2292,7 @@ are fixed before the work starts:
   two domains together by timing if one domain's Tor dying triggered
   another's respawn, or if they shared a backoff schedule.
 
-## 12. Increments (rule 26)
+## 12. Increments (rule 126)
 
 1. P2P lane: `TSR-F1`. The link replaces the zone host's `tor_proxy` slot
    here (Rick's TSR-F1 brief, 2026-10-16): the zone host publishes it, the

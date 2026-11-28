@@ -627,7 +627,7 @@ steps below and listed at the end.
    - **The brief's binding content goes into the owning documents** (ruling
      1): the rounding loop's seven properties into ESR-15's row and
      `FEE_LADDER_DERIVATION.md`; the parameter guard, as ruled in 2, into the
-     sweep's row (registered as its own ESR item at birth, rule 94); ESR-10's
+     sweep's row (registered as its own ESR item at birth, rule 194); ESR-10's
      build list into its row.
    - The grid-sampled extremes in this lane's sim (the class above) take
      the boundary heights: `--fee-ladder`'s reachable `C` samples block 1

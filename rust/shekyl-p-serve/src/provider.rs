@@ -87,7 +87,7 @@ impl std::error::Error for ProviderError {}
 /// **Chunked, not materialised.** The serving loop holds one body per
 /// in-flight connection for as long as that connection takes, so a
 /// whole-shard buffer would silently convert the endpoint's concurrency cap
-/// into a resident-memory bound of `MAX_INFLIGHT × W` — a bill the rule-76
+/// into a resident-memory bound of `MAX_INFLIGHT × W` — a bill the rule-176
 /// provisioning floor cannot pay, and one the cap does not claim to be
 /// charging. Peak cost here is one chunk.
 ///

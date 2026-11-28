@@ -1,6 +1,8 @@
 ---
 description: When the disposition for a question is "we don't need this now," the right shape is reject-now-with-named-reopening-criteria, not refuse-forever and not pre-provision-for-flexibility. Optionality without concrete need is debt, not flexibility.
 alwaysApply: true
+scope: estate
+repos: [core, gui, prism]
 ---
 
 # Reversion-clause discipline
@@ -63,7 +65,7 @@ context. The later reviewer may not.
 applied to work items), `16-architectural-inheritance.mdc` (fix
 structurally now; reopen only on prohibitive cost),
 `17-dependency-discipline.mdc` (re-verify a dependency when its version,
-features, or audit posture change), `19-validation-surface-discipline.mdc`
+features, or audit posture change), shekyl-core's [`119-validation-surface-discipline`](https://github.com/Shekyl-Foundation/shekyl-core/blob/dev/.cursor/rules/119-validation-surface-discipline.mdc)
 (re-open a bundle when a new reviewer-facing property appears),
 `00-mission.mdc` (a rejection that cites the hierarchy reopens when the
 substrate re-orders the priority calculus, not when a preference does).

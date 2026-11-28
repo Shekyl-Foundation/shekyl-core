@@ -475,7 +475,7 @@ jobs:
         run: python3 scripts/bench/test_rt_p9_summary.py
 
       - name: Run index prefix-uniqueness check
-        # Rule 94 §2 family prefixes must not collide.
+        # Rule 194 §2 family prefixes must not collide.
         # Instance of 47-gate-subject-assertion.mdc.
         if: '!cancelled()'
         run: python3 scripts/ci/check_index_prefix_uniqueness.py

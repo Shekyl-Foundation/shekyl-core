@@ -33,7 +33,7 @@
 # header lacks the columns the derivation reads (every table's own header —
 # §4.J carries three under one heading), a header in either document not
 # followed by its GFM delimiter row of the same width (Markdown renders no
-# table, so the rows under it are not on the page — rule 94 §7), a §4 row
+# table, so the rows under it are not on the page — rule 194 §7), a §4 row
 # whose id cell is not a well-formed `CEN-` id or that is too short for its
 # header, a census with zero bound rows, an unterminated code fence in either
 # document (it would hide the rest of the file from the parse), a DRS doc with

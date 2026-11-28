@@ -133,7 +133,7 @@ Slice-1 **Q6** freezes the canonical proof/Bp+ interiors *by reference* to
 `rust/shekyl-oxide/shekyl-oxide/fcmp/bulletproofs/src/lib.rs` (Bp+). So the
 kept-vendored crypto now carries **genesis-frozen format**, and the Bp+ wrapper
 in the *application* layer is genesis-load-bearing too. The pristine gate (§6 A1)
-is therefore not hygiene — it protects a frozen surface ([`42-serialization-policy`],
+is therefore not hygiene — it protects a frozen surface ([`142-serialization-policy`],
 [`30-cryptography`]).
 
 **The pin is not just stale — it is proof-format-buggy.** Re-baselining at the
@@ -304,7 +304,7 @@ priority track.
   together in [`../FOLLOWUPS.md`](../FOLLOWUPS.md) ("Block-height-only
   `unlock_time`").
 - **B1 — settle the final names** against the post-sweep namespace (§7), per
-  [`25-rust-architecture`].
+  [`125-rust-architecture`].
 - **B2 — relocate + rename** the residual support crates; provenance-stamp each
   moved file; drop their tracking machinery. Because the crates already carry
   `shekyl-*` names, the directory move alone changes no import sites — the rename
@@ -352,7 +352,7 @@ empties — the same double-handling trap one level down. Each is a B1 input.
 3. **Track B begins** once slice 1 is on `dev`: B0 re-inventory → B1 names → B2
    relocate+rename → B3 metadata → B4 verify+land.
 
-**Status (2026-06-25) — Track B split into two PRs by validation surface (rule 19):**
+**Status (2026-06-25) — Track B split into two PRs by validation surface (rule 119):**
 
 - **PR 1 — relocations (no-behavior-change reorg).** B0 re-inventory + B1 names
   done; B2 executed. Six support crates relocated out of the oxide tree to

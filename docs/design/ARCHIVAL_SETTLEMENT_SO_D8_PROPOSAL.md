@@ -104,7 +104,7 @@ privacy gain does not enter the arithmetic.
 > re-derives them as census rows. Re-derivation is where DRS §7.5's
 > partition gains a row nobody graded against the original. Worse: R-B
 > moves a genesis-frozen wire byte (`h` on the kept side, 117 → ~125,
-> rule 42 plus a version bump). Doing that once pre-cutover in C++ and
+> rule 142 plus a version bump). Doing that once pre-cutover in C++ and
 > once again as a chain-rules row is two bites at a frozen surface for
 > one change.
 >
@@ -141,9 +141,9 @@ branch `feat/so-a-settlement-surface` carrying the three Slice-A commits
 that tree on 2026-09-13; where a line number is quoted from an older document
 it is marked as such.
 
-**Process:** [`26-sub-pr-design-discipline`](../../.cursor/rules/26-sub-pr-design-discipline.mdc).
+**Process:** [`126-sub-pr-design-discipline`](../../.cursor/rules/126-sub-pr-design-discipline.mdc).
 No new identifier family is minted: sub-dispositions here are `SO-D8a`…`SO-D8e`,
-which parse under the registered `SO-` prefix (rule 94 §1) and are folded back
+which parse under the registered `SO-` prefix (rule 194 §1) and are folded back
 into `ARCHIVAL_SETTLEMENT_WRITER.md` §12/§13 when ruled. This file then
 archives per rule 95.
 
@@ -392,7 +392,7 @@ round already CLOSED by `PL-D3` (#745, 2026-09-14). Re-deriving it would
 rewrite the documents #745 already corrected (the RF-D8 (i) fifth-site
 shape). The brief never landed in the tree. The living surface is the
 `PL-` index row and `FCMP_SPEND_LINKABILITY.md`. Do not reopen `PL-D3`.
-Do not edit the `PL-` row from this lane (rule 94 §6).
+Do not edit the `PL-` row from this lane (rule 194 §6).
 
 Rick asked, before adopting a witness scheme that reveals a coinbase output's
 per-output hybrid key early: *what prevents `H(revealed hybrid_public_key)`
@@ -456,7 +456,7 @@ successor. The reconciliation this proposal owes under `PL` §12 ruling 11:
   that sentence is **removed by #745 itself**, which deletes the whole `PL-D1`
   row when `PL-D3` lands (its `FOLLOWUPS.md` diff is `−4/+1`; the row's own
   text says *"this item closes when it lands"*). This branch does **not** edit
-  that row: it is the `PL-` lane's (rule 94 §6), and a modify here against a
+  that row: it is the `PL-` lane's (rule 194 §6), and a modify here against a
   delete there is a conflict for whichever PR lands second. Until #745 merges
   the cross-reference is stale-but-harmless (it points at a line that no
   longer exists); after it, gone.
@@ -522,7 +522,7 @@ must pick one of:
 | `passes > issued` | unreachable once the membership gate lands | **asymmetric as originally stated** — fires only when `issued` is too low; `issued` too high settles Missed with no detector. Under `SO-D8b` the named inequality is unreachable by construction. Three **local** layers guard Q3 reconstruction instead; the harmful direction is layer 2's alone (persisted digest + re-walk); FATAL retained as a dominated backstop; desync is a store-invariant Fault; on-chain digest **REJECTED** (§6) |
 | Who fetches, and when | **every** miner attempting `h`, speculatively, inside the block interval — the herd (F4) | **the winner of `h`**, within `W₂` blocks |
 | Who is the witness, and how is that proven | implicit: the record rides the producer's block | the producer of `h`, **authenticated** by a hybrid signature under a key `h` committed (§2.2) |
-| Frozen surfaces touched | none on the wire | record format (RF round reopens, rule 21), rule-42 version bump, one new `tx_extra` tag (§2.2) |
+| Frozen surfaces touched | none on the wire | record format (RF round reopens, rule 21), rule-142 version bump, one new `tx_extra` tag (§2.2) |
 
 **Ratified: R-B.** Rick, 2026-09-13: *"This is the way it needs to work."*
 The grounds, in the order they were established: (1) F4 — R-A is the herd,
@@ -547,7 +547,7 @@ disagrees with the enumeration the correction is marked.
 
 1. **Record format — genesis-frozen, and the RF round reopens.** The
    layout is the specification's §7 and §8 (`SCS-P5`): `h` rides the
-   carrier, a record keeps its input tag and `j`. **Rule 42 fires**:
+   carrier, a record keeps its input tag and `j`. **Rule 142 fires**:
    persisted block bytes move, one version bump for record and carrier.
    **Rule 21 reopening criterion for the RF close (2026-08-21) is met**
    — the ruled mechanism changed; this is the substrate change the close
@@ -1005,7 +1005,7 @@ data. Wrong tool for `SO-D8d` (it does not close the local reconstruction
 hole without becoming a consensus surface). It addresses the
 reconstruction burden that §6.6's withdrawn ground (3) now states as a
 participation requirement on every node, and belongs on record against
-PDM — do not mint a `PDM-` id here (rule 94 §6).
+PDM — do not mint a `PDM-` id here (rule 194 §6).
 
 *SUPERSEDED: "`passes > issued` is the check"; "FATAL means reject the
 connecting block"; "the edit that makes it fire is only reverting the
@@ -1035,7 +1035,7 @@ five-ground rejection (ground 3 withdrawn).*
   trims the tree to `h`, its root equals the recorded root at `h`), which
   is why it has no `StoreInvariant` variant yet. Reuse refused: `SI-5`'s
   subject is the curve tree, not settlement. The row is minted in the
-  register by the Slice C PR that arms it (rule 94 §6 — the DRS lane owns
+  register by the Slice C PR that arms it (rule 194 §6 — the DRS lane owns
   the register); this record reserves nothing there.
 - **`D_max` ≠ `ARCHIVAL_REORG_DEPTH_BLOCKS`.** 720 is the archival reorg
   depth (`build.rs`, from the economics config); `D_max` is `PDM-Q11`'s
@@ -1348,7 +1348,7 @@ length or version prefix that makes extension clean. It does not.
   and `k ≤ 256` (the deleted FFI shim's check, `DEL-008`; `MAX_ATTESTATION_RECORDS` in `shekyl-archival-retention`).
   Appending 32 B of `H(witness_pk)` is `32 ≢ 0 (mod 49)` and is refused.
   Prefixing 32 B (or a version byte) is a format change to a
-  genesis-frozen field (rule 42).
+  genesis-frozen field (rule 142).
 - Empty set = **absent tag**, not an empty blob
   (`cryptonote_format_utils.cpp` at `ac3836de90` (lines 685–701): parse success with no tag is
   `true` and `blob.clear()`). A witness commitment is per issuing block
@@ -1657,7 +1657,7 @@ not wait on them; building does.
 2. **The R-B record layout, written once** (`SCV-3`): kept and pruned
    fields, including where `SF-D8`'s carried `nonce`, `anchor_height` and
    32-byte delivery digest ride.  This is the response-format round's reopen (§2.1 item 1), with its
-   rule-42 version bump. It includes **the anchor window's operand**:
+   rule-142 version bump. It includes **the anchor window's operand**:
    there is none. Admission checks only `anchor_height < h` (`SCS-P7`,
    `SCS-P32`, CEN-J36).
 3. **The height that replaces "the fire height"** (`SCV-12`). §8's
@@ -1706,7 +1706,7 @@ not wait on them; building does.
    As asked and as first answered the signature had three parameters. The
    finality leg subtracts the reorg cap, and the cap in force is rule-set
    data: a Fakechain set names its own, shorter than the genesis value
-   (`shekyl-chain-rules/src/reorg.rs`, module docs; rule 71). A
+   (`shekyl-chain-rules/src/reorg.rs`, module docs; rule 171). A
    `ChainView` carries no rule set, so a three-parameter body could only
    read the constant and would hold a shortened chain to 720 blocks. Both
    callers already hold the rule set `validate` was given. The height
@@ -1764,7 +1764,7 @@ implies holding at the epoch's open). The first is why the
 settlement writer and the admission rows land as one unit.
 
 
-**Home is Rust, and only Rust (Q15, 2026-09-16).** `20-rust-vs-cpp-policy`
+**Home is Rust, and only Rust (Q15, 2026-09-16).** `RULE_20_RUST_VS_CPP`
 and DRS-D12 agree: everything that computes lives in `shekyl-chain-rules`
 (admission / epoch-mismatch / membership / deadline / witness / tag
 content — new `CEN-` rows, ids at Slice C) and
@@ -1941,7 +1941,7 @@ so where it applies.
    not only a correctness one** (§6.5): a λ that differs between
    admission and settlement leaves the pair set identical, so layer 2
    passes; only layer 1 fires, and only on replay. Closed ahead of
-   Slice C; landed in its own PR after #759 (rule 19: Rust gates, not
+   Slice C; landed in its own PR after #759 (rule 119: Rust gates, not
    docs gates).
 5. **ANSWERED, then RULED.** `ERR_CREDIT_DEADLINE`'s disposition changed with
    R-B — it is **re-bound** to the `W₂` window, not kept as `h_close` (§3).

@@ -157,7 +157,7 @@ impl<T: Rule> Bound<CenRow> for T {
 /// the `StructurallyValid` instead.
 ///
 /// A struct rather than positional arguments so the set can grow without
-/// moving any rule's signature (rule 26 A1: freeze the signature, replace
+/// moving any rule's signature (rule 126 A1: freeze the signature, replace
 /// the body).
 pub(crate) struct FormContext<'a> {
     /// The untrusted candidate, exactly as received.

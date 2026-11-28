@@ -11,7 +11,7 @@
 //! is only meaningful under the schedule it was written with. The C++ pinned
 //! the schedule on FAKECHAIN only, because that is the one network where the
 //! lever (`SHEKYL_SETTLEMENT_EPOCH_BLOCKS`) can move it; here the pin is
-//! written on every network (rule 71: the store sees a datum, never a
+//! written on every network (rule 171: the store sees a datum, never a
 //! nettype), which on a public network is a constant matching a constant.
 //! What the store owns is **record at create, compare at open, refuse
 //! loudly on mismatch** — the same shape as `schema_version` — and, since
@@ -22,7 +22,7 @@
 //!
 //! The type is `shekyl_types::archival::SettlementEpochBlocks` — the rule
 //! set carries it and the retention crate computes with it, so it lives
-//! where all three readers reach (rule 18) — and its codec is
+//! where all three readers reach (rule 118) — and its codec is
 //! `shekyl-store-codec`'s (`vocabulary.rs`), where every impl of the
 //! foreign [`Canonical`](super::Canonical) trait on a foreign type has to
 //! be. This module is the pin's **meaning** for this store; the cell it

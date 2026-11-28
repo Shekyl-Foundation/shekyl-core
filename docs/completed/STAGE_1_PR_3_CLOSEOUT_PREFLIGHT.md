@@ -322,7 +322,7 @@ PR-open time captures:
   false-positive matches in C++ wallet2's `sign_with_spend_key`
   enum / `derive_subaddress_public_key` removed method).
 - **C3** — `.cursor/rules/*.mdc` stale-globs sweep clean (the
-  `42-serialization-policy.mdc` realignment in M3e closed the
+  `142-serialization-policy.mdc` realignment in M3e closed the
   one outstanding entry).
 
 Each with the `rg` invocation that produced the result.

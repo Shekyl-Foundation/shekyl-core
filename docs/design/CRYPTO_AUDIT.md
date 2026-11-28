@@ -456,7 +456,7 @@ fips203/204/205 0.5.0. Owner: the crypto-audit lane. It is not part of
 #1494: that pull request did not create the gap, and the 0.4 crates had it.
 
 **The question.** Is each post-quantum signer's signing constant-time with
-respect to its secret key, on the floor device (Raspberry Pi 4, rule 76)
+respect to its secret key, on the floor device (Raspberry Pi 4, rule 176)
 and on x86?
 
 **Coverage when CA-3 opened.** checkct's drivers and its dynamic

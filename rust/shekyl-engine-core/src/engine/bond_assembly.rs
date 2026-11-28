@@ -325,7 +325,7 @@ pub(crate) struct FundingSelection {
 /// the exit's `Release` vin, the claim's emission vin. A selection of
 /// `MAX_INPUTS` funding records therefore assembles a `MAX_INPUTS + 1`-vin
 /// transaction — rejected on every public network, and (since E6 slice 6
-/// commit 2 made the Rust I4 unconditional, rule 71) refused by the Rust
+/// commit 2 made the Rust I4 unconditional, rule 171) refused by the Rust
 /// validator on FAKECHAIN too, so a regtest walk through `shekyl-chain-rules`
 /// *does* observe the boundary; only the C++ daemon's cap stays gated off
 /// there until E4 retires it. The drain does NOT take this constant: a drain is

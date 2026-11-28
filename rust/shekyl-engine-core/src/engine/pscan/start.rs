@@ -91,7 +91,7 @@ use crate::engine::transaction_submitter::{
 };
 use crate::engine::Engine;
 
-/// Default wall-clock interval between P-scan sweeps (rule 75: rationale + bounds).
+/// Default wall-clock interval between P-scan sweeps (rule 175: rationale + bounds).
 ///
 /// **Rationale.** The P-scan is a catch-up loop over *final* blocks — its sweep
 /// ceiling trails the tip by [`ARCHIVAL_REORG_DEPTH_BLOCKS`] (720 blocks ≈ 24 h at

@@ -6,7 +6,7 @@
 //! - **`floor`** (default) — the amended targets, which are **regression
 //!   bounds**: they assert that rendering has not regressed from the measured
 //!   floor baseline, not that the design fits a UX target. Meaningful only when
-//!   run ON the floor device (rule 76: Pi 4). GAP-7 measured x86:A72 per-term
+//!   run ON the floor device (rule 176: Pi 4). GAP-7 measured x86:A72 per-term
 //!   ratios spanning 3.86×–12× with one axis changing sign, so an x86 run of
 //!   this profile is orientation, never evidence.
 //! - **`x86-smoke`** — separate, x86-derived thresholds for the CI gate of the
