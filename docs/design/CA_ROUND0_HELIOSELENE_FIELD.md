@@ -450,8 +450,19 @@ run.
    - Does the resync go first?
    - Does a field port wait for it, or go into the same fork round?
 
-One check §2's threat frame rests on is not made yet: whether the shipped
-binaries' prover inlines `HelioseleneField` mul and square without a call
-boundary on each target. The harness's direct path stands in for it. A
-disassembly of the release binaries settles it, and it goes into this
-document before the questions are ruled.
+**The shipped prover has the direct path's shape on Linux x86_64.** §2's
+threat frame takes the harness's direct path as the closer analogue of the
+prover. A release `shekyl-cli` was disassembled: `cargo build --release`
+at `8b5f8e2674`, `x86_64-unknown-linux-gnu`, rustc 1.94.0.
+- It has no standalone `HelioseleneField` mul or square symbol.
+- `red512`'s constant is inlined into 53 functions of the prover,
+  verifier and curve code: `ArithmeticCircuitStatement::prove`,
+  `Divisor::merge`, `SelenePoint` add and double, `LinComb` arithmetic
+  and the divisor gadgets.
+- The wide multiply in them is an out-of-line call, as in every `CA-2`
+  record.
+
+The scan is in shekyl-dev
+`infrastructure/captures/ca-round0-prototypes/2026-11-28/`. The Windows
+and aarch64 release binaries are not scanned yet. The harness's MSVC
+build has the same direct-loop shape (amendment 1).
