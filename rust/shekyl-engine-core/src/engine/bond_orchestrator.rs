@@ -511,6 +511,17 @@ use super::stake_persist::PersistedBondTicket;
 use super::traits::{DaemonEngine, EconomicsEngine, LedgerEngine, PendingTxEngine, RefreshEngine};
 use super::Engine;
 
+/// Which reference the funding sweep anchors at.
+pub(crate) enum SweepReference {
+    /// The ordinary send-path reference for the wallet's own tip
+    /// (`tip − REF_ANCHOR_AGE`): the request paths, whose reference is only
+    /// the sweep's maturity bar.
+    FromWalletTip(BlockHeight),
+    /// A named reference: the canonical one for the daemon-claimed tip a due
+    /// post is signed against (BD-Q3).
+    At(BlockHeight),
+}
+
 /// Obtain one [`ReferenceBlock`] via the ordinary send-path anchoring
 /// procedure (WI-2 F-6): reorg-safe ∧ not-too-stale (loud) ∧ ingest-available ∧
 /// ledger-present. **Not** a hand-rolled `tip − FCMP_REFERENCE_BLOCK_MIN_AGE`.
@@ -536,6 +547,28 @@ pub(crate) async fn anchored_reference_block(
     if should_reanchor(chain_tip, reference_height) {
         return Err(BondAssemblyError::ReferenceResyncing {
             detail: "tree too far behind to anchor a submittable reference; resync",
+        });
+    }
+    reference_block_at(curve_tree, reference_height, block_hash_at).await
+}
+
+/// The [`ReferenceBlock`] at a named `reference_height`: its curve-tree root
+/// and block hash. The wallet's tree and ledger need only have reached that
+/// block, not the tip it was named for: a due post is signed at the
+/// canonical reference for the daemon-claimed tip (BD-Q3), and a wallet one
+/// block behind that tip still holds the reference.
+pub(crate) async fn reference_block_at(
+    curve_tree: &CurveTreeHandle,
+    reference_height: shekyl_types::BlockHeight,
+    block_hash_at: impl FnOnce(shekyl_types::BlockHeight) -> Option<BlockHash>,
+) -> Result<ReferenceBlock, BondAssemblyError> {
+    let covered_through = curve_tree
+        .ingested_tip_height()
+        .await
+        .map_err(|err| BondAssemblyError::build("curve-tree ingested tip", format!("{err:?}")))?;
+    if covered_through.is_none_or(|ingested| ingested < reference_height) {
+        return Err(BondAssemblyError::ReferenceResyncing {
+            detail: "curve tree has not reached the reference",
         });
     }
     let (curve_tree_root, _depth) = curve_tree
@@ -638,7 +671,7 @@ where
             self_arc.clone(),
             &store,
             &curve_tree,
-            chain_tip,
+            SweepReference::FromWalletTip(chain_tip),
             tip_hash_at,
             p_slot,
             &holdings,
@@ -721,7 +754,7 @@ where
         self_arc: Arc<RwLock<Self>>,
         store: &PendingPostStore<WalletFilePendingSealStore<S, D, L, E, R, P>>,
         curve_tree: &CurveTreeHandle,
-        chain_tip: BlockHeight,
+        at: SweepReference,
         tip_hash_at: impl FnOnce(BlockHeight) -> Option<BlockHash>,
         p_slot: PSlot,
         holdings: &HoldingsDescriptor,
@@ -729,8 +762,15 @@ where
         pruning_landed: &SpentRecordsDurablyPruned,
         own: &[GlobalOutputIndex],
     ) -> Result<(FundingSelection, ReferenceBlock, u64), BondAssemblyError> {
-        // Anchored ReferenceBlock via the ordinary procedure (WI-2 F-6).
-        let reference = anchored_reference_block(curve_tree, chain_tip, tip_hash_at).await?;
+        let reference = match at {
+            // Anchored ReferenceBlock via the ordinary procedure (WI-2 F-6).
+            SweepReference::FromWalletTip(chain_tip) => {
+                anchored_reference_block(curve_tree, chain_tip, tip_hash_at).await?
+            }
+            SweepReference::At(height) => {
+                reference_block_at(curve_tree, height, tip_hash_at).await?
+            }
+        };
         let reference_height = reference.height;
 
         // The seal basis is ONE ordered read — pending block, then pscan seal.
@@ -989,7 +1029,7 @@ where
             self_arc.clone(),
             &store,
             &curve_tree,
-            chain_tip,
+            SweepReference::FromWalletTip(chain_tip),
             tip_hash_at,
             slot,
             &holdings,

@@ -990,3 +990,55 @@ fn an_owed_drain_refuses_a_new_stake_with_its_own_reason() {
         "a stake in flight is the first reason"
     );
 }
+
+/// A due post is signed at the canonical reference for the daemon-claimed
+/// tip, and the wallet needs only to have reached that block: a wallet whose
+/// tree is one block behind the claimed tip still signs (BD-Q3). Anchoring
+/// from the wallet's own tip instead put the reference one block too old
+/// whenever the driver ticked before the wallet took in the newest block,
+/// and the sign waited on every such tick.
+/// Red edit: answer `reference_block_at` from the wallet's ingested tip.
+#[tokio::test(flavor = "current_thread")]
+async fn a_due_reference_is_the_named_one_while_the_wallet_has_reached_it() {
+    use super::{anchored_reference_block, reference_block_at};
+    use crate::engine::curve_tree_actor::CurveTreeHandle;
+    use shekyl_curve_tree::reference::select_reference_height;
+    use shekyl_curve_tree::CurveTreeClient;
+
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let client = CurveTreeClient::open(dir.path().join("curve_tree.redb")).expect("open tree");
+    let tree = CurveTreeHandle::spawn(client);
+    let ingested = 40u64;
+    for h in 0..=ingested {
+        tree.ingest(BlockHeight::from_raw(h), std::sync::Arc::new(Vec::new()))
+            .await
+            .expect("empty-leaf ingest advances the cursor");
+    }
+    let hash = |h: BlockHeight| {
+        Some(BlockHash::from_bytes(
+            [u8::try_from(h.to_raw()).unwrap_or(0); 32],
+        ))
+    };
+
+    // The claimed tip is one block past the wallet's: its canonical
+    // reference is one block newer than the wallet's own anchor.
+    let wallet_tip = BlockHeight::from_raw(ingested);
+    let claimed_tip = BlockHeight::from_raw(ingested + 1);
+    let canonical = select_reference_height(claimed_tip).expect("a long enough chain");
+    let from_wallet = anchored_reference_block(&tree, wallet_tip, hash)
+        .await
+        .expect("the wallet's own anchor");
+    assert_eq!(from_wallet.height.to_raw() + 1, canonical.to_raw());
+
+    let named = reference_block_at(&tree, canonical, hash)
+        .await
+        .expect("a reference the wallet has reached is used as named");
+    assert_eq!(named.height, canonical);
+
+    // A reference the wallet's tree has not reached refuses as resyncing.
+    let ahead = BlockHeight::from_raw(ingested + 1);
+    assert!(matches!(
+        reference_block_at(&tree, ahead, hash).await,
+        Err(BondAssemblyError::ReferenceResyncing { .. })
+    ));
+}

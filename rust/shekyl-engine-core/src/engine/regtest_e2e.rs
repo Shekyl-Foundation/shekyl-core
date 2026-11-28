@@ -5322,11 +5322,28 @@ async fn e2e_a_plan_signed_at_its_due_block_lands_at_reference_age_six() {
     // `SHEKYL_TEST_REPLAY_PLAN_DRAW=<blocks>` re-seals the plan with that
     // draw through the block's own transitions before the driver starts.
     let swept = replay_or_log_plan_draw(&arc, &persona).await;
+    // The due is never before the request, and the funding it is measured
+    // from predates the request (BD-Q2), so the due is at most the request
+    // plus the draw: the latest count the post may first be sent at, but for
+    // the walk's own pace of four blocks a round.
+    let latest_due = {
+        let block = pending_block(&arc).await;
+        let plan = block
+            .plans()
+            .iter()
+            .find(|p| p.persona == persona)
+            .expect("the plan is sealed before the driver starts");
+        plan.requested_at.to_raw() + plan.draw.to_raw()
+    };
     let pscan = start_driving_pscan(&arc, &daemon).await;
 
     // Mine toward the due block a few blocks at a time, letting the wallet
     // catch up and the driver tick between batches, until the driver has
-    // signed and sent the post.
+    // signed and sent the post. Once the chain reaches the latest the due
+    // can be, mining stops: a sign proves the post and then reads the tip
+    // again, so a chain that moves on during every proof (four blocks a
+    // round, far faster than a block time) would refuse every attempt as a
+    // race and test nothing about the due.
     let mut first_send = None;
     for _ in 0..200 {
         let block = pending_block(&arc).await;
@@ -5336,7 +5353,9 @@ async fn e2e_a_plan_signed_at_its_due_block_lands_at_reference_age_six() {
                 break;
             }
         }
-        daemon.generate_blocks(4).await;
+        if daemon.height().await < latest_due {
+            daemon.generate_blocks(4).await;
+        }
         refresh(&arc).await;
         tokio::time::sleep(Duration::from_millis(1_500)).await;
     }
@@ -5347,6 +5366,14 @@ async fn e2e_a_plan_signed_at_its_due_block_lands_at_reference_age_six() {
         other => panic!("a signed stake must refuse withdrawal as confirming, got {other:?}"),
     }
     let claimed_tip = at.tip().expect("a sent post was judged against a tip");
+    // Signed at its due, not blocks later: within two of the walk's rounds of
+    // the latest the due can be. A sign that waits on the wallet while the
+    // chain moves on fails here, where the age check alone passes it.
+    assert!(
+        at.to_raw() <= latest_due + 8,
+        "the post was first sent at count {} but was due by {latest_due}",
+        at.to_raw()
+    );
     assert_eq!(
         claimed_tip
             .checked_sub(reference)

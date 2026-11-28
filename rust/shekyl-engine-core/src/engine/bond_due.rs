@@ -25,7 +25,7 @@ use tokio::sync::RwLock;
 use super::bond_assembly::{
     BondAssemblyError, FundingInputContext, FundingSelection, SpentRecordsDurablyPruned,
 };
-use super::bond_orchestrator::{p_lane_floor_fee, planned_holdings};
+use super::bond_orchestrator::{p_lane_floor_fee, planned_holdings, SweepReference};
 use super::bond_plan::canonical_reference;
 use super::curve_tree_actor::{CurveTreeHandle, CurveTreeHandleError};
 use super::drain_orchestrator::{DrainIntent, NoExitOwed};
@@ -271,18 +271,16 @@ where
         };
 
         // The chain as it stands after the fill.
-        let (stake, curve_tree, chain_tip, tip_hash_at, bonded) = {
+        let (stake, curve_tree, tip_hash_at, bonded) = {
             let g = self_arc.read().await;
             let stake = g
                 .stake_handle()
                 .ok_or(DueBlock::Wait(PlanWait::WalletBehind))?;
             let snap = g.ledger.snapshot();
-            let chain_tip = g.ledger.synced_height();
             let tip_hash_at = move |h: BlockHeight| snap.block_hash_at(h);
             (
                 stake,
                 g.curve_tree.clone(),
-                chain_tip,
                 tip_hash_at,
                 g.ledger.bonded_slots(),
             )
@@ -295,7 +293,7 @@ where
             self_arc.clone(),
             &store,
             &curve_tree,
-            chain_tip,
+            SweepReference::At(canonical),
             tip_hash_at,
             p_slot,
             &holdings,
@@ -305,15 +303,12 @@ where
         )
         .await
         .map_err(DueBlock::from_sweep)?;
-        // Signed only at the canonical reference for the clock the driver
-        // sends on, so the first send carries reference age 6. A wallet behind
-        // that clock waits; a wallet ahead of it means the tick's tip is stale,
-        // and the next tick signs against the newer one.
-        match reference.height.cmp(&canonical) {
-            std::cmp::Ordering::Less => return Err(DueBlock::Wait(PlanWait::WalletBehind)),
-            std::cmp::Ordering::Greater => return Ok(PlanAttempt::Raced),
-            std::cmp::Ordering::Equal => {}
-        }
+        // The sweep anchors at the canonical reference for the clock the
+        // driver sends on, so the first send carries reference age 6. The
+        // wallet needs only to have reached that reference, not the tip: a
+        // wallet whose tree has not reached it waits (`ReferenceResyncing`,
+        // `WalletBehind`), and a tip that moves while the post is proved is
+        // caught below.
         let funded_through = selection
             .records
             .iter()
