@@ -11,8 +11,8 @@ use shekyl_types::{BlockHeight, ShardId};
 
 use super::DueBlock;
 use crate::engine::bond_assembly::BondAssemblyError;
+use crate::engine::bond_plan::PlanAttempt;
 use crate::engine::holdings_fill::{CompleteTreeFillError, FillFailure, MarketFillError};
-use crate::engine::pscan::dispatch::PlanAttempt;
 use crate::engine::stake_engine::StakeEngineError;
 use shekyl_engine_state::PlanWait;
 

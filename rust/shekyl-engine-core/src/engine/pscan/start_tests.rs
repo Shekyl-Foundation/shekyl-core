@@ -507,8 +507,8 @@ impl crate::engine::pscan::dispatch::BondPlanSigner for NoSigner {
         &self,
         _persona: shekyl_types::PCanonicalId,
         _tip: shekyl_types::ChainCount,
-    ) -> crate::engine::pscan::dispatch::PlanAttempt {
-        crate::engine::pscan::dispatch::PlanAttempt::Raced
+    ) -> crate::engine::bond_plan::PlanAttempt {
+        crate::engine::bond_plan::PlanAttempt::Raced
     }
 
     async fn drain_ended(

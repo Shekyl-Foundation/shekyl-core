@@ -488,7 +488,7 @@ async fn retire_ended_personas<S: PScanStore>(
     stake: &StakeEngineHandle,
     store: &S,
     accrual: &mut PScanAccrual,
-    ended: &[shekyl_engine_state::EndedPlan],
+    ended: &[shekyl_engine_state::DrainedEndedPlan],
 ) -> Result<(), PScanTaskError> {
     if ended.is_empty() {
         return Ok(());
@@ -503,13 +503,13 @@ async fn retire_ended_personas<S: PScanStore>(
     for plan in ended {
         match stake
             .retire_bonded_persona(
-                RetirementWitness::from_ended_plan(plan),
+                RetirementWitness::from_drained(plan),
                 std::sync::Arc::clone(&funded_slots),
             )
             .await?
         {
             RetireOutcome::Retired { slot } => {
-                retired_any |= accrual.retire_persona(plan.persona, slot, epoch, epoch);
+                retired_any |= accrual.retire_persona(plan.persona(), slot, epoch, epoch);
             }
             // `NotHeld`: wiped in an earlier session whose seal never landed;
             // the slot is still recorded, so the persona re-derives at the next

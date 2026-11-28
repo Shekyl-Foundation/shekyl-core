@@ -1083,3 +1083,9 @@ where
 #[cfg(test)]
 #[path = "bond_orchestrator_tests.rs"]
 mod tests;
+
+/// The owed-drain refusal and the due-block reference. Split out when
+/// `bond_orchestrator_tests.rs` crossed 1000 lines.
+#[cfg(test)]
+#[path = "bond_orchestrator_due_tests.rs"]
+mod due_tests;

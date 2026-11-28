@@ -72,13 +72,11 @@ use tokio_util::sync::CancellationToken;
 
 use shekyl_engine_state::PendingPostBlock;
 use shekyl_rpc_transport::DaemonTarget;
-use shekyl_types::{ChainCount, PCanonicalId, PSlot};
 
 use super::block_source::DaemonBlockSource;
 use super::cadence::FixedRateSchedule;
 use super::dispatch::{
-    BondBroadcast, BondPlanSigner, DispatchConfig, DispatchDriver, PendingPostStore,
-    PendingSealStore, PlanAttempt,
+    BondBroadcast, DispatchConfig, DispatchDriver, PendingPostStore, PendingSealStore,
 };
 use super::pending_store::OpenCover;
 use super::task::{run_pscan_task, PScanConfig, PScanStore};
@@ -537,77 +535,6 @@ where
     WalletFilePendingSealStore { engine }.load().await
 }
 
-/// The production [`BondPlanSigner`]: signs a due stake and drains an ended
-/// persona through the engine (`ARCHIVAL_BOND_POST_DELAY.md` BD-Q3). It holds
-/// the wallet's own node target because signing at due fills the shards the
-/// bond owes from that node (WSS-Q4), the same node the request filled from.
-#[allow(clippy::type_complexity)] // the same engine-arc shape as `WalletFilePendingSealStore`
-struct LocalBondSigner<S, D, L, E, R, P>
-where
-    S: EngineSignerKind,
-    D: DaemonEngine,
-    L: LedgerEngine,
-    E: EconomicsEngine,
-    R: RefreshEngine,
-    P: PendingTxEngine,
-{
-    engine: Arc<RwLock<Engine<S, D, L, E, R, P, WalletFile>>>,
-    node: DaemonTarget,
-}
-
-impl<S, D, L, E, R, P> BondPlanSigner for LocalBondSigner<S, D, L, E, R, P>
-where
-    S: EngineSignerKind + Send + Sync + 'static,
-    D: DaemonEngine,
-    L: LedgerEngine,
-    E: EconomicsEngine,
-    R: RefreshEngine,
-    P: PendingTxEngine,
-    Engine<S, D, L, E, R, P, WalletFile>: Send + Sync,
-{
-    fn sign_at_due(
-        &self,
-        persona: PCanonicalId,
-        tip: ChainCount,
-    ) -> impl std::future::Future<Output = PlanAttempt> + Send {
-        let engine = self.engine.clone();
-        let node = self.node.clone();
-        async move { Engine::sign_bond_at_due(engine, &node, persona, tip).await }
-    }
-
-    fn drain_ended(
-        &self,
-        p_slot: PSlot,
-        persona: PCanonicalId,
-    ) -> impl std::future::Future<Output = ()> + Send {
-        let engine = self.engine.clone();
-        async move { Engine::drain_ended_persona(engine, p_slot, persona).await }
-    }
-
-    fn persona_ended(&self, p_slot: PSlot) -> impl std::future::Future<Output = ()> + Send {
-        let engine = self.engine.clone();
-        async move {
-            let stake = { engine.read().await.stake_handle() };
-            if let Some(stake) = stake {
-                if let Err(error) = stake.deactivate_ended_persona(p_slot).await {
-                    tracing::warn!(%error, "staking: an ended persona could not be deactivated");
-                }
-            }
-        }
-    }
-
-    fn slot_retired(&self, p_slot: PSlot) -> impl std::future::Future<Output = ()> + Send {
-        let engine = self.engine.clone();
-        async move {
-            engine
-                .read()
-                .await
-                .ledger
-                .retire_bonded_slot(p_slot.index());
-        }
-    }
-}
-
 /// Dispatch a persisted bond transaction through this wallet's operator-owned daemon.
 struct LocalBondBroadcast<D> {
     daemon: Arc<D>,
@@ -924,10 +851,7 @@ where
             None => (dispatch_config, None),
         };
 
-        let signer = LocalBondSigner {
-            engine: self_arc.clone(),
-            node: node.clone(),
-        };
+        let signer = crate::engine::bond_due::LocalBondSigner::new(self_arc.clone(), node.clone());
         let dispatch = DispatchDriver::new(
             pending_seal,
             broadcast,

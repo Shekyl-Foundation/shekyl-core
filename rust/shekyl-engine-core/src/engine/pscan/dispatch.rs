@@ -56,7 +56,7 @@ pub(crate) use super::pending_store::{PendingPostStore, PendingSealStore};
 // The plan half of the tick (BD-Q3): the signing seam, what to sign, the
 // endings decided from the scan's evidence.
 use super::plan_tick::{plan_pass, report_plan_endings, sign_due, PlanPass};
-pub(crate) use super::plan_tick::{BondPlanSigner, PlanAttempt, TickOutcome};
+pub(crate) use super::plan_tick::{BondPlanSigner, TickOutcome};
 
 // ---------------------------------------------------------------------------
 // The broadcast seam
@@ -758,11 +758,6 @@ impl<S: PendingSealStore, T: BondBroadcast, G: BondPlanSigner> DispatchTick
                      own reorg-deep confirmation (the claim never releases the reservation)"
                 );
             }
-            // Terminal verify rejection: fail loud, stop resending. Remove
-            // the record — the byte-prune and the reservation release are
-            // the same seal (R2-4) — and surface the alarm. No automatic
-            // re-assembly (§3.6: a rejection-driven re-assemble loop is a
-            // probe amplifier for a malicious daemon).
             // Terminal verify rejection (BD-Q3 Rule 2): stop sending, keep
             // the record AND its reservation, and record the cause in one
             // seal. From the first submit the daemon holds valid bytes: a

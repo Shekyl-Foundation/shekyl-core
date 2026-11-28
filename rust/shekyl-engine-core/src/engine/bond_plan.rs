@@ -15,6 +15,7 @@
 use std::collections::BTreeMap;
 
 use shekyl_curve_tree::reference::{select_reference_height, REF_ANCHOR_AGE};
+use shekyl_engine_state::pending_post_block::PlanWait;
 use shekyl_engine_state::pscan_state::PFundingOutputRecord;
 use shekyl_engine_state::PendingBondPlan;
 use shekyl_types::{BlockCount, BlockHeight, ChainCount, GlobalOutputIndex, PCanonicalId, PSlot};
@@ -101,41 +102,54 @@ pub(crate) fn canonical_reference(tip: ChainCount) -> Option<BlockHeight> {
     tip.tip().and_then(select_reference_height)
 }
 
-/// What one tick signs. A plan is signed for the first time. A post never
-/// sent, whose reference is no longer canonical, is signed again. The due
-/// is where the maximum wait is measured from.
+/// The stake one tick signs, and the count its maximum wait is measured
+/// from. A plan contributes its scheduling due (`plan_due`). A post never
+/// sent contributes the count it was signed at. The two are the same fact
+/// by the time the tick holds them, so the stage is not a second field:
+/// [`shekyl_engine_state::StakeStage`] already named the row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SignSubject {
-    /// A plan at or past its due count.
-    Plan {
-        /// The persona the plan is for.
-        persona: PCanonicalId,
-        /// The plan's due count.
-        due: ChainCount,
-    },
-    /// A post never sent, signed again before its first send.
-    UnsentPost {
-        /// The persona the post is bound to.
-        persona: PCanonicalId,
-        /// The due count the plan was signed at.
-        due: ChainCount,
-    },
+pub(crate) struct SignSubject {
+    persona: PCanonicalId,
+    due: ChainCount,
 }
 
 impl SignSubject {
+    /// A sign this tick, for `persona`, whose maximum wait is measured from `due`.
+    pub(crate) fn at(persona: PCanonicalId, due: ChainCount) -> Self {
+        Self { persona, due }
+    }
+
     /// The persona this tick signs for.
     pub(crate) fn persona(self) -> PCanonicalId {
-        match self {
-            Self::Plan { persona, .. } | Self::UnsentPost { persona, .. } => persona,
-        }
+        self.persona
     }
 
     /// The due the maximum wait is measured from.
     pub(crate) fn due(self) -> ChainCount {
-        match self {
-            Self::Plan { due, .. } | Self::UnsentPost { due, .. } => due,
-        }
+        self.due
     }
+}
+
+/// What one attempt to sign a stake at its due block came to
+/// (`ARCHIVAL_BOND_POST_DELAY.md` BD-Q3; how a plan ends, ruled 2026-11-26).
+///
+/// Defined with the plan, not in the dispatch driver: the engine that signs
+/// produces it, and the driver only decides what to do with it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PlanAttempt {
+    /// The plan (or a post never sent) was replaced by a post signed at the
+    /// canonical reference for this tick's tip. The driver marks and sends
+    /// it in the same tick.
+    Signed,
+    /// The attempt was blocked. A temporary reason retries every tick; a
+    /// limited one retries until the plan's maximum wait from its due block.
+    Wait(PlanWait),
+    /// The shards the bond owes can no longer be bonded. The plan ends at
+    /// once and its funding is drained.
+    Unbondable,
+    /// The record changed under the attempt, or it was already sent (BD-Q3
+    /// Rule 1): nothing to record, and the next tick reads the new state.
+    Raced,
 }
 
 #[cfg(test)]

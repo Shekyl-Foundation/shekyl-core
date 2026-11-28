@@ -5195,22 +5195,20 @@ async fn stake_persona_and_submit_bond(
         match super::Engine::sign_bond_at_due(arc.clone(), &daemon.target(), plan_persona, tip)
             .await
         {
-            super::pscan::dispatch::PlanAttempt::Signed => {
+            super::bond_plan::PlanAttempt::Signed => {
                 signed = true;
                 break;
             }
-            super::pscan::dispatch::PlanAttempt::Wait(wait) if !wait.is_limited() => {
+            super::bond_plan::PlanAttempt::Wait(wait) if !wait.is_limited() => {
                 eprintln!("the plan waits ({wait:?}); refreshing");
                 refresh(&arc).await;
             }
-            super::pscan::dispatch::PlanAttempt::Wait(
-                shekyl_engine_state::PlanWait::FeeAboveFunding,
-            ) => {
+            super::bond_plan::PlanAttempt::Wait(shekyl_engine_state::PlanWait::FeeAboveFunding) => {
                 eprintln!("the plan's funding is short of the live fee; mining more");
                 daemon.generate_blocks(MINE_BATCH_BLOCKS).await;
                 refresh(&arc).await;
             }
-            super::pscan::dispatch::PlanAttempt::Raced => refresh(&arc).await,
+            super::bond_plan::PlanAttempt::Raced => refresh(&arc).await,
             other => daemon.panic_with_log("sign the plan at due", format!("{other:?}")),
         }
     }
@@ -5233,7 +5231,7 @@ async fn stake_persona_and_submit_bond(
             .await
             .expect("pending-post read");
         (
-            post.expect("first_stake seals exactly one pending post"),
+            post.expect("signing at due seals exactly one pending post"),
             covered.expect("first_stake's confirmed seal covers the pending records"),
         )
     };

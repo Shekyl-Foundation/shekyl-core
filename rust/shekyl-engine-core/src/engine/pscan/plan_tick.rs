@@ -12,35 +12,16 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use shekyl_engine_state::pending_post_block::{record_was_sent, EndedPlan, PlanEnding, PlanWait};
-use shekyl_engine_state::{PendingBondPlan, PendingBondPost, PendingPostBlock};
+use shekyl_engine_state::pending_post_block::{EndedPlan, PlanEnding};
+use shekyl_engine_state::{DrainedEndedPlan, PendingPostBlock, WaitingStake};
 use shekyl_types::{BlockCount, BlockHeight, ChainCount, GlobalOutputIndex, PCanonicalId, PSlot};
 use tokio_util::sync::CancellationToken;
 
 use super::dispatch::{DispatchError, PendingPostStore, PendingSealStore, TickEvidence};
+pub(crate) use crate::engine::bond_plan::PlanAttempt;
 use crate::engine::bond_plan::{
     canonical_reference, past_max_wait, plan_due, FundingPlace, SignSubject,
 };
-
-/// What one attempt to sign a stake at its due block came to
-/// (`ARCHIVAL_BOND_POST_DELAY.md` BD-Q3; how a plan ends, ruled 2026-11-26).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PlanAttempt {
-    /// The plan (or a post never sent) was replaced by a post signed at the
-    /// canonical reference for this tick's tip. The driver marks and sends
-    /// it in the same tick.
-    Signed,
-    /// The attempt was blocked. A temporary reason retries every tick; a
-    /// limited one retries until the plan's maximum wait from its due block.
-    Wait(PlanWait),
-    /// The shards the bond owes can no longer be bonded. The plan ends at
-    /// once and its funding is drained.
-    Unbondable,
-    /// The record changed under the attempt (withdrawn, ended, or a
-    /// reservation released): nothing to record, and the next tick reads the
-    /// new state.
-    Raced,
-}
 
 /// The driver's signing seam: the engine assembles, proves and signs a due
 /// stake, and drains a persona whose plan ended. The driver decides **when**; the engine does the work and
@@ -82,15 +63,17 @@ pub(crate) trait BondPlanSigner: Send + Sync + 'static {
 
 /// A post never sent whose reference is no longer the canonical one for
 /// `tip`: it is signed again before its first send (BD-Q3 Rule 1), never
-/// sent at an older age. Lowest persona first.
-pub(super) fn resign_candidate(posts: &[PendingBondPost], tip: ChainCount) -> Option<SignSubject> {
+/// sent at an older age. Lowest persona first. The maximum wait is measured
+/// from the count the post was signed at.
+pub(super) fn resign_candidate(block: &PendingPostBlock, tip: ChainCount) -> Option<SignSubject> {
     let canonical = canonical_reference(tip)?;
-    posts
-        .iter()
-        .filter(|p| !record_was_sent(p.state, p.terminal) && p.reference_height != canonical)
-        .map(|p| SignSubject::UnsentPost {
-            persona: p.persona,
-            due: p.due,
+    block
+        .waiting_stakes()
+        .filter_map(|waiting| {
+            let WaitingStake::Unsent(post) = waiting else {
+                return None;
+            };
+            (post.reference_height != canonical).then_some(SignSubject::at(post.persona, post.due))
         })
         .min_by_key(|subject| subject.persona())
 }
@@ -99,18 +82,18 @@ pub(super) fn resign_candidate(posts: &[PendingBondPost], tip: ChainCount) -> Op
 /// (BD-Q2), ties by persona. A plan whose funding has no live record has no
 /// due; the spent-elsewhere ending has already removed it this pass.
 pub(super) fn sign_candidate(
-    plans: &[PendingBondPlan],
+    block: &PendingPostBlock,
     funding: &BTreeMap<GlobalOutputIndex, FundingPlace>,
     reorg_depth: BlockCount,
     tip: ChainCount,
 ) -> Option<SignSubject> {
-    plans
-        .iter()
-        .filter_map(|p| {
-            plan_due(p, funding, reorg_depth).map(|due| SignSubject::Plan {
-                persona: p.persona,
-                due,
-            })
+    block
+        .waiting_stakes()
+        .filter_map(|waiting| {
+            let WaitingStake::Plan(plan) = waiting else {
+                return None;
+            };
+            plan_due(plan, funding, reorg_depth).map(|due| SignSubject::at(plan.persona, due))
         })
         .filter(|subject| subject.due() <= tip)
         .min_by_key(|subject| (subject.due(), subject.persona()))
@@ -125,8 +108,7 @@ pub(super) fn select_sign_target(
     reorg_depth: BlockCount,
     tip: ChainCount,
 ) -> Option<SignSubject> {
-    resign_candidate(block.posts(), tip)
-        .or_else(|| sign_candidate(block.plans(), funding, reorg_depth, tip))
+    resign_candidate(block, tip).or_else(|| sign_candidate(block, funding, reorg_depth, tip))
 }
 
 /// End every plan, and every post never sent, whose reserved funding left
@@ -145,22 +127,12 @@ pub(super) fn end_spent_elsewhere(
     let gone = |gindexes: &[GlobalOutputIndex]| {
         gindexes.iter().any(|g| !evidence.live_funding.contains(g))
     };
+    // Waiting rows only: a sent post's missing input is its own confirmation,
+    // and [`StakeStage::waiting`] is what keeps that row out of this ending.
     let spent: Vec<PCanonicalId> = block
-        .plans()
-        .iter()
-        .filter(|p| covered(p.funded_through) && gone(&p.funding_gindexes))
-        .map(|p| p.persona)
-        .chain(
-            block
-                .posts()
-                .iter()
-                .filter(|p| {
-                    !record_was_sent(p.state, p.terminal)
-                        && covered(p.funded_through)
-                        && gone(&p.funding_gindexes)
-                })
-                .map(|p| p.persona),
-        )
+        .waiting_stakes()
+        .filter(|waiting| covered(waiting.funded_through()) && gone(waiting.funding_gindexes()))
+        .map(WaitingStake::persona)
         .collect();
     spent
         .iter()
@@ -246,8 +218,9 @@ pub(super) async fn sign_due<S: PendingSealStore, G: BondPlanSigner>(
 /// set shows them, on a later tick.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(crate) struct TickOutcome {
-    /// Ended plans to retire, in record order.
-    pub(crate) retire: Vec<EndedPlan>,
+    /// Ended plans to retire, in record order. Each value is the drain
+    /// predicate, so the task's witness does not re-derive it.
+    pub(crate) retire: Vec<DrainedEndedPlan>,
 }
 
 /// What the plan half of phase 1 decided, under the pending lock.
@@ -256,7 +229,8 @@ pub(super) struct PlanPass {
     /// another transaction this tick: ended as `spent_elsewhere`.
     pub(super) spent_elsewhere: Vec<EndedPlan>,
     /// Ended plans whose persona's funding is drained: the task retires them.
-    pub(super) drained: Vec<EndedPlan>,
+    /// A [`DrainedEndedPlan`] is this predicate's proof.
+    pub(super) drained: Vec<DrainedEndedPlan>,
     /// The stake to sign this tick, chosen from a covered seal.
     pub(super) sign: Option<SignSubject>,
     /// The one ended persona whose drain is owed this tick, if any.
@@ -292,9 +266,8 @@ pub(super) fn plan_pass(
         .iter()
         .map(|ended| ended.p_slot)
         .collect();
-    let drained: Vec<EndedPlan> = block
+    let drained: Vec<DrainedEndedPlan> = block
         .drained_plans(&funded_slots, evidence.scanned_through)
-        .cloned()
         .collect();
     let drain_owed = block
         .ended_plans()

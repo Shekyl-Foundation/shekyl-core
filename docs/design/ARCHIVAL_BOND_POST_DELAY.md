@@ -784,8 +784,8 @@ unless named):
 - **The due** (`bond_plan.rs` `plan_due`): BD-Q2's anchor over the
   reserved funding, recomputed each tick on the daemon-claimed count
   clock; `PLAN_MAX_WAIT`; the canonical reference for a tip.
-- **Signing at due** (`pscan/dispatch.rs`, the driver decides when;
-  `bond_orchestrator.rs` `sign_bond_at_due`, the engine does it): fill,
+- **Signing at due** (`pscan/plan_tick.rs`, the driver decides when;
+  `bond_due.rs` `sign_bond_at_due`, the engine does it): fill,
   live fee, sweep at the canonical reference with the plan's own
   reservation available to it, `AssembleBond` (which no longer draws),
   checked seal, then the driver marks and sends it in the same tick. A
@@ -795,7 +795,7 @@ unless named):
 - **The endings and the drain** (`pscan/dispatch.rs`, `pscan/task.rs`,
   `drain_orchestrator.rs` `NoExitOwed`, `pscan/seal_basis.rs`
   `owes_no_exit`): one send per tick, the drain only on a tick that sends
-  no post; the retirement through `RetirementWitness::from_ended_plan`.
+  no post; the retirement through `RetirementWitness::from_drained`.
 - **The owner's withdrawal** (`unstake_facade.rs`): `unstake` withdraws a
   plan and refuses a signed post; the wallet RPC's `UnstakeResult` gains
   `WITHDRAWN` (contract 0.27.0).

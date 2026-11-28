@@ -218,6 +218,134 @@ pub enum Withdrawal {
     NoPlan,
 }
 
+/// Where one persona's stake stands. One persona is in one stage
+/// (`ARCHIVAL_BOND_POST_DELAY.md` §3.6). [`PendingPostBlock::stake_stage`]
+/// is the only scan; a new stage is a new arm, and every transition matches
+/// it.
+#[derive(Clone, Copy, Debug)]
+pub enum StakeStage<'a> {
+    /// Sealed at the request. Nothing is signed.
+    Plan(&'a PendingBondPlan),
+    /// Signed, and no submit has been attempted.
+    Unsent(&'a PendingBondPost),
+    /// A submit was attempted. The bytes are never replaced (BD-Q3 Rule 1).
+    Sent(&'a PendingBondPost),
+    /// Ended without a bond. Its funding drain is owed.
+    Ended(&'a EndedPlan),
+}
+
+impl<'a> StakeStage<'a> {
+    /// The persona this stage belongs to.
+    #[must_use]
+    pub fn persona(self) -> PCanonicalId {
+        match self {
+            Self::Plan(plan) => plan.persona,
+            Self::Unsent(post) | Self::Sent(post) => post.persona,
+            Self::Ended(ended) => ended.persona,
+        }
+    }
+
+    /// The slot this stage keeps derivable.
+    #[must_use]
+    pub fn p_slot(self) -> PSlot {
+        match self {
+            Self::Plan(plan) => plan.p_slot,
+            Self::Unsent(post) | Self::Sent(post) => post.p_slot,
+            Self::Ended(ended) => ended.p_slot,
+        }
+    }
+
+    /// The row that can still be signed or ended. A sent post and an ended
+    /// plan are not waiting.
+    #[must_use]
+    pub fn waiting(self) -> Option<WaitingStake<'a>> {
+        match self {
+            Self::Plan(plan) => Some(WaitingStake::Plan(plan)),
+            Self::Unsent(post) => Some(WaitingStake::Unsent(post)),
+            Self::Sent(_) | Self::Ended(_) => None,
+        }
+    }
+}
+
+/// A stake that has not been sent: a plan, or a post no submit has touched.
+/// Endings, the wait reason, and a signature touch only this.
+#[derive(Clone, Copy, Debug)]
+pub enum WaitingStake<'a> {
+    /// Sealed at the request.
+    Plan(&'a PendingBondPlan),
+    /// Signed, and no submit has been attempted.
+    Unsent(&'a PendingBondPost),
+}
+
+impl<'a> WaitingStake<'a> {
+    /// The persona this row is for.
+    #[must_use]
+    pub fn persona(self) -> PCanonicalId {
+        match self {
+            Self::Plan(plan) => plan.persona,
+            Self::Unsent(post) => post.persona,
+        }
+    }
+
+    /// The funding the row reserved.
+    #[must_use]
+    pub fn funding_gindexes(self) -> &'a [GlobalOutputIndex] {
+        match self {
+            Self::Plan(plan) => &plan.funding_gindexes,
+            Self::Unsent(post) => &post.funding_gindexes,
+        }
+    }
+
+    /// The highest block that funding sits in.
+    #[must_use]
+    pub fn funded_through(self) -> BlockHeight {
+        match self {
+            Self::Plan(plan) => plan.funded_through,
+            Self::Unsent(post) => post.funded_through,
+        }
+    }
+}
+
+/// An ended plan whose drain is done. Constructible only by
+/// [`PendingPostBlock::drained_plans`], so holding one is the predicate:
+/// the sealed scan covers the funding block, the slot holds no live funding,
+/// and no drain is in flight.
+///
+/// Not persisted. The actor's funded gate still refuses a slot that gained
+/// funding after the read that produced this value.
+#[derive(Clone, PartialEq, Eq)]
+pub struct DrainedEndedPlan {
+    ended: EndedPlan,
+}
+
+impl DrainedEndedPlan {
+    /// The ended row the drain predicate accepted.
+    #[must_use]
+    pub fn ended(&self) -> &EndedPlan {
+        &self.ended
+    }
+
+    /// The persona whose plan ended.
+    #[must_use]
+    pub fn persona(&self) -> PCanonicalId {
+        self.ended.persona
+    }
+
+    /// The slot the retirement wipes.
+    #[must_use]
+    pub fn p_slot(&self) -> PSlot {
+        self.ended.p_slot
+    }
+}
+
+impl std::fmt::Debug for DrainedEndedPlan {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("DrainedEndedPlan")
+            .field(&self.ended)
+            .finish()
+    }
+}
+
 /// Write `wait` into `slot` when it differs. One comparison for the plan
 /// and the unsent post.
 fn assign_wait(slot: &mut Option<PlanWait>, wait: Option<PlanWait>) -> bool {
@@ -228,7 +356,67 @@ fn assign_wait(slot: &mut Option<PlanWait>, wait: Option<PlanWait>) -> bool {
     true
 }
 
+/// Which row [`PendingPostBlock::stake_stage`] names. The index is the
+/// scan's result, so a mutation does not scan again.
+enum StakeAt {
+    Plan(usize),
+    Unsent(usize),
+    Sent(usize),
+    Ended(usize),
+}
+
 impl super::PendingPostBlock {
+    /// The one scan of `persona`'s stake. A plan outranks a post, and a post
+    /// outranks an ended row: the live row is what a transition acts on.
+    fn locate(&self, persona: &PCanonicalId) -> Option<StakeAt> {
+        if let Some(idx) = self.plans.iter().position(|p| &p.persona == persona) {
+            return Some(StakeAt::Plan(idx));
+        }
+        if let Some(idx) = self.posts.iter().position(|p| &p.persona == persona) {
+            let post = &self.posts[idx];
+            return Some(if record_was_sent(post.state, post.terminal) {
+                StakeAt::Sent(idx)
+            } else {
+                StakeAt::Unsent(idx)
+            });
+        }
+        self.ended_plans
+            .iter()
+            .position(|p| &p.persona == persona)
+            .map(StakeAt::Ended)
+    }
+
+    /// Where `persona`'s stake stands, if it has one.
+    #[must_use]
+    pub fn stake_stage(&self, persona: &PCanonicalId) -> Option<StakeStage<'_>> {
+        Some(match self.locate(persona)? {
+            StakeAt::Plan(idx) => StakeStage::Plan(&self.plans[idx]),
+            StakeAt::Unsent(idx) => StakeStage::Unsent(&self.posts[idx]),
+            StakeAt::Sent(idx) => StakeStage::Sent(&self.posts[idx]),
+            StakeAt::Ended(idx) => StakeStage::Ended(&self.ended_plans[idx]),
+        })
+    }
+
+    /// Stakes that have not been sent: the rows an ending, a wait, or a
+    /// signature may touch.
+    pub fn waiting_stakes(&self) -> impl Iterator<Item = WaitingStake<'_>> + '_ {
+        self.stake_stages().filter_map(StakeStage::waiting)
+    }
+
+    /// Every stake row, in stage order: plans, then posts, then ended plans.
+    pub fn stake_stages(&self) -> impl Iterator<Item = StakeStage<'_>> + '_ {
+        let plans = self.plans.iter().map(StakeStage::Plan);
+        let posts = self.posts.iter().map(|post| {
+            if record_was_sent(post.state, post.terminal) {
+                StakeStage::Sent(post)
+            } else {
+                StakeStage::Unsent(post)
+            }
+        });
+        let ended = self.ended_plans.iter().map(StakeStage::Ended);
+        plans.chain(posts).chain(ended)
+    }
+
     /// Seal a planned stake at the request (BD-Q3): classify it as a stake
     /// for its persona, and insert it iff admitted. The plan reserves its
     /// funding from here on.
@@ -336,21 +524,16 @@ impl super::PendingPostBlock {
     }
 
     /// Record why `persona`'s stake was not signed on this attempt, on the
-    /// plan or on the post never sent. A sent post is not waiting. Returns
-    /// `true` when the stored reason changed (the caller seals only then).
+    /// plan or on the post never sent. A sent post is not waiting, and
+    /// neither is an ended plan. Returns `true` when the stored reason
+    /// changed (the caller seals only then).
     #[must_use]
     pub fn set_sign_wait(&mut self, persona: &PCanonicalId, wait: Option<PlanWait>) -> bool {
-        if let Some(plan) = self.plans.iter_mut().find(|p| &p.persona == persona) {
-            return assign_wait(&mut plan.wait, wait);
+        match self.locate(persona) {
+            Some(StakeAt::Plan(idx)) => assign_wait(&mut self.plans[idx].wait, wait),
+            Some(StakeAt::Unsent(idx)) => assign_wait(&mut self.posts[idx].wait, wait),
+            Some(StakeAt::Sent(_) | StakeAt::Ended(_)) | None => false,
         }
-        if let Some(post) = self
-            .posts
-            .iter_mut()
-            .find(|p| &p.persona == persona && !record_was_sent(p.state, p.terminal))
-        {
-            return assign_wait(&mut post.wait, wait);
-        }
-        false
     }
 
     /// End `persona`'s stake without a bond, in one mutation: its plan, or its
@@ -367,18 +550,18 @@ impl super::PendingPostBlock {
         ending: PlanEnding,
         at_height: BlockHeight,
     ) -> Option<EndedPlan> {
-        let (p_slot, funded_through) =
-            if let Some(idx) = self.plans.iter().position(|p| &p.persona == persona) {
+        // A sent post ends at its end date. An ended plan is already ended.
+        let (p_slot, funded_through) = match self.locate(persona)? {
+            StakeAt::Plan(idx) => {
                 let plan = self.plans.remove(idx);
                 (plan.p_slot, plan.funded_through)
-            } else {
-                let idx = self
-                    .posts
-                    .iter()
-                    .position(|p| &p.persona == persona && !record_was_sent(p.state, p.terminal))?;
+            }
+            StakeAt::Unsent(idx) => {
                 let post = self.posts.remove(idx);
                 (post.p_slot, post.funded_through)
-            };
+            }
+            StakeAt::Sent(_) | StakeAt::Ended(_) => return None,
+        };
         self.generation += 1;
         let ended = EndedPlan {
             p_slot,
@@ -413,31 +596,40 @@ impl super::PendingPostBlock {
     /// plan waits past its due block; refused once it is signed.
     #[must_use]
     pub fn withdraw_plan(&mut self, persona: &PCanonicalId, at_height: BlockHeight) -> Withdrawal {
-        if self.posts.iter().any(|p| &p.persona == persona) {
-            return Withdrawal::AlreadySigned;
-        }
-        match self.end_plan(persona, PlanEnding::Withdrawn, at_height) {
-            Some(ended) => Withdrawal::Withdrawn(ended),
-            None => Withdrawal::NoPlan,
+        match self.stake_stage(persona) {
+            // Signed, sent or not: the ruling refuses withdrawal once the
+            // post exists. The unsent post still ends on its own terms.
+            Some(StakeStage::Unsent(_) | StakeStage::Sent(_)) => Withdrawal::AlreadySigned,
+            Some(StakeStage::Plan(_)) => {
+                match self.end_plan(persona, PlanEnding::Withdrawn, at_height) {
+                    Some(ended) => Withdrawal::Withdrawn(ended),
+                    None => Withdrawal::NoPlan,
+                }
+            }
+            Some(StakeStage::Ended(_)) | None => Withdrawal::NoPlan,
         }
     }
 
     /// Ended plans whose persona's slot holds no live funding and has no
     /// live drain, judged only once the sealed scan has covered the block the
-    /// funding sat in (absence from a scan short of it is not a spend): their
-    /// drain is done, and their persona is to be retired
-    /// (the caller retires it durably, then [`Self::drop_retired_plans`]
-    /// removes the record).
+    /// funding sat in (absence from a scan short of it is not a spend). Each
+    /// item is a [`DrainedEndedPlan`]: the only way to mint one, so a
+    /// retirement witness built from it is this predicate. The caller retires
+    /// the persona durably, then [`Self::drop_retired_plans`] removes the record.
     pub fn drained_plans<'a>(
         &'a self,
         funded_slots: &'a BTreeSet<PSlot>,
         scanned_through: Option<BlockHeight>,
-    ) -> impl Iterator<Item = &'a EndedPlan> + 'a {
-        self.ended_plans.iter().filter(move |ended| {
-            scanned_through.is_some_and(|s| s >= ended.funded_through)
-                && !funded_slots.contains(&ended.p_slot)
-                && !self.has_live_drain_for(&ended.persona)
-        })
+    ) -> impl Iterator<Item = DrainedEndedPlan> + 'a {
+        self.ended_plans
+            .iter()
+            .filter(move |ended| {
+                scanned_through.is_some_and(|s| s >= ended.funded_through)
+                    && !funded_slots.contains(&ended.p_slot)
+                    && !self.has_live_drain_for(&ended.persona)
+            })
+            .cloned()
+            .map(|ended| DrainedEndedPlan { ended })
     }
 
     /// Remove every ended plan whose persona is durably retired: the retired
@@ -460,3 +652,7 @@ impl super::PendingPostBlock {
         out
     }
 }
+
+#[cfg(test)]
+#[path = "plan_block_tests.rs"]
+mod plan_block_tests;

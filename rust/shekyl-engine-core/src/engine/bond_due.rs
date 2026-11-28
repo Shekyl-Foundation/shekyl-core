@@ -16,6 +16,7 @@ use shekyl_engine_file::WalletFile;
 use shekyl_engine_state::pending_post_block::{
     PendingBondPost, PendingPostState, PlanWait, PlannedPosture, SignAdmission,
 };
+use shekyl_engine_state::StakeStage;
 use shekyl_rpc_transport::DaemonTarget;
 use shekyl_tx_builder::{LeafEntry, TreeContext};
 use shekyl_types::{BlockHeight, ChainCount, GlobalOutputIndex, PCanonicalId, PSlot};
@@ -26,14 +27,13 @@ use super::bond_assembly::{
     BondAssemblyError, FundingInputContext, FundingSelection, SpentRecordsDurablyPruned,
 };
 use super::bond_orchestrator::{p_lane_floor_fee, planned_holdings, SweepReference};
-use super::bond_plan::canonical_reference;
+use super::bond_plan::{canonical_reference, PlanAttempt};
 use super::curve_tree_actor::{CurveTreeHandle, CurveTreeHandleError};
 use super::drain_orchestrator::{DrainIntent, NoExitOwed};
 use super::fee_policy::FeeEstimatorError;
 use super::fee_snapshot::map_daemon_engine_fee_error;
 use super::holdings_fill::{CompleteTreeFillError, FilledHoldings, MarketFillError};
 use super::pscan::block_source::daemon_claimed_tip;
-use super::pscan::dispatch::PlanAttempt;
 use super::pscan::start::pending_post_store_for_engine;
 use super::signer::EngineSignerKind;
 use super::stake_engine::{AssembledBondPost, PersonaHandle, StakeEngineError, StakeEngineHandle};
@@ -132,13 +132,18 @@ struct HeldFunding {
     own: Vec<GlobalOutputIndex>,
 }
 
-/// Which row the due-block read found. A plan is signed for the first time;
-/// a post never sent is signed again at the canonical reference.
-enum HeldStake {
+/// What the due-block read took off the row, owned so the pending lock can
+/// drop before the fill. A sent post, an ended plan, and a missing row are
+/// [`DueRow::NotSignable`]: Rule 1 is decided here, before any fill or proof.
+enum DueRow {
+    /// Nothing to sign. The signed bytes are not built.
+    NotSignable,
+    /// A plan, signed for the first time at this tick's tip.
     Plan(HeldFunding),
-    UnsentPost {
+    /// A post never sent, signed again. `due` is the count it was signed at,
+    /// which is where its maximum wait is measured.
+    Unsent {
         funding: HeldFunding,
-        /// The due the plan was signed at. The maximum wait is measured from it.
         due: ChainCount,
     },
 }
@@ -193,35 +198,27 @@ where
         };
         let store = pending_post_store_for_engine(self_arc.clone(), pending_gate);
 
-        // What is being signed: the plan, or the post never sent. The driver
-        // named the persona; the row decides which.
+        // The row decides what is signed. A sent post is Rule 1 and returns
+        // before the fill: the bytes already sealed are the bytes that send.
         let held = store
-            .read(|block| {
-                if let Some(plan) = block.plans().iter().find(|p| p.persona == persona) {
-                    return Some(HeldStake::Plan(HeldFunding {
-                        p_slot: plan.p_slot,
-                        posture: plan.posture.clone(),
-                        own: plan.funding_gindexes.clone(),
-                    }));
-                }
-                block
-                    .posts()
-                    .iter()
-                    .find(|p| p.persona == persona)
-                    .map(|post| HeldStake::UnsentPost {
-                        funding: HeldFunding {
-                            p_slot: post.p_slot,
-                            posture: post.posture.clone(),
-                            own: post.funding_gindexes.clone(),
-                        },
-                        due: post.due,
-                    })
+            .read(|block| match block.stake_stage(&persona) {
+                Some(StakeStage::Plan(plan)) => DueRow::Plan(HeldFunding {
+                    p_slot: plan.p_slot,
+                    posture: plan.posture.clone(),
+                    own: plan.funding_gindexes.clone(),
+                }),
+                Some(StakeStage::Unsent(post)) => DueRow::Unsent {
+                    funding: HeldFunding {
+                        p_slot: post.p_slot,
+                        posture: post.posture.clone(),
+                        own: post.funding_gindexes.clone(),
+                    },
+                    due: post.due,
+                },
+                Some(StakeStage::Sent(_) | StakeStage::Ended(_)) | None => DueRow::NotSignable,
             })
             .await
             .map_err(|e| DueBlock::assembly("pending read", e))?;
-        let Some(held) = held else {
-            return Ok(PlanAttempt::Raced);
-        };
         // A plan is signed at this tick's tip. A post never sent keeps the
         // due it was signed at, which is where its maximum wait is measured.
         let (
@@ -233,8 +230,9 @@ where
             post_due,
             resign,
         ) = match held {
-            HeldStake::Plan(funding) => (funding, tip, false),
-            HeldStake::UnsentPost { funding, due } => (funding, due, true),
+            DueRow::NotSignable => return Ok(PlanAttempt::Raced),
+            DueRow::Plan(funding) => (funding, tip, false),
+            DueRow::Unsent { funding, due } => (funding, due, true),
         };
         let canonical = canonical_reference(tip).ok_or(DueBlock::Wait(PlanWait::WalletBehind))?;
 
@@ -522,6 +520,98 @@ where
         stake
             .assemble_bond(handle, ticket, holdings, funding, tree_ctx, fee.to_raw())
             .await
+    }
+}
+
+/// The production [`BondPlanSigner`](super::pscan::plan_tick::BondPlanSigner):
+/// the engine signs, drains, and retires, and the dispatch driver decides
+/// when. It lives with the methods it calls, not in the scan's start path.
+#[allow(clippy::type_complexity)] // the same engine-arc shape as the scan's store
+pub(crate) struct LocalBondSigner<S, D, L, E, R, P>
+where
+    S: EngineSignerKind,
+    D: DaemonEngine,
+    L: LedgerEngine,
+    E: EconomicsEngine,
+    R: RefreshEngine,
+    P: PendingTxEngine,
+{
+    engine: Arc<RwLock<Engine<S, D, L, E, R, P, WalletFile>>>,
+    node: DaemonTarget,
+}
+
+impl<S, D, L, E, R, P> LocalBondSigner<S, D, L, E, R, P>
+where
+    S: EngineSignerKind + Send + Sync + 'static,
+    D: DaemonEngine,
+    L: LedgerEngine,
+    E: EconomicsEngine,
+    R: RefreshEngine,
+    P: PendingTxEngine,
+    Engine<S, D, L, E, R, P, WalletFile>: Send + Sync,
+{
+    /// The signer the scan task holds for one wallet session.
+    // CLIPPY: the parameter is the engine arc the scan already threads; a
+    // type alias would only rename that one shape.
+    #[allow(clippy::type_complexity)]
+    pub(crate) fn new(
+        engine: Arc<RwLock<Engine<S, D, L, E, R, P, WalletFile>>>,
+        node: DaemonTarget,
+    ) -> Self {
+        Self { engine, node }
+    }
+}
+
+impl<S, D, L, E, R, P> super::pscan::plan_tick::BondPlanSigner for LocalBondSigner<S, D, L, E, R, P>
+where
+    S: EngineSignerKind + Send + Sync + 'static,
+    D: DaemonEngine,
+    L: LedgerEngine,
+    E: EconomicsEngine,
+    R: RefreshEngine,
+    P: PendingTxEngine,
+    Engine<S, D, L, E, R, P, WalletFile>: Send + Sync,
+{
+    fn sign_at_due(
+        &self,
+        persona: PCanonicalId,
+        tip: ChainCount,
+    ) -> impl std::future::Future<Output = PlanAttempt> + Send {
+        let engine = self.engine.clone();
+        let node = self.node.clone();
+        async move { Engine::sign_bond_at_due(engine, &node, persona, tip).await }
+    }
+
+    fn drain_ended(
+        &self,
+        p_slot: PSlot,
+        persona: PCanonicalId,
+    ) -> impl std::future::Future<Output = ()> + Send {
+        let engine = self.engine.clone();
+        async move { Engine::drain_ended_persona(engine, p_slot, persona).await }
+    }
+
+    fn persona_ended(&self, p_slot: PSlot) -> impl std::future::Future<Output = ()> + Send {
+        let engine = self.engine.clone();
+        async move {
+            let stake = { engine.read().await.stake_handle() };
+            if let Some(stake) = stake {
+                if let Err(error) = stake.deactivate_ended_persona(p_slot).await {
+                    tracing::warn!(%error, "staking: an ended persona could not be deactivated");
+                }
+            }
+        }
+    }
+
+    fn slot_retired(&self, p_slot: PSlot) -> impl std::future::Future<Output = ()> + Send {
+        let engine = self.engine.clone();
+        async move {
+            engine
+                .read()
+                .await
+                .ledger
+                .retire_bonded_slot(p_slot.index());
+        }
     }
 }
 
