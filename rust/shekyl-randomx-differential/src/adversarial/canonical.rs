@@ -51,7 +51,7 @@
 //! introduced at C5.
 //!
 //! Per
-//! [`19-validation-surface-discipline.mdc`](../../../../.cursor/rules/19-validation-surface-discipline.mdc)
+//! [`119-validation-surface-discipline.mdc`](../../../../.cursor/rules/119-validation-surface-discipline.mdc)
 //! the precondition's reuse is the substrate-aware option (no
 //! bundling, no duplicate validation surface); the Phase 2g
 //! cache-equivalence pre-existing test already produces the

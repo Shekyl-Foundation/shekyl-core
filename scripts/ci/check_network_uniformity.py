@@ -2,7 +2,7 @@
 # Copyright (c) 2026, The Shekyl Foundation
 # All rights reserved.
 # BSD-3-Clause
-"""Rule 71 on the Rust consensus surface: the network selects data, never
+"""Rule 171 on the Rust consensus surface: the network selects data, never
 control flow.
 
 Once `network == Testnet` decides whether a check runs, "testnet passed"
@@ -40,7 +40,7 @@ is every module under it.
 
 Every fenced crate must exist and enumerate at least one source file: an
 empty fence is a missing subject, never a pass. The allowlist shrinks,
-never grows silently (rule 71 §4): an entry is the rule-71 §2 ratification
+never grows silently (rule 171 §4): an entry is the rule-171 §2 ratification
 trail or migration debt with a named owner, recorded beside it.
 
 `--selftest` runs the extractor and the three checks against synthetic
@@ -73,7 +73,7 @@ ALLOWLIST = (
     (
         "rust/shekyl-chain-rules/src/rule_set.rs",
         "Network::Mainnet | Network::Testnet | Network::Stagenet | Network::Regtest => {",
-        "Migration debt toward the network's row (rule 71 §4): RuleSchedule::for_network "
+        "Migration debt toward the network's row (rule 171 §4): RuleSchedule::for_network "
         "selects each network's rule schedule by match, every arm the identity today. "
         "NETWORK_IDENTITY.md's census (the shekyl-node rules_of row) rules the schedule a "
         "row field; owner: the network-identity round (NI), which moves it into the row.",
@@ -352,9 +352,9 @@ def check(hits, allowlist):
     for hf, htext in hits:
         if (hf, htext) not in entries:
             errors.append(
-                f"unlisted Network-variant branch on the consensus surface (rule 71): {hf} : {htext}\n"
+                f"unlisted Network-variant branch on the consensus surface (rule 171): {hf} : {htext}\n"
                 "      the network selects data, never control flow: make it a row lookup, or ratify\n"
-                "      the divergence (named, loud, rule 71 §2) and add an annotated entry"
+                "      the divergence (named, loud, rule 171 §2) and add an annotated entry"
             )
     if len(hits) != len(allowlist):
         listing = "\n".join(f"      {hf} : {htext}" for hf, htext in hits)
@@ -410,7 +410,7 @@ def main():
         hits.extend(crate_hits(crate, features.get(crate, set()), errors.append))
     errors.extend(check(hits, ALLOWLIST))
     if errors:
-        print("FAIL: rule 71 on the Rust consensus surface:")
+        print("FAIL: rule 171 on the Rust consensus surface:")
         for e in errors:
             print(f"  {e}")
         return 1

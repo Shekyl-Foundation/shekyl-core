@@ -2,7 +2,7 @@
 
 **Status:** OPEN — Round 0 RULED except the fragment count (Rick, 2026-11-22; §11), docs only.
 Consensus surface: the design is ruled here before any code moves, then one
-rule-07 cutover PR moves every consumer together. Identifier family `ICD-`
+rule-107 cutover PR moves every consumer together. Identifier family `ICD-`
 (registered in [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2):
 `ICD-R*` rulings, `ICD-F*` findings, `ICD-Q*` questions for Rick.
 
@@ -609,7 +609,7 @@ legal-shape function (below), which answers per shape and fee width, so it
 cannot fall below a legal spend. At a pinned 0.05 SKL the reserve's head-room
 would fall from about 600 to about 337 atomic per weight byte; instead the
 reserve is computed from the ceiling at 600 (`ICD-R10`: 89 113 000 atomic,
-about 0.0891 SKL, with the rule-75 bounds re-checked against the rung). (The
+about 0.0891 SKL, with the rule-175 bounds re-checked against the rung). (The
 reserve's comment gives today's ceiling as 80 456 bytes; the weight model gives
 79 625 for the same shape at a 10-byte fee varint. The comment likely predates
 the 2026-09-14 proof-size re-measurement; the computed reserve replaces both
@@ -1032,7 +1032,7 @@ fee a `Release` actually pays is quantized up to it.
   funds a `Release` over an underfunded pool
   (`ARCHIVAL_BOND_CONSTRUCTION.md` §7.2), so the larger corner strands value
   until earnings or retirement but bricks nothing.
-- **Rule-75 bounds re-checked:** `0 < 89 113 000 < 750 000 000`. The engine's
+- **Rule-175 bounds re-checked:** `0 < 89 113 000 < 750 000 000`. The engine's
   assertion that the reserve is below one cover rung
   (`the_exit_fee_reserve_is_below_one_cover_rung`) holds.
 - **Placement.** `shekyl-standoff` today depends on nothing and states that it

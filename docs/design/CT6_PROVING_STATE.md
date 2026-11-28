@@ -50,7 +50,7 @@ The round arrived briefed as a new document with a new identifier family
    was minted to escape ([`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md)
    §"CT-ACT-": *"a bare `CT-4` would be ambiguous in exactly the place it would
    be read"*).
-3. **Rule 94 registration is irreversible-ish**, which is exactly why the
+3. **Rule 194 registration is irreversible-ish**, which is exactly why the
    pre-flight ran before the registration and not after it. It found that the
    name already existed (§3).
 
@@ -71,7 +71,7 @@ programme's own next slice — the one CT-5's closeout routed forward.
 | This document | **New, living.** Home for `CT-6` and its questions |
 | [`CT5_SERIES_CLOSEOUT.md`](../completed/CT5_SERIES_CLOSEOUT.md) §5 | **Not amended** — it is a completed record of what *was*. The residue row stays as written |
 | [`CURVE_TREE_CLIENT.md`](CURVE_TREE_CLIENT.md) §"What REMAINS" | **Re-points** (a) and (b) to this document. Owed by the registering PR |
-| [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) | **The existing `CT-1…CT-5` family row is amended to `CT-1…CT-6`** (rule 94 §1) — *not* a new row. `check_index_prefix_uniqueness` holds one row per prefix and rejected a separate `CT-6` row as a `CT` collision, which is this section's ruling restated as a gate: extending a family and minting one are different edits, and the index can tell them apart |
+| [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) | **The existing `CT-1…CT-5` family row is amended to `CT-1…CT-6`** (rule 194 §1) — *not* a new row. `check_index_prefix_uniqueness` holds one row per prefix and rejected a separate `CT-6` row as a `CT` collision, which is this section's ruling restated as a gate: extending a family and minting one are different edits, and the index can tell them apart |
 | `assemble.rs:106`'s comment | Named this work *"the store-backed / per-input-reconstruction assembly follow-up"*. **Re-pointed at implementation (increment 3, 2026-09-24):** the comment described a follow-up that has now landed, so it states the shape that is there — the positions are indexed once for the batch — rather than naming itself as owed work |
 
 ---
@@ -264,7 +264,7 @@ round's fixed points, each inherited from a verified source.
 | **C6** | The frontier advance is **public and identity-free**; path capture filters it to the wallet's own outputs. **`identity-free` is a claim about the bytes, never about access**: that the content reveals no ownership does not make the file carrying it shared, and a design that reads public content out of another identity's sealed file is `WSS-13` relocated, not C6 satisfied. **Amended 2026-09-30 — the clause read *"a per-identity filter"* and *"no component sees two identities' ownership"*.** `Q5`'s dissolution (2026-09-22) established there is no second proving consumer, and records in its own row that *"C6's second capture side is not built"* — so that half has **no subject**, not a smaller one. The bytes-vs-access half is untouched and is the part that survives, because it governs **persistence** (`Q3`) rather than the number of capture sides | §6.3.3 |
 | **C7** | A reorg deeper than the horizon **refuses**; it never silently produces a wrong tree, and it says so as a rule-82 failure mode (the remedy is a full resync: remove the `.curvetree` file and then clear scan history; neither alone lifts the refusal). **BUILT 2026-09-30 (increment 5).** The horizon is `W` = `FINALITY_DEPTH_BLOCKS`, not the ring's `SEGMENT_FREEZE_REORG_MARGIN_BLOCKS`: between the two a rollback is past the snapshot tier and still repairable by folding, so the bound is `> W`. The seats are the producer's fork walk and the ingest backstop (`engine::reorg_finality`), **not** `LeafStore::rollback_to_fork` — the store must perform a deep truncation correctly (F9; the replica generator depends on it), and the policy is about whether a wallet refresh may ask. The walk confirms a fork only when a stored hash matches inside `W`; a short record on a tall chain is not a confirmed fork. Rule-82 copy reaches the caller as `ResyncRequired` (`-29211`, contract 0.10.0; `-29204` is `REFRESH_CANCELLED`) carrying the depth, `W`, and whether the depth was measured. A rescan reports the same code with `history_cleared`, rather than the server-side log `internal_detail` would have left the remedy in | §6.3.4 row 1 |
 | **C8** | Everything here is derived-from-canon: recovery is **refuse-and-resync**, never a migration. Persistence is a cache | `WSS` R3 |
-| **C9** | The graded quantity is §6.3.4 rows 2 and 3, on rule 76's floor, by the landed `shekyl-wss-q1b-bench` harness | §6.3.4; `WSS_Q1B_BENCH_SPEC.md` |
+| **C9** | The graded quantity is §6.3.4 rows 2 and 3, on rule 176's floor, by the landed `shekyl-wss-q1b-bench` harness | §6.3.4; `WSS_Q1B_BENCH_SPEC.md` |
 
 ---
 
@@ -304,12 +304,12 @@ have re-imported the dependency this round exists outside of.
 
 | # | Increment | Discharges | Gated on |
 | --- | --- | --- | --- |
-| **1** | **Registration + this document.** The `CT-1…CT-5` family row is **amended to `CT-1…CT-6`** (rule 94 §1) — not a new row, per §1.1; `CURVE_TREE_CLIENT.md` re-point | — | **Tripped 2026-09-22** by Q2 and Q3's rulings together with Q5's dissolution and Q6's named dependency: a complete Round-1 disposition, with Q1 and Q4 pending **as derivations with named inputs** rather than as open judgments |
+| **1** | **Registration + this document.** The `CT-1…CT-5` family row is **amended to `CT-1…CT-6`** (rule 194 §1) — not a new row, per §1.1; `CURVE_TREE_CLIENT.md` re-point | — | **Tripped 2026-09-22** by Q2 and Q3's rulings together with Q5's dissolution and Q6's named dependency: a complete Round-1 disposition, with Q1 and Q4 pending **as derivations with named inputs** rather than as open judgments |
 | **2** | **The C1 oracle, height-keyed.** At every fixture height `h`, root, depth, and drained-leaf count equal `assemble_leaf_stream` + `root_from_scalars` over the leaves drained through `h - 1`. That cutoff is written in the test, not read from `drained_through`. Depth is graded at the two leaf counts where `layer_count_for_leaves` steps (`0`, and `SELENE_CHUNK_WIDTH * HELIOS_CHUNK_WIDTH`). **Q2 examiner armed here, graded at increment 4:** `examine_tier_readings` compares a `TierReading` (root and depth) per tier. `TierCoverage::OutsideSpan` is the only non-answer; a tier error has no variant to hide in. Agreeing overlap is success, a root or depth mismatch is `Disagree`, and a height in neither `HeightSpan` is `Uncovered`. The 2026-09-23 decision-log row records why the examiner is armed before its tiers exist | §6.3.4 row 4; Q2 | Q2 (**ruled**); Q1's *shape* only — its constants are not inputs to the oracle |
 | **3** | **Per-transaction reconstruction reuse.** `drained`/`layers` once per tx, `gindex → drain-position` index | **Closeout (a)** — F3b | 2 |
 | **4** | **The snapshot ring + advance — BUILT (§10).** One dense ring over the reorg horizon, total by construction (`Q1` RULED 2026-09-28, §9) — no tiers, no spacing, no eviction. `shekyl_curve_tree::frontier::Frontier` advances inside `ingest_block`; the ring is the `frontier_snapshots` table of the wallet's own `LeafStore`, written and evicted in the block's own transaction; `root_and_depth_at` reads it for in-horizon heights and falls through to `root_at_count` elsewhere. `per_block_advance_worst_case_s` is **re-derived from the built advance** (Q4). The increment-2 examiner grades the real segment tier against the real snapshot tier, **unmodified** | **Closeout (b)** — F3a | 2, 3; Q2, Q3 (**ruled**); **`Q1` RULED by derivation (§9); `Q4` pre-registered with its re-point as a landing condition** — the gate is open |
-| **5** | **Path capture** — **one capture side, not two** (Q5 closed) — and the reorg refusal path (C7) with its rule-82 copy. **C7 BUILT 2026-09-30** (the fork walk and the tree-tip backstop share one comparison; the hash window holds `W` plus the kept block; `ResyncRequired` is `-29211`; a rescan sets `history_cleared`; §10.3's framing corrected); **path capture is BUILT** — its *instrument* landed first (the structural red-bite, the O(chain) before-figure, and §11.6's gate spec, PRs #927/#931), and **§11.6's integrity gate is BUILT**: `verify_path_against_its_branches` recomputes the root from an assembled path's own branches and refuses with `PathRootMismatch`, so the artifact is checked rather than the store compared with itself. **The capture mechanism is BUILT** (PR #945): the fold captures every chunk that closes over a registered output, reconciliation backfills what a late registration is owed, and assembly reads captures and the frontier snapshot without touching `entries` — `assembly_today_depends_on_every_foreign_leaf` is at **state 3 of 3** as `capture::a_path_from_captures_equals_the_rebuilt_one_with_every_foreign_leaf_gone`. **The registrant is BUILT** (PR #966, its own by rule 19) and **the rebuild is deleted**: the curve-tree actor registers a spend's inputs in the same handler invocation that assembles them, and the refresh's ingest offers everything the wallet will hold once it has merged — ledger, the persona's funding outputs, and that result's own detections — between its rollback and its first fold, so a found output is captured as it folds and a resume is a mass late registration, cheap because a held pair is `AlreadyHeld` — §11.12. **Registration at construction is BUILT** (the PR after #966): the persona's pending records already hold its unconfirmed transactions, so their outputs are named to the tree by `(tx_hash, vout, O)` and registered as their block folds — §11.13. `assemble_paths` has no fallback; an unregistered input is refused by name. The §6.3.3 precondition this row used to carry is **discharged** — that sentence was reconciled on `dev` (`WALLET_SIDE_STORE.md` §6.3.3 now reads *"There is one capture side, not two"*), so nothing waits on it | §6.3.3; C7; §11.6 | 4. **Q5's gate is removed**: the dissolution leaves nothing for this increment to wait on |
-| **6** | **Re-grade rows 2 and 3** on the amortized form, same harness, same rig — **and it is also `Q4`'s only seat.** Increment 4 re-derived the advance field and measured it off-rig; a fraction of cadence computed anywhere but the pinned Pi 4 is a property of the machine that computed it (rule 76). The blocker is the board, not the code | §6.3.4; Q4 | 4 |
+| **5** | **Path capture** — **one capture side, not two** (Q5 closed) — and the reorg refusal path (C7) with its rule-82 copy. **C7 BUILT 2026-09-30** (the fork walk and the tree-tip backstop share one comparison; the hash window holds `W` plus the kept block; `ResyncRequired` is `-29211`; a rescan sets `history_cleared`; §10.3's framing corrected); **path capture is BUILT** — its *instrument* landed first (the structural red-bite, the O(chain) before-figure, and §11.6's gate spec, PRs #927/#931), and **§11.6's integrity gate is BUILT**: `verify_path_against_its_branches` recomputes the root from an assembled path's own branches and refuses with `PathRootMismatch`, so the artifact is checked rather than the store compared with itself. **The capture mechanism is BUILT** (PR #945): the fold captures every chunk that closes over a registered output, reconciliation backfills what a late registration is owed, and assembly reads captures and the frontier snapshot without touching `entries` — `assembly_today_depends_on_every_foreign_leaf` is at **state 3 of 3** as `capture::a_path_from_captures_equals_the_rebuilt_one_with_every_foreign_leaf_gone`. **The registrant is BUILT** (PR #966, its own by rule 119) and **the rebuild is deleted**: the curve-tree actor registers a spend's inputs in the same handler invocation that assembles them, and the refresh's ingest offers everything the wallet will hold once it has merged — ledger, the persona's funding outputs, and that result's own detections — between its rollback and its first fold, so a found output is captured as it folds and a resume is a mass late registration, cheap because a held pair is `AlreadyHeld` — §11.12. **Registration at construction is BUILT** (the PR after #966): the persona's pending records already hold its unconfirmed transactions, so their outputs are named to the tree by `(tx_hash, vout, O)` and registered as their block folds — §11.13. `assemble_paths` has no fallback; an unregistered input is refused by name. The §6.3.3 precondition this row used to carry is **discharged** — that sentence was reconciled on `dev` (`WALLET_SIDE_STORE.md` §6.3.3 now reads *"There is one capture side, not two"*), so nothing waits on it | §6.3.3; C7; §11.6 | 4. **Q5's gate is removed**: the dissolution leaves nothing for this increment to wait on |
+| **6** | **Re-grade rows 2 and 3** on the amortized form, same harness, same rig — **and it is also `Q4`'s only seat.** Increment 4 re-derived the advance field and measured it off-rig; a fraction of cadence computed anywhere but the pinned Pi 4 is a property of the machine that computed it (rule 176). The blocker is the board, not the code | §6.3.4; Q4 | 4 |
 | **7** | **`.curvetree` retirement** | `WSS-18` | **P-store lane** (Q6) |
 
 ---
@@ -318,7 +318,7 @@ have re-imported the dependency this round exists outside of.
 
 | Date | Decision | Ground |
 | --- | --- | --- |
-| 2026-09-20 | **Discharge, not a new family.** `CT-6` extends `CT-`; `WPS-` not minted | §1 — the tree already names the work; one lane, one family; rule 94 registration is irreversible-ish |
+| 2026-09-20 | **Discharge, not a new family.** `CT-6` extends `CT-`; `WPS-` not minted | §1 — the tree already names the work; one lane, one family; rule 194 registration is irreversible-ish |
 | 2026-09-20 | **Item 3 removed from the round, not answered** | F1 — landed, privacy-canonical, reversion-clause-carrying. The brief's default would have moved `REF_ANCHOR_AGE` from 6 to 5 |
 | 2026-09-20 | **The reorg horizon is consumed as a constant, never restated** | F2 — `SEGMENT_FREEZE_REORG_MARGIN_BLOCKS` is `ARCHIVAL_REORG_DEPTH_BLOCKS` from one JSON authority |
 | 2026-09-20 | **The round's subject is the unfrozen tail, not "root-at-`h` is unsolved"** | F3 — `root_at_count` amortizes past the freeze horizon and recomputes ~29 segments per call inside it |
@@ -652,7 +652,7 @@ or leaf collection: those are unchanged by this increment, and the quantity
 scope `537.59 ms` was modelled at, which also counted no table writes.
 
 **The grade is not here.** `Q4`'s threshold is a fraction of block cadence on
-rule 76's floor. Increment 4 ran off-rig, so the record carries the figure, the
+rule 176's floor. Increment 4 ran off-rig, so the record carries the figure, the
 ratio and `rig.grading: false`; **increment 6 is the seat for the graded run**,
 and the blocker is the board rather than the code.
 
@@ -831,7 +831,7 @@ path, and the figure it owes is increment 6's graded run on the floor.
 
 **This is an observational before-figure, not an attested one.** The record's
 `rig.attested` reads `["not requested"]`, and the word *attested* in this
-project means the rule-76 rig pins, which this run neither requested nor
+project means the rule-176 rig pins, which this run neither requested nor
 carries. The claim was overstated when this section first landed and is
 corrected here.
 
@@ -871,7 +871,7 @@ substitute for the bracket.
 **221 µs/leaf is the staker-class x86 host's figure, and nothing else's.**
 The host *role* is named beside every number below — rule 37 keeps the host
 itself in `shekyl-dev` — because this project uses *floor* for the Pi (rule
-76), and `min_leaves_for_depth(6)` is also called a rung **floor**. An
+176), and `min_leaves_for_depth(6)` is also called a rung **floor**. An
 unqualified "floor" beside a duration invites a reader to merge a staker
 measurement with a floor-device one. They are different numbers on different
 hardware.
@@ -892,7 +892,7 @@ that**: 509 µs/leaf is `537.59 ms` ÷ `1 056` leaves/block, the per-block repla
 rate §9 measured at that leaf rate, and no Pi has run this instrument. It is
 here to size the gap, not to grade anything.
 
-**Increment 6 does not owe a Pi measurement of today's cost.** Rule 76 pins a
+**Increment 6 does not owe a Pi measurement of today's cost.** Rule 176 pins a
 *graded* figure to the floor device, and what increment 6 grades is capture —
 the form that replaces this one. Measuring O(chain) on the Pi would spend half
 a day of a contended host to price code that is being deleted.
@@ -991,7 +991,7 @@ widen the bound or derive from `chunk_width`. Named blocker.
   before-figure** — `rig.attested` reads `not requested`, and the control
   brackets only the last arm, so between-arm comparability is uncontrolled
   (§11.2 states the scope and the cheap bracket that would close it). It is
-  not a graded figure either: grading means a budget on the rule-76 rig, and
+  not a graded figure either: grading means a budget on the rule-176 rig, and
   there is no budget for this form because capture replaces it — what
   increment 6 grades is capture, on the floor device. Two further runs were discarded before the kept one, both for the
   same cause: the **harness** differed between two samples that are only
@@ -1114,7 +1114,7 @@ enforcement: the FOLLOWUPS gates check a row's target, owner and prose, never
 its discharge.
 
 **No nettype branch exists or may be added.** A table that refused on mainnet
-would be `nettype` selecting a code path on `rust/**`, which rule 71 forbids —
+would be `nettype` selecting a code path on `rust/**`, which rule 171 forbids —
 and it would defeat the reason for plaintext, since testnet would then never
 exercise the persistence mainnet ships.
 

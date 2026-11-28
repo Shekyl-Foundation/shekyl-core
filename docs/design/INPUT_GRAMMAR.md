@@ -15,7 +15,7 @@ verified against `shekyl-core` @ `7cf70b705` (`dev`).
 **Identifier family:** `IG-` (input grammar): rules `IG-1…IG-15`, questions
 `IG-Q1…IG-Qn`, findings `IG-F1…IG-Fn`. The prefixes collide with no
 registered family. Registered at birth in the PR that lands this document
-(rule 94).
+(rule 194).
 **The `R1…R9` tokens in §0** are the maintainer's numbered rulings of
 2026-10-13, cited the same way by the daemon-configuration cutover brief
 (`DAEMON_CONFIG_CUTOVER.md`, draft PR #1066); they are not an identifier
@@ -95,7 +95,7 @@ A row narrows its kind with a constraint stated in the row and enforced by its c
 
 **IG-7 Surfaces.** Each row says where it may be given. Command-line only: `help`, `version`, `network`, `config-file`, `service` (each selects which file is read, so a key in that file could only restate or contradict it) and `config-verify` (a key in the file would make every start a check). File only: every secret and every command value. Everything else: both, CLI winning per key.
 
-**IG-8 Development levers.** A `dev-` option is hidden from help and generated docs, names the networks it is accepted on as data in its row (a `dev-` option given on any other network is refused at parse, rule 71), and is announced at every start when set. It follows every other rule. **No `dev-` option is ever accepted on mainnet**: a lever mainnet genuinely needs is not a development lever and gets a public row.
+**IG-8 Development levers.** A `dev-` option is hidden from help and generated docs, names the networks it is accepted on as data in its row (a `dev-` option given on any other network is refused at parse, rule 171), and is announced at every start when set. It follows every other rule. **No `dev-` option is ever accepted on mainnet**: a lever mainnet genuinely needs is not a development lever and gets a public row.
 
 **IG-9 One table per binary, generated everything.** The table row: id, name, kind, constraint, keywords, default (a value, unset, or "derived from the network row"), surfaces, runtime (`yes` or `no`: whether `option set` accepts the row, IG-12), grant (`health`, `status`, `peers` or `config`, default `config`: the grant under which `option show` discloses the row; [`RPC_CHANNEL.md`](RPC_CHANNEL.md) §6.4, RT-O24), visibility (`public` / `dev` / `rejected` / `reserved`), accepted networks (`dev` only), owning subsystem, help text. From the table: `--help`, completion, the documentation tables, and an annotated TOML example. A gate regenerates the docs and diffs them, and asserts the table is non-empty (rule 47). A row names `health` only if it passes RPC_CHANNEL §6.1's line for that grant: a client needs it to decide whether it can use the node now, and it says nothing lasting about the node; no row does today. The peer, closed-peer and ban rows are `peers`; everything that describes the host or links the operator (`mine-address`, `tor-onion`, paths, SOCKS endpoints, notify commands) is `config`; a secret's value is shown under no grant.
 
@@ -273,7 +273,7 @@ Legend — **R** rename or fold (no trace), **K** kept as is, **X** REJECTED row
 | `test-drop-download`, `test-drop-download-height`, `test-dbg-lock-sleep`, `show-time-stats` | — | | | |  |  | – |
 | `keep-fakechain` | — | | | |  |  | – (nothing is wiped, R3) |
 | `fixed-difficulty` | `dev-difficulty` | integer ≥ 1 | unset | both |  |  | R; regtest |
-| `prep-blocks-threads`, `block-sync-size`, `span-limit`, `block-download-max-size` | — | | | |  |  | X (chain sync's protocol constants replace `span-limit`, `block-sync-size` and `block-download-max-size`: the per-response, objects and global byte budgets and the deadlines, provisioned at the floor device, rule 76; a metered link is `p2p-download-max`, and a byte quota reopens under IG-Q40; `prep-blocks-threads` is the shared hasher budget's, derived from the floor device's scratchpads, DRS-X DX-Q2 item 6; [`P2P_3_CHAIN_SYNC_BRIEF.md`](P2P_3_CHAIN_SYNC_BRIEF.md) CS-Q12, ruled 2026-10-18) |
+| `prep-blocks-threads`, `block-sync-size`, `span-limit`, `block-download-max-size` | — | | | |  |  | X (chain sync's protocol constants replace `span-limit`, `block-sync-size` and `block-download-max-size`: the per-response, objects and global byte budgets and the deadlines, provisioned at the floor device, rule 176; a metered link is `p2p-download-max`, and a byte quota reopens under IG-Q40; `prep-blocks-threads` is the shared hasher budget's, derived from the floor device's scratchpads, DRS-X DX-Q2 item 6; [`P2P_3_CHAIN_SYNC_BRIEF.md`](P2P_3_CHAIN_SYNC_BRIEF.md) CS-Q12, ruled 2026-10-18) |
 | `db-sync-mode` | — | | | |  |  | – (the DRS lane decided: no knob; the Rust store's durability is the constant `shekyl_chain_store::store::DURABILITY`, `Immediate`, DRS-D9, Rick 2026-10-26) |
 | `db-salvage` | — | | | |  |  | L DRS |
 | `keep-alt-blocks` | — | | | |  |  | L DRS-E5 |

@@ -2,6 +2,11 @@
 description: Secure memory wiping conventions for cryptographic secrets.
 globs:
   - rust/**
+  - src-tauri/**
+  - prism-*/**
+  - shekyl-prism/**
+scope: estate
+repos: [core, gui, prism]
 ---
 
 # Secure Memory Wiping
@@ -22,7 +27,7 @@ deallocation.
   implement it manually to redact secrets.
 - Use `Zeroizing::new(...)` at point of creation — never let a bare secret
   exist in a local that gets moved into a wrapper later.
-- `#![deny(unsafe_code)]` at crate level (rule 25). All wiping goes through
+- `#![deny(unsafe_code)]` at crate level (`45-rust-lint-checks.mdc`). All wiping goes through
   `zeroize`, which guarantees the write is not elided.
 
 ## Hand-off discipline for secrets across producer/consumer boundaries
@@ -139,18 +144,18 @@ correct shape.
 ## OS-level protection
 
 A secret must not reach swap or a core dump. This is a requirement, and it
-has two named implementations:
+has two parts:
 
-- **Every binary hardens its process first.** `shekyld`, `shekyl-cli` and
-  `shekyl-wallet-rpc` call `shekyl_process::harden::harden_process()` as
-  the first statement of `main` and refuse to start if it fails. It sets
-  the core limit to zero and, on Linux, `prctl(PR_SET_DUMPABLE, 0)`.
-- **The long-lived secret types own locked storage.** The typed secret
-  types in `shekyl-crypto-pq` (wallet spend and view keys, the PQC secret
-  keys, the transaction key) lock their pages (`mlock`; `VirtualLock` on
-  Windows) and exclude them from core dumps (`madvise(MADV_DONTDUMP)`)
-  once, at construction. A caller gets the protection by holding the
-  type, never by calling an OS function itself.
+- **Every binary hardens its process first**, as the first statement of
+  `main`, and refuses to start if hardening fails: the core limit is zero
+  and, on Linux, the process is not dumpable.
+- **The long-lived secret types own locked storage.** They lock their
+  pages and exclude them from core dumps once, at construction. A caller
+  gets the protection by holding the type, never by calling an OS function
+  itself.
+
+shekyl-core's implementations of both are core rule
+[`135-secure-memory-core`](https://github.com/Shekyl-Foundation/shekyl-core/blob/dev/.cursor/rules/135-secure-memory-core.mdc).
 
 ## What counts as a secret
 

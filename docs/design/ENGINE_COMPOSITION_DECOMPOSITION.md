@@ -254,7 +254,7 @@ are façade methods, never inherent `Engine::` ones.
 
 **Deferred:** renaming to `StakeWorkflow`. Named blocker: call-site rename
 across every `stake_handle()` consumer, which is a validation surface of its
-own (rule 19) and shares nothing with the file carve. `TransferFacade` /
+own (rule 119) and shares nothing with the file carve. `TransferFacade` /
 `engine.scan()` wait until a product surface wants the same cut.
 
 ### Inherent `Engine` API — allowed categories

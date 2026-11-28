@@ -31,7 +31,7 @@
 //! neither stakes nor sends alone (R-32). Its spends are ceremonies, whose
 //! durable records live in `.wallet.multisig`.
 //!
-//! # Versions (rule 42)
+//! # Versions (rule 142)
 //!
 //! - [`GROUP_LEDGER_BLOCK_VERSION`] ↔ `schemas/group_ledger_block.snap`
 //! - [`GROUP_WALLET_LEDGER_FORMAT_VERSION`] ↔ `schemas/group_wallet_ledger.snap`

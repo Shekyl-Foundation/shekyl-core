@@ -58,7 +58,7 @@
 #            place.
 #
 # A row the CI runner can re-capture is a count, and a count is not a
-# device time (rule 76): no stale or unmeasured row was a `ci` row when the
+# device time (rule 176): no stale or unmeasured row was a `ci` row when the
 # sweep ran.
 #
 # `[[retired_estimate]]` keeps a prediction beside the measurement that
@@ -213,6 +213,7 @@ stale_through = [
   { through = "6cc4130c2f71864321f7f6513cd7925cb1d47ad3", note = "The prover's multiexp selects in constant time: generalized-bulletproofs, fcmps and the first-party prover crates move from multiexp 0.4.2 to 0.5.2, and fcmps' VectorCommitmentTape::commit gains a ConditionallySelectable bound. 0.5 changes only the non-vartime multiexp, which reads every Straus table entry and Pippenger bucket where 0.4 indexed one; the vartime paths are unchanged. The verifier calls multiexp_vartime and verify_vartime alone (shekyl-fcmp proof.rs, generalized-bulletproofs BatchVerifier::verify), so the verify cost these constants price does not move; the prover's cost rises, and is priced by time_sign_transaction_by_shape, not by this path set." },
   { through = "0c6029d37c8844e0c69213cba9a1d3f0c02e5b50", note = "Comments and doc strings only: text that described LMDB or the C++ store as live is restated for the Rust store. No code, constant or path changed, and nothing the capture priced moved." },
   { through = "a9f3fe58b815d59ff1d1bd42f8e0347edb03fc18", note = "Manifest only: the vendored circuit-abstraction and ec-gadgets declare rust-version 1.81, and the pin and content manifest move to the fork head that does. No code changed; nothing the capture priced moved." },
+  { through = "08ee35aaef58304227340e0bda03d8ccf5b31db3", note = "The rules sweep (structural PR 4a) rewrites rule-number citations in comments on these paths, the core-class rules having moved to 101-199. No code line changed; no cost moved." },
 ]
 
 [[constant]]
@@ -474,6 +475,7 @@ stale_through = [
   { through = "c760edf7b2e833644703b5dffcac4ef6b4f4c543", note = "The WSS-Q4 build, after review (c760edf7b2). ReadShardFrame, which only the reconcile sends, reads the frame through BodyStore::read_frame: the buffer grows with the chunks as each authenticates instead of being reserved from the row's unsealed length, and the chunks' total is compared with that length. A served body is unchanged: it still asks the actor once to open and once per chunk. The sweep's frame read may reallocate a few times per shard where it allocated once; not measured." },
   { through = "7c51f485ab8ca56a3c04bce36632881e449dc223", note = "The serve-fault report (7c51f485ab). On a 200 that ends short of its signature (the store failing mid-body, a byte past the opened length, a body short of it), serve.rs calls ShardBody::report_fault after counting the lookup failure: for a held body that inserts the shard into the wallet's fault set and wakes the body-store leg, with no store read and no actor message. A served 200, a refusal and a requester that stops reading are unchanged. The pass the report wakes reads the reported shard's frame through the same one-worker actor, the contention a sweep already has, once per report and not again while that shard's alarm is unanswered. BodyStore gains test_tamper_chunk behind the test-only test-tamper feature; no shipped build compiles it. Not re-measured." },
   { through = "d27fc3fd00c43b41dd31f92e61bb4fdeefda8a9a", note = "The fault queue keeps fresh reports apart from shards a pass could not check (d27fc3fd00): report_fault still inserts one shard and wakes the leg, with no store read and no actor message, and a served 200, a refusal and a requester that stops reading are unchanged. Not re-measured." },
+  { through = "08ee35aaef58304227340e0bda03d8ccf5b31db3", note = "The rules sweep (structural PR 4a) rewrites rule-number citations in comments on these paths, the core-class rules having moved to 101-199. No code line changed; no cost moved." },
 ]
 
 [[path_set]]
@@ -546,6 +548,7 @@ stale_through = [
   { through = "c760edf7b2e833644703b5dffcac4ef6b4f4c543", note = "The WSS-Q4 build, after review (c760edf7b2). ReadShardFrame, which only the reconcile sends, reads the frame through BodyStore::read_frame: the buffer grows with the chunks as each authenticates instead of being reserved from the row's unsealed length, and the chunks' total is compared with that length. A served body is unchanged: it still asks the actor once to open and once per chunk. The sweep's frame read may reallocate a few times per shard where it allocated once; not measured." },
   { through = "7c51f485ab8ca56a3c04bce36632881e449dc223", note = "The serve-fault report (7c51f485ab). On a 200 that ends short of its signature (the store failing mid-body, a byte past the opened length, a body short of it), serve.rs calls ShardBody::report_fault after counting the lookup failure: for a held body that inserts the shard into the wallet's fault set and wakes the body-store leg, with no store read and no actor message. A served 200, a refusal and a requester that stops reading are unchanged. The pass the report wakes reads the reported shard's frame through the same one-worker actor, the contention a sweep already has, once per report and not again while that shard's alarm is unanswered. BodyStore gains test_tamper_chunk behind the test-only test-tamper feature; no shipped build compiles it. Not re-measured." },
   { through = "d27fc3fd00c43b41dd31f92e61bb4fdeefda8a9a", note = "The fault queue keeps fresh reports apart from shards a pass could not check (d27fc3fd00): report_fault still inserts one shard and wakes the leg, with no store read and no actor message, and a served 200, a refusal and a requester that stops reading are unchanged. Not re-measured." },
+  { through = "08ee35aaef58304227340e0bda03d8ccf5b31db3", note = "The rules sweep (structural PR 4a) rewrites rule-number citations in comments on these paths, the core-class rules having moved to 101-199. No code line changed; no cost moved." },
 ]
 
 [[constant]]
@@ -639,6 +642,7 @@ cleared = [
   { through = "b0cbd52d721ca83c78271234e335e9e138ea1b00", reason = "runtime.rs changes only a test: the accept-loop test names the receipt width on signer_at_synced_tip. SERVING_NICE and the runtime are unchanged. The BA-T5 session 3 T1 capture still prices this tree." },
   { through = "6ecc1155ec178d61e538e359591e50dcbc21a697", reason = "runtime.rs changes only a test: the accept-loop test calls signer_at_synced_tip without a width. SERVING_NICE and the runtime are unchanged. The BA-T5 session 3 T1 capture still prices this tree." },
   { through = "be9d8ab307dd7084cd98afe86228d6c754b509b6", reason = "Adds LOWERS_THREADS, a constant set in the same cfg arms that pick the call, and a test of it. The lowering call, SERVING_NICE 19 and the runtime are unchanged. The BA-T5 session 3 T1 capture still prices this tree." },
+  { through = "08ee35aaef58304227340e0bda03d8ccf5b31db3", reason = "The rules sweep (structural PR 4a) rewrites rule-number citations in comments on these paths, the core-class rules having moved to 101-199. No code line changed; no cost moved." },
 ]
 
 [[constant]]
@@ -863,6 +867,7 @@ stale_through = [
   { through = "14f4c49d1163a112dfcd74194a623dd997cfce91", note = "The persistent onion's duplicate-host cause (Rick, 2026-11-21): link.rs's InboundCause gains PublishedElsewhere, a value the Tor supervisor publishes on the link's inbound facet. An enum variant only; no dial, handshake or gap I/O changes. Not re-measured; the rows stay stale." },
   { through = "046a69b05c007d7a9898d66c98eae35ca5ccb1ff", note = "The Noise flip (#1560): every clearnet session is Noise and the option to run without it is gone; a plaintext peer ends with one typed cause. The handshake and framing are unchanged, and every leg of the capture already ran with the record layer on. Re-measured with the floor device dialling on the LAN (noise_flip_clearnet_spans_20261127.md): p99 connect 1.19 ms, initiator handshake 7.36 ms, gap 3.39 ms, none moving a term of the derivation; the deadlines are unchanged." },
   { through = "9edebe6020b4eac5b463e9b42cb3a8bdf65f21ba", note = "The handshake flight is one value: the prefix and the message, returned by Initiator::new and write_message2. The node's handshake still writes that buffer in one budgeted write, the same bytes as before, and still reads the peer's prefix and message under the same deadline. Record open drains through take_one, which is open_one. Initiator::open and Responder::accept are the unbudgeted peer side, called by tests. No dial, handshake or gap deadline moved. Not re-measured; the 2026-11-27 floor capture still prices these rows, and they stay stale." },
+  { through = "08ee35aaef58304227340e0bda03d8ccf5b31db3", note = "The rules sweep (structural PR 4a) rewrites rule-number citations in comments on these paths, the core-class rules having moved to 101-199. No code line changed; no cost moved." },
   { through = "b783a10ddba59467bb674906ab0ffa9cbc1ab59f", note = "TSR-W1, a persistent onion's guards (Rick, 2026-11-27): link.rs's InboundCause gains GuardsRefused and GuardsUnfilled, values the Tor supervisor publishes on the link's inbound facet while an onion is withheld for its guards. Enum variants only; no dial, handshake or gap I/O changes. Not re-measured; the rows stay stale." },
 ]
 
@@ -1012,6 +1017,7 @@ cleared = [
   { through = "0af605d95b25ea346c67830f5fbd12b7e4c5666f", reason = "PWD-B12: cause.rs gains three close kinds the session layer closes a refused fragment train with (InnerMessageOversize, FragmentTrainOverrun, InnerMessageNotDispatch) and the predicate that classes them with SessionRefused. An enum table only; the Tor dial, the gap, the shutdown wait and their I/O are unchanged, so the 2026-10-14 capture still prices this tree." },
   { through = "d9238096a2e1e7cbd38b3ace9a351d467e13aa15", reason = "PWD-B12: cause.rs gains a fourth close kind of the same class (InnerMessageNotTransactionNotice, 23), which the session layer closes a train with when its inner message is not the transaction notice. An enum table only; the Tor dial, the gap, the shutdown wait and their I/O are unchanged." },
   { through = "14f4c49d1163a112dfcd74194a623dd997cfce91", reason = "The persistent onion's duplicate-host cause (Rick, 2026-11-21): link.rs's InboundCause gains PublishedElsewhere, a value the Tor supervisor publishes on the link's inbound facet. An enum variant only; the Tor dial, the gap, the shutdown wait and their I/O are unchanged, so the 2026-10-14 capture still prices this tree." },
+  { through = "08ee35aaef58304227340e0bda03d8ccf5b31db3", reason = "The rules sweep (structural PR 4a) rewrites rule-number citations in comments on these paths, the core-class rules having moved to 101-199. No code line changed; no cost moved." },
   { through = "b783a10ddba59467bb674906ab0ffa9cbc1ab59f", reason = "TSR-W1, a persistent onion's guards (Rick, 2026-11-27): link.rs's InboundCause gains GuardsRefused and GuardsUnfilled, values the Tor supervisor publishes on the link's inbound facet while an onion is withheld for its guards. Enum variants only; the Tor dial, the gap, the shutdown wait and their I/O are unchanged, so the 2026-10-14 capture still prices this tree." },
 ]
 
@@ -1258,6 +1264,7 @@ stale_through = [
   { through = "89ed6c52ddbdcdd5964738342702ed77f02911a2", note = "R-26 amended (89ed6c52dd): assemble_paths returns one sealed batch (AssembledPaths) and a path no longer carries its own tree context; the wallet's signing assembly reads the tree from the batch and drops its per-path agreement check. The same capture reads and the same fold per path, so the spend's path-assembly and proving work is unchanged. Not re-measured." },
   { through = "14974d84e02fc1875f584371aea5c1b6d4f5be65", note = "The merge of dev into the rustdoc PR (1c413b0dbb), whose conflicts in this path set take dev's side, and the link fixes after it (this commit): comment lines only, no code beyond dev's; nothing the measurement ran is added, removed or reordered.a5e9d05d66) change doc and plain comment lines and no code; nothing the measurement ran is added, removed or reordered. Not re-measured." },
   { through = "0c6029d37c8844e0c69213cba9a1d3f0c02e5b50", note = "Comments and doc strings only: text that described LMDB or the C++ store as live is restated for the Rust store. No code, constant or path changed, and nothing the capture priced moved." },
+  { through = "08ee35aaef58304227340e0bda03d8ccf5b31db3", note = "The rules sweep (structural PR 4a) rewrites rule-number citations in comments on these paths, the core-class rules having moved to 101-199. No code line changed; no cost moved." },
 ]
 
 [[constant]]
@@ -1346,6 +1353,7 @@ stale_through = [
   { through = "4943ebc7f774852834b447ace87569bd36451900", note = "rpc 4.0: one doc comment in shekyl-pow-randomx's lib.rs renames calc_pow to pow. Cache derivation is unchanged. The 341 ms record and the 200 ms target are untouched, and the row stays stale." },
   { through = "28529f778001552baf1dc36f1891d0b46d7d2463", note = "The hashing actor's cutover: cache_store.rs is deleted and the crate's docs restated; the caller of the derivation is now shekyl-hasher's builder thread. PreparedCache::derive itself is unchanged, so the 341 ms record and the 200 ms target are untouched, and the row stays stale. The floor device's derive is on record since 2026-11-10 (docs/benchmarks/cache_derive_pi4_20261110.txt, about 2.1 s) under the gated row cache_derive_iai. A later commit of the same change, 28529f7780, rewords one sentence of the crate's docs and touches no code." },
   { through = "12bd06df77dadaad90ee68e61d503e1197dd67a4", note = "Rustdoc only: the workspace rustdoc gate's link fixes (#1445, this commit and its parent a5e9d05d66) change doc and plain comment lines and no code; nothing the measurement ran is added, removed or reordered. Not re-measured." },
+  { through = "08ee35aaef58304227340e0bda03d8ccf5b31db3", note = "The rules sweep (structural PR 4a) rewrites rule-number citations in comments on these paths, the core-class rules having moved to 101-199. No code line changed; no cost moved." },
 ]
 
 [[constant]]
@@ -1548,6 +1556,7 @@ cleared = [
   { through = "4943ebc7f774852834b447ace87569bd36451900", reason = "rpc 4.0: comments in hash_budget.rs rename calc_pow and fill_pow_hash to pow and a header read with pow, and one doc comment in shekyl-pow-randomx's lib.rs renames calc_pow to pow. HASH_CPU_NANOS is unchanged and no hash path changed, so the capture still prices this tree." },
   { through = "28529f778001552baf1dc36f1891d0b46d7d2463", reason = "The hashing actor's cutover: in the RandomX sources this row watches, cache_store.rs is deleted and docs are restated. compute_hash is unchanged, and pow still runs one hash under one CalcPow permit, now on a warm loan from the hasher. The per-hash thread CPU the capture timed has not moved, and HASH_CPU_NANOS is unchanged. A later commit of the same change, 28529f7780, rewords one sentence of the crate's docs and touches no code." },
   { through = "12bd06df77dadaad90ee68e61d503e1197dd67a4", reason = "Rustdoc only: the workspace rustdoc gate's link fixes (#1445, this commit and its parent a5e9d05d66) change doc and plain comment lines and no code; nothing the measurement ran is added, removed or reordered. HASH_CPU_NANOS is unchanged." },
+  { through = "08ee35aaef58304227340e0bda03d8ccf5b31db3", reason = "The rules sweep (structural PR 4a) rewrites rule-number citations in comments on these paths, the core-class rules having moved to 101-199. No code line changed; no cost moved." },
 ]
 
 [[constant]]

@@ -16,7 +16,7 @@ haircut; the residual is the **temporal** intersection channel, which is T-A1 / 
 **Parent designs:** `ARCHIVAL_FIREWALL_THREATS.md`, `ARCHIVAL_COVER_DRAW.md`,
 `F1_TA3_TA7_LIFETIME_WINDOW.md` (the temporal channel + the regime bound),
 `STAKER_ARCHIVAL_SIM.md` (the economic substrate the equilibrium is validated against).
-**Process rule:** `26-sub-pr-design-discipline.mdc`; `21-reversion-clause-discipline.mdc`.
+**Process rule:** `126-sub-pr-design-discipline.mdc`; `21-reversion-clause-discipline.mdc`.
 
 ---
 

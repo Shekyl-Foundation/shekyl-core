@@ -40,7 +40,7 @@ pub(crate) use shekyl_types::{BlockCount, PSlot};
 /// How many slots past the current cursor `assemble()` pre-derives into the
 /// held set (`ARCHIVAL_BOND_CONSTRUCTION.md` §10.2, Model D).
 ///
-/// # Rationale and bounds (`75-system-autonomy.mdc`)
+/// # Rationale and bounds (`175-system-autonomy.mdc`)
 ///
 /// `k` is the one tuning knob of Model D. The derive-forward set at open is
 /// `{persisted bonded slots} ∪ {cursor ..= cursor + k}`: the bonded slots are
@@ -75,7 +75,7 @@ pub(crate) const ARCHIVAL_PERSONA_LOOKAHEAD: u32 = 2;
 /// steady-state cost of the window is a map load. The one-time derivation
 /// (~W PQ keygens) is paid at wallet create / first open after upgrade — a
 /// moment that already runs full PQ account keygen, sized to stay small at
-/// the rule-76 device floor.
+/// the rule-176 device floor.
 ///
 /// - **Width.** A restore-from-seed recovers at most `W` slots of staking
 ///   history per open+rescan cycle (`ceil(depth / W)` cycles for deeper

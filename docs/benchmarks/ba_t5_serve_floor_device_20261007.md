@@ -14,7 +14,7 @@ the registered rule the other lines then go ungraded; the registered
 text and that outcome are left exactly as they were. The one-leaf figure
 is kept as a **projection** for any future design that serves short
 frames, labelled as one
-([`76-device-provisioning-floor`](../../.cursor/rules/76-device-provisioning-floor.mdc),
+([`176-device-provisioning-floor`](../../.cursor/rules/176-device-provisioning-floor.mdc),
 discipline 5). Reading line (a) on production's frame instead of the
 registered one is a change made after the run. It rests on a fact about
 the code and not on the numbers, and it is stated here first for that
@@ -36,7 +36,7 @@ from that failure. The answer is categorical either way: the floor device
 can serve shards, or it cannot.
 
 The floor device is the Raspberry Pi 4 Model B of
-[`76-device-provisioning-floor`](../../.cursor/rules/76-device-provisioning-floor.mdc).
+[`176-device-provisioning-floor`](../../.cursor/rules/176-device-provisioning-floor.mdc).
 Devices are named by role here.
 
 ## Registered before the run

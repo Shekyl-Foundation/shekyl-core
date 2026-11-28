@@ -1,6 +1,8 @@
 ---
 description: Commit message and PR discipline.
 alwaysApply: true
+scope: estate
+repos: [core, gui, prism]
 ---
 
 # Commit rules

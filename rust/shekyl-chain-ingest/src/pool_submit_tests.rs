@@ -668,7 +668,7 @@ async fn a_full_pool_answers_a_stem_duplicate_as_a_fresh_spend_at_its_rate() {
     scenario.close().await;
 }
 
-/// A lone regtest node's own transaction (DX-Q3, Q9; no opt-in, rule 71):
+/// A lone regtest node's own transaction (DX-Q3, Q9; no opt-in, rule 171):
 /// submitted through the node's one pool, it enters in its stem phase and
 /// the node's template does not list it; once the relay's entry marks it
 /// shown (`RustPoolShim::fluffed`, what the relay driver calls at embargo

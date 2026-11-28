@@ -12,8 +12,8 @@
 //! # Why this derives the outcome instead of importing it
 //!
 //! The obvious wiring is to let `tx_pool` report each embargo's resolution,
-//! since that is where the embargo arms and fires today. **Rejected under rule
-//! 20.** `tx_pool` holds no relay-zone handle, so importing the outcome means
+//! since that is where the embargo arms and fires today. **Rejected under
+//! `RULE_20_RUST_VS_CPP`.** `tx_pool` holds no relay-zone handle, so importing the outcome means
 //! building a new C++ path from the mempool into the relay layer, and every
 //! byte of that path is C++ deciding something Rust could decide.
 //!

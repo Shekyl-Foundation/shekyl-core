@@ -1,0 +1,32 @@
+---
+description: "shekyl-core's part of the cryptography rules (30): per-output PQC keys, where the vectors live, and the domain registry."
+globs:
+  - rust/shekyl-crypto-pq/**
+  - rust/shekyl-proofs/**
+  - rust/shekyl-fcmp/**
+  - rust/shekyl-oxide/**
+scope: core
+---
+
+# Cryptography rules: shekyl-core's part
+
+Estate rule [`30-cryptography`](30-cryptography.mdc) holds in every Shekyl repository.
+This rule holds the part of it that only shekyl-core has: the protocol's
+per-output PQC keys, where its vectors live, and its domain registry.
+
+## Per-output PQC keys (Option C)
+
+PQC signing uses per-output KEM-derived keys, not the wallet master key.
+Per-output keys give forward secrecy per output. The ML-KEM ciphertext lives
+in `tx_extra` under tag `0x06` and must survive pruning permanently — it is
+required for wallet PQC key rederivation.
+
+## Test vectors
+
+shekyl-core's vectors are in `docs/test_vectors/*.json`. A change to one
+requires a CHANGELOG entry as well as review: vectors define consensus.
+
+## Domain registry
+
+A live domain string is registered, and its bytes are held by the domain
+registry gate: see SIGNATURE_ALIGNMENT §5.

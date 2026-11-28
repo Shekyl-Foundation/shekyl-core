@@ -2,7 +2,7 @@
 
 **Status: SCOPING — review rounds 1–4 applied (threat-model axis closed,
 maintainer-accepted 2026-07-19); opened 2026-07-19. No implementation has
-begun; this document is the scoping artifact rule 26 requires before
+begun; this document is the scoping artifact rule 126 requires before
 code.**
 
 Charter: `ARCHIVAL_FIREWALL_GATE6.md` §12.4 names F-D2's remaining half a
@@ -21,10 +21,10 @@ it was never seal evidence either way)*. It
 remains pre-genesis work on its own Gate-6 track: R4 is open on F-D2
 alone, and the FOLLOWUPS "P-drain mechanism re-walk" riders are V3.0.
 
-Process: this round cites **`26-sub-pr-design-discipline.mdc`**
+Process: this round cites **`126-sub-pr-design-discipline.mdc`**
 explicitly — the work is a multi-sub-PR subsystem crossing an FFI-adjacent
 boundary (Tauri GUI ↔ engine crates) with firewall-class (priority-2)
-properties. A pre-flight pass (rule 26 §"Pre-flight pass") is owed between
+properties. A pre-flight pass (rule 126 §"Pre-flight pass") is owed between
 this round's closure and the first production commit; the **core-side
 half (DS-PR-1/DS-PR-2) was run early 2026-07-19** — substrate re-check +
 artifact execution at `28870bd61`, one errata (R0-D1), all 24 core
@@ -32,7 +32,7 @@ artifacts green — recorded in `ARCHIVAL_DRAIN_SEND_FD2_AUDIT.md`. The
 GUI-side half (DS-PR-3/4/5) is carried to each GUI sub-PR's open
 (R0-D3-B). Design questions
 mint the **DS-N** family (registered at birth in
-`IMPLEMENTATION_INDEX.md` §2 per rule 94; prefix `DS-` passes the
+`IMPLEMENTATION_INDEX.md` §2 per rule 194; prefix `DS-` passes the
 uniqueness check — no registered family's tokens parse as `DS<digits>`).
 
 ---
@@ -239,8 +239,8 @@ by the engine's P-scan task) — **substantially landed** as of
 GUI-PR0…GUI-PR3 (§2.4): the GUI holds an `Engine`, starts the P-scan at
 open, and can activate a staker; the layer's remainder is the aggregate
 `P`-balance read. Layer 2 is *engine-core work*
-(secrets + membership proofs + persona transport — Rust per rule 20;
-new code originates in `shekyl-core` per rule 10; the GUI is a
+(secrets + membership proofs + persona transport — Rust per `RULE_20_RUST_VS_CPP`;
+new code originates in `shekyl-core` per rule 110; the GUI is a
 consumer). Only layer 3 is genuinely GUI work.
 
 ## 3. Design questions (DS-N) — proposed dispositions, review pending
@@ -478,7 +478,7 @@ updates so the new code never cites retired discipline.
 | DS-PR-5 | shekyl-gui-wallet | DS-6 funding default (separable) | DS-PR-3 |
 | DS-PR-6 | shekyl-core | DS-7 doc sweep + Gate-6/M1/FOLLOWUPS close-out lines | last |
 
-Cross-repo note (rule 10): every engine-side API lands in `shekyl-core`
+Cross-repo note (rule 110): every engine-side API lands in `shekyl-core`
 first; the GUI consumes released surface, never the reverse.
 
 ### Composition discipline (`ENGINE_COMPOSITION_DECOMPOSITION.md` alignment)
@@ -525,7 +525,7 @@ no `Engine` generic — the same make-bad-states-unrepresentable
 discipline the `fd1_arm_*` guards and the fee-contract pin already use,
 so a monolith regression is caught mechanically, not by review vigilance.
 
-## 5. Threat-model addenda (Rounds 3–4 — rule 26 A3)
+## 5. Threat-model addenda (Rounds 3–4 — rule 126 A3)
 
 Late-round adversarial pass against named attacker objectives, run now
 that the shape survived review rounds 1–2 (A3 timing: after feature
@@ -738,7 +738,7 @@ sub-PR lands.
   DS-6.)*
 - UI visual design (page placement, staking-page integration) — product
   surface, not firewall surface; falls out at DS-PR-4.
-- ~~Threat-model addenda (rule 26 A3) — owed as a late-round pass~~ —
+- ~~Threat-model addenda (rule 126 A3) — owed as a late-round pass~~ —
   **discharged in §5** (Round 3, extended Round 4, **Round 4 closed
   maintainer-accepted 2026-07-19**): seven attacker objectives
   (T-DS-1…T-DS-7) graded and routed — amount channel, transport
@@ -785,7 +785,7 @@ sub-PR lands.
   the retracted claim); dual-open rejected; DS-PR-3 re-scoped to its
   remainder (aggregate `P`-balance read) with its former dependency
   edges recorded closed (§4).
-- **2026-07-19 — Round 3 (threat-model addenda, rule 26 A3; §5).** Late-
+- **2026-07-19 — Round 3 (threat-model addenda, rule 126 A3; §5).** Late-
   round adversarial pass run now that the shape survived rounds 1–2.
   Five attacker objectives graded (T-DS-1…T-DS-5): amount-channel
   recovery, transport linkage, mis-send, crossing-class inflation,
@@ -882,7 +882,7 @@ sub-PR lands.
   T-DS-7 + GF-7 disposition + scope boundary) closes clean;** the three
   impl-time arms (composite wire-shape, change→`P`-space, `unlock_time`/
   `tx_extra` re-walk) are forward-actions that gate DS-PR-1, not this
-  round. Standing rule-26 thin re-confirm at DS-PR-1 open remains the only
+  round. Standing rule-126 thin re-confirm at DS-PR-1 open remains the only
   threat-adjacent item outstanding — which is where those arms fire.
 - **2026-07-20 — DS-PR-1 landed (drain assembly, `shekyl-core`).** The
   actor-side assembly slice: `AssembleDrain` handler in `stake_engine.rs`

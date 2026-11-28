@@ -10,7 +10,7 @@
 //! whose keys the consensus digest covers. Production reads only the
 //! shipped set, through [`archival_params`]; a node on another set forks
 //! itself off, so there is no CLI flag, configuration key or RPC for it
-//! (rules 71 and 83). The economics sim builds other sets and calls the
+//! (rules 171 and 83). The economics sim builds other sets and calls the
 //! same functions with them; [`ArchivalParams::validate`] is the door, so a
 //! sweep cannot build a set the shipped build would refuse.
 //!

@@ -164,7 +164,7 @@ mechanism-versus-number split on B9 is his, not the sweep's.*
 | **I5** Q-10 write-back obligation | **BLOCKED** | discharge gated on I4 | No — blocked |
 | **I6** Shi et al. sub-attacks closed | **N/A** | verification row: closed by rules ruled in I2, no separate artifact | n/a |
 | **I7** per-host **inbound** admission | **DELETED** — the mechanism is removed, not completed | **Deleted 2026-09-22.** `has_too_many_connections`, the `--max-connections-per-ip` descriptor, the `max_connections` member, `HostInboundCap` / `InboundZone` and the four `shekyl_host_inbound_*` FFI exports are all gone; `is_host_limit` is the total-ceiling check and nothing else. The flag is retired by name through `REMOVED_FLAGS` (`src/common/removed_flags.cpp`), so a config carrying it gets a named message rather than a parse error. **Four independent reasons, three of them measurements:** a host is not an operator (no `k` works under CGNAT); PWD-E4's inverted ratio (~3c/address for an attacker, impossible for a CGNAT subscriber); the only measured inbound adversary opens **one** edge per victim, which a cap of 1 admits in full; and the white list is already defended at the **promotion boundary**. The residual job — slots — is the total ceiling six lines above the deleted call. *Records-was: "PARTIAL … the NUMBER is owed to the maintainer" — the number is dissolved by the deletion, and the residual safety bound is derived from the descriptor limit (`InboundCeiling`); there is no policy ceiling below it (`INPUT_GRAMMAR.md` IG-Q40)* | **n/a — minted 2026-09-21, after the alpha.8 ruling.** The forward cut is behaviour-preserving and carries no wire change. **Closed 2026-10-14** (Rick, IG-Q40): the operator inbound cap is deleted, so no number is owed |
-| **I8** *what is this inbound connection to me?* | **OPEN — routed** | minted 2026-09-21 with PWD-I7's re-diagnosis: the accepting-side category `is_same_host` cannot answer. **No code lands here by design** — separating the nouns needs a total ceiling plus an eviction policy with a protection set, and rule 20 makes migrating a subsystem a planning activity with its own round. Tier 1 (local self-classification, no wire) is separable and could land alone | **n/a — not ruled.** The trade (door refusal → eviction preference) is judged right and argued in the row; the protection set must be designed against a named adversary, and must not become a reachability ranking (§80.4's sorting one axis over) |
+| **I8** *what is this inbound connection to me?* | **OPEN — routed** | minted 2026-09-21 with PWD-I7's re-diagnosis: the accepting-side category `is_same_host` cannot answer. **No code lands here by design** — separating the nouns needs a total ceiling plus an eviction policy with a protection set, and `RULE_20_RUST_VS_CPP` makes migrating a subsystem a planning activity with its own round. Tier 1 (local self-classification, no wire) is separable and could land alone | **n/a — not ruled.** The trade (door refusal → eviction preference) is judged right and argued in the row; the protection set must be designed against a named adversary, and must not become a reachability ranking (§80.4's sorting one axis over) |
 | **A1** archival submission path | **NOT RULED** | a question in the dispatch brief with no ruling in this deliverable; the census narrowed it to a falsifiable claim | n/a — unruled decision, not a status |
 | **E1** node determines its own endpoint | NOT IMPLEMENTED | no endpoint-determination mechanism in `src/p2p/` or `shekyl-levin` | **NO — deferred to alpha.9.** Changes what a node *claims* using existing fields, not wire shape; largest of the nine, with no mechanism at all. Until it lands the advertised port stays operator-configured — a known, documented, testnet-acceptable state. *(Sweep proposed Yes.)* |
 | **E2** what verifies a candidate endpoint | NOT IMPLEMENTED | no dial-back, no hairpin, no verification site | **NO — deferred to alpha.9** with E1: *"rushing a dial-back mechanism into a release is how you get the ping-back-as-DoS-amplifier problem."* *(Sweep proposed Yes.)* |
@@ -195,7 +195,7 @@ decision** (see the updates above) — **39** as of those mints:
 | SUPERSEDED | 1 |
 | verification-only | 1 |
 | never ruled / not ruled | 1 (A1) |
-| OPEN — routed to its own round | 1 *(I8 — minted with no implementation by design; rule 20 makes the eviction subsystem a planning activity)* |
+| OPEN — routed to its own round | 1 *(I8 — minted with no implementation by design; `RULE_20_RUST_VS_CPP` makes the eviction subsystem a planning activity)* |
 
 **13 of 39 are ruled and unbuilt** on the sweep's formula (12 NOT IMPLEMENTED + 1 PARTIAL), which now includes B11 and is not a fresh recount. **I8 is
 not among them** — it is not yet ruled, so it is neither built nor unbuilt in
@@ -976,7 +976,7 @@ review.
   `peerlist_entry.id` — **persisted schema is the fourth frontier, and it was
   swept last.**
 - **`peerlist_entry.id` is persisted**, so its removal is a stored-format change.
-  It rides **the same rule-42 version bump** as PWD-I2's store reset —
+  It rides **the same rule-142 version bump** as PWD-I2's store reset —
   **one bump, and no migration on either side of it**, since the bump drops the
   store rather than converting it. That is what makes carrying both changes on
   one bump free: neither needs a reader for the old schema.
@@ -1234,7 +1234,7 @@ path. The discovery data that reclassification would have preserved is
 re-acquired from seeds in the ordinary way.
 
 **This is a persisted-state semantic change, so it takes a version-constant bump
-under [`42-serialization-policy`](../../.cursor/rules/42-serialization-policy.mdc)** —
+under [`142-serialization-policy`](../../.cursor/rules/142-serialization-policy.mdc)** —
 without one, an upgraded node cannot distinguish a pre-fix store from a post-fix
 one and the drop has no trigger to fire on. **P2P-3 owns the bump. There is no
 migration to own** — the bump *is* the operation, and its effect is a wholesale
@@ -2321,16 +2321,16 @@ the refused party has no move. Combined with unbounded `--in-peers` above, the
 cap is bounding the population that cannot evade it while leaving unbounded the
 one that can.
 
-#### Nettype-uniform by construction (rule 71)
+#### Nettype-uniform by construction (rule 171)
 
-`has_too_many_connections` has no nettype branch, and rule 71 forbids adding
+`has_too_many_connections` has no nettype branch, and rule 171 forbids adding
 one on this surface. **Mainnet is therefore affected structurally and needs no
 separate observation** — the testnet reproduction is the mainnet behaviour. The
 Rust owner below takes `(zone, count, cap)` and cannot be handed a nettype at
 all, which makes the uniformity structural rather than a convention a reviewer
 has to police.
 
-#### What this row lands now: the rule-20 forward cut
+#### What this row lands now: the `RULE_20_RUST_VS_CPP` forward cut
 
 **Superseded 2026-09-22.** The cap, `host_inbound.rs`, and the
 `shekyl_host_inbound_*` exports below were deleted with the mechanism. The
@@ -2361,12 +2361,12 @@ nothing about it has to be redone:
   `shekyl_p2p_default_out_peers`.
 - `has_too_many_connections` / `is_host_limit` are reduced to marshaling.
 
-**Why the cut qualifies under rule 20.** It does not obviously match "Rust if
+**Why the cut qualifies under `RULE_20_RUST_VS_CPP`.** It does not obviously match "Rust if
 any of" — this is not a secret, a cryptographic contract, untrusted-input
 parsing, or amount arithmetic. The cut rests instead on the **"when in doubt,
-Rust" default** and on rule 20's *advance the boundary, don't thicken it*
+Rust" default** and on `RULE_20_RUST_VS_CPP`'s *advance the boundary, don't thicken it*
 clause, which is the governing one here: this row is a **fix** to an inherited
-default, and rule 20 says a bug fix is **not** exempt — fixing it in C++ now and
+default, and `RULE_20_RUST_VS_CPP` says a bug fix is **not** exempt — fixing it in C++ now and
 re-fixing it in Rust at rewrite time is two chances to get it wrong. The number
 was also *written twice* and compared against in a rule *written twice*, in the
 language whose default the migration exists to remove. The forward cut gives the
@@ -2903,7 +2903,7 @@ problem solved.
    the reflection surface that motivated question 3's rejection — so the round
    can deliver the diagnosis that would have identified this failure in minutes
    long before it has to rule on eviction. The question is whether to open it as
-   a named round (rule 20: migrating a subsystem is a planning activity with its
+   a named round (`RULE_20_RUST_VS_CPP`: migrating a subsystem is a planning activity with its
    own design doc and review cycle) or to take tier 1 alone as a fix and defer
    the rest.
 
@@ -2960,7 +2960,7 @@ self-handshake. **Not one is a capacity decision.**
 
 So separating the nouns means **the door stops refusing**, and something has to
 manage capacity at the far end: **a total ceiling plus an eviction policy with a
-protection set.** That is a subsystem. **Rule 20 is explicit that migrating one
+protection set.** That is a subsystem. **`RULE_20_RUST_VS_CPP` is explicit that migrating one
 is a planning activity** — its own design document, its own review cycle, its
 own test gates, its own PR — **not a fix folded into a lane.** This row is
 therefore a *routing*, and PWD-I7's forward cut is deliberately the only code
@@ -3286,7 +3286,7 @@ question is routed.
 | Option | Adversary / channel | Verdict |
 | --- | --- | --- |
 | **Prologue (initiator-side) layered over PWD-T5's network-derived prefix (responder-side)** | Honest misconfiguration on both sides; an on-path rewriter against the initiator | **Adopted.** Two-sided coverage at zero additional wire bytes and zero additional round trips, reusing a mechanism this cluster already rules |
-| Add a third flight, or defer responder completion to a key-confirming record | Would give the responder authenticated network identity | **Refused on cost against a gainless state.** It charges every honest connection a round trip — the one thing a transport-handshake budget cannot absorb at the Pi-4 floor (rule 76) — to close a case an adversary has no reason to enter. Deferring completion to the first transport record does not even work: those records decrypt correctly under a mismatched prologue |
+| Add a third flight, or defer responder completion to a key-confirming record | Would give the responder authenticated network identity | **Refused on cost against a gainless state.** It charges every honest connection a round trip — the one thing a transport-handshake budget cannot absorb at the Pi-4 floor (rule 176) — to close a case an adversary has no reason to enter. Deferring completion to the first transport record does not even work: those records decrypt correctly under a mismatched prologue |
 | Bind `network_id` into the **key schedule** rather than the transcript hash — a network-qualified protocol name, or `MixKeyAndHash` | The same, cryptographically | **Refused, but safe — record it as the retreat.** It would make transport keys diverge by network, giving the responder a genuine failure. It is refused because a network-qualified protocol name breaks the Noise name form that PW-7a's read-not-depend posture assumes a future implementer can parse, and `psk`-style mixing changes message 1's token rules and therefore PWD-T1's byte tables. **Reopen this option, not the third flight, if the concession above ever stops being gainless** |
 | Drop the Levin handshake's `network_id` comparison, leaving network separation to the transport handshake | The same | **Refused.** Tor and I2P have no transport handshake of ours, so it would leave them with no network check; and moving the field out of the Levin handshake puts session content in the transport handshake, which *Two handshakes* forbids |
 
@@ -3940,7 +3940,7 @@ dependency, stated rather than papered over with a placeholder number.
 
 **Three decisions: PWD-B3a, PWD-B6 and PWD-B3.** Cluster B carries **28** bucket-4 rows
 across four validation surfaces, which is more than one review can hold at the
-attention each row deserves (rule 19). It is therefore split into sub-rounds,
+attention each row deserves (rule 119). It is therefore split into sub-rounds,
 following the consensus lane's R1a/R1b/R1c precedent, and **this one goes
 first because PWD-B3 is a hub rather than merely a blocker.**
 
@@ -4011,7 +4011,7 @@ command and exactly what this rule exists to reject.
 | **Reject unrecognised input at ingress** | The peer probing for a permissive path — an unknown command id that falls back to the **global** packet limit instead of a bound sized for what it claims to be, or an undefined flag bit accepted as uninterpreted semantics | **Adopted.** It is the only answer that is the same on both surfaces, and it makes the *defined* set the specification rather than a subset of what is tolerated |
 | Fall back to the global limit (today's command behaviour) | The same | **Refused.** `DEFAULT_MAX_PACKET_SIZE` is a *framing* bound, not a statement about what the message is — using it as the cap for an unknown command means the only thing sizing the buffer is how big a bucket may be, which is precisely the derivation PWD-T6 refused |
 | Accept uninterpreted semantics (today's flag behaviour) | The same | **Refused.** The codec round-trips unknown bits, and **PWC-A6a records that no relay carries them today** — the relay path re-frames rather than forwarding a received header — so this is a *latent* permission, not a live forwarding path. Closing it now costs nothing; leaving it means the next Shekyl extension collides with a bit some peer was already permitted to set |
-| Ignore-and-drop the field, keep the message | The same | **Refused, and it is the subtle one.** It looks conservative and silently changes the message: a peer that sent `flags = REQUEST\|0x20` believes it sent something this node did not act on, and neither side can tell. **Silent divergence, which rule 71 forbids on the consensus surface and PW-18 dislikes everywhere** |
+| Ignore-and-drop the field, keep the message | The same | **Refused, and it is the subtle one.** It looks conservative and silently changes the message: a peer that sent `flags = REQUEST\|0x20` believes it sent something this node did not act on, and neither side can tell. **Silent divergence, which rule 171 forbids on the consensus surface and PW-18 dislikes everywhere** |
 | Cap unknown commands at a per-command default | The resource exhauster | **Refused.** A default cap answers "how much of an unknown thing should I buffer", which is a question with no good answer; rejecting answers it with zero |
 
 **Conceded.** This forecloses in-band extension without a version bump — a peer
@@ -4241,7 +4241,7 @@ budget the ingress cap is static and needs no per-connection state, and the
 requested cardinality — which does live in per-connection handler state —
 survives only as a correctness rule. Nothing widens the framing seam to carry
 connection state, which would push protocol policy into the framing crate
-against `25-rust-architecture`. *The original two-layer split (two resource
+against `125-rust-architecture`. *The original two-layer split (two resource
 bounds) is retired with the cardinality cap it existed to serve — the dated
 correction above; what remains splits by KIND:*
 
@@ -4394,7 +4394,7 @@ sub-round**; only one is ever current. **24 rows remain**, all in cluster B's la
 ## 3.7 Cluster B, second sub-round — cadence, rate, and the batch nobody bounded
 
 **Three decisions: PWD-B1, PWD-B2, and PWD-B12 (minted here).** The
-validation surface is **connection cadence and rate** (rule 19). It goes second
+validation surface is **connection cadence and rate** (rule 119). It goes second
 because **PWD-B12 is what PWC-A2 is re-blocked on**: PWD-B3 ruled the header
 field must express the largest value the command table can produce, and
 `NOTIFY_NEW_TRANSACTIONS` had no bound at all when this round opened
@@ -4719,7 +4719,7 @@ generous rather than as absent to anyone without this history.
 
 **Why this is recorded here rather than fixed.** Both remedies — restoring
 the clause, and moving the message to `global` — are changes to C++ the
-migration is replacing, which `20-rust-vs-cpp-policy` makes the exception
+migration is replacing, which `RULE_20_RUST_VS_CPP` makes the exception
 rather than the default. The bound itself is this row's, in Rust.
 
 

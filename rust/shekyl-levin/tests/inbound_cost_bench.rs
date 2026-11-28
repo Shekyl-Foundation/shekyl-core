@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! What one INBOUND connection costs a node (`PWD-I7`, rule 76).
+//! What one INBOUND connection costs a node (`PWD-I7`, rule 176).
 //!
 //! The per-host inbound cap was deleted 2026-09-22. The ceiling that replaced
 //! it is derived from the process descriptor limit (`InboundCeiling`), not
@@ -12,10 +12,10 @@
 //! bound counts descriptors.
 //!
 //! **This is the instrument, not a number that ships.** It prints a table.
-//! Rule 76 expects the floor to move; the rig stays re-runnable so a later
+//! Rule 176 expects the floor to move; the rig stays re-runnable so a later
 //! measurement can be compared with the one that selected descriptors.
 //!
-//! **Two arms** (`DAEMON_RELAY_PRIVACY.md` §80.4, rule 76 item 3): run it on
+//! **Two arms** (`DAEMON_RELAY_PRIVACY.md` §80.4, rule 176 item 3): run it on
 //! the floor device and on a development machine, and record the ratio.
 //! Cross-machine ratios are measured, never assumed.
 //!
@@ -216,7 +216,7 @@ fn inbound_connection_cost_table() {
         "NOTE: VmHWM is the peak since start. If it exceeds the final VmRSS by\n\
          more than the table's total growth, the binding constraint is STARTUP,\n\
          not steady state, and the ceiling must be derived against the peak.\n\
-         Record BOTH arms (floor device and dev machine) and the ratio: rule 76\n\
+         Record BOTH arms (floor device and dev machine) and the ratio: rule 176\n\
          item 3 — cross-machine ratios are measured, never assumed.\n"
     );
 }

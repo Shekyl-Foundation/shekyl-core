@@ -10,11 +10,11 @@ inert — `06-branching.mdc` land-inert-then-branch; 2c-2a substrate is present 
 `…/stake_persist.rs`).
 **Parent design:** `ARCHIVAL_BOND_CONSTRUCTION.md` §10 / §10.1 / §10.2, §11.1 Q3;
 `ARCHIVAL_TIMING_CONSTANTS.md` §7; `ARCHIVAL_FIREWALL_GATE6.md` §9.6 / §10.9.
-**Process rule:** `26-sub-pr-design-discipline.mdc` (opt-in; cited here per its
+**Process rule:** `126-sub-pr-design-discipline.mdc` (opt-in; cited here per its
 Scope clause — this is a multi-round per-trait PR on the gate-6 firewall request
 surface with an RNG self-cert).
 **Status:** **OPEN — scoping pre-flight closed; design rounds 1–6 closed; the
-rule-26 impl-time pre-flight (`R0-D1`–`R0-D4`, §4.1) closed (2026-06-19). All
+rule-126 impl-time pre-flight (`R0-D1`–`R0-D4`, §4.1) closed (2026-06-19). All
 design + reconciliation gates met; remaining before merge is the rule-45/50
 workspace gate sweep + the substrate re-check, then PR.**
 
@@ -32,16 +32,16 @@ delivery] question explicitly"). It precedes the adversarial design rounds.
 discipline.mdc` reserves **"Round 0" / `R0-D#`** for the *impl-time* pre-flight
 pass that runs **after design closure, before production code** ("Round 0 in
 plan-doc naming only, meaning impl-time pre-flight after design closure, not the
-round before Round 1" — rule 26 lines 11–14, §"Pre-flight pass"). The pass the
+round before Round 1" — rule 126 lines 11–14, §"Pre-flight pass"). The pass the
 user named "2c-2b Round 0 pre-flight" is the **rule-16 scoping check that opens
-the rounds**, a different pass from the rule-26 `R0-D#` one. To keep the stable
+the rounds**, a different pass from the rule-126 `R0-D#` one. To keep the stable
 `R0-D#` anchors uncontaminated:
 
 - This opening pass records findings as **`SP-#`** (scoping pre-flight).
-- The rule-26 impl-time pre-flight pass (§4) keeps **`R0-D#`** for after design
+- The rule-126 impl-time pre-flight pass (§4) keeps **`R0-D#`** for after design
   closure.
 
-The two are complementary exactly as rule 26 frames them: the scoping check
+The two are complementary exactly as rule 126 frames them: the scoping check
 defends against scope drift and inherited-architecture contradiction *before*
 the rounds; the impl-time `R0-D#` pass defends against design decisions
 falsified by substrate or by running produced artifacts *after* closure.
@@ -63,7 +63,7 @@ inert by 2c-2a.
 | S1 | **Parallel StakeEngine JoinMarket bond request type** — a typed-separate request to the StakeEngine actor, *not* a `TxRequest` variant, so bond construction never threads the `LedgerEngine` transfer pipeline (cross-assignment unrepresentable). | §11.1 Q3 (CLOSED, lines 766–780); §9.6/§10.1 | `SignBond` message on `StakeEngine` (`stake_engine.rs:662`, landed) alongside `MintPersonaHandle` / `ActivatePersona` (`stake_engine.rs:539,572`). Consumes `PersonaHandle` (`stake_engine.rs:247`). Drives `build_join_market_vin` (`shekyl-archival-bond-builder/src/lib.rs:109`). *(Round-5 re-pin §3.5(b)/(c).)* |
 | S2 | **`sign_bond(ticket: PersistedBondTicket, …)`** — the consumer half of the persist-before-use typestate; sign-before-persist is uncallable (no ticket to pass). | §10.2 typed contract #1 (lines 567–582); `stake_persist.rs:22–27,70` | Consumes `PersistedBondTicket` **by value** (`stake_persist.rs:70`, `!Clone`) via `SignBond.ticket` (`stake_engine.rs:662`). Producer `Engine::persist_bond_record` (`stake_persist.rs:138`) landed + tested. *(Round-5 re-pin §3.5(b).)* |
 | S3 | **Funding-selection *design* (design-now / wire-later)** — settle the two-regime split: cold-start = principal-funded, amount-decoupled, and delayed from the funding ([`ARCHIVAL_BOND_POST_DELAY.md`](ARCHIVAL_BOND_POST_DELAY.md) BD-Q2); steady-state = `P`-local fund-from-earnings ramp (≥ 2 settlement epochs). **The genesis-adjacent firewall *logic* lands now; neither real funding source is wired** (principal-output access and `P`-scanning both deferred — SP-2.d / SP-2.e). Selection logic is **fixture-validated** over Bond-PR 2c-1's `funded_ledger_and_tree`, not real sources. | §10 (lines 454–456); `ARCHIVAL_TIMING_CONSTANTS.md` §7 (lines 253, 256) | `verify_credit_funding` (`builder/src/lib.rs:173`) is the amount-level invariant the selection must satisfy. Consumes economics SEB/epoch constants (B6, §4). |
-| S4 | **The typed timing seam** — `NetworkGap(BlockSpan)` carries the window of the bond-post delay (`draw_entry_gap`), measured from the funding (BD-Q2; width BD-Q4). The funding → bond-post guard is that anchor; `EconomicSpacing(SebSpan)` is deleted in the implementation slice (BD-Q5). Entry seam only; exit seam deferred to the release slice. | §10 (line 457–462); FOLLOWUPS (lines 914–917) | **Landed** in `stake_timing.rs`: `BlockSpan:81`, `SebSpan:98`, `NetworkGap:111`, `EconomicSpacing:137`, `DEFAULT_ENTRY_GAP:152` (typed `NetworkGap`; renamed from `…_WINDOW` to avoid collision with raw `shekyl_standoff::DEFAULT_ENTRY_GAP_WINDOW`, PR #163 re-review), `MIN_COLD_START_SPACING:166`; accessors `BlockSpan::as_u64:86` / `NetworkGap::as_blocks:118`. All are crate-local `pub(crate)` `u64` newtypes — `BlockSpan` is **standalone, not** built on `shekyl-types::BlockCount` (Round 2 §3.2; rule-18 promote-on-second-consumer). *(Round-5 §3.5(c)/(d).)* |
+| S4 | **The typed timing seam** — `NetworkGap(BlockSpan)` carries the window of the bond-post delay (`draw_entry_gap`), measured from the funding (BD-Q2; width BD-Q4). The funding → bond-post guard is that anchor; `EconomicSpacing(SebSpan)` is deleted in the implementation slice (BD-Q5). Entry seam only; exit seam deferred to the release slice. | §10 (line 457–462); FOLLOWUPS (lines 914–917) | **Landed** in `stake_timing.rs`: `BlockSpan:81`, `SebSpan:98`, `NetworkGap:111`, `EconomicSpacing:137`, `DEFAULT_ENTRY_GAP:152` (typed `NetworkGap`; renamed from `…_WINDOW` to avoid collision with raw `shekyl_standoff::DEFAULT_ENTRY_GAP_WINDOW`, PR #163 re-review), `MIN_COLD_START_SPACING:166`; accessors `BlockSpan::as_u64:86` / `NetworkGap::as_blocks:118`. All are crate-local `pub(crate)` `u64` newtypes — `BlockSpan` is **standalone, not** built on `shekyl-types::BlockCount` (Round 2 §3.2; rule-118 promote-on-second-consumer). *(Round-5 §3.5(c)/(d).)* |
 | S5 | **Live RNG degeneracy check (float-free, fail-loud)** — the cheap integer-only guard, distinct from the statistical self-cert. | §10 (lines 457–462); FOLLOWUPS (line 917–918) | Runs against `draw_entry_gap` output (`shekyl-standoff/src/draw.rs:57`). Negative-control shapes already exist: `draw_entry_gap_double_jitter_trap` (`conformance.rs:135`), `correlated_walk` (`conformance.rs:208`). |
 | S6 | **`certify_draw` self-cert against the shipping wallet's CSPRNG (gated)** — proves the *shipping wallet's RNG* produces conformant draws, not merely the reference. | §10 (lines 457–462) | `certify_draw` (`conformance.rs:377`) over a `GapRng` (`draw.rs:13`) adapter on `rand_core::OsRng` (the shipping CSPRNG — `shekyl-tx-builder/src/sign.rs:17`, `engine/sign_bridge.rs:14`). |
 | S7 | **Request-path composition KAT + own-surface negatives.** Accept: mint handle → `persist_bond_record` → `sign_bond` → `build_join_market_vin` → verify, over 2c-1's `funded_ledger_and_tree` fixture. **Not** a new prover round-trip (closed by Bond-PR 2a #156 / 2c-1 #158 — arc §5; the prove-half tampering negatives — wrong `bond_credit`, tampered commitment/preimage, replay — live in 2a). 2c-2b's **new** failure surfaces, all uncovered upstream, must be asserted here: **(a)** funding violating `verify_credit_funding` is rejected; **(b)** the RNG degeneracy guard **fires** on a degenerate draw (assert it bites, via the `double_jitter_trap` / `correlated_walk` controls, not just that the shapes exist); **(c)** ~~`trybuild` **compile-fail** tests~~ **→ RETIRED, replaced by an in-crate `!Clone` guard (§4.1 `R0-D1`)**: the tokens are `pub(crate)` with module-private fields, so `trybuild` (external crate) cannot reach them without re-exposing firewall internals; the unrepresentability is type-system-enforced unconditionally, and the `!Clone` half is pinned by an always-on `const _` guard verified to bite. Real-tree verify half stays `#[ignore]`/CT-5-gated. | arc §5; §11.1 Q4 (lines 782–789); FOLLOWUPS (lines 918–924); §4.1 `R0-D1`; §4 typed contracts | Builder dev-deps `shekyl-archival-retention` verify path. No `trybuild` dep (retired). |
@@ -262,7 +262,7 @@ design) must be right in 2c-2b; the **wiring** of both real sources is deferred.
 
 ## 3. Design-round scaffold (rounds 1–6, agenda only — adversarial)
 
-Per the user's framing and rule 26 §"Part A" / `A3` (threat-model addenda is a
+Per the user's framing and rule 126 §"Part A" / `A3` (threat-model addenda is a
 *late*-round discipline, R3–R4). Seeded questions, not closures:
 
 1. **Round 1 (anchor) — the funding-regime design (design-now / wire-later).**
@@ -588,7 +588,7 @@ was a placement guess that **Round 2 already overruled**: `BlockSpan` ships as a
 standalone `pub(crate) struct BlockSpan(pub u64)` (`stake_timing.rs:72`), not
 built on `BlockCount`. `BlockCount` does exist (macro-generated in
 `shekyl-types`, the relative-block-span `Duration`-analogue — `lib.rs:31`), but
-`BlockSpan` does not depend on it; the rule-18 placement settled at "crate-local
+`BlockSpan` does not depend on it; the rule-118 placement settled at "crate-local
 newtype, promote on a second consumer" (§3.2). The S4 cell is corrected below.
 
 **(e) Outcome.** No claim in §§1–3 is falsified by the substrate. The only
@@ -640,13 +640,13 @@ forward to the new deferred-items bullet so the audit trail is single-sourced.
 deferral is untracked. The scope boundary is closed: 2c-2b consumes exactly the
 2c-2a inert surface and defers exactly the 2d-anchored items plus the four newly-
 propagated wire-later actions. Rounds 1–6 are closed; the only remaining gate is
-the rule-26 impl-time pre-flight (`R0-D#`, §4 below) before production-merge.
+the rule-126 impl-time pre-flight (`R0-D#`, §4 below) before production-merge.
 
 ---
 
 ## 4. Impl-time pre-flight pass (`R0-D#`)
 
-Runs **after** round 6 closes, **before** production commits (rule 26 §"Pre-
+Runs **after** round 6 closes, **before** production commits (rule 126 §"Pre-
 flight pass"). Two halves, agenda noted now so the rounds produce the artifacts
 it will check:
 

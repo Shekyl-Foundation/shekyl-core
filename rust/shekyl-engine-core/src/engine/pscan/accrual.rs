@@ -520,7 +520,7 @@ impl PScanAccrual {
     /// Snapshot to the persisted [`PScanState`] for sealing — cursor + accruals +
     /// pending releases + bond-post matches as one atomic unit (the write half of the
     /// SP-2 discipline). The matches convert to their state-shaped twin
-    /// [`BondPostRecord`] at this seam (rule 18); `covered` is not serialized — it is
+    /// [`BondPostRecord`] at this seam (rule 118); `covered` is not serialized — it is
     /// `[0, synced_height)` and `from_state` reconstructs it from the sealed frontier.
     pub(crate) fn to_state(&self) -> PScanState {
         PScanState::new(

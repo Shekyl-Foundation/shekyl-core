@@ -388,7 +388,7 @@ fn every_published_cell_is_its_pinned_door_sequence() {
                 cell.provenance,
                 Provenance::MeasuredPi4,
                 "a published cell ({n_in}-in, depth {depth}) is not a spec-machine \
-                 measurement; rule 76.4 forbids a scaled or reference-machine \
+                 measurement; rule 176.4 forbids a scaled or reference-machine \
                  number standing in the spec table"
             );
             (n_in, depth, cell.millis, cell.basis)

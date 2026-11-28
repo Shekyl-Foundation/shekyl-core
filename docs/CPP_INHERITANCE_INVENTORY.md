@@ -29,7 +29,7 @@ This document updates when:
    lands the workstream updates the relevant section here in the same
    commit boundary.
 2. **A new inherited C++ file is added** (rare; Shekyl-first per
-   [`10-shekyl-first.mdc`](../.cursor/rules/10-shekyl-first.mdc) directs
+   [`110-shekyl-first.mdc`](../.cursor/rules/110-shekyl-first.mdc) directs
    new code to Rust). The PR adding the file categorizes it here.
 3. **A category boundary moves** (e.g., F.C++-2 file is migrated to
    Rust, changing category from "keep-justified" to "migrated").

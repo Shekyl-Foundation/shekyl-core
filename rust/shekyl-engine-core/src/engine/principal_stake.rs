@@ -125,7 +125,7 @@ where
     /// appends the principal's own change output (subaddress 0), co-present with
     /// the `P`-output in this tx. Whether that co-presence is a principal↔`P`
     /// linkage vector is an open GF-7 question on a *distinct* firewall surface
-    /// from this leg's GF-2 boundary (rule 19) — tracked, to be resolved with the
+    /// from this leg's GF-2 boundary (rule 119) — tracked, to be resolved with the
     /// bond-funding-separation (GF-7) work, not in this PR.
     ///
     /// # Errors

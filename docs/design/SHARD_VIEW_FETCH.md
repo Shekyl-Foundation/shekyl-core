@@ -18,7 +18,7 @@ review and `SV-D10`. Visualization continuation
 [`../V3_SHARD_VISUALIZATION.md`](../V3_SHARD_VISUALIZATION.md) *SV-D
 continuation*.
 Identifier family `SV-D` (index row `SV-D1…SV-Dn`, registered at birth per
-rule 94 §1). Decision authority: Rick. Companion to
+rule 194 §1). Decision authority: Rick. Companion to
 [`../V3_SHARD_VISUALIZATION.md`](../V3_SHARD_VISUALIZATION.md) (what a
 rendering is), [`ARCHIVAL_SHARD_FETCH.md`](ARCHIVAL_SHARD_FETCH.md) (the
 client that fetches a shard), and
@@ -105,7 +105,7 @@ view_hash(k) = cSHAKE256(
 - **Domain separation** per rule 30: a new cSHAKE256 customization string,
   registered in `shekyl-crypto-pq`'s domain registry with the other
   `shekyl/…-v1` strings.
-- **One home** (rules 05 and 18): the word `ShardViewHash` is a
+- **One home** (rules 05 and 118): the word `ShardViewHash` is a
   `shekyl-types` newtype beside the other 32-byte names; the computation
   is `shekyl_archival_retention::ShardViewHasher`, a streaming fold
   (`begin(ShardId)`, `fold_tx(ArchivalTx { txid, prunable, pqc_auths })`,
@@ -143,7 +143,7 @@ facts trait. `src/rpc/archival_shard_fetch.{h,cpp}`,
 `COMMAND_RPC_REQUEST_ARCHIVAL_SHARD` are deleted, not kept as a shim, and the
 `shekyl_daemon_operator_shard_fetch` FFI goes with its last C++ caller. The
 scheduler, the verifier, the hash and the cache are Rust
-(`20-rust-vs-cpp-policy.mdc`: parses untrusted input, defines a contract other
+(`RULE_20_RUST_VS_CPP.md`: parses untrusted input, defines a contract other
 code consumes).
 
 *Landed 2026-10-08 (step 3).* `shekyl_daemon_rpc::shard_view` holds the

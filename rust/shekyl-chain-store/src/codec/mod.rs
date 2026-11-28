@@ -53,7 +53,7 @@
 //! `.github/workflows/schema-snapshot.yml` — which
 //! also triggers on `rust/shekyl-store-codec/**`, because the moved
 //! codecs' fixtures are still committed here and their bytes are still the
-//! digest's fold input. That is the rule-42 ratchet §11.1(e) recorded as
+//! digest's fold input. That is the rule-142 ratchet §11.1(e) recorded as
 //! owed: an encoding cannot move without the version moving in the same PR.
 
 mod alt;

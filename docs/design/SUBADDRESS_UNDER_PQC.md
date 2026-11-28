@@ -31,7 +31,7 @@ design doc was opened from that branch tip (`9a0996bc4`) for substrate
 citations; land the doc on `dev` (or a short-lived branch off `dev`) before
 Round 1. The round does not depend on Stage 2 merging first.
 
-**Process.** Per `26-sub-pr-design-discipline.mdc` (cited explicitly)
+**Process.** Per `126-sub-pr-design-discipline.mdc` (cited explicitly)
 and `docs/design/STAGE_1_PER_PR_TEMPLATE.md` §3. Target **4–6**
 adversarial design rounds before any implementation PR.
 
@@ -93,7 +93,7 @@ layers with separate mechanisms in End-state 5.
 
 ## 2. Pre-flight (Round 0)
 
-Per `26-sub-pr-design-discipline.mdc` §"Pre-flight pass" and
+Per `126-sub-pr-design-discipline.mdc` §"Pre-flight pass" and
 `STAGE_1_PER_PR_TEMPLATE.md` §3.
 
 ### 2.1 Engine / scope identification
@@ -313,7 +313,7 @@ without per-subaddress KEM (and the scan cost that would require).
 ## 4. Threat-model frame
 
 Objectives for adversarial rounds 2–4. Each finding routes to absorb,
-discipline note, or forward-action per `26-sub-pr-design-discipline.mdc`
+discipline note, or forward-action per `126-sub-pr-design-discipline.mdc`
 A3.
 
 ### 4.1 Layer separation (R1-F5) — load-bearing
@@ -1185,7 +1185,7 @@ is the threat-model pin; **FA-9** propagates it to user-facing threat docs.
 | `subaddress_labels` | **Delete** or repurpose → `payment_requests: Vec<PaymentRequest>` |
 | `address_book.payment_id` | **Delete field** on new entries (Phase 1 decision) |
 
-Bump `BOOKKEEPING_BLOCK_VERSION` per `42-serialization-policy.mdc`.
+Bump `BOOKKEEPING_BLOCK_VERSION` per `142-serialization-policy.mdc`.
 
 **Ledger:** `TransferDetails.subaddress` removed; add `receive_attribution`
 + optional `echoed_label` (engine-only, redacted in logs) or store only

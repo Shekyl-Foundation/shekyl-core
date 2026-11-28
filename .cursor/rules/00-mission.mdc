@@ -1,6 +1,8 @@
 ---
 description: Shekyl mission and the canonical priority hierarchy. Apply to all changes.
 alwaysApply: true
+scope: estate
+repos: [core, gui, prism]
 ---
 
 # Shekyl mission

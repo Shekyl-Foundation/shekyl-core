@@ -3,7 +3,7 @@
 
 **Status:** see [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) for landing status (docs-flow repair 2026-08-26).
 Sibling audit trail for `ARCHIVAL_DRAIN_SEND_FD2.md`, per
-`26-sub-pr-design-discipline.mdc` §"Pre-flight pass" (the pass is
+`126-sub-pr-design-discipline.mdc` §"Pre-flight pass" (the pass is
 labeled **Round 0**; findings carry stable **R0-D#** IDs that must not
 be renamed).
 
@@ -34,7 +34,7 @@ every prescribed core artifact run).
 ### 1. Substrate re-check
 
 Re-read each core-side disposition's cited source line at the pin
-(rule 26 A2 audit-against-actual-code; B6 numeric/source-line variant).
+(rule 126 A2 audit-against-actual-code; B6 numeric/source-line variant).
 
 | Plan-doc cite | Claim | Verified at pin | Result |
 |---------------|-------|-----------------|--------|
@@ -77,7 +77,7 @@ precedent is intact.
 
 ### 2. Artifact execution
 
-Ran the behavioral artifacts the plan leans on (rule 26 B9 frame).
+Ran the behavioral artifacts the plan leans on (rule 126 B9 frame).
 
 | Suite | Filter | Result |
 |-------|--------|--------|
@@ -129,4 +129,4 @@ carry when the target sub-PR lands.
 2026-07-19.** One errata (R0-D1), no design-invalidating finding, all
 core artifacts green. GUI-side pre-flight carried (R0-D3-B). Thin
 re-confirmation at DS-PR-1 open (post-#342-merge) remains the standing
-rule-26 requirement.
+rule-126 requirement.

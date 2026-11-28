@@ -51,10 +51,10 @@ preimage is re-keyed), **`PDM-Q12`** (the segment-freeze pipeline retires;
 no successor object) and **`PDM-Q6`** (txid commits `prunable_hash` and
 `pqc_auth_hash`; membership derives from length rows) — the rulings that
 decide which of this surface's readers are already dead. Process per
-`26-sub-pr-design-discipline.mdc`; identifier families **`SAR-`** (findings)
+`126-sub-pr-design-discipline.mdc`; identifier families **`SAR-`** (findings)
 and **`SAR-Q`** (round questions) registered in
 [`IMPLEMENTATION_INDEX.md`](../design/IMPLEMENTATION_INDEX.md) §2 by the PR that adds
-this file (rule 94 §1; `check_index_prefix_uniqueness.py` branch (a): the two
+this file (rule 194 §1; `check_index_prefix_uniqueness.py` branch (a): the two
 parse to distinct prefixes and clear the 95 registered).
 
 **The gate that lifted, re-read rather than inherited (rule 22).** The §5
@@ -87,7 +87,7 @@ contract, §2.3 there).
 | `ReadSnapshot`, `AtHeight`, `AtIndex`, `chain_reads::cell`, the fault policy | landed (S-CHAIN-R, S-OUT-KI) |
 | The 17 `archival_*` tables exist in the redb schema | landed, **all `Unshaped`** (`rust/shekyl-chain-store/src/schema.rs:373–438`); accumulator classes assigned (`accumulator/class.rs:110–137`) |
 | `properties` shaped (`&str → Blob<PropertyCellBytes>`) | landed (`schema.rs:368`) — two of this surface's reads are cells in it (§2.1 #13, #14) |
-| Layout `SCHEMA_VERSION = 10` (`codec/schema_version.rs:102`; the 2026-09-22 tx-data-prune deletion's bump); rule-42 snapshot gate | landed — this increment bumps to 11 |
+| Layout `SCHEMA_VERSION = 10` (`codec/schema_version.rs:102`; the 2026-09-22 tx-data-prune deletion's bump); rule-142 snapshot gate | landed — this increment bumps to 11 |
 | The settlement-epoch schedule pin (`codec/settlement_epoch.rs`) | landed (S-CHAIN-W SCW-2) — every epoch-keyed row here is meaningful only under it |
 | P0b journal audit (the §5 row's gate) | **met 2026-09-05** (above) |
 | `PDM-Q3`, `PDM-Q6`, `PDM-Q12` | RULED 2026-09-18 (`PDM-Q2` re-ruled 2026-09-22 does not touch this surface's reads) |
@@ -267,7 +267,7 @@ semantics; otherwise `Option`. Applied:
 The daemon store cannot depend on `shekyl-archival-retention` — it pulls
 `shekyl-fcmp`, `shekyl-crypto-pq`, `shekyl-curve-generators`,
 `shekyl-ct-balance` (`shekyl-archival-retention/Cargo.toml:17–27`), the same
-graph that ruled `shekyl-curve-tree` out under `SCU-Q2`. Rule 18's written
+graph that ruled `shekyl-curve-tree` out under `SCU-Q2`. Rule 118's written
 rule (landed with S-CURVE): *a type both stores/crates need lives in
 `shekyl-types`; the computation lives in the owning crate.* So the
 **state-shaped** archival record types move to `shekyl-types`, and the
@@ -309,7 +309,7 @@ so only `Holdings::shard_set` can build one), `HeldShard`,
 `shekyl-chain-store::codec::archival`,
 because `bonded_total` is an `AtomicUnits` and `shekyl-units` is
 `shekyl-types`' sibling, not its dependency — the record cannot be spelled
-below the crate that owns its amount without adding an edge rule 18 did not
+below the crate that owns its amount without adding an edge rule 118 did not
 ask for. Today the store is the record's only reader, so the daemon store's
 codec is the owning crate by the rule's own test. **Reopens** (rule 21) if
 E6 slice 8 needs `BondRecord` on `ChainView` — **REOPENED on its own
@@ -369,7 +369,7 @@ since E4 §2.3 is where the reader was specified. `ServeCreditKey` and
 | `archival_slash_log` | `&[u8]` (`BE(height) ‖ BE(seq)`) → `Unshaped` | **`SAR-Q7`**: `(BlockHeight, JournalSeq)` → `Coded<SlashLogEntry>` if A2 lands here; unchanged if deferred to E4 | A2 |
 | `archival_settlement`, `archival_slash_applied`, `archival_budget_accrual`, the five other journals | `Unshaped` | unchanged — E4's writers shape them | none |
 
-Layout `SCHEMA_VERSION` 10 → 11 (rule 42; the snapshot moves by exactly the
+Layout `SCHEMA_VERSION` 10 → 11 (rule 142; the snapshot moves by exactly the
 seven rows above — eight if `SAR-Q7` shapes the slash log here). **As
 landed (2026-09-23):** the seven rows are **six tables and one `properties`
 cell** — `tables.snap` loses six `Unshaped` (28 → 22) and `properties.snap`
@@ -418,7 +418,7 @@ writes them.
   reaching a second table to do it (`archival_slash_removed_holding_after`,
   `:4804–4870`, a range scan over `archival_slash_log`). Its comment says
   "storage adapters with no consensus logic" of the helpers three lines
-  below it. This is the rule-20 finding on the surface: the fold ports to
+  below it. This is the `RULE_20_RUST_VS_CPP` finding on the surface: the fold ports to
   `shekyl-archival-retention` as `holds_shard_at(&BondRecord, ShardId,
   BlockHeight, &[SlashLogEntry])`, with the LMDB tests' as-of-height cases
   (`archival_substrate_lmdb.cpp:1674–1893`) as its Rust tests — when
@@ -513,7 +513,7 @@ layout are not inherited (§3.5).
    `BudgetAtomic`, `AttestationWitness` per `SAR-Q2`'s ruling, with `Canonical`
    codecs; `ServeCreditKey` tuple key and `PassCount` in `ids.rs`; the seven
    tables re-typed in `schema.rs`; `SCHEMA_VERSION` 11; snapshot regenerated
-   (rule 42); SI-14 in the register.
+   (rule 142); SI-14 in the register.
 2. **The reads.** `store/archival_reads.rs`: A1, A3–A10; SI-15 armed; the
    `properties` cell typed; tests: empty store, planted rows, each `Option`
    arm, the SI-14 decode refusal, a `BondRecord` round trip at every cap
@@ -563,7 +563,7 @@ port — so the docs commit is the third. `SI-14` landed `ruled` and `SI-15`
 ## 8. Denominator — what must stay green, what must be extended
 
 - `check_chain_rules_no_store.sh` (the rules crate reaches no store).
-- Rule-42 schema snapshot: **must move**, and only by the seven tables +
+- Rule-142 schema snapshot: **must move**, and only by the seven tables +
   version (the gate's diff is the review) — *moved as landed:* `tables.snap`
   six rows (`Unshaped` 28 → 22), `properties.snap` one cell (6 → 7), five new
   codec snapshots (`bond_record`, `r_market`, `sigma_work_milli`,
@@ -603,7 +603,7 @@ port — so the docs commit is the third. `SI-14` landed `ruled` and `SI-15`
 | Q | Question | Ruling | Why |
 |---|---|---|---|
 | **SAR-Q1** | Does this increment shape only the seven tables its reads touch (§4), leaving the journals, `archival_settlement`, `archival_slash_applied`, `archival_budget_accrual` and the retired `archival_shard_segment` `Unshaped` for E4 — or shape all seventeen now? | **RULED: default held** — **Seven.** | A shape with no reader and no writer is pre-provisioning (rule 21); the journals' *existence* is E4's first question (SAR-7), and shaping a retired table (SAR-5) is worse than leaving it. S-CURVE left `curve_tree_checkpoints` `Unshaped` on the same ground. |
-| **SAR-Q2** | Where do the record types live: move `BadInterval`, `ShardSet`, `HoldingsDescriptor` from `shekyl-archival-retention` down to `shekyl-types` and define `BondRecord` beside them — or define `BondRecord` in `shekyl-types` with its own `IntervalEntry`/`Holdings` and have the retention crate convert? | **RULED: default held** (an application of rule 18 as written at `SCU-Q2` rather than a ruling — the rule doing its job on its fourth instance) — **Move down.** | Rule 18 as written at `SCU-Q2`: one definition, both crates. A conversion layer between two spellings of the same interval is CTS-3 reborn. The retention crate keeps every fold; it loses three struct definitions and gains `use shekyl_types::…`. |
+| **SAR-Q2** | Where do the record types live: move `BadInterval`, `ShardSet`, `HoldingsDescriptor` from `shekyl-archival-retention` down to `shekyl-types` and define `BondRecord` beside them — or define `BondRecord` in `shekyl-types` with its own `IntervalEntry`/`Holdings` and have the retention crate convert? | **RULED: default held** (an application of rule 118 as written at `SCU-Q2` rather than a ruling — the rule doing its job on its fourth instance) — **Move down.** | Rule 118 as written at `SCU-Q2`: one definition, both crates. A conversion layer between two spellings of the same interval is CTS-3 reborn. The retention crate keeps every fold; it loses three struct definitions and gains `use shekyl_types::…`. |
 | **SAR-Q3** | Is `BondRecord`'s codec a re-specified `Canonical` (same fields, redb-native layout, DRS-D8) — or a byte-for-byte port of `ArchivalBondValue` v7? | **RULED: re-specified — approved with one word checked: "same fields, same frozen caps" means same *semantics*, not byte-compatible.** Byte-parity with LMDB was never the constraint (the comparator projects; `zerokval` already diverges); a 350-line hand codec becoming a `Canonical` impl is the work, and it is free to choose its encoding. | Nothing hashes or relays the stored record (the wire record is `bond_wire.rs`'s, a different object); byte-parity with LMDB was never the constraint (§7.6, `zerokval`, `SCU-Q3`). The v7 layout carries a `holdings_kind` byte plus two parallel vectors that the sum type retires (SI-14). B4 results-fidelity: same field set, same caps, one owner per cap constant. |
 | **SAR-Q4** | The gather (#10) is deleted (SAR-4, §3.4 rule 3). Does the store also offer one composed convenience read — `emission_epoch_source(p, epoch)` assembling A1 + A5 + A7 + A8 into the retention crate's `EmissionEpochSource` — or do E4 / slice 8 compose it at the call site from the primitive reads only? | **RULED: default held** — composition belongs to the caller; a composed read would put the composition in the store — **Primitives only; no composed read.** | A composed read is the gather shell with a Rust accent: it fixes *which* rows a claim needs inside the store, which is the verdict's knowledge, not the store's (`emission_verify.rs` owns `EmissionEpochSource`). The five-table "immutable for a claimable epoch" argument (`blockchain_db.h:2372–2384`) is a property the rule states about the rows it reads; the store's job is to return them typed. Reopens if two production composers appear and disagree (rule 21). |
 | **SAR-Q5** | Do the alt-attestation witness pair (#16 read, #17 write) land here as an archival read, or with E5 S-ALT as an alt-block attribute? | **RULED: default held** — **E5 S-ALT.** | The row is written in `add_alt_block`'s transaction and read only by `switch_to_alternative_blockchain`; it is an attribute of an alt block that happens to live in an `archival_` table. S-ALT owns the alt block's shape; splitting one alt-block attribute across two increments is the god-object-by-table-name error the §5 map warns against. |
@@ -630,7 +630,7 @@ port — so the docs commit is the third. `SI-14` landed `ruled` and `SI-15`
   deletes the code.
 - `CHAIN_RULES_SLICE_8` (when scaffolded) inherits `SAR-Q6`'s forward-action;
   until then it is recorded in `DAEMON_REDB_STORE.md` table 3's 4.J row. *(done — the 4.J row carries it)*
-- `18-type-placement.mdc`: no change — the rule already covers this instance
+- `118-type-placement.mdc`: no change — the rule already covers this instance
   (`SCU-Q2`'s general form); this document cites it.
 - CHANGELOG: one entry (schema layout 11; the typed archival reads; the
   bond record's Rust type). *(done)*
@@ -642,7 +642,7 @@ port — so the docs commit is the third. `SI-14` landed `ruled` and `SI-15`
 | Date | Entry |
 |---|---|
 | 2026-09-24 | **Review of the read half, before merge.** `Holdings::ShardSet` carries a private list: `Holdings::shard_set` is the constructor and it calls `ShardSet::new`, so a duplicate or over-cap holding cannot be built and `descriptor` no longer panics on a value the type accepts. `first_paying_emission_height` is `Option<FirstPayingHeight>`; height 0 is the C++ unset sentinel and is refused at decode, and the type cannot hold it. `attestation_witness_at` runs `AttestationWitnessBytes::well_formed` (non-empty, at most `MAX_ATTESTATION_WITNESS_BYTES`) and an ill-formed row is SI-7. `served_shards` seeks to the next shard id; it does not rescan the persona prefix. |
-| 2026-09-23 | **As built — two deviations from the ruled defaults, disclosed by the increment's docs commit (rule 22).** **(1) The record's home.** `SAR-Q2` moved the shared vocabulary to `shekyl-types` and that landed as ruled; §3.4's table also put `BondRecord` there by default, and it did not go: `bonded_total` is an `AtomicUnits`, `shekyl-units` is `shekyl-types`' sibling, and rule 18's own test ("both crates need it") is not met while the daemon store is the record's only reader. `BondRecord`, `Holdings`, `HeldShard` and the three close-row scalars live in `shekyl-chain-store::codec::archival`; reopens on slice 8 needing the record on `ChainView` (§3.4 as-built). **(2) The count.** "Seven tables" was six tables and one `properties` cell; the snapshots (`tables.snap` 28 → 22 `Unshaped`, `properties.snap` 6 → 7) are the count of record (§4). **Two smaller corrections the tree made to the plan:** SI-14 lands `ruled`, not `built` — the codec refuses what it would observe, so SI-7 is its arm and no variant is minted for it; and its "in shard-id order" clause is struck, the v7 record preserving insertion order and the corpus proving it (§5). **What the corpus bought (carry 1 of PR #840):** the claimed-set span rule (`last − first ≤ W`), absent from the first Rust cut and present in the C++ encoder's throw — a rule the self round trip could not have found. |
+| 2026-09-23 | **As built — two deviations from the ruled defaults, disclosed by the increment's docs commit (rule 22).** **(1) The record's home.** `SAR-Q2` moved the shared vocabulary to `shekyl-types` and that landed as ruled; §3.4's table also put `BondRecord` there by default, and it did not go: `bonded_total` is an `AtomicUnits`, `shekyl-units` is `shekyl-types`' sibling, and rule 118's own test ("both crates need it") is not met while the daemon store is the record's only reader. `BondRecord`, `Holdings`, `HeldShard` and the three close-row scalars live in `shekyl-chain-store::codec::archival`; reopens on slice 8 needing the record on `ChainView` (§3.4 as-built). **(2) The count.** "Seven tables" was six tables and one `properties` cell; the snapshots (`tables.snap` 28 → 22 `Unshaped`, `properties.snap` 6 → 7) are the count of record (§4). **Two smaller corrections the tree made to the plan:** SI-14 lands `ruled`, not `built` — the codec refuses what it would observe, so SI-7 is its arm and no variant is minted for it; and its "in shard-id order" clause is struck, the v7 record preserving insertion order and the corpus proving it (§5). **What the corpus bought (carry 1 of PR #840):** the claimed-set span rule (`last − first ≤ W`), absent from the first Rust cut and present in the C++ encoder's throw — a rule the self round trip could not have found. |
 | 2026-09-23 | **Three carries into the increment** (maintainer, PR #840, after the rulings): **(1)** the v7 cross-check corpus — real `ArchivalBondValue` blobs decoded by the C++ reader, asserted equal to the Rust `BondRecord` (§7 commit 1/2), because a self round trip proves self-consistency and not identity, and the C++ decoder E4 deletes is the only oracle; **(2)** the schema gate's arming verified in the failing direction, not assumed (§8); **(3)** S-PRUNE's dependency on `PDM-Q11`'s provisional `D_max` moved onto that skeleton's banner (`DRS_E1_SPRUNE.md`), because a watermark fixed before the constant is confirmed is picked by implementation convenience — R8's shape. |
-| 2026-09-23 | **Round 1 RULED** (maintainer, PR #840). Q1, Q2, Q4, Q5 held (Q2 an application of rule 18, not a ruling; Q4 because `EmissionEpochSource` already exists and composition is the caller's). Q3 approved with the word checked: same *semantics*, not byte-compatible. Q6 approved, with why the `Option` is load-bearing regardless of slice 8's answer. **Q7 amended: defer the port, not the row** — CEN-L16 minted in this PR; the R8 sweep gap and its two siblings (slice 4 S25, slice 5 shard-set bound) folded into one census-lane question on the existing FOLLOWUPS row. **Process note acted on:** the §5 row's eighteen-day stale gate is the `DEFERRED_DOCS` self-expiry shape applied to plan-row blockers; measured over `docs/design/*.md` table rows — 119 blockers, 45 naming an identifier a gate could resolve, 74 prose — so it is a wish until blockers take rule 22's `blocked on <ID> — falsify by <check>` form; a FOLLOWUPS row proposes the lint (owner `DAEMON_REDB_STORE.md` §5). |
+| 2026-09-23 | **Round 1 RULED** (maintainer, PR #840). Q1, Q2, Q4, Q5 held (Q2 an application of rule 118, not a ruling; Q4 because `EmissionEpochSource` already exists and composition is the caller's). Q3 approved with the word checked: same *semantics*, not byte-compatible. Q6 approved, with why the `Option` is load-bearing regardless of slice 8's answer. **Q7 amended: defer the port, not the row** — CEN-L16 minted in this PR; the R8 sweep gap and its two siblings (slice 4 S25, slice 5 shard-set bound) folded into one census-lane question on the existing FOLLOWUPS row. **Process note acted on:** the §5 row's eighteen-day stale gate is the `DEFERRED_DOCS` self-expiry shape applied to plan-row blockers; measured over `docs/design/*.md` table rows — 119 blockers, 45 naming an identifier a gate could resolve, 74 prose — so it is a wish until blockers take rule 22's `blocked on <ID> — falsify by <check>` form; a FOLLOWUPS row proposes the lint (owner `DAEMON_REDB_STORE.md` §5). |
 | 2026-09-23 | **Round 0 executed** at `d8ebfd18c`. Eleven findings (SAR-1 … SAR-11); seven questions posed with defaults (SAR-Q1 … Q7). The surface's eighteen methods map to ten Rust reads: two are dead by ruling (SAR-5), one is a log operand and S-PRUNE's (SAR-6), two are E5 S-ALT's (`SAR-Q5`), one is E4's test hook, one is the gather shell §3.4 rule 3 said to delete (SAR-4), one wraps a fold that is already Rust behind an FFI shim, and one is a C++ consensus fold in the DB layer that reads the slash log as history (SAR-2, SAR-7) — its port travels with E4's journal ruling by default (`SAR-Q7`). The substrate fact that sizes the increment is SAR-9: the persisted bond record has no Rust type. The §5 row's gate was found lifted eighteen days before this read (rule 22). |

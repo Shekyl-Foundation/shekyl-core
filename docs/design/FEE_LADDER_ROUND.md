@@ -144,7 +144,7 @@ early. Dispositions:
 - **W7 revised** (round-2 text struck, kept as record) + **W8 minted**
   (miner fee-rank ordering leak — exists today under any multi-rate
   ladder; uniform rates make hash-ordered inclusion cheap to require,
-  flagged rule-71-adjacent).
+  flagged rule-171-adjacent).
 - **FL-R4 contested → FL-R17**: rung count reopened as the explicit
   C9-vs-C2(b) trade, C2(b)'s cost restated as selectable urgency (a
   feature), recommendation (b) single-rate *labeled as a
@@ -217,7 +217,7 @@ visible.
   diff cites a merged document at `dev`.
 - **The bundle splits in two after the design PR** (the built branch had
   interleaved them and is being restructured): **PR one, atomic (rule
-  07)**: the signed composition + one owner + no flag path; the ladder
+  107)**: the signed composition + one owner + no flag path; the ladder
   operand move; FL-R16c (consensus via `compute_fee_burn`); the FL-R14
   assertion; the FL-V7 doc corrections (under the names the reviewer
   knows); the oracle graduated. **PR two, mechanical, after**: the
@@ -399,7 +399,7 @@ C2-R row + this branch's FL row).
 
 **Cycle six (Copilot, two findings):**
 
-- **Index row missing its as-of date** (rule-94 row format) — valid,
+- **Index row missing its as-of date** (rule-194 row format) — valid,
   fixed: the FL status cell leads with `OPEN (as of 2026-09-05)`.
 - **Census rows still say "R2 DEFERRED … pending FL-R12′"** — the
   index's cleared-gate method note does bind the PR that lands the
@@ -584,7 +584,7 @@ fee self-marks a wallet — which is a fingerprint, not a timing leak.
 
 **The one surviving harm with teeth was measured: the rejection race
 (§4.5b).** Lags stated and justified: 1 block; 3 (≈ 6 min: FCMP++
-proving at the rule-76 floor, human confirmation, Dandelion++ stem);
+proving at the rule-176 floor, human confirmation, Dandelion++ stem);
 25 (a signing session left open); and 100 — the protocol's own ceiling
 `FCMP_REFERENCE_BLOCK_MAX_AGE`, past which no conforming transaction
 can be submitted. **Refusals: 0 of 72 000 000 quotes at every lag,
@@ -879,8 +879,8 @@ are relayed countersignatures, not in-tree ones, and the rows say so.*
 
 ## Build (authorized round 8; executed 2026-09-04 on `feat/fee-ladder-r12-impl`)
 
-The reward-path bundle, one validation surface, built Rust-first (rule
-20: C++ reduced to marshaling). **The C++ diff direction, as a
+The reward-path bundle, one validation surface, built Rust-first (
+`RULE_20_RUST_VS_CPP`: C++ reduced to marshaling). **The C++ diff direction, as a
 measurement, not a reading** (steering correction — an earlier report
 said "thinner," which does not survive measurement): the formula bodies
 genuinely left C++ (the whole `Fl/Fn/Fm/Fh` ladder computation and its
@@ -1160,7 +1160,7 @@ directly. Dispositions:
 **OPEN.** Substance in [`FEE_LADDER_DERIVATION.md`](FEE_LADDER_DERIVATION.md)
 §10; this record carries state only (rule 95 — one owner per claim).
 
-Opened against `dev` `c1709cf2f`, citing rule 26. Jurisdiction is narrow
+Opened against `dev` `c1709cf2f`, citing rule 126. Jurisdiction is narrow
 by construction: the band staying and `C_q` not becoming chain state are
 RULED and are inputs, not questions. The round decides the *shape* of the
 previous value — the four questions `blockchain.cpp` already names at the

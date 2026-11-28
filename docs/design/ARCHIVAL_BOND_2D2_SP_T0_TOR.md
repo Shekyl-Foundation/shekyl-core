@@ -7,7 +7,7 @@ control-port channel the keystone's measured circuit-ID test (SP-T1's measured h
 the dependency both halves of SP-T1 sit on.
 **Parent designs:** `ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md` (§3 DQ2, §12 SP-T0, §14, §15, §16),
 `shekyl-p-transport` (SP-T1 type half, PR #204).
-**Process rule:** `26-sub-pr-design-discipline`; `17-dependency-discipline` (the control-port client +
+**Process rule:** `126-sub-pr-design-discipline`; `17-dependency-discipline` (the control-port client +
 the bundled binary); `21-reversion-clause-discipline`; `82-failure-mode-ux` (the bootstrap state).
 
 ---
@@ -281,16 +281,16 @@ not** be promoted into `CURRENT_PIN` — an aarch64 host could be given it throu
 The ground that reopened it is the transport cutover: `P2P_TRANSPORT_LAYER.md` D9 takes the Tor
 deadline distribution on the floor device under the shipping posture, a managed ephemeral Tor with
 onion-service proof-of-work on, and `discover_and_verify` refuses a managed launch without a pin. An
-attached distro Tor measures a different posture, and an x86_64 measurement is not the floor (rule 76).
+attached distro Tor measures a different posture, and an x86_64 measurement is not the floor (rule 176).
 So the alpha is pinned, on the same gate and the same signing key as the stable pin. What it costs,
 stated: aarch64 builds ship an alpha Tor until stable publishes the target. **Reopen:** the first stable
 bundle with `linux-aarch64` replaces this pin; alpha-line security advisories are on the checklist's
-watch until then. [`76-device-provisioning-floor`](../../.cursor/rules/76-device-provisioning-floor.mdc)
+watch until then. [`176-device-provisioning-floor`](../../.cursor/rules/176-device-provisioning-floor.mdc)
 names the Pi 4 as the minimum supported device, and that device now obtains a `VerifiedTorBinary`.
 
 ### Tor binaries used for the transit measurement (not shipped)
 
-The Tor-transit arm of `DAEMON_RELAY_PRIVACY.md`'s `hop` work compares an x86_64 host against the rule-76
+The Tor-transit arm of `DAEMON_RELAY_PRIVACY.md`'s `hop` work compares an x86_64 host against the rule-176
 floor device. **Both arms run the same Tor build**, because a cross-arm comparison must hold everything
 but the manipulated variable — the `peers`-pin discipline (`DAEMON_RELAY_PRIVACY.md` §69.2) applied to
 the transport instead of the model.

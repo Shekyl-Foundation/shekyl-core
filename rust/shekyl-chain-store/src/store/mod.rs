@@ -429,7 +429,7 @@ impl ChainStore {
     /// chains with synthetic block ids open there. A node passes its
     /// network's pin ([`GenesisPin::for_network`], regtest included). The
     /// store does not know which networks exist: the pin is the data, and
-    /// nettype does not select a branch here (rule 71).
+    /// nettype does not select a branch here (rule 171).
     ///
     /// An existing file is admitted on a read-only open, before any
     /// writable one, so another network's store is refused with nothing

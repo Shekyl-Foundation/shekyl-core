@@ -25,7 +25,7 @@ refetch path.
 against header; reorg rollback by segment."
 
 **Process discipline:** this plan-doc cites
-`26-sub-pr-design-discipline.mdc` (multi-round per-trait PR; consensus-coupled
+`126-sub-pr-design-discipline.mdc` (multi-round per-trait PR; consensus-coupled
 drain-order replication). The substrate audit below follows A2
 (audit-against-actual-code, pinned citations); boundary moves follow A4;
 findings route per A5.
@@ -454,7 +454,7 @@ Closure verified against the amended text. Three implementation riders
 Each lands on `dev` within the 5-day/10-commit guidance; no consensus-rule
 boundary is touched (the drain rule is CT-2's landed, KAT-pinned replication —
 CT-3 changes *where state lives*, not *what is computed*), so
-`07-consensus-atomic-cutovers.mdc` is not invoked.
+`107-consensus-atomic-cutovers.mdc` is not invoked.
 
 ---
 
@@ -483,5 +483,5 @@ records).
 - Downstream: CT-5 (engine/refresh wiring consumes CT-3b's resume + ingest
   API), CT-2 Tier B (fixture generation rides CT-3 + CT-5 + the 2A spend
   path — see the CT-2B ordering note in `CT2_ROUND1_CLOSEOUT.md` §5).
-- Process: `26-sub-pr-design-discipline.mdc` (A2/A3/A4/A5, B3/B6/B9),
+- Process: `126-sub-pr-design-discipline.mdc` (A2/A3/A4/A5, B3/B6/B9),
   `21-reversion-clause-discipline.mdc` (R1-Q1 shape).

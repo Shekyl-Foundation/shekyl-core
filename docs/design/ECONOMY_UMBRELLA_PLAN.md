@@ -3,7 +3,7 @@
 **Status:** **OPEN — opened 2026-10-04.** Identifier family **`EUP-`**
 (the program's steps, §5), registered in
 [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2 with this file
-(rule 94 §1). This document owns the order in which the economy is realigned,
+(rule 194 §1). This document owns the order in which the economy is realigned,
 measured and decided. It does not own any single mechanism; each row of §2
 names its owner.
 

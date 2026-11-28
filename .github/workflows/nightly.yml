@@ -178,7 +178,7 @@ jobs:
     # and `weights_read_bench`'s block was refused by CEN-B4 and then CEN-F18
     # — two rows that landed after the bench was written — for as long as
     # nobody ran them (both found and fixed on PR #1003). The bench figures
-    # a shared runner prints decide nothing (rule 76: the floor device does);
+    # a shared runner prints decide nothing (rule 176: the floor device does);
     # what the lane asserts is that every ignored test still builds a chain
     # its own constants admit. Budget: the weights bench at its 100 000-block
     # default is about half an hour in release on a workstation, the slash
@@ -463,7 +463,7 @@ jobs:
     # the five-block miner test never pinned the seed the miner requires
     # (e1c39b882). Budget: 44 minutes on a loaded 16-core workstation; 240
     # for a 4-vCPU runner.
-    # The figures a shared runner prints decide nothing (rule 76); what the
+    # The figures a shared runner prints decide nothing (rule 176); what the
     # lane asserts is that every ignored test still passes.
     #
     # Same matrix as above. The set is read from the checked-out ref's

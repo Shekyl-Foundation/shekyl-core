@@ -20,7 +20,7 @@
 //!
 //! Recorded, not judged: whether Shekyl wants the dataset mode is decided
 //! on this artifact, by whoever owns that decision, against the
-//! provisioning floor (rule 76) — which is why the artifact carries the
+//! provisioning floor (rule 176) — which is why the artifact carries the
 //! host it was measured on rather than pretending to be the floor.
 //!
 //! Lock-free counters (`AtomicU64`, relaxed): N `form` workers hash

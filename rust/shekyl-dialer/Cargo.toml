@@ -44,7 +44,7 @@ shekyl-draw-rng = { path = "../shekyl-draw-rng" }
 # Test seams only. A setter for a connector's in-flight bound, so a test can
 # run the dialer at a bound above the protocol's, and a non-consuming wait
 # for a posted result. No production crate turns this on; the bound is
-# protocol data (rule 71).
+# protocol data (rule 171).
 test-seams = []
 
 [dev-dependencies]

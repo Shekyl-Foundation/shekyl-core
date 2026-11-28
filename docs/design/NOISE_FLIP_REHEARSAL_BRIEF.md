@@ -10,7 +10,7 @@
 1. A: evidence;
 2. B: the framing PR;
 3. C: this rehearsal;
-4. D: the flip, a rule 07 flag day and one wipe release.
+4. D: the flip, a rule 107 flag day and one wipe release.
 
 ## Prerequisites (each merged or shipped before C starts)
 

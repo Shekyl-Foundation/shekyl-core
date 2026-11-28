@@ -57,7 +57,7 @@ fn edge_round_trip() {
 fn serde_is_transparent_to_inner_u64() {
     // `#[serde(transparent)]` means the postcard wire bytes of the newtype
     // are byte-identical to the bare `u64`. A type-name change in a persisted
-    // field still bumps the owning block's version (rule 42).
+    // field still bumps the owning block's version (rule 142).
     let typed = postcard::to_allocvec(&BlockHeight::from_raw(0x0102_0304)).unwrap();
     let raw = postcard::to_allocvec(&0x0102_0304u64).unwrap();
     assert_eq!(typed, raw);
@@ -332,7 +332,7 @@ fn key_image_canonical_constructor_is_the_family_constructor() {
 #[test]
 fn key_image_wire_form_is_the_bare_array() {
     // `#[serde(transparent)]` is what keeps `TransferDetails`' persisted
-    // `Option<KeyImage>` byte-identical to `Option<[u8; 32]>` (rule 42). Pinned
+    // `Option<KeyImage>` byte-identical to `Option<[u8; 32]>` (rule 142). Pinned
     // here so the family's derive, not the old hand-written type, is what the
     // snapshot tests downstream are relying on.
     let bytes = [0x5Au8; 32];

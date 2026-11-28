@@ -36,7 +36,7 @@ whose operands depend on a secret is one too. It explores the real machine
 code, so the verdict includes what LLVM did.
 
 **Targets.** Every shipped target is 64-bit: x86_64 (Linux, Windows,
-FreeBSD, macOS) and aarch64 (Linux, macOS; the rule-76 floor device is an
+FreeBSD, macOS) and aarch64 (Linux, macOS; the rule-176 floor device is an
 aarch64 Pi 4); riscv64 was in `contrib/gitian/gitian-linux.yml` `HOSTS`
 until 2026-10-24 (#1184); `.github/workflows/depends.yml` records 32-bit as
 retired in alpha.5. BINSEC decodes x86_64, 32-bit RISC-V and Thumb, so:

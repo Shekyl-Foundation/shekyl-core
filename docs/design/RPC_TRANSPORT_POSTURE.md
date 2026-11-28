@@ -16,7 +16,7 @@ landed slices stand.
 `file:line` below was read at that commit; the draft's anchors were against
 the pre-#526 layout and are re-anchored here.
 **Token family:** `RT-`, registered in `IMPLEMENTATION_INDEX.md` in the
-commit that lands this doc (rule 94). Neighbours actually present in the
+commit that lands this doc (rule 194). Neighbours actually present in the
 index as families: `R`, `RF-`, `RP-` (`RPC-` occurs only in prose, not as a
 family); `RT-` is free.
 **Decision authority:** Rick. Review notes from the landing pass are marked
@@ -358,7 +358,7 @@ only by RT-14 ([`RPC_CHANNEL.md`](RPC_CHANNEL.md)), the refusal RT-W1 gave
 
 *Needs a ruling.* Either harden C++ now, or hold L2/L3 behind the Rust
 migration and land RT-1/RT-2 there as a small C++ change in the interim.
-(Rule 20's lean: a small C++ *deletion or refusal* is acceptable; a C++
+(`RULE_20_RUST_VS_CPP`'s lean: a small C++ *deletion or refusal* is acceptable; a C++
 *TLS implementation* is the debt the Rust migration would have to pay down
 again.)
 
@@ -404,7 +404,7 @@ again.)
   a confirmation gate, not a refusal — with the flag, `0.0.0.0` bound — so
   the daemon was ahead in defaults and weaker in kind. Small, no epee TLS
   surface, and it survives the Rust RPC migration as a spec requirement
-  rather than as code to port (rule 20 permits a C++ refusal; it forbids a
+  rather than as code to port (`RULE_20_RUST_VS_CPP` permits a C++ refusal; it forbids a
   C++ TLS implementation).
   **The 2026-07-10 daemon reasoning does not transfer to RT-4.** That ruling
   was made about a channel whose compromise costs privacy and chain view.
@@ -503,7 +503,7 @@ before its green was trusted.**
 | Slice | Contents | Depends on | State |
 |---|---|---|---|
 | RT-W1 | RT-1 + RT-2 on `shekyl-wallet-rpc`; help text; operator docs rewritten against the real binary (they described the retired C++ server) | nothing — lands now | **LANDED on this branch 2026-08-21** (`validate_listen`, both bind paths, wiring tests observed red then green) |
-| RT-W2 | RT-1 + RT-2 on the daemon RPC, every listener (the restricted one included) | — | **LANDED 2026-08-22.** Confirmed that day: no recommended configuration involves a remote daemon and none exists, so RT-2 on an auth-less daemon means loopback only. Site: not the two C++ confirm gates the row first named but the Rust seam every daemon listener passes through (`shekyl-daemon-rpc::bind::bind_listener`, on a strictly parsed `SocketAddr`) — rule 20, and one classifier shared with the wallet (`shekyl_rpc_transport::listen`). `--confirm-external-bind` retired through `removed_flags` (confirmation is not refusal). C++ no longer parses bind IPs: `--rpc-bind-ip` / `--rpc-bind-port` / `--rpc-bind-ipv6-address` go to Rust as given; `--rpc-use-ipv6` is a second family on the same FFI start, not a second C++ server. IPv6 loopback (`::1`) is loopback; network IPv6 is RT-2 until RT-4 |
+| RT-W2 | RT-1 + RT-2 on the daemon RPC, every listener (the restricted one included) | — | **LANDED 2026-08-22.** Confirmed that day: no recommended configuration involves a remote daemon and none exists, so RT-2 on an auth-less daemon means loopback only. Site: not the two C++ confirm gates the row first named but the Rust seam every daemon listener passes through (`shekyl-daemon-rpc::bind::bind_listener`, on a strictly parsed `SocketAddr`) — `RULE_20_RUST_VS_CPP`, and one classifier shared with the wallet (`shekyl_rpc_transport::listen`). `--confirm-external-bind` retired through `removed_flags` (confirmation is not refusal). C++ no longer parses bind IPs: `--rpc-bind-ip` / `--rpc-bind-port` / `--rpc-bind-ipv6-address` go to Rust as given; `--rpc-use-ipv6` is a second family on the same FFI start, not a second C++ server. IPv6 loopback (`::1`) is loopback; network IPv6 is RT-2 until RT-4 |
 | RT-W3 | Stack probes (§7.1: RT-P1, RT-P2) | — | **LANDED 2026-08-22** (PR #532, `shekyl-rt-p2-spike`: nine probes green, results in §7.1; RT-P1 read from source; RT-4 unmoved) |
 | RT-W4 | (was: RT-4/5/6/7 on L1) | — | **SUPERSEDED 2026-10-09** by [`RPC_CHANNEL.md`](RPC_CHANNEL.md) R1. Not open work: the wallet leg is on the channel (RT-W12 there) |
 | RT-W5 | RT-9 removal, the eleven-file reference set enumerated first | — | **LANDED 2026-08-22** (PR #533: `2fb5fad61` removes `--public-node`, `/get_public_nodes`, the P2P advertisement and bumps `CORE_RPC_VERSION`; `7279cf360` deletes the residue — `set_rpc_port`/`m_rpc_port`, `rpc_credits_per_hash`, `print_pl publicrpc`; bootstrap-daemon disposition `20c869b1d`) UPDATE 2026-08-31: the P2P wire half — `rpc_port` / `rpc_credits_per_hash` in `basic_node_data` and the peerlist entry, which #533 had left serialized at zero — deleted, peerlist store v7 drop-on-load (PR #587); the RT-9 disposition is now complete on both halves |

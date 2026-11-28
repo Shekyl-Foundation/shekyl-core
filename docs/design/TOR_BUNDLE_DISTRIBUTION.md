@@ -12,8 +12,8 @@ became the exact-contents rule, and the system-supplied libraries are recorded
 fails is announced, never refused (TB-2, Rick, 2026-10-19): the daemon
 starts, and what it does is the posture table in
 [`TOR_SUPERVISOR.md`](TOR_SUPERVISOR.md).
-Identifier family `TB-1…TB-n` (index row registered at birth per rule 94
-§1). Decision authority: Rick. Rule 26 is cited: this changes a security
+Identifier family `TB-1…TB-n` (index row registered at birth per rule 194
+§1). Decision authority: Rick. Rule 126 is cited: this changes a security
 boundary (what the Tor pin proves) and a startup contract.
 
 This round amends two ruled documents and restates neither:

@@ -77,7 +77,7 @@
 
 **GF-1-carve resolved (2026-06-16):** bond-debit authority is a dedicated `bond_spend_pk` (gate-4
 §3.5 step 5 / §4.1 / §3.4.1; §9.3 labels), not the account identity key. Per
-[`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc),
+[`126-sub-pr-design-discipline.mdc`](../../.cursor/rules/126-sub-pr-design-discipline.mdc),
 adversarial rounds run before Stage 3 `StakeEngine` production code.
 
 **Global PQC policy:** Hybrid genesis stack (Ed25519 + ML-DSA-65 spend auth; X25519 +
@@ -1086,7 +1086,7 @@ exact workspace version, `onion-service-service` (+ `vanguards`, + `restricted-d
 feature plumbing, MSRV vs. workspace, and the **`launch_onion_service_with_hsid` key-injection
 API shape** (load-bearing for §10.7). **Embed-vs-external (Fork #1) is therefore decidable in
 Round 2** — embed Arti, Rust-canonical per
-[`20-rust-vs-cpp-policy.mdc`](../completed/RULE_20_RUST_VS_CPP.md) — **conditional on**
+[`RULE_20_RUST_VS_CPP.md`](../completed/RULE_20_RUST_VS_CPP.md) — **conditional on**
 that at-source pin, with the external-daemon-over-SOCKS fallback held as the reversion clause
 ([`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc))
 if the at-source check fails.
@@ -1802,7 +1802,7 @@ Engine claim orchestrator returns the assembled reply **unbroadcast** (`claim_or
 `shekyl-standoff` exposes `draw_entry_gap` only; there is **no `draw_exit_gap` and no claim-jitter
 symbol** anywhere under `rust/`, and `ARCHIVAL_TIMING_CONSTANTS.md` §7 still lists "Emission jitter —
 ± fraction of `SEB`" as unlanded. This is therefore a **pre-code structural pin** — arm the mechanism
-before the identifier exists (the M1 discipline; [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)).
+before the identifier exists (the M1 discipline; [`126-sub-pr-design-discipline.mdc`](../../.cursor/rules/126-sub-pr-design-discipline.mdc)).
 (UPDATE 2026-07-16: `draw_exit_gap` now exists — F-D3, §12.5, `shekyl-standoff/src/exit.rs` —
 but it is the *exit-seam* draw, not GF-10's claim jitter; the claim-jitter symbol remains absent
 and this pin's status is unchanged. UPDATE 2026-07-17: `draw_exit_gap` deleted with the F-D4
@@ -2454,7 +2454,7 @@ The build lands only the piece that lives in `shekyl-core`:
 
   **UPDATE 2026-07-19: the drain-send subsystem design round OPENED** —
   [`ARCHIVAL_DRAIN_SEND_FD2.md`](ARCHIVAL_DRAIN_SEND_FD2.md) (scoping —
-  review rounds 1–4 applied, DS-1…DS-7; rule 26 cited). The round scopes the
+  review rounds 1–4 applied, DS-1…DS-7; rule 126 cited). The round scopes the
   three layers above against
   the verified substrate (gui-wallet `dev` is engine-first — `EngineSession`
   embeds `engine-core::Engine` and starts `start_pscan_if_staker` on open,

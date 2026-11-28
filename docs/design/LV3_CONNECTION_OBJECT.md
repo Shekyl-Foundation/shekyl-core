@@ -4,9 +4,9 @@
 deliverable is the slice register at §6**, and implementation is deferred past
 the alpha.9 freeze (§6.4). Pinned to `dev` `059aca264` for the round's original
 anchors; **Rounds 2–3 and §2.10 are pinned to `f9e000f76`** and say so at each
-block. **The deliverable of this round is a design, not code** — rule 20 is
+block. **The deliverable of this round is a design, not code** — `RULE_20_RUST_VS_CPP` is
 explicit that migrating a subsystem is a planning activity with its own design
-document, review cycle and test gates, never folded into feature work. Rule 26
+document, review cycle and test gates, never folded into feature work. Rule 126
 cited explicitly. Owner:
 [`P2P_3_IMPLEMENTATION_ROUND.md`](P2P_3_IMPLEMENTATION_ROUND.md) §4.
 **UPDATE 2026-09-25: slice 5 is steps a–c. Sockets are the transport
@@ -996,7 +996,7 @@ contribute to.
    measured adversary is compliant at `1`. **It defends nothing.**
 2. **Give `--in-peers` a REACHABLE default — the mechanism already exists.**
    `P` here is descriptors and memory — **directly observable**, so this is a
-   **measurement at the rule-76 floor (Pi 4)**, not a ruling and not a guess.
+   **measurement at the rule-176 floor (Pi 4)**, not a ruling and not a guess.
    **No number is written here**, and it is not owed to the maintainer as a
    decision.
 
@@ -1024,7 +1024,7 @@ contribute to.
    - **It is structurally the cut PR 812 already made next door**, where
      `max-connections-per-ip`'s `-1` became an explicit sentinel resolved in
      Rust by `shekyl_host_inbound_resolve_cap`. An implicit narrowing of a
-     sentinel is the defect class rule 18 names, and **the Rust-side pattern
+     sentinel is the defect class rule 118 names, and **the Rust-side pattern
      for fixing it now exists** — so this should be resolved the same way
      rather than patched in C++. That pairing is the addition; the narrowing
      itself was known.
@@ -1245,7 +1245,7 @@ six places re-creating the same state is still the outcome the slice exists to
 prevent.
 
 **§1 and the index cell are corrected accordingly** — an index cell asserting an
-identity nothing reads is exactly the drift rule 94 exists to catch.
+identity nothing reads is exactly the drift rule 194 exists to catch.
 
 ## 2.10 E1 TIER-1 — taken into alpha.9, and it splits in half
 
@@ -1494,7 +1494,7 @@ priority 2, not traded against convenience.
   crosses.
 - **What the C++ keeps.** The seam, not the subsystem. Scope fence: **do not
   expand LV-3 into the surrounding C++ beyond the seam** — that is a separate
-  planning activity, and folding it in is what rule 20 forbids.
+  planning activity, and folding it in is what `RULE_20_RUST_VS_CPP` forbids.
 
 ---
 
@@ -1606,7 +1606,7 @@ rows. Both close by id. Each `shekyl_seam_board` visit is one fixed-size row.
 `outbound_dial_refused` on a copied board whose row repeated connector
 and direction, and before that the cap walked `foreach_connection`.* Slice 3 keeps the fill
 loops. Deleting the thread removes the one-second `--in-peers`
-measurement input (rule 76;
+measurement input (rule 176;
 [`P2P_3_IMPLEMENTATION_ROUND.md`](P2P_3_IMPLEMENTATION_ROUND.md) §7.4
 item 2). *Records-was: the ceiling was compared against the atomic the
 recount at `net_node.inl:1112` maintained.*

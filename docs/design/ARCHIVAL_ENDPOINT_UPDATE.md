@@ -85,7 +85,7 @@ else's liveness to draw on instead.
    P2P message would make the wallet a P2P participant, which the boundary
    forbids in the other direction.
 3. **The fetcher is a daemon subsystem, written in Rust** beside
-   `shekyl-daemon-rpc` (rule 20; the countermand), reaching personas over the
+   `shekyl-daemon-rpc` (`RULE_20_RUST_VS_CPP`; the countermand), reaching personas over the
    daemon's Tor surface. `shekyl-tor-control-daemon` is the crate that exists
    there; that it carries *outbound* is TJ-B's to confirm, not this round's
    claim. Out of this round's scope — TJ-B's — but its home is fixed here.
@@ -111,7 +111,7 @@ cost 56 bytes for 32 bytes of entropy, and admit non-canonical spellings that
 differ as bytes and agree as addresses. Rule
 [65](../../.cursor/rules/65-address-format-discipline.mdc) (an address is a
 display form over a key) points at the key, and so does rule
-[42](../../.cursor/rules/42-serialization-policy.mdc) where it applies — the
+[142](../../.cursor/rules/142-serialization-policy.mdc) where it applies — the
 **wallet's** persisted copy of the field (Freezes, above), not the vin: a fixed
 32-byte field versions cleanly; a string carries a format question into every
 version bump.

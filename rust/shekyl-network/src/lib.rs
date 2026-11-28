@@ -8,7 +8,7 @@
 //! Every Shekyl network, mainnet, testnet, stagenet and regtest, is a row
 //! in one table and goes through one code path. A network differs from the
 //! others only as data in its row; nothing branches on which network it is
-//! (rule 71), and nothing treats one network as another.
+//! (rule 171), and nothing treats one network as another.
 //!
 //! A network has two forms (NI-R10):
 //!
