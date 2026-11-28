@@ -44,6 +44,13 @@ name: chain-forge
 #   is 257 s on a 16-vCPU build VM, about 6 minutes on the hosted x86_64
 #   runner and about 4 on aarch64, so the regeneration is nightly only; the
 #   pull check is under a minute.
+# - Chain L (CF-4b), nightly on x86_64 only: its plan forged in two
+#   processes and held to its committed blocks.txt and pin, and the identity
+#   test's four locks over every body it lists. No pull request forges L or
+#   a prefix of it: a prefix that exercised every transaction kind would run
+#   to the Release at 5,100 of its 5,179 blocks, and the small plan already
+#   exercises every kind on every pull request in scope. aarch64 forges the
+#   small and shard-fill plans, whose primitives L shares.
 #
 # Scope: the Rust tree and `config/`, because a forged chain's bytes depend
 # on the consensus rules, the store, the driver and the crypto beneath them,
@@ -216,6 +223,12 @@ jobs:
       - name: the shard-fill plan forges its pinned hosted chain (nightly)
         if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
         run: bash scripts/ci/ignored_set_chain_forge.sh --run determinism::the_shard_fill_plan_forges_its_pinned_chain_in_two_processes
+      - name: the Chain L plan forges its pinned hosted chain (nightly)
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: bash scripts/ci/ignored_set_chain_forge.sh --run determinism::the_chain_l_plan_forges_its_pinned_chain_in_two_processes
+      - name: Chain L is regtest's alone (nightly)
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: bash scripts/ci/ignored_set_chain_forge.sh --run forged_chain::chain_l_is_regtests_alone
 
   aarch64:
     name: "chain forge: determinism (aarch64)"

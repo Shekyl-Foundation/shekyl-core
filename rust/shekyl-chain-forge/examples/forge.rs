@@ -162,6 +162,9 @@ fn run() -> Result<ExitCode, String> {
                 forged.manifest.transactions,
                 took.as_secs_f64(),
             );
+            if let Some((key, height)) = forged.harness_funding {
+                eprintln!("  harness funding output {} at {height}", hex::encode(key));
+            }
             for file in executor::FILES {
                 let path = out.join(file);
                 let bytes = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;

@@ -29,6 +29,7 @@
 //! and the manifest records where it did (`CHAIN_FORGE.md` §7.1, §7.2).
 
 mod built;
+mod checks;
 pub mod claim;
 pub mod produce;
 pub mod seeds;
@@ -42,18 +43,23 @@ use std::num::{NonZeroU128, NonZeroUsize};
 use std::path::Path;
 use std::sync::Arc;
 
+use shekyl_archival_retention::archival_params;
+use shekyl_bundle_producer::DrawTarget;
 use shekyl_chain_forge::{
-    close_event, sha256_hex, Action, BlocksTxt, Branch, Difference, EpochBlocks, EventRecord, Line,
-    Manifest, Plan, PlanRef, ScheduleRecord, SwitchRecord, MANIFEST_FORMAT_VERSION,
+    close_event, sha256_hex, Action, BlocksTxt, Branch, Difference, EpochBlocks, EventRecord,
+    FillTo, Line, Manifest, Plan, PlanRef, ScheduleRecord, SwitchRecord, MANIFEST_FORMAT_VERSION,
 };
-use shekyl_chain_ingest::admitted_draws::{assert_issued_pair, mine_serving, DriverWitness};
+use shekyl_chain_ingest::admitted_draws::{
+    assert_issued_pair, mine_serving, serve_to, DriverWitness,
+};
 use shekyl_chain_ingest::archival_driver::ENDPOINT;
+use shekyl_chain_ingest::chain_drive::{failure_window_epochs, spender_owning_before, Driven};
 use shekyl_chain_ingest::metrics::Metrics;
 use shekyl_chain_ingest::pipeline::PipelineConfig;
 use shekyl_chain_ingest::priced::{assert_priced, fee_at, SIZING_FEE};
 use shekyl_chain_ingest::rebaseline::{baseline, ReplayFault};
 use shekyl_chain_ingest::scenario::{FreeHash, Mined, Scenario};
-use shekyl_chain_ingest::scenario_archival::shard_set;
+use shekyl_chain_ingest::scenario_archival::{complete_tree, shard_set};
 use shekyl_chain_ingest::scenario_shard::{
     close_shards_drawing, first_admissible_compact_join, inside_one_epoch_of, maturity, mine_to,
     settled_epoch_blocks, ClosedShard, FILL_FROM_COINBASE,
@@ -61,12 +67,17 @@ use shekyl_chain_ingest::scenario_shard::{
 use shekyl_chain_ingest::schedule::ChainRules;
 use shekyl_chain_ingest::source::SequenceNo;
 use shekyl_chain_ingest::ProductionPow;
-use shekyl_chain_rules::{CappedEpoch, CenRow, SettlementEpochBlocks, SettlementSchedule};
+use shekyl_chain_ingest::Rewound;
+use shekyl_chain_rules::{
+    CappedEpoch, CenRow, ChainView as _, SettlementEpochBlocks, SettlementSchedule,
+};
 use shekyl_corpus::{CorpusFault, CorpusWriter, CORPUS_FORMAT_VERSION};
-use shekyl_harness_spender::{Persona, Recipient, Spender};
+use shekyl_harness_spender::{MinerWallet, Owner, Persona, PostedBond, Recipient, Spender};
 use shekyl_network::Network;
-use shekyl_types::{BlockCount, BlockHeight, SettlementEpoch, ShardId};
+use shekyl_types::archival::SettlementOutcome;
+use shekyl_types::{BlockCount, BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 
+use checks::{harness_persona, HarnessFunding, LastReorg};
 use seeds::{PlanDraws, Seeds, Source};
 
 /// The corpus's file name in a forged chain's directory.
@@ -121,6 +132,9 @@ pub struct Forged {
     pub manifest: Manifest,
     /// Its `blocks.txt`, as written.
     pub blocks: BlocksTxt,
+    /// The harness persona's funding output and the block that listed it,
+    /// for a walk's owner to check against the wallet it restores.
+    pub harness_funding: Option<([u8; 32], BlockHeight)>,
 }
 
 /// What a forging came to.
@@ -155,6 +169,16 @@ pub enum ForgeFault {
     /// The plan asks for what the chain cannot do.
     #[error("plan: {0}")]
     Plan(String),
+    /// A reorg's rewind was refused: the lowest block it would pop is below
+    /// the store's undo floor. The plan's branch would be built on a chain
+    /// the store did not pop, so the forging stops here.
+    #[error("the rewind to {fork} was refused: the lowest poppable height is {floor}")]
+    RewindRefused {
+        /// The height the reorg forks at.
+        fork: BlockHeight,
+        /// The store's lowest poppable height.
+        floor: BlockHeight,
+    },
 }
 
 /// The rules `plan`'s chain is forged and replayed under: regtest at the
@@ -210,11 +234,27 @@ pub async fn forge(
 /// A persona the plan joined.
 struct Joined {
     persona: Persona,
-    shard: ClosedShard,
+    /// The closed shards it holds, ascending; none for a complete tree.
+    shards: Vec<ClosedShard>,
     join_epoch: SettlementEpoch,
     backing_key: [u8; 32],
     fee_key: [u8; 32],
     join_height: BlockHeight,
+    /// The output its release paid it, and the block that listed it.
+    released: Option<([u8; 32], BlockHeight)>,
+}
+
+impl Joined {
+    /// The one shard a single-pair step reads.
+    fn only_shard(&self) -> Result<ClosedShard, ForgeFault> {
+        match self.shards.as_slice() {
+            [shard] => Ok(*shard),
+            held => Err(ForgeFault::Plan(format!(
+                "this step reads one held shard; the persona holds {}",
+                held.len()
+            ))),
+        }
+    }
 }
 
 /// A block [`Forge::write_new`] appended, and the corpus record it occupies.
@@ -299,6 +339,26 @@ pub struct Forge {
     /// regtest miner's first is block 1's (block 0's pays the table's
     /// recipients), and a fill spends from [`FILL_FROM_COINBASE`] up.
     reserved: u64,
+    /// The next coinbase at or above [`FILL_FROM_COINBASE`] that no fill
+    /// and no kept spend has taken: a later fill starts here, and the
+    /// plan's spends take from here once those below the fill are gone.
+    above_fill: u64,
+    /// The epoch of the last block a served step mined.
+    last_served: Option<SettlementEpoch>,
+    /// The first coinbase the plan's own spends take.
+    first_kept: u64,
+    /// The plan's reorg cap.
+    reorg_cap: u64,
+    /// Each main-chain height's corpus record and branch.
+    record_at: Vec<(u64, Branch)>,
+    /// The block the running step's event belongs to, when not the tip.
+    event_at: Option<BlockHeight>,
+    /// The last reorg the plan made.
+    last_reorg: Option<LastReorg>,
+    /// The harness persona's funding output.
+    harness_funding: Option<HarnessFunding>,
+    /// The block before the first admissible join a step mined to.
+    join_eve: Option<BlockHeight>,
     closed: Vec<ClosedShard>,
     personas: BTreeMap<u32, Joined>,
     rules: ChainRules,
@@ -333,6 +393,7 @@ impl Forge {
         let spacing = std::num::NonZeroU64::new(plan.block_seconds)
             .ok_or_else(|| ForgeFault::Plan("block_seconds is at least 1".into()))?;
         scenario.space_blocks(spacing);
+        let first_kept = plan.first_kept_coinbase.unwrap_or(1);
         let mut forge = Self {
             scenario: Some(scenario),
             chain: vec![genesis],
@@ -348,7 +409,16 @@ impl Forge {
             seeds: Arc::new(Seeds::new(seed, options.swapped)),
             spends: 0,
             claims: 0,
-            reserved: 1,
+            reserved: first_kept.min(FILL_FROM_COINBASE),
+            above_fill: first_kept.max(FILL_FROM_COINBASE),
+            last_served: None,
+            first_kept,
+            reorg_cap: plan.schedule.reorg_cap_blocks,
+            record_at: Vec::new(),
+            event_at: None,
+            last_reorg: None,
+            harness_funding: None,
+            join_eve: None,
             closed: Vec::new(),
             personas: BTreeMap::new(),
             rules,
@@ -382,18 +452,28 @@ impl Forge {
                 return Ok(Some(difference));
             }
             if let Some(name) = &step.event {
-                let tip = self.chain.last().expect("genesis at least");
-                let branch = self
-                    .ledger
-                    .lines()
-                    .last()
-                    .expect("genesis is written at open")
-                    .branch;
+                let tip = self.chain.last().expect("genesis at least").height;
+                let height = self.event_at.take().unwrap_or(tip);
+                let (written_at, branch) =
+                    self.record_at[usize::try_from(height.to_raw()).expect("a height fits")];
+                // A block written as an offer is on the chain only from the
+                // record its branch won at: a snapshot stopped earlier does
+                // not hold it.
+                let record = match branch {
+                    Branch::Main => written_at,
+                    Branch::Alt(_) => self
+                        .expected
+                        .iter()
+                        .map(|switch| switch.at_record)
+                        .filter(|at| *at >= written_at)
+                        .min()
+                        .expect("an offered block on the chain is on a branch that won"),
+                };
                 self.events.push(EventRecord {
                     name: name.clone(),
-                    height: tip.height.to_raw(),
+                    height: height.to_raw(),
                     branch: branch.to_string(),
-                    record: self.records - 1,
+                    record,
                 });
             }
         }
@@ -486,19 +566,23 @@ impl Forge {
 
     /// The next kept coinbase, matured for a block at `connecting`.
     fn reserve(&mut self, connecting: BlockHeight) -> Result<BlockHeight, ForgeFault> {
-        let coinbase = self.reserved;
-        if coinbase >= FILL_FROM_COINBASE {
-            return Err(ForgeFault::Plan(format!(
-                "the plan's spends and posts use the coinbases below {FILL_FROM_COINBASE}; it asked for more"
-            )));
-        }
+        let below_fill = self.reserved < FILL_FROM_COINBASE;
+        let coinbase = if below_fill {
+            self.reserved
+        } else {
+            self.above_fill
+        };
         if coinbase + maturity() > connecting.to_raw() {
             return Err(ForgeFault::Plan(format!(
                 "coinbase {coinbase} is not spendable at {connecting}: mine to {} first",
                 coinbase + maturity()
             )));
         }
-        self.reserved += 1;
+        if below_fill {
+            self.reserved += 1;
+        } else {
+            self.above_fill += 1;
+        }
         Ok(BlockHeight::from_raw(coinbase))
     }
 
@@ -538,6 +622,8 @@ impl Forge {
             }
             let record = self.records;
             self.records += 1;
+            self.record_at.truncate(self.written);
+            self.record_at.push((record, self.branch));
             written_blocks.push(WrittenBlock {
                 height: mined.height,
                 record,
@@ -579,12 +665,51 @@ impl Forge {
                 let mined = self.scenario().mine(*blocks).await;
                 self.chain.extend(mined);
             }
-            Action::Spend { inputs } => self.spend(*inputs).await?,
+            Action::Spend { inputs, outputs } => match outputs {
+                None => self.spend(*inputs).await?,
+                Some(outputs) => self.spend_paying(*inputs, *outputs).await?,
+            },
+            Action::MineTo { epoch, offset } => {
+                let to = BlockHeight::from_raw(epoch * self.schedule.blocks().get() + offset + 1);
+                self.mine_until(to).await;
+            }
+            Action::MineBeforeJoin { shards } => self.mine_before_join(shards).await?,
+            Action::FundHarness => self.fund_harness().await?,
+            Action::FillBlock { to } => self.fill_block(*to).await?,
+            Action::ServeTo {
+                persona,
+                epoch,
+                offset,
+                withhold,
+            } => {
+                self.serve_to_height(
+                    *persona,
+                    epoch * self.schedule.blocks().get() + offset,
+                    *withhold,
+                )
+                .await?;
+            }
+            Action::Check {
+                what,
+                persona,
+                shard,
+            } => self.event_at = self.check(*what, *persona, *shard).await?,
             Action::FillShards { count } => closes = self.fill(*count).await,
             Action::Join { persona, shards } => self.join(*persona, shards).await?,
             Action::Serve { persona } => self.serve(*persona).await?,
             Action::Claim { persona } => claim::step(self, *persona).await?,
             Action::Reorg { depth } => self.reorg(*depth).await?,
+            Action::JoinTree { persona } => self.join_tree(*persona).await?,
+            Action::ServeEpochs {
+                persona,
+                epochs,
+                withhold,
+            } => self.serve_epochs(*persona, *epochs, *withhold).await?,
+            Action::Slash { persona, shard } => self.slash(*persona, *shard).await?,
+            Action::Reinstate { persona } => self.reinstate(*persona).await?,
+            Action::Release { persona } => self.release(*persona).await?,
+            Action::Collect { persona } => self.collect(*persona).await?,
+            Action::SpendDiscarded { shard } => self.spend_discarded(*shard).await?,
             Action::Produce {
                 persona,
                 start_spread_ms,
@@ -634,16 +759,238 @@ impl Forge {
         Ok(())
     }
 
+    /// One kept coinbase spent to the miner in `outputs` outputs, listed in
+    /// the next block (CF-E3).
+    async fn spend_paying(&mut self, inputs: u32, outputs: u32) -> Result<(), ForgeFault> {
+        if inputs != 1 {
+            return Err(ForgeFault::Plan(
+                "a spend that names its outputs has one input".into(),
+            ));
+        }
+        let outputs = usize::try_from(outputs).expect("a count fits");
+        let connecting = self.connecting();
+        let coinbase = self.reserve(connecting)?;
+        let spend = self.next_spend();
+        let seeds = self.seeds.spend(spend);
+        let rate = self.scenario().connecting_default_rate().await;
+        let spender = self.spender();
+        let wallet = self.scenario().wallet();
+        let sized =
+            spender.spend_coinbase_paying(wallet, coinbase, connecting, SIZING_FEE, outputs);
+        let body = spender.drawing(seeds).spend_coinbase_paying(
+            wallet,
+            coinbase,
+            connecting,
+            fee_at(&sized, rate),
+            outputs,
+        );
+        assert_priced(&body, &sized, rate);
+        assert_eq!(body.prefix.outputs.len(), outputs, "the spend's outputs");
+        self.built.push(Built {
+            body: body.clone(),
+            connecting,
+            kind: BuiltKind::Paying { coinbase },
+        });
+        let block = self
+            .scenario()
+            .mine_admitted(vec![body])
+            .await
+            .unwrap_or_else(|fault| panic!("the plan's spend connects: {fault}"));
+        self.chain.push(block);
+        Ok(())
+    }
+
+    /// Mine empty blocks until the next block connects at `to`.
+    async fn mine_until(&mut self, to: BlockHeight) {
+        let mut chain = std::mem::take(&mut self.chain);
+        mine_to(self.scenario.as_mut().expect("home"), &mut chain, to).await;
+        self.chain = chain;
+    }
+
+    /// [`Action::MineBeforeJoin`].
+    async fn mine_before_join(&mut self, shards: &[u64]) -> Result<(), ForgeFault> {
+        let mut admissible = None;
+        for id in shards {
+            let close = self.close_of(*id)?;
+            let height = first_admissible_compact_join(&self.rules, close);
+            admissible = admissible.max(Some(height));
+        }
+        let admissible =
+            admissible.ok_or_else(|| ForgeFault::Plan("a join holds a closed shard".into()))?;
+        let join_height = inside_one_epoch_of(self.schedule, admissible, 1);
+        self.mine_until(join_height).await;
+        self.join_eve = Some(
+            join_height
+                .checked_sub_count(BlockCount::ONE)
+                .expect("a join is above genesis"),
+        );
+        Ok(())
+    }
+
+    /// [`Action::FundHarness`].
+    async fn fund_harness(&mut self) -> Result<(), ForgeFault> {
+        if self.harness_funding.is_some() {
+            return Err(ForgeFault::Plan(
+                "the harness persona is funded once: its bond post consumes every funding output"
+                    .into(),
+            ));
+        }
+        let connecting = self.connecting();
+        let coinbase = self.reserve(connecting)?;
+        let spend = self.next_spend();
+        let seeds = self.seeds.spend(spend);
+        let rate = self.scenario().connecting_default_rate().await;
+        let spender = self.spender();
+        let wallet = self.scenario().wallet();
+        let harness = harness_persona();
+        let recipient = Recipient::persona(harness.keys());
+        let sized =
+            spender.spend_coinbase_to(wallet, coinbase, connecting, SIZING_FEE, None, &recipient);
+        let body = spender.drawing(seeds).spend_coinbase_to(
+            wallet,
+            coinbase,
+            connecting,
+            fee_at(&sized, rate),
+            None,
+            &recipient,
+        );
+        assert_priced(&body, &sized, rate);
+        let output_key = body.prefix.outputs[0].key;
+        self.built.push(Built {
+            body: body.clone(),
+            connecting,
+            kind: BuiltKind::Funding { coinbase },
+        });
+        let block = self
+            .scenario()
+            .mine_admitted(vec![body])
+            .await
+            .unwrap_or_else(|fault| panic!("the harness funding connects: {fault}"));
+        self.chain.push(block);
+        self.harness_funding = Some(HarnessFunding {
+            output_key,
+            paid_at: connecting,
+        });
+        Ok(())
+    }
+
+    /// [`Action::FillBlock`]: real spends of kept coinbases, as many as
+    /// reach the weight `to` names over the median the tip was judged at.
+    /// The block's own verdict then holds the count to it.
+    async fn fill_block(&mut self, to: FillTo) -> Result<(), ForgeFault> {
+        let connecting = self.connecting();
+        let params = shekyl_economics::economic_params();
+        let before = self.chain.last().expect("genesis at least");
+        if !before.template.transactions.is_empty() {
+            return Err(ForgeFault::Plan(
+                "a filled block follows one that lists nothing: its weight is the coinbase's"
+                    .into(),
+            ));
+        }
+        let coinbase_weight = before.weights.weight.to_raw();
+        let median = before.weights.medians.effective_median.to_raw();
+        let limit = before.weights.medians.limit(params).to_raw();
+        let first = self.reserve(connecting)?;
+        let rate = self.scenario().connecting_default_rate().await;
+        let spender = self.spender();
+        let sized = spender.spend_coinbase(self.scenario().wallet(), first, connecting, SIZING_FEE);
+        let fee = fee_at(&sized, rate);
+        let body_weight = u64::try_from(sized.weight()).expect("a weight fits");
+        let count = match to {
+            FillTo::Median => median.saturating_sub(coinbase_weight) / body_weight + 1,
+            FillTo::Bound => limit.saturating_sub(coinbase_weight) / body_weight,
+        };
+        let mut coinbases = vec![first];
+        for _ in 1..count {
+            coinbases.push(self.reserve(connecting)?);
+        }
+        let seeds: Vec<_> = coinbases
+            .iter()
+            .map(|_| {
+                let spend = self.next_spend();
+                self.seeds.spend(spend)
+            })
+            .collect();
+        let wallet = self.scenario.as_ref().expect("home").wallet();
+        let listed: Vec<shekyl_wire::Transaction> = std::thread::scope(|scope| {
+            let handles: Vec<_> = coinbases
+                .iter()
+                .zip(seeds)
+                .map(|(&coinbase, seeds)| {
+                    let (spender, sized) = (&spender, &sized);
+                    scope.spawn(move || {
+                        let body = spender
+                            .drawing(seeds)
+                            .spend_coinbase(wallet, coinbase, connecting, fee);
+                        assert_priced(&body, sized, rate);
+                        body
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|handle| handle.join().expect("a spend builds"))
+                .collect()
+        });
+        for (body, coinbase) in listed.iter().zip(&coinbases) {
+            self.built.push(Built {
+                body: body.clone(),
+                connecting,
+                kind: BuiltKind::Spend {
+                    coinbases: vec![*coinbase],
+                },
+            });
+        }
+        let block = self
+            .scenario()
+            .mine_admitted(listed)
+            .await
+            .unwrap_or_else(|fault| panic!("the filled block connects: {fault}"));
+        let weight = block.weights.weight.to_raw();
+        let in_force = block.weights.medians.effective_median.to_raw();
+        let limit = block.weights.medians.limit(params).to_raw();
+        let reaches = match to {
+            FillTo::Median => weight > in_force && weight - body_weight <= in_force,
+            FillTo::Bound => weight <= limit && weight + body_weight > limit,
+        };
+        if !reaches {
+            return Err(ForgeFault::Plan(format!(
+                "the {to:?} block weighs {weight}: median {in_force}, limit {limit}, body {body_weight}"
+            )));
+        }
+        self.chain.push(block);
+        Ok(())
+    }
+
+    /// [`Action::ServeTo`].
+    async fn serve_to_height(
+        &mut self,
+        slot: u32,
+        height: u64,
+        withhold: Option<u64>,
+    ) -> Result<(), ForgeFault> {
+        let joined = self
+            .personas
+            .get(&slot)
+            .ok_or_else(|| ForgeFault::Plan(format!("persona {slot} has not joined")))?;
+        let withheld = withhold.map(|shard| (joined.persona.id(), ShardId::from_raw(shard)));
+        self.serve_until(withheld, BlockHeight::from_raw(height))
+            .await;
+        Ok(())
+    }
+
     /// Real spends until `count` shards are closed (S9). The new closes, in
     /// the order the fold counted them.
     async fn fill(&mut self, count: u64) -> Vec<ClosedShard> {
         let seeds = Arc::clone(&self.seeds);
         let mut next = self.spends;
         let mut chain = std::mem::take(&mut self.chain);
+        let first_coinbase = self.above_fill;
+        let first_spend = next;
         let filled = close_shards_drawing(
             self.scenario.as_mut().expect("home"),
             &mut chain,
-            FILL_FROM_COINBASE,
+            first_coinbase,
             count,
             || {
                 let index = next;
@@ -653,6 +1000,7 @@ impl Forge {
         )
         .await;
         self.chain = chain;
+        self.above_fill = first_coinbase + (next - first_spend);
         self.spends = next;
         self.closed.extend(filled.closed.iter().copied());
         filled.closed
@@ -670,17 +1018,36 @@ impl Forge {
                     .ok_or_else(|| ForgeFault::Plan(format!("shard {id} is not closed")))
             })
             .collect::<Result<_, _>>()?;
-        let [close] = closes.as_slice() else {
-            return Err(ForgeFault::Plan(
-                "a join holds one closed shard in this increment".into(),
-            ));
-        };
+        // Admissible once every held shard is: the latest of their heights.
+        let admissible = closes
+            .iter()
+            .map(|close| first_admissible_compact_join(&self.rules, *close))
+            .max()
+            .ok_or_else(|| ForgeFault::Plan("a compact join holds a closed shard".into()))?;
         // The join and the block after it sit in one epoch, neither a close.
-        let join_height = inside_one_epoch_of(
-            self.schedule,
-            first_admissible_compact_join(&self.rules, *close),
-            1,
-        );
+        let join_height = inside_one_epoch_of(self.schedule, admissible, 1);
+        self.post_join(slot, shard_set(shards.to_vec()), closes, join_height)
+            .await
+    }
+
+    /// Persona `slot` joins as a complete tree at the next height that
+    /// sits, with the block after it, inside one epoch.
+    async fn join_tree(&mut self, slot: u32) -> Result<(), ForgeFault> {
+        let join_height = inside_one_epoch_of(self.schedule, self.connecting(), 1);
+        self.post_join(slot, complete_tree(), Vec::new(), join_height)
+            .await
+    }
+
+    /// The join block: persona `slot` funded by a kept coinbase whose spend
+    /// carries its join of `holdings`, at `join_height`.
+    async fn post_join(
+        &mut self,
+        slot: u32,
+        holdings: shekyl_archival_retention::HoldingsDescriptor,
+        closes: Vec<ClosedShard>,
+        join_height: BlockHeight,
+    ) -> Result<(), ForgeFault> {
+        let shards: Vec<u64> = closes.iter().map(|close| close.shard.to_raw()).collect();
         let mut chain = std::mem::take(&mut self.chain);
         mine_to(
             self.scenario.as_mut().expect("home"),
@@ -712,10 +1079,10 @@ impl Forge {
             coinbase,
             join_height,
             SIZING_FEE,
-            Some(&sizing.join(shard_set(shards.to_vec()), ENDPOINT)),
+            Some(&sizing.join(holdings.clone(), ENDPOINT)),
             &recipient,
         );
-        let join = persona.join(shard_set(shards.to_vec()), ENDPOINT);
+        let join = persona.join(holdings, ENDPOINT);
         let funding = spender.drawing(seeds).spend_coinbase_to(
             wallet,
             coinbase,
@@ -733,7 +1100,7 @@ impl Forge {
             kind: BuiltKind::Join {
                 coinbase,
                 slot,
-                shards: shards.to_vec(),
+                shards,
             },
         });
         let block = self
@@ -752,11 +1119,12 @@ impl Forge {
             slot,
             Joined {
                 persona,
-                shard: *close,
+                shards: closes,
                 join_epoch,
                 backing_key,
                 fee_key,
                 join_height,
+                released: None,
             },
         );
         Ok(())
@@ -776,9 +1144,322 @@ impl Forge {
         let chain = std::mem::take(&mut self.chain);
         let (scenario, chain) =
             mine_serving(scenario, chain, &witness, &[&joined.persona], until).await;
-        assert_issued_pair(&scenario, served, (joined.persona.id(), joined.shard.shard));
+        let shard = joined.only_shard()?.shard;
+        assert_issued_pair(&scenario, served, (joined.persona.id(), shard));
         self.scenario = Some(scenario);
         self.chain = chain;
+        Ok(())
+    }
+
+    /// Mine to `until` with every block's draws committed and filed: every
+    /// joined persona passes its draws, except the one pair `withheld`.
+    async fn serve_until(&mut self, withheld: Option<(PCanonicalId, ShardId)>, until: BlockHeight) {
+        let witness = self.witness();
+        let mut drive = Driven::begin(
+            self.scenario.take().expect("home"),
+            std::mem::take(&mut self.chain),
+        );
+        {
+            let signers: Vec<&Persona> = self
+                .personas
+                .values()
+                .map(|joined| &joined.persona)
+                .collect();
+            let passes = move |_: BlockHeight, target: &DrawTarget| {
+                withheld != Some((target.persona, target.shard))
+            };
+            serve_to(&mut drive, &witness, &signers, &passes, until).await;
+        }
+        let (scenario, chain) = drive.into_parts();
+        self.scenario = Some(scenario);
+        self.chain = chain;
+        let tip = self.chain.last().expect("genesis at least").height;
+        self.last_served = Some(self.schedule.epoch_at(tip));
+    }
+
+    /// [`Action::ServeEpochs`].
+    async fn serve_epochs(
+        &mut self,
+        slot: u32,
+        epochs: u64,
+        withhold: Option<u64>,
+    ) -> Result<(), ForgeFault> {
+        let joined = self
+            .personas
+            .get(&slot)
+            .ok_or_else(|| ForgeFault::Plan(format!("persona {slot} has not joined")))?;
+        let through = joined.join_epoch.to_raw() + epochs;
+        let withheld = withhold.map(|shard| (joined.persona.id(), ShardId::from_raw(shard)));
+        let at_pass = BlockHeight::from_raw(self.schedule.slash_deadline_height(through));
+        self.serve_until(withheld, at_pass).await;
+        let mut chain = std::mem::take(&mut self.chain);
+        mine_to(
+            self.scenario.as_mut().expect("home"),
+            &mut chain,
+            at_pass + BlockCount::ONE,
+        )
+        .await;
+        self.chain = chain;
+        Ok(())
+    }
+
+    /// [`Action::Slash`]: the pass of each epoch is read as it lands, and
+    /// the step ends after the one that slashes the withheld pair.
+    async fn slash(&mut self, slot: u32, shard: u64) -> Result<(), ForgeFault> {
+        let joined = self
+            .personas
+            .get(&slot)
+            .ok_or_else(|| ForgeFault::Plan(format!("persona {slot} has not joined")))?;
+        let persona = joined.persona.id();
+        let join_epoch = joined.join_epoch.to_raw();
+        let held = ShardId::from_raw(shard);
+        let needed = failure_window_epochs();
+        let mut misses = 0u64;
+        let mut outcomes = Vec::new();
+        for epoch in join_epoch + 1..=join_epoch + 3 * needed {
+            let deadline = self.schedule.slash_deadline_height(epoch);
+            let after_pass = BlockHeight::from_raw(deadline + 1);
+            if self.connecting() < after_pass {
+                self.serve_until(Some((persona, held)), after_pass).await;
+            }
+            let pass = &self.chain[usize::try_from(deadline).expect("small")].archival;
+            let outcome = pass
+                .settlements()
+                .iter()
+                .find(|row| {
+                    row.epoch.to_raw() == epoch && row.persona == persona && row.shard == held
+                })
+                .map(|row| row.row.outcome());
+            outcomes.push((epoch, outcome));
+            misses += u64::from(outcome == Some(SettlementOutcome::Missed));
+            let slashed = pass
+                .slashes()
+                .iter()
+                .any(|slash| slash.entry.persona == persona && slash.entry.shard == held);
+            if slashed != (outcome == Some(SettlementOutcome::Missed) && misses == needed) {
+                return Err(ForgeFault::Plan(format!(
+                    "epoch {epoch}: the slash is the pass of miss {needed}; settled {outcomes:?}"
+                )));
+            }
+            if slashed {
+                return Ok(());
+            }
+        }
+        Err(ForgeFault::Plan(format!(
+            "no slash of shard {shard} in three failure windows; settled {outcomes:?}"
+        )))
+    }
+
+    /// A kept coinbase's spend carrying the post `make` builds for persona
+    /// `slot`, in the next block, paying the persona when `pays_persona`.
+    async fn post(
+        &mut self,
+        slot: u32,
+        pays_persona: bool,
+        make: impl for<'p> Fn(&'p Persona) -> PostedBond<'p>,
+    ) -> Result<shekyl_wire::Transaction, ForgeFault> {
+        if !self.personas.contains_key(&slot) {
+            return Err(ForgeFault::Plan(format!("persona {slot} has not joined")));
+        }
+        let connecting = self.connecting();
+        let coinbase = self.reserve(connecting)?;
+        let spend = self.next_spend();
+        let seeds = self.seeds.spend(spend);
+        let rate = self.scenario().connecting_default_rate().await;
+        let spender = self.spender();
+        let body = {
+            let wallet = self.scenario.as_ref().expect("home").wallet();
+            let persona = &self.personas[&slot].persona;
+            let recipient = if pays_persona {
+                Recipient::persona(persona.keys())
+            } else {
+                wallet.recipient().clone()
+            };
+            // The sizing post is signed from the OS's randomness, by the
+            // same persona's keys (`crate::priced`'s reason).
+            let sizing =
+                Persona::from_master(&self.seeds.persona_master(slot), Network::Regtest, slot);
+            let sized = spender.spend_coinbase_to(
+                wallet,
+                coinbase,
+                connecting,
+                SIZING_FEE,
+                Some(&make(&sizing)),
+                &recipient,
+            );
+            let body = spender.drawing(seeds).spend_coinbase_to(
+                wallet,
+                coinbase,
+                connecting,
+                fee_at(&sized, rate),
+                Some(&make(persona)),
+                &recipient,
+            );
+            assert_priced(&body, &sized, rate);
+            body
+        };
+        self.built.push(Built {
+            body: body.clone(),
+            connecting,
+            kind: BuiltKind::Post { coinbase, slot },
+        });
+        let block = self
+            .scenario()
+            .mine_admitted(vec![body.clone()])
+            .await
+            .unwrap_or_else(|fault| panic!("persona {slot}'s post connects: {fault}"));
+        self.chain.push(block);
+        Ok(body)
+    }
+
+    /// Persona `id`'s stored bond record, which must exist.
+    async fn bond_record(&self, id: PCanonicalId) -> shekyl_types::archival::BondRecord {
+        self.scenario
+            .as_ref()
+            .expect("home")
+            .bond_record(id)
+            .await
+            .expect("the store answers")
+            .expect("the persona has a record")
+    }
+
+    /// [`Action::Reinstate`].
+    async fn reinstate(&mut self, slot: u32) -> Result<(), ForgeFault> {
+        let joined = self
+            .personas
+            .get(&slot)
+            .ok_or_else(|| ForgeFault::Plan(format!("persona {slot} has not joined")))?;
+        let id = joined.persona.id();
+        let record = self.bond_record(id).await;
+        self.post(slot, false, |persona| persona.reinstate(&record))
+            .await?;
+        Ok(())
+    }
+
+    /// [`Action::Release`].
+    async fn release(&mut self, slot: u32) -> Result<(), ForgeFault> {
+        let last = self
+            .last_served
+            .ok_or_else(|| ForgeFault::Plan("a release follows a served epoch".into()))?;
+        let opens = BlockHeight::from_raw(
+            self.schedule
+                .open_height(last.to_raw() + archival_params().release_cooldown_epochs),
+        );
+        let mut chain = std::mem::take(&mut self.chain);
+        mine_to(self.scenario.as_mut().expect("home"), &mut chain, opens).await;
+        self.chain = chain;
+        self.write_new()?;
+        if self.stopped.is_some() {
+            return Ok(());
+        }
+        let joined = self
+            .personas
+            .get(&slot)
+            .ok_or_else(|| ForgeFault::Plan(format!("persona {slot} has not joined")))?;
+        let id = joined.persona.id();
+        let bonded = self.bond_record(id).await.bonded_total.to_raw();
+        let connecting = self.connecting();
+        let body = self
+            .post(slot, true, |persona| persona.release(bonded))
+            .await?;
+        let paid = body.prefix.outputs[0].key;
+        self.personas.get_mut(&slot).expect("checked").released = Some((paid, connecting));
+        Ok(())
+    }
+
+    /// One owned output spent in the next block once it is spendable.
+    async fn spend_output(
+        &mut self,
+        owner: &Owner<'_>,
+        output_key: [u8; 32],
+        paid_at: BlockHeight,
+        recipient: &Recipient,
+    ) {
+        let connecting = self.connecting();
+        let network = self.scenario().network_id();
+        let spender = spender_owning_before(network, &self.chain, paid_at, &[output_key]);
+        let sized = spender.spend_owned(
+            vec![spender.owned_input(owner, output_key, connecting)],
+            connecting,
+            SIZING_FEE,
+            recipient,
+        );
+        let rate = self.scenario().connecting_default_rate().await;
+        let spend = self.next_spend();
+        let body = spender.drawing(self.seeds.spend(spend)).spend_owned(
+            vec![spender.owned_input(owner, output_key, connecting)],
+            connecting,
+            fee_at(&sized, rate),
+            recipient,
+        );
+        assert_priced(&body, &sized, rate);
+        self.built.push(Built {
+            body: body.clone(),
+            connecting,
+            kind: BuiltKind::Owned { output_key },
+        });
+        let block = self
+            .scenario()
+            .mine_admitted(vec![body])
+            .await
+            .unwrap_or_else(|fault| panic!("the owned spend connects: {fault}"));
+        self.chain.push(block);
+    }
+
+    /// [`Action::Collect`].
+    async fn collect(&mut self, slot: u32) -> Result<(), ForgeFault> {
+        let joined = self
+            .personas
+            .get(&slot)
+            .ok_or_else(|| ForgeFault::Plan(format!("persona {slot} has not joined")))?;
+        let (paid, listed) = joined
+            .released
+            .ok_or_else(|| ForgeFault::Plan(format!("persona {slot} has not released")))?;
+        let spendable = listed + BlockCount::from_raw(maturity());
+        let mut chain = std::mem::take(&mut self.chain);
+        mine_to(self.scenario.as_mut().expect("home"), &mut chain, spendable).await;
+        self.chain = chain;
+        self.write_new()?;
+        if self.stopped.is_some() {
+            return Ok(());
+        }
+        // The persona's keys are read through a copy of its master: the
+        // spend borrows the forge mutably while it signs.
+        let persona =
+            Persona::from_master(&self.seeds.persona_master(slot), Network::Regtest, slot);
+        let owner = Owner::persona(persona.keys());
+        let recipient = Recipient::persona(persona.keys());
+        self.spend_output(&owner, paid, listed, &recipient).await;
+        Ok(())
+    }
+
+    /// [`Action::SpendDiscarded`]: output 0 of the first spend in the block
+    /// before the shard's close, which the shard's body carries.
+    async fn spend_discarded(&mut self, shard: u64) -> Result<(), ForgeFault> {
+        let closed = self.close_of(shard)?;
+        let discarded = self.discard_boundary(closed);
+        if self.connecting() <= discarded {
+            return Err(ForgeFault::Plan(format!(
+                "shard {shard}'s bodies are discarded at {discarded}; the tip is below it"
+            )));
+        }
+        let paid_at = closed
+            .close_height
+            .checked_sub_count(BlockCount::ONE)
+            .expect("a shard closes above genesis");
+        let block = &self.chain[usize::try_from(paid_at.to_raw()).expect("small")];
+        let output_key = block
+            .template
+            .transactions
+            .first()
+            .ok_or_else(|| ForgeFault::Plan(format!("block {paid_at} lists no spend")))?
+            .prefix
+            .outputs[0]
+            .key;
+        let wallet = MinerWallet::harness_regtest();
+        let owner = Owner::miner(wallet);
+        self.spend_output(&owner, output_key, paid_at, wallet.recipient())
+            .await;
         Ok(())
     }
 
@@ -801,10 +1482,63 @@ impl Forge {
         let fork = tip
             .checked_sub_count(BlockCount::from_raw(depth))
             .ok_or_else(|| ForgeFault::Plan(format!("a reorg of {depth} below genesis")))?;
-        self.scenario()
+        // The tree at the fork and above the popped tip: the rewind must
+        // restore the first, and the two say whether it crossed a chunk.
+        let above_tip = tip + BlockCount::ONE;
+        let above_fork = fork + BlockCount::ONE;
+        let (at_fork, leaves_above_fork, leaves_above_tip) = self
+            .scenario()
+            .read_chain(move |view, _| {
+                let leaves = |height| match view.leaf_count_at(height).expect("the count reads") {
+                    shekyl_chain_rules::AtHeight::Recorded(count) => count,
+                    shekyl_chain_rules::AtHeight::AboveTip => {
+                        unreachable!("one past the tip is the next drain's count")
+                    }
+                };
+                (
+                    (
+                        view.root_at(above_fork).expect("the root reads"),
+                        view.depth_at(above_fork).expect("the depth reads"),
+                        leaves(above_fork),
+                    ),
+                    leaves(above_fork),
+                    leaves(above_tip),
+                )
+            })
+            .await;
+        match self
+            .scenario()
             .rewind_to(fork)
             .await
-            .unwrap_or_else(|fault| panic!("the rewind to {fork}: {fault:?}"));
+            .unwrap_or_else(|fault| panic!("the rewind to {fork}: {fault:?}"))
+        {
+            Rewound::Popped { .. } => {}
+            Rewound::Refused { floor, .. } => {
+                return Err(ForgeFault::RewindRefused { fork, floor })
+            }
+        }
+        let after = self
+            .scenario()
+            .read_chain(move |view, _| {
+                (
+                    view.root_at(above_fork).expect("the root reads"),
+                    view.depth_at(above_fork).expect("the depth reads"),
+                    match view.leaf_count_at(above_fork).expect("the count reads") {
+                        shekyl_chain_rules::AtHeight::Recorded(count) => count,
+                        shekyl_chain_rules::AtHeight::AboveTip => {
+                            unreachable!("one past the tip is the next drain's count")
+                        }
+                    },
+                )
+            })
+            .await;
+        self.last_reorg = Some(LastReorg {
+            fork,
+            popped_tip: tip,
+            leaves_above_fork,
+            leaves_above_tip,
+            restored: after == at_fork,
+        });
         self.chain
             .truncate(usize::try_from(fork.to_raw() + 1).expect("a height fits"));
         self.written = self.chain.len();
@@ -931,6 +1665,9 @@ impl Forge {
         Ok(Forged {
             manifest,
             blocks: self.ledger,
+            harness_funding: self
+                .harness_funding
+                .map(|funding| (funding.output_key, funding.paid_at)),
         })
     }
 }

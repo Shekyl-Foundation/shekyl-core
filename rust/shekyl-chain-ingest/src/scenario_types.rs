@@ -68,6 +68,12 @@ impl<P> Clocked<P> {
         self.interval.store(seconds.get(), Ordering::Relaxed);
     }
 
+    /// Set the clock to `at`: a driver resuming a chain from a snapshot
+    /// starts from the tip's time.
+    pub fn set_now(&self, at: Timestamp) {
+        self.clock.store(at.to_raw(), Ordering::Relaxed);
+    }
+
     /// The clock now.
     pub fn now(&self) -> Timestamp {
         Timestamp::from_raw(self.clock.load(Ordering::Relaxed))

@@ -329,10 +329,15 @@ pub async fn mine_to(
     }
 }
 
-/// The height the chain's next block connects at: its length, as a count.
+/// The height the chain's next block connects at. A chain resumed from a
+/// snapshot holds only the blocks mined since, so this reads the last one's
+/// height rather than the length.
 fn next_height(chain: &[Mined]) -> BlockHeight {
-    ChainCount::from_raw(u64::try_from(chain.len()).expect("a test chain's length is a count"))
-        .next_height()
+    chain
+        .last()
+        .map_or(ChainCount::from_raw(0).next_height(), |tip| {
+            tip.height + BlockCount::ONE
+        })
 }
 
 /// Fill the chain with real spends until `want` shards are closed, each

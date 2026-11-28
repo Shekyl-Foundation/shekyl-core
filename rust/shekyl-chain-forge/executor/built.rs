@@ -39,6 +39,30 @@ pub enum BuiltKind {
         /// The shards joined.
         shards: Vec<u64>,
     },
+    /// A spend of one coinbase paying the miner past the usual two outputs.
+    Paying {
+        /// The coinbase spent.
+        coinbase: BlockHeight,
+    },
+    /// A coinbase spend paying the harness seed's persona.
+    Funding {
+        /// The coinbase spent.
+        coinbase: BlockHeight,
+    },
+    /// A coinbase spend carrying a post of persona `slot`: a Reinstate or
+    /// a Release.
+    Post {
+        /// The coinbase spent.
+        coinbase: BlockHeight,
+        /// The persona.
+        slot: u32,
+    },
+    /// A spend of one output a block paid: a persona's collect, or the
+    /// miner's spend of an output in a discarded shard.
+    Owned {
+        /// The output's key.
+        output_key: [u8; 32],
+    },
     /// Persona `slot`'s emission claim.
     Claim {
         /// The persona.

@@ -43,7 +43,7 @@ use shekyl_chain_ingest::archival_driver::ENDPOINT;
 use shekyl_chain_ingest::chain_drive::spender_owning_before;
 use shekyl_chain_ingest::emission_assembly::claim_signed_under;
 use shekyl_chain_ingest::scenario::{FreeHash, Mined, Scenario, StepOutcome};
-use shekyl_chain_ingest::scenario_archival::shard_set;
+use shekyl_chain_ingest::scenario_archival::{complete_tree, shard_set};
 use shekyl_chain_ingest::schedule::{ChainRules, LeverRefused};
 use shekyl_chain_rules::{
     judge_lone_stateless, Candidate, CappedEpoch, CenRow, ReferenceClaim, ReferenceClaims,
@@ -63,15 +63,60 @@ const OTHERS: [Network; 3] = [Network::Mainnet, Network::Testnet, Network::Stage
 /// Blocks mined at the tip, each committing its draws, before one draws.
 const DRAWING_WITHIN: u64 = 64;
 
-fn plan() -> Plan {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("plans/small.toml");
+fn plan(file: &str) -> Plan {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("plans")
+        .join(file);
     Plan::parse(&std::fs::read_to_string(path).expect("the plan reads")).expect("parses")
 }
 
+/// `plan`, forged in this process and held open at its tip.
+async fn forged_open(plan: &Plan, out: &std::path::Path) -> Forge {
+    let mut forge = Forge::open(
+        plan,
+        out,
+        Options {
+            swapped: BTreeSet::new(),
+            stop_at_difference: None,
+            hashers: NonZeroUsize::MIN,
+            producer: executor::ProducerOptions::default(),
+        },
+    )
+    .await
+    .expect("the forging opens");
+    assert!(
+        forge.run(plan).await.expect("the plan runs").is_none(),
+        "nothing to stop at"
+    );
+    forge
+}
+
+/// A reorg whose rewind the store refuses stops the forging with the
+/// refusal: the branch is never built on a chain the store did not pop.
+/// Twenty-block epochs and a cap of 10: the pruning boundary at 40 retires
+/// the undo journal below 30, so a reorg of 20 from the tip at 45 forks at
+/// 25, under the floor.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "minutes of proofs; run in release by chain-forge.yml"]
-async fn the_small_plan_is_regtests_alone_and_refuses_a_tampered_receipt() {
-    let plan = plan();
+async fn a_rewind_below_the_undo_floor_stops_the_forging() {
+    let plan = Plan::parse(
+        r#"
+chain = "rewind-refused"
+seed = "0000000000000000000000000000000000000000000000000000000000000001"
+network = "regtest"
+fixed_difficulty = 1
+block_seconds = 1
+schedule = { settlement_epoch_blocks = 20, reorg_cap_blocks = 10 }
+
+[[step]]
+do = "mine"
+blocks = 45
+
+[[step]]
+do = "reorg"
+depth = 20
+"#,
+    )
+    .expect("parses");
     let out = tempfile::tempdir().expect("a directory");
     let mut forge = Forge::open(
         &plan,
@@ -85,12 +130,37 @@ async fn the_small_plan_is_regtests_alone_and_refuses_a_tampered_receipt() {
     )
     .await
     .expect("the forging opens");
-    assert!(
-        forge.run(&plan).await.expect("the plan runs").is_none(),
-        "nothing to stop at"
-    );
+    match forge.run(&plan).await {
+        Err(executor::ForgeFault::RewindRefused { fork, floor }) => {
+            assert_eq!(fork, BlockHeight::from_raw(25));
+            assert_eq!(floor, BlockHeight::from_raw(30));
+        }
+        Err(other) => panic!("the forging stopped on something else: {other}"),
+        Ok(stopped) => panic!("the forging ran past a refused rewind: {stopped:?}"),
+    }
+    forge.abandon().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "minutes of proofs; run in release by chain-forge.yml"]
+async fn the_small_plan_is_regtests_alone_and_refuses_a_tampered_receipt() {
+    let plan = plan("small.toml");
+    let out = tempfile::tempdir().expect("a directory");
+    let mut forge = forged_open(&plan, out.path()).await;
     identity_locks(&mut forge).await;
     receipt_tamper(&mut forge).await;
+    forge.abandon().await;
+}
+
+/// §6's four locks on Chain L (`CF-4b`): every body the lifecycle chain
+/// lists, every kind included, is regtest's alone.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "a forging of Chain L; run in release by chain-forge.yml's nightly"]
+async fn chain_l_is_regtests_alone() {
+    let plan = plan("chain-l.toml");
+    let out = tempfile::tempdir().expect("a directory");
+    let mut forge = forged_open(&plan, out.path()).await;
+    identity_locks(&mut forge).await;
     forge.abandon().await;
 }
 
@@ -214,6 +284,16 @@ async fn identity_locks(forge: &mut Forge) {
         if !block.template.transactions.contains(&item.body) {
             continue; // popped by the plan's reorg
         }
+        let leg = match &item.kind {
+            BuiltKind::Spend { coinbases } if coinbases.len() == 1 => Some(CenRow::I15),
+            BuiltKind::Join { .. } => Some(CenRow::J27),
+            BuiltKind::Claim { .. } => Some(CenRow::J26),
+            _ => None,
+        };
+        // One body of each kind reaches its row; a longer chain lists many.
+        if leg.is_none_or(|row| legs.contains(&row)) {
+            continue;
+        }
         let claims = claims_for(&chain, block);
         let spender = Spender::on(
             regtest,
@@ -237,7 +317,12 @@ async fn identity_locks(forge: &mut Forge) {
                 shards,
             } => {
                 let persona = forge.persona(*slot).expect("the plan joined it");
-                let join = persona.join(shard_set(shards.clone()), ENDPOINT);
+                let holdings = if shards.is_empty() {
+                    complete_tree()
+                } else {
+                    shard_set(shards.clone())
+                };
+                let join = persona.join(holdings, ENDPOINT);
                 let bodies: Vec<(NetworkId, Transaction)> = OTHERS
                     .iter()
                     .map(|other| {
@@ -307,7 +392,13 @@ async fn identity_locks(forge: &mut Forge) {
                     }),
                 )
             }
-            BuiltKind::Spend { .. } => continue,
+            // Each of these rows has its leg above: a post is a bond post
+            // like a join, an owned spend a spend like a coinbase's.
+            BuiltKind::Spend { .. }
+            | BuiltKind::Paying { .. }
+            | BuiltKind::Funding { .. }
+            | BuiltKind::Post { .. }
+            | BuiltKind::Owned { .. } => continue,
         };
         for other in OTHERS {
             let id = other.network_id();

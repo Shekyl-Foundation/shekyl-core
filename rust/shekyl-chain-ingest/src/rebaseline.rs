@@ -45,7 +45,7 @@ use crate::corpus::CorpusSource;
 use crate::metrics::Metrics;
 use crate::pipeline::{run, EventDigest, PipelineConfig, PipelineFault, RunReport};
 use crate::schedule::ChainRules;
-use crate::source::SequenceNo;
+use crate::source::{IngestEvent, SequenceNo, Sequenced, Source};
 use crate::substrate::SubstrateFault;
 use crate::trace::{Facts, Trace, TraceFault, TraceWriter};
 use crate::ProductionPow;
@@ -229,6 +229,69 @@ pub async fn replay_corpus(
     Ok(run(&mut source, pow, metrics, rules, store, trace, cfg).await?)
 }
 
+/// A source that ends after the event numbered `last`.
+struct ThroughRecord<S> {
+    inner: S,
+    last: SequenceNo,
+    ended: bool,
+}
+
+impl<S: Source> Source for ThroughRecord<S> {
+    type Fault = S::Fault;
+
+    fn first_height(&self) -> BlockHeight {
+        self.inner.first_height()
+    }
+
+    fn next(&mut self) -> Result<Option<Sequenced<IngestEvent>>, Self::Fault> {
+        if self.ended {
+            return Ok(None);
+        }
+        let event = self.inner.next()?;
+        self.ended = event.as_ref().is_none_or(|event| event.seq >= self.last);
+        Ok(event)
+    }
+}
+
+/// [`replay_corpus`], stopped after corpus record `last`: the production
+/// connect path, from genesis, to one indexed event (`CHAIN_FORGE.md` §8).
+/// `trace` is the chain's trace narrowed to that event
+/// ([`Trace::through_event`]). The store is closed when this returns.
+///
+/// # Errors
+///
+/// As [`replay_corpus`].
+#[allow(
+    clippy::too_many_arguments,
+    reason = "replay_corpus's inputs and the record it stops at"
+)]
+pub async fn replay_corpus_through(
+    corpus: &Path,
+    store: &Path,
+    last: SequenceNo,
+    rules: ChainRules,
+    cfg: PipelineConfig,
+    pow: Arc<ProductionPow>,
+    metrics: Arc<Metrics>,
+    trace: Arc<Trace>,
+) -> Result<RunReport, ReplayFault> {
+    let inner = CorpusSource::open(BufReader::new(File::open(corpus)?))?;
+    if inner.net() != rules.network() {
+        return Err(ReplayFault::WrongNetwork {
+            corpus: inner.net(),
+            rules: rules.network(),
+        });
+    }
+    let mut source = ThroughRecord {
+        inner,
+        last,
+        ended: false,
+    };
+    let horizons = horizons(&rules)?;
+    let store = ChainStore::with_horizons(store, ApplyPolicy::default(), horizons)?;
+    Ok(run(&mut source, pow, metrics, rules, store, trace, cfg).await?)
+}
+
 /// `shekyl-chain-replay baseline`: connect the corpus at `corpus` against a
 /// fresh store at `store` with nothing to compare, then write the store's
 /// chain as the trace at `out` ([`write_trace_file`]).
@@ -283,7 +346,7 @@ pub async fn baseline(
 }
 
 /// The store's horizons under `rules`' schedule at genesis.
-fn horizons(rules: &ChainRules) -> Result<Horizons, StoreError> {
+pub(crate) fn horizons(rules: &ChainRules) -> Result<Horizons, StoreError> {
     Ok(Horizons::under(&rules.in_force(BlockHeight::from_raw(0)))?)
 }
 

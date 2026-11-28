@@ -725,7 +725,11 @@ jobs:
     # workstation, and the connect and pop rows each pay a form in setup.
     # A pull request counts a block of four transactions of each shape;
     # this job counts the full blocks every night, and `bench-full-drift`
-    # compares the counts with the night before.
+    # compares the counts with the night before. The set also holds the
+    # emission claim's block (`benches/emission_claim_iai.rs`), connected on
+    # Chain L's first-settled-epoch snapshot, which the capture script
+    # fetches and builds before its gungraun runs (in the tree, so a night
+    # on main's copy of this file still builds it).
     #
     # Same matrix as above; the set is read from the checked-out ref's
     # scripts/bench/capture_rust_baseline.sh, so each leg is judged by its

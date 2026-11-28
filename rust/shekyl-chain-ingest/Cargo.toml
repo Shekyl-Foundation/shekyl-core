@@ -67,7 +67,7 @@ fetch = ["dep:shekyl-rpc-client", "dep:shekyl-rpc-types"]
 # it: `harness` is TEST_ONLY and no feature of this crate may turn it on
 # (check_test_only_features.py). The bench target requires both, and the
 # capture script names both on its command line.
-bench-internals = ["pipeline", "dep:tempfile"]
+bench-internals = ["pipeline", "dep:tempfile", "dep:sha2", "dep:shekyl-hash-budget"]
 replay-cli = [
     "pipeline",
     "fetch",
@@ -144,6 +144,14 @@ required-features = ["bench-internals", "harness"]
 # bench-full) and not a pull request's.
 [[bench]]
 name = "block_path_full_iai"
+harness = false
+required-features = ["bench-internals", "harness"]
+
+# An emission claim's block connected (BA-T2's emission-claim shape, as
+# BA-T41 counts a connect), over Chain L's first-settled-epoch snapshot:
+# a 34 MB store and the pinned chain, so the nightly capture's.
+[[bench]]
+name = "emission_claim_iai"
 harness = false
 required-features = ["bench-internals", "harness"]
 
@@ -276,6 +284,8 @@ shekyl-archival-fetch-sched = { path = "../shekyl-archival-fetch-sched", optiona
 
 # bench-internals: the bench store's own directory (`bench_support.rs`).
 tempfile = { workspace = true, optional = true }
+# The snapshot cache's file digest (`snapshot.rs`, bench-internals and tests).
+sha2 = { workspace = true, optional = true }
 
 # replay-cli: argument parsing as shekyl-cli does it; HTTP transport for
 # `fetch`; SETTLEMENT_EPOCH_BLOCKS — a consensus constant, not a flag.
@@ -300,6 +310,7 @@ curve25519-dalek = { version = "4", default-features = false, features = ["alloc
 zeroize = { workspace = true, optional = true }
 
 [dev-dependencies]
+sha2 = { workspace = true }
 # The hosted shard-fill chain's pin and the check a fetched copy passes
 # (`forged_fill`, CHAIN_FORGE.md CF-4a). The forge's library only: no
 # driver, no seeded entry point (its own normal edges are the plan's and

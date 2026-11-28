@@ -171,6 +171,12 @@ NIGHTLY_BENCHES=(
   # the connect and pop rows each pay a form in setup. nightly.yml's
   # bench-full job captures it and compares it with the night before.
   "shekyl-chain-ingest::block_path_full_iai:bench-internals,harness"
+  # BA-T2's emission-claim shape, counted as BA-T41 counts a connect: the
+  # claim's block on Chain L's first-settled-epoch snapshot. Its setup
+  # opens a sealed snapshot and never replays, so the capture fetches the
+  # pinned chain and builds the snapshot before the gungraun runs
+  # (prepare_chain_l below).
+  "shekyl-chain-ingest::emission_claim_iai:bench-internals,harness"
 )
 
 # ---- which rows this run captures --------------------------------------
@@ -254,6 +260,46 @@ for row in "${SELECTED[@]}"; do
     cd "${RUST_ROOT}"
     cargo bench -p "${CRATE}" "${FEATURE_ARGS[@]}" --bench "${CRIT_BENCH}" -- --noplot
   )
+done
+
+# ---- what a row's setup opens -------------------------------------------
+#
+# The emission-claim row starts from Chain L's first-settled-epoch snapshot
+# (CHAIN_FORGE.md §8). Here, in the tree under test, rather than in the
+# workflow: a scheduled run takes main's workflow over each branch's tree,
+# so a step written there would be missing from the night that first
+# carries the row. The chain is fetched by its pin and checked layer by
+# layer, and the snapshot built by a production replay from genesis and
+# held to the pinned trace. Rule 47: the step names one test and holds the
+# run to one pass. Rule 46: the log is written, the exit kept, then shown.
+prepare_chain_l() {
+  local log status=0
+  log="$(mktemp)"
+  python3 "${REPO_ROOT}/scripts/ci/fetch_test_chain.py" chain-l
+  (
+    cd "${RUST_ROOT}"
+    cargo test --locked --release -p shekyl-chain-ingest --features pipeline --lib -- \
+      --ignored --exact chain_l::the_first_settled_epoch_snapshot_builds_and_opens
+  ) > "${log}" 2>&1 || status=$?
+  cat "${log}"
+  if (( status != 0 )); then
+    echo "[capture_rust_baseline] ERROR: the first-settled-epoch snapshot did not build" >&2
+    rm -f "${log}"
+    exit "${status}"
+  fi
+  if ! grep -q '^test result: ok\. 1 passed' "${log}"; then
+    echo "[capture_rust_baseline] ERROR: the snapshot step ran no test: its name no longer matches" >&2
+    rm -f "${log}"
+    exit 1
+  fi
+  rm -f "${log}"
+}
+for row in "${SELECTED[@]}"; do
+  if [[ "$(row_id "${row}")" == "shekyl-chain-ingest::emission_claim_iai" ]]; then
+    echo
+    echo "[capture_rust_baseline] setup     : Chain L's first-settled-epoch snapshot"
+    prepare_chain_l
+  fi
 done
 
 # ---- gungraun runs (instruction counts, Tier-1) -----------------------

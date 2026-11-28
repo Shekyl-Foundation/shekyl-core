@@ -35,7 +35,9 @@ subjects=(
   'determinism::each_source_drawn_from_the_os_moves_the_chain'
   'determinism::the_producer_plan_forges_the_same_bytes_in_two_processes'
   'determinism::the_shard_fill_plan_forges_its_pinned_chain_in_two_processes'
+  'determinism::the_chain_l_plan_forges_its_pinned_chain_in_two_processes'
   'forged_chain::the_small_plan_is_regtests_alone_and_refuses_a_tampered_receipt'
+  'forged_chain::chain_l_is_regtests_alone'
   'producer_audit::a_live_producer_run_settles_as_the_planned_one'
 )
 # Ignored so the set's parents can spawn them; never run on their own.

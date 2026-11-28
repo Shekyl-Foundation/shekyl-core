@@ -7,10 +7,11 @@
 //! rows the plan fed it, as the driver's emission scenario computes them
 //! (`scenario_emission_tests`, `the_drivers_emission_claim_connects_and_pays_the_persona`).
 //!
-//! The claim step needs one bond, one shard and one served pair on the
-//! chain: the persona's. The validator then holds the claim to the rows the
-//! slash pass wrote (CEN-J21, J23, J25), so terms this arithmetic got wrong
-//! are refused, never forged.
+//! The claim step needs one compact bond in the epoch's market: the
+//! persona's, on the shards it holds, credited on those the epoch's slash
+//! pass settled `Served`. A complete tree is in no market. The validator
+//! then holds the claim to the rows the slash pass wrote (CEN-J21, J23,
+//! J25), so terms this arithmetic got wrong are refused, never forged.
 
 use shekyl_archival_retention::{
     archival_params, claimant_reward_share, epoch_close_compute, shard_contribution_micro,
@@ -25,6 +26,7 @@ use shekyl_chain_ingest::scenario_archival::shard_set;
 use shekyl_chain_ingest::scenario_shard::mine_to;
 use shekyl_chain_rules::SettlementSchedule;
 use shekyl_harness_spender::Owner;
+use shekyl_types::archival::SettlementOutcome;
 use shekyl_types::{BlockCount, BlockHeight, SettlementEpoch};
 
 use super::{Built, BuiltKind, Forge, ForgeFault};
@@ -37,10 +39,11 @@ pub struct Served {
     pub epoch: SettlementEpoch,
     /// The epoch the persona joined in.
     pub join_epoch: SettlementEpoch,
-    /// The one shard: its id and the height its fill closed it.
-    pub shard: u64,
-    /// The height whose fold first counted the shard closed.
-    pub close_height: BlockHeight,
+    /// The shards the persona holds, ascending: each id and the height
+    /// whose fold first counted it closed.
+    pub held: Vec<(u64, BlockHeight)>,
+    /// The held shards the epoch credits it on, ascending.
+    pub credited: Vec<u64>,
     /// The epoch's budget, as its close froze it.
     pub budget: u64,
 }
@@ -57,14 +60,29 @@ pub fn terms(served: &Served) -> ClaimTerms {
         join_settlement_epoch: served.join_epoch.to_raw(),
         bad_intervals: &[],
     }];
-    let shards = [EpochCloseShard {
-        shard_id: served.shard,
-        close: ShardClose::ClosedAt(served.close_height),
-    }];
-    let pairs = [CreditPair {
-        bond_idx: 0,
-        shard_idx: 0,
-    }];
+    let shards: Vec<EpochCloseShard> = served
+        .held
+        .iter()
+        .map(|&(shard_id, close_height)| EpochCloseShard {
+            shard_id,
+            close: ShardClose::ClosedAt(close_height),
+        })
+        .collect();
+    let index_of = |id: u64| {
+        served
+            .held
+            .iter()
+            .position(|&(shard_id, _)| shard_id == id)
+            .expect("a credited shard is held")
+    };
+    let pairs: Vec<CreditPair> = served
+        .credited
+        .iter()
+        .map(|&id| CreditPair {
+            bond_idx: 0,
+            shard_idx: index_of(id),
+        })
+        .collect();
     let count_at_close = (served.epoch.to_raw() + 1) * served.schedule.blocks().get();
     let inputs = EpochCloseInputs::under_schedule(
         served.schedule,
@@ -90,17 +108,26 @@ pub fn terms(served: &Served) -> ClaimTerms {
         served.budget,
         result.sigma_work_milli
     );
-    let scarcity = shard_contribution_micro(&inputs, &result.r_market_by_shard, 0);
+    let shard_entries = served
+        .credited
+        .iter()
+        .map(|&shard_id| ShardWorkEntry {
+            shard_id,
+            serve_credit_bit: true,
+            scarcity_micro: u32::try_from(shard_contribution_micro(
+                &inputs,
+                &result.r_market_by_shard,
+                index_of(shard_id),
+            ))
+            .expect("a per-entry term fits (F-C)"),
+        })
+        .collect();
     ClaimTerms {
-        holdings: shard_set(vec![served.shard]),
+        holdings: shard_set(served.held.iter().map(|&(id, _)| id).collect()),
         settlement_epochs: vec![served.epoch.to_raw()],
         work_claim: vec![WorkEpochClaim {
             epoch: served.epoch.to_raw(),
-            shard_entries: vec![ShardWorkEntry {
-                shard_id: served.shard,
-                serve_credit_bit: true,
-                scarcity_micro: u32::try_from(scarcity).expect("a per-entry term fits (F-C)"),
-            }],
+            shard_entries,
         }],
         reward_amount_plain: vec![share.reward],
     }
@@ -113,14 +140,15 @@ pub fn terms(served: &Served) -> ClaimTerms {
 ///
 /// [`ForgeFault`] when `slot` has not joined.
 pub(super) async fn step(forge: &mut Forge, slot: u32) -> Result<(), ForgeFault> {
-    let (served, shard, join_epoch, backing_key, fee_key, join_height) = {
+    let (served, held, persona_id, join_epoch, backing_key, fee_key, join_height) = {
         let joined = forge
             .personas
             .get(&slot)
             .ok_or_else(|| ForgeFault::Plan(format!("persona {slot} has not joined")))?;
         (
             SettlementEpoch::from_raw(joined.join_epoch.to_raw() + 1),
-            joined.shard,
+            joined.shards.clone(),
+            joined.persona.id(),
             joined.join_epoch,
             joined.backing_key,
             joined.fee_key,
@@ -147,12 +175,27 @@ pub(super) async fn step(forge: &mut Forge, slot: u32) -> Result<(), ForgeFault>
         .close()
         .expect("the block that completes the epoch carries its close");
     assert_eq!(close.epoch(), served, "the close is the served epoch's");
+    let pass = &forge.chain[usize::try_from(at_pass.to_raw()).expect("small")].archival;
+    let mut credited: Vec<u64> = pass
+        .settlements()
+        .iter()
+        .filter(|row| {
+            row.epoch == served
+                && row.persona == persona_id
+                && row.row.outcome() == SettlementOutcome::Served
+        })
+        .map(|row| row.shard.to_raw())
+        .collect();
+    credited.sort_unstable();
     let terms = terms(&Served {
         schedule: forge.schedule,
         epoch: served,
         join_epoch,
-        shard: shard.shard.to_raw(),
-        close_height: shard.close_height,
+        held: held
+            .iter()
+            .map(|closed| (closed.shard.to_raw(), closed.close_height))
+            .collect(),
+        credited,
         budget: close.budget().to_raw(),
     });
 

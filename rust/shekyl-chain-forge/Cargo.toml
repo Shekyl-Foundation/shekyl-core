@@ -63,6 +63,9 @@ shekyl-p-loopback = { path = "../shekyl-p-loopback" }
 # keys as the store's tables type them (redb) and their values through the
 # store's codec, so it can hold a field rather than a whole row.
 shekyl-chain-store = { path = "../shekyl-chain-store" }
+shekyl-economics = { path = "../shekyl-economics" }
+shekyl-fcmp = { path = "../shekyl-fcmp" }
+shekyl-harness-wallet = { path = "../shekyl-harness-wallet" }
 shekyl-store-codec = { path = "../shekyl-store-codec" }
 redb = { workspace = true }
 # The identity test's lock 2: another network's table genesis.

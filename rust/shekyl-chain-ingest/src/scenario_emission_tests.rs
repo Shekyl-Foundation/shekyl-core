@@ -81,7 +81,8 @@ use shekyl_wire::Transaction;
 
 use crate::admitted_draws::{assert_issued_pair, mine_serving, DriverWitness};
 use crate::archival_driver::{refused_at, ENDPOINT, FEE};
-use crate::chain_drive::{catch_up, spender_owning_before, Driven};
+use crate::chain_drive::{block_at, catch_up, spender_owning_before, Driven};
+use crate::chain_l;
 use crate::emission_assembly::{
     assemble_emission_claim, assemble_emission_claim_breaking_fee_proof, ClaimTerms,
 };
@@ -124,16 +125,23 @@ const OLDER_TX_KEY: [u8; 32] = [0x5e; 32];
 #[tokio::test]
 #[ignore = "minutes of proofs; run by nightly.yml's chain-ingest-ignored job"]
 async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
-    // The shard is closed by the forged shard-fill chain (`forged_fill`):
-    // its spends were proved once, and every rule judges them as they
-    // connect.
-    let (mut scenario, mut mined, rules, filled) =
-        forged_fill::connect("scenario-emission-claim", settled_epoch(), 1).await;
+    // The shard is closed on Chain L: this test starts from the store a
+    // production replay left at `shard-0-closed` (`chain_l`, `CF-4b`'s
+    // pilot), held to the digest the chain's pinned trace carries there.
+    let chain_l::Resumed {
+        mut scenario,
+        prefix,
+        rules,
+        closed,
+    } = chain_l::resume_at("scenario-emission-claim", "shard-0-closed").await;
     let network = scenario.network_id();
-    let [closed] = filled.closed.as_slice() else {
+    let [closed] = closed.as_slice() else {
         panic!("one shard closed");
     };
     assert_eq!(closed.shard.to_raw(), 0);
+    // The first block above the snapshot: the driver's own record starts
+    // here, and the spender reads the prefix from the corpus.
+    let mut mined = scenario.mine(1).await;
 
     // The join and the twin's funding after it sit in one epoch, neither a
     // close.
@@ -143,7 +151,11 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
         1,
     );
     mine_to(&mut scenario, &mut mined, join_height).await;
-    let mut spender = Spender::on(scenario.network_id(), &mined);
+    let linked: Vec<_> = prefix.iter().map(chain_l::PrefixBlock::linked).collect();
+    let mut spender = Spender::on(scenario.network_id(), &linked);
+    for block in &mined {
+        spender.push(block);
+    }
     let mut seen = mined.len();
 
     // The funding spend: the first post coinbase to the persona in two
@@ -226,7 +238,7 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
     );
     mine_to(&mut scenario, &mut mined, at_pass).await;
     catch_up(&mut spender, &mined, &mut seen);
-    let closing = &mined[usize::try_from(count_at_close - 1).expect("small")].archival;
+    let closing = &block_at(&mined, BlockHeight::from_raw(count_at_close - 1)).archival;
     let close = *closing
         .close()
         .expect("the block that completes the epoch carries its close");
@@ -338,7 +350,7 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
 
     // The pass block: it settled the pair Served and gathered the epoch,
     // and the rows are the arithmetic above.
-    let pass = &mined[usize::try_from(at_pass.to_raw()).expect("small")].archival;
+    let pass = &block_at(&mined, at_pass).archival;
     let settled: Vec<_> = pass
         .settlements()
         .iter()

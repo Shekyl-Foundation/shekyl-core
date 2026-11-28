@@ -294,7 +294,7 @@ pub(super) async fn step(
             .personas
             .get(&slot)
             .ok_or_else(|| ForgeFault::Plan(format!("persona {slot} has not joined")))?;
-        (joined.shard.shard, joined.join_epoch)
+        (joined.only_shard()?.shard, joined.join_epoch)
     };
     let served = SettlementEpoch::from_raw(join_epoch.to_raw() + 1);
     let settled_at = BlockHeight::from_raw(forge.schedule.slash_deadline_height(served.to_raw()));

@@ -43,6 +43,11 @@ pub struct Plan {
     /// refuses a block stamped past it (CEN-C1), so a chain stamped ahead of
     /// the wall clock would replay or not depending on when it was forged.
     pub block_seconds: u64,
+    /// The first of the miner's coinbases the plan's own spends and posts
+    /// take. Those below it stay unspent, for a consumer of the chain's
+    /// snapshots to spend. `None` is coinbase 1, the miner's first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_kept_coinbase: Option<u64>,
     /// The steps, in order.
     #[serde(rename = "step")]
     pub steps: Vec<Step>,
@@ -98,6 +103,35 @@ pub enum Action {
     Spend {
         /// Inputs, 1 to the wire's limit.
         inputs: u32,
+        /// Outputs when not the two every spend pays: a one-input spend
+        /// up to the wire's limit, all to the miner.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        outputs: Option<u32>,
+    },
+    /// Mine blocks that list nothing to `offset` blocks into epoch `epoch`:
+    /// a height the schedule derives, not one the plan writes.
+    MineTo {
+        /// The settlement epoch.
+        epoch: u64,
+        /// Blocks past its first.
+        #[serde(default)]
+        offset: u64,
+    },
+    /// Mine blocks that list nothing to the block before the first height
+    /// a compact join of `shards` is admissible.
+    MineBeforeJoin {
+        /// The closed shards the join would hold.
+        shards: Vec<u64>,
+    },
+    /// A kept coinbase's spend pays the harness seed's persona at slot 0,
+    /// the persona a wallet restored from that seed derives, so a walk that
+    /// starts from a snapshot can post its bond. Once per plan: a bond post
+    /// consumes every funding output, up to a cap.
+    FundHarness,
+    /// One block of real spends of kept coinbases, as many as reach `to`.
+    FillBlock {
+        /// The weight it reaches.
+        to: FillTo,
     },
     /// Real spends of the miner's coinbases, built across threads, until
     /// `count` shards are closed (S9, and S1–S6 in every spend).
@@ -155,6 +189,141 @@ pub enum Action {
         /// Blocks popped; at most the schedule's reorg cap.
         depth: u64,
     },
+    /// Persona `persona` joins as a complete tree, funded by a kept
+    /// coinbase spend that carries the join (S5 for its bond slot). It
+    /// holds no shard, so it adds no pair to the drawable set.
+    JoinTree {
+        /// The persona's slot in the plan.
+        persona: u32,
+    },
+    /// Mine through the slash pass of the `epochs`-th epoch after persona
+    /// `persona`'s join, each block's draws committed and filed. Every
+    /// joined persona passes its draws, except `persona`'s on the shard
+    /// `withhold` names, which are filed as misses. The pass's block is
+    /// mined plain, so a claim of that epoch can follow it.
+    ServeEpochs {
+        /// The persona whose join the epochs count from.
+        persona: u32,
+        /// Epochs after the join.
+        epochs: u64,
+        /// A held shard whose draws the persona withholds.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        withhold: Option<u64>,
+    },
+    /// Keep serving, persona `persona` withholding its draws on `shard`,
+    /// through the slash pass of that pair's last counted miss. The height
+    /// is read off the chain: an epoch that leaves the pair short of its
+    /// counted draws is no observation and moves the slash an epoch later.
+    Slash {
+        /// The persona.
+        persona: u32,
+        /// The held shard it never serves.
+        shard: u64,
+    },
+    /// Persona `persona` closes its open bad interval, riding a kept
+    /// coinbase's spend, in the next block.
+    Reinstate {
+        /// The persona.
+        persona: u32,
+    },
+    /// Persona `persona` releases its whole bond at the first epoch the
+    /// cooldown from its last served epoch allows, the release riding a
+    /// kept coinbase's spend whose outputs pay the persona.
+    Release {
+        /// The persona.
+        persona: u32,
+    },
+    /// Persona `persona` spends the output its release paid it, once that
+    /// output is spendable: the wallet's collect, an ordinary spend.
+    Collect {
+        /// The persona.
+        persona: u32,
+    },
+    /// Keep serving, every joined persona passing its draws except
+    /// `persona`'s on `withhold`, to `offset` blocks into epoch `epoch`.
+    ServeTo {
+        /// The persona `withhold` is a shard of.
+        persona: u32,
+        /// The settlement epoch.
+        epoch: u64,
+        /// Blocks past its first.
+        #[serde(default)]
+        offset: u64,
+        /// A held shard whose draws the persona withholds.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        withhold: Option<u64>,
+    },
+    /// Mine nothing, and hold the chain to what the event says. A named
+    /// check indexes its event at the block the check finds: the tip, or
+    /// for a first-of check the earlier block it names.
+    Check {
+        /// What is checked.
+        what: Check,
+        /// The persona, for a check that reads one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        persona: Option<u32>,
+        /// The shard, for a check that reads one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        shard: Option<u64>,
+    },
+    /// The miner spends an output paid inside closed shard `shard`, after
+    /// the boundary that discarded that shard's bodies. Consensus reads no
+    /// discarded body to admit it.
+    SpendDiscarded {
+        /// The discarded shard.
+        shard: u64,
+    },
+}
+
+/// The weight a [`Action::FillBlock`] reaches.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum FillTo {
+    /// One body past the effective median (CEN-G6b): the least block the
+    /// penalty applies to.
+    Median,
+    /// The most bodies under the block-weight limit: one more crosses it.
+    Bound,
+}
+
+/// What a [`Action::Check`] holds the chain to (`CHAIN_FORGE.md` §3).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Check {
+    /// CF-E6: the tip's spend proves over a tree of three layers.
+    TreeDepthThree,
+    /// CF-E7: the tip is the first block on the second RandomX seed, and
+    /// lists a spend.
+    SeedBoundary,
+    /// CF-E8: names the first block whose fees burned and fed the pool.
+    BurnPositive,
+    /// CF-E12: names the first block that admitted a filed bundle.
+    ServeCredit,
+    /// CF-E13: the tip is the slash pass of the persona's first drawn
+    /// epoch: non-zero market, work and budget, the watermark written, and
+    /// no slash row on the chain.
+    SettledEpoch,
+    /// CF-E19: names the boundary that discarded `shard`'s bodies.
+    Discarded,
+    /// CF-E20: the tip's pass settled `Served` a pair on the discarded
+    /// `shard`.
+    SettledOnDiscarded,
+    /// CF-E21: the tip ran a pruning boundary's batch.
+    PruneBoundary,
+    /// CF-E18: the tip lists the persona's Release.
+    Unstake,
+    /// CF-E24: the last reorg's fork and popped tip straddle an epoch's
+    /// first block.
+    ReorgCrossesEpoch,
+    /// CF-E25: they straddle a pruning boundary.
+    ReorgCrossesPrune,
+    /// CF-E26: they straddle a curve-tree leaf chunk, and the rewind
+    /// restored the tree.
+    ReorgCrossesChunk,
+    /// The tip is a cut the CompleteTree body-fill walk can start from.
+    BodyFillCompleteTree,
+    /// The tip is a cut the Market body-fill walk can start from.
+    BodyFillMarket,
 }
 
 /// Why a plan was refused.
@@ -340,7 +509,13 @@ start_spread_ms = 50
                 start_spread_ms: 50
             }
         );
-        assert_eq!(plan.steps[1].action, Action::Spend { inputs: 2 });
+        assert_eq!(
+            plan.steps[1].action,
+            Action::Spend {
+                inputs: 2,
+                outputs: None
+            }
+        );
         assert_eq!(plan.steps[1].event.as_deref(), Some("first-two-in-spend"));
         assert_eq!(plan.steps[6].action, Action::Reorg { depth: 2 });
         let written = PLAN.replace("\"settled\"", "20");
