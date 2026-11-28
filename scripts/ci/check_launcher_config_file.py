@@ -18,16 +18,21 @@
 # does. A spawned binary therefore names its file
 # (`--config-file <path>`, or `--config-file none` for the defaults alone),
 # and a daemon run in-process loads with
-# `shekyl_daemon_config::load_default_file_unread` (or builds its
-# configuration with `after_file`, which opens no file).
+# `shekyl_daemon_config::load_default_file_unread`.
+#
+# `after_file` is not that choice. It is the step after a file is opened
+# (`load` calls it with the opened file), so a call to it says nothing
+# about whether the host file was read. A unit test that builds a
+# configuration that way and starts nothing is named in NOT_A_SPAWN, with
+# the other files that match the shape and start no daemon.
 #
 # The subject is every source file with adjacent `--network regtest` argv
 # tokens outside comments (`check_armed_lever_launchers.py`'s SPAWN), the
 # binary named or not: a bench that holds the binary in a variable launches
 # as surely as one that spells `shekyld`. The owner-socket gate's REQUIRED
 # launchers are this gate's too, with the ones that gate cannot see; this
-# gate's own NOT_A_SPAWN names the files that match and have no file step
-# that could open the machine's default.
+# gate's own NOT_A_SPAWN names the files that match and have no step that
+# could open the machine's default.
 #
 # What it does not see: it judges a file, not a spawn, so a file with one
 # launcher that chooses its file and another that does not passes; and it
@@ -72,13 +77,17 @@ NOT_A_SPAWN = {
     "rust/shekyl-daemon-config/src/owner_socket.rs": "the socket plan's own tests; no file step",
     "rust/shekyl-daemon-config/src/sections/tests.rs": "builds configurations from parsed rows; no file step",
     "rust/shekyl-daemon-config/src/resolve.rs": "resolves parsed rows in its tests; no file step",
+    "rust/shekyl-daemon/src/network.rs": "builds a configuration from parsed rows and starts nothing",
+    "rust/shekyl-daemon/src/options.rs": "builds a configuration from parsed rows and starts nothing",
     "rust/shekyl-rpc-tunnel/src/config.rs": "the tunnel's own loader, under a test platform's root; starts no daemon",
+    "rust/shekyl-rpc-tunnel/tests/no_home.rs": "the tunnel's loader tests; starts no daemon",
     "scripts/bench/drs_fixture.py": "an artifact fixture's recorded argv; spawns nothing",
 }
 
-# A spawned binary names its file; an in-process daemon loads with the
-# default file unread, or builds its configuration after the file step.
-CHOSEN = ("--config-file", "load_default_file_unread", "after_file(")
+# A spawned binary names its file. An in-process daemon loads with the
+# default file unread. Those are the two ways a start leaves the host
+# file closed. `after_file` is not one of them.
+CHOSEN = ("--config-file", "load_default_file_unread")
 
 
 def chooses_the_file(text, suffix):
@@ -156,6 +165,16 @@ def selftest():
         (
             "an in-process daemon through the production entry is refused",
             {"a.rs": 'let a = ["shekyld", "--network", "regtest"];\nrun::main(&a, &p);\n'},
+            ("a.rs",),
+            ["a.rs: starts a regtest daemon that reads"],
+        ),
+        (
+            "after_file does not excuse the production entry",
+            {
+                "a.rs": 'let a = ["shekyld", "--network", "regtest"];\n'
+                "run::main(&a, &p);\n"
+                "let loaded = after_file(cli, &platform, None).unwrap();\n"
+            },
             ("a.rs",),
             ["a.rs: starts a regtest daemon that reads"],
         ),
