@@ -116,6 +116,58 @@ struct FileScan {
     test_modules: Vec<String>,
 }
 
+/// The string literal whose contents start at `start`: the byte span of its
+/// contents.
+fn string_at(lexed: &Lexed, start: usize) -> Option<(usize, usize)> {
+    lexed
+        .string_spans
+        .iter()
+        .find(|(s, _)| *s == start)
+        .copied()
+}
+
+/// The string `const name: &str = "..."` of this file names, if it names
+/// one. Two such constants of one name with different strings are refused:
+/// which one an event reads depends on its module.
+fn string_const(
+    src: &str,
+    lexed: &Lexed,
+    toks: &[Token],
+    name: &str,
+) -> Result<Option<(usize, usize)>, String> {
+    let mut found: Option<(usize, usize)> = None;
+    for (i, tok) in toks.iter().enumerate() {
+        if !(tok.is_ident(lexed, "const")
+            && toks.get(i + 1).is_some_and(|t| t.is_ident(lexed, name))
+            && toks.get(i + 2).is_some_and(|t| t.is_punct(b':'))
+            && toks.get(i + 3).is_some_and(|t| t.is_punct(b'&')))
+        {
+            continue;
+        }
+        // `&str` or `&'static str`.
+        let mut k = i + 4;
+        if toks.get(k).is_some_and(|t| t.is_punct(b'\'')) {
+            k += 2;
+        }
+        if !(toks.get(k).is_some_and(|t| t.is_ident(lexed, "str"))
+            && toks.get(k + 1).is_some_and(|t| t.is_punct(b'='))
+            && toks.get(k + 2).is_some_and(|t| t.is_punct(b'"')))
+        {
+            continue;
+        }
+        let Some(span) = toks.get(k + 2).and_then(|q| string_at(lexed, q.end)) else {
+            continue;
+        };
+        match found {
+            Some(earlier) if src[earlier.0..earlier.1] != src[span.0..span.1] => {
+                return Err(format!("two string constants named `{name}` differ"));
+            }
+            _ => found = Some(span),
+        }
+    }
+    Ok(found)
+}
+
 fn scan_file(src: &str) -> Result<FileScan, String> {
     let lexed = lex(src);
     let toks = tokens(&lexed);
@@ -152,17 +204,25 @@ fn scan_file(src: &str) -> Result<FileScan, String> {
             scan.implicit = true;
             continue;
         }
-        // The target's string: its contents span starts one past the quote.
-        let quote = body.get(2).filter(|t| t.is_punct(b'"')).map(|t| t.end);
-        let literal = quote.and_then(|q| lexed.string_spans.iter().find(|(s, _)| *s == q));
+        // The target: a string literal, or a `const` of this file that is
+        // one (`target: TARGET`, the named-constant spelling).
+        let literal = match body.get(2) {
+            Some(t) if t.is_punct(b'"') => string_at(&lexed, t.end),
+            Some(t)
+                if t.kind == TokenKind::Ident && body.get(3).is_some_and(|c| c.is_punct(b',')) =>
+            {
+                string_const(src, &lexed, &toks, t.text(&lexed))?
+            }
+            _ => None,
+        };
         match literal {
             Some((s, e)) => {
-                scan.explicit.insert(src[*s..*e].to_owned());
+                scan.explicit.insert(src[s..e].to_owned());
             }
             None => {
                 return Err(format!(
-                    "line {}: an event's target is not a string literal; a computed target \
-                     cannot be checked against the subsystems",
+                    "line {}: an event's target is neither a string literal nor a string \
+                     `const` of this file, so it cannot be checked against the subsystems",
                     site.line
                 ))
             }
@@ -428,6 +488,27 @@ mod tests {
         assert_eq!(s.explicit, ["kept".to_owned()].into_iter().collect());
         assert!(!s.implicit);
         assert_eq!(s.test_modules, vec!["more".to_owned()]);
+    }
+
+    #[test]
+    fn a_target_named_by_a_string_const_of_the_file_is_read() {
+        let s = scan(
+            r#"mod m {
+                const TARGET: &str = "shekyl_clearnet::message_size";
+                fn f() { tracing::info!(target: TARGET, bytes = 1, "x"); }
+            }"#,
+        );
+        assert_eq!(
+            s.explicit,
+            ["shekyl_clearnet::message_size".to_owned()]
+                .into_iter()
+                .collect()
+        );
+        assert!(!s.implicit);
+        assert!(scan_file(
+            "const T: &str = \"a\"; mod n { const T: &'static str = \"b\"; } fn f() { info!(target: T, \"x\"); }"
+        )
+        .is_err());
     }
 
     #[test]

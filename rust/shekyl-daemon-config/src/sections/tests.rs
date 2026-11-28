@@ -1031,7 +1031,7 @@ fn a_log_file_is_written_only_when_named() {
         "--log-level",
         "info",
         "--log-category",
-        "wallet=debug",
+        "rpc=debug",
     ]))
     .expect("the rows");
     assert!(unnamed.file_sink.is_none(), "no file unless one is named");
@@ -1039,7 +1039,7 @@ fn a_log_file_is_written_only_when_named() {
     assert!(unnamed
         .directive
         .as_str()
-        .contains("shekyl_wallet_rpc=debug"));
+        .contains("shekyl_rpc_transport=debug"));
 
     let log_file = abs("/var/log/shekyl/wallet.log");
     let named = crate::logging_to_named_file(&resolved(&[
