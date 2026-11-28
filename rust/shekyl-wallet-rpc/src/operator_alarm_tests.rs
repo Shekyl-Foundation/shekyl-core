@@ -183,7 +183,9 @@ async fn every_producers_condition_reaches_the_reply() {
     );
 
     drop(posture);
-    translator.await.expect("the translator ends when its posture channel closes");
+    translator
+        .await
+        .expect("the translator ends when its posture channel closes");
 }
 
 /// The rows carry nothing that names the persona's onion or a clock: the
