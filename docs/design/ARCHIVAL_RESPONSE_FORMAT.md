@@ -92,9 +92,9 @@ constraint.)*
 
 **Freezes:** a genesis-frozen wire. Everything decided here is impossible to
 change after genesis, which is the only reason the round exists as a round.
-**Process:** [`26-sub-pr-design-discipline`](../../.cursor/rules/26-sub-pr-design-discipline.mdc).
+**Process:** [`126-sub-pr-design-discipline`](../../.cursor/rules/126-sub-pr-design-discipline.mdc).
 Disposition IDs **`RF-D1` … `RF-Dn`**, registered at birth per
-[`94-tracking-index`](../../.cursor/rules/94-tracking-index.mdc).
+[`194-tracking-index`](../../.cursor/rules/194-tracking-index.mdc).
 
 **Every input below is pinned, and `RF-D3` is now implemented.** `RF-D5`
 (§2.5 — surfaced by grounding the deletion, not by the ruling) is resolved with
@@ -430,9 +430,9 @@ current ordering is *sound but unnamed*, so the reorder is **independent
 hardening, not a fix riding a format change**. Bundled, a reviewer would read it
 as necessary to the format, which it is not.
 
-### 2.7 Rule 42 — checked, and there is **no instance here**
+### 2.7 Rule 142 — checked, and there is **no instance here**
 
-[Rule 42](../../.cursor/rules/42-serialization-policy.mdc) pairs every persisted
+[Rule 142](../../.cursor/rules/142-serialization-policy.mdc) pairs every persisted
 wire-format change with a version-constant bump, CI-enforced. It was checked
 rather than assumed, because **a bump performed on the wrong constant is worse
 than none — it would read as satisfied**.
@@ -844,8 +844,8 @@ fixed message, is untouched. Kept side after all four removals: `p_id` 32 ‖
 ### `RF-D10` — RULED 2026-08-20: the C++ side holds an opaque blob, not a typed struct
 
 **The question that produced it:** *why is this going into C++ instead of
-Rust?* The answer is that it should not have been. [Rule 20](../completed/RULE_20_RUST_VS_CPP.md)
-and [rule 40](../completed/RULE_40_FFI_DISCIPLINE.md) say new code advances
+Rust?* The answer is that it should not have been. [`RULE_20_RUST_VS_CPP`](../completed/RULE_20_RUST_VS_CPP.md)
+and [`RULE_40_FFI_DISCIPLINE`](../completed/RULE_40_FFI_DISCIPLINE.md) say new code advances
 the FFI boundary rather than thickening C++, and the codebase already had the
 pattern: `txin_archival_reward_emission` is an **opaque `canonical_bytes`
 blob** whose only parser is Rust — C++ never reads inside, and consensus code
@@ -1349,7 +1349,7 @@ is what a reader does with padding it does not understand:
 
 - **Reject non-zero padding** — safe, and **forecloses the field**. Any future
   scheme needs every fetcher updated first: a flag day, which
-  [rule 75](../../.cursor/rules/75-system-autonomy.mdc) exists to avoid. It also
+  [rule 175](../../.cursor/rules/175-system-autonomy.mdc) exists to avoid. It also
   makes the reservation self-defeating: TJ-H reserved the field precisely so a
   later scheme would *not* need a format change, and this reintroduces one.
 - **Ignore padding content** — a future scheme works on deployment. Rollout is
@@ -1468,7 +1468,7 @@ ordinary shared 404. Before the frame, a flat body could be any length. That
 latitude is what buys "multiple of `LEAF_BYTES`" as a *structural* property
 instead of a validity rule written in prose.
 
-**[Rule 42](../../.cursor/rules/42-serialization-policy.mdc) — checked for
+**[Rule 142](../../.cursor/rules/142-serialization-policy.mdc) — checked for
 artifact B, and again there is no instance.** §2.7 ran this for the attestation
 witness blob; the served frame is a *different* artifact and inherits nothing, so
 it is checked on its own terms and the answer recorded rather than assumed. The
@@ -1483,12 +1483,12 @@ constant exists to prevent. No bump is owed; written down so nobody adds one.
 
 **Scope note — superseded 2026-08-20: `A` and `B` land together.** This section
 first recorded them as separate validation surfaces
-([rule 19](../../.cursor/rules/19-validation-surface-discipline.mdc)) — different
+([rule 119](../../.cursor/rules/119-validation-surface-discipline.mdc)) — different
 crates, different tests, a C++ serializer `B` never touches. **The maintainer
-ruled otherwise, and the reason overrides the rule-19 reading:** the kept/pruned
+ruled otherwise, and the reason overrides the rule-119 reading:** the kept/pruned
 boundary is the decision under review, and a reviewer can only check it with both
 halves visible. A single-artifact PR does not complete the move. Recorded as a
-reversal rather than edited away, because the rule-19 argument was correctly
+reversal rather than edited away, because the rule-119 argument was correctly
 applied to the wrong question — validation surfaces were separable, the *decision*
 was not. And the
 defect claim here is the narrow one — the served frame **avoids introducing** an
@@ -1516,7 +1516,7 @@ change instead of two.
   successor the exclusion lacked, not a reopening of this round.
 - **The settlement-outcome table schema** (§9.7 item 9) — a separate PR,
   a separate validation surface
-  ([rule 19](../../.cursor/rules/19-validation-surface-discipline.mdc)).
+  ([rule 119](../../.cursor/rules/119-validation-surface-discipline.mdc)).
   (`EndpointUpdate` on the bond wire, listed here as the other exclusion,
   was REJECTED 2026-09-13.)
 - **Whether A5/W10 survives overall.** The `RESPONSE_BYTES` correction moved one

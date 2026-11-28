@@ -7,7 +7,7 @@ this branch (RPC 3.34 — #782 took 3.33 on the same day; chained on merge). `SO
 the interface; `SOK-12` comment corrected; `SOK-13` FOLLOWUPS row removed.
 Round 0 sweep confirmed 2026-09-18 with the mechanism sharpened (§1.1a);
 Round 1 (§3) and Round 2 wargame (§3.5) closed the same day. Process per
-`26-sub-pr-design-discipline.mdc`. **Do not implement from this file**; the
+`126-sub-pr-design-discipline.mdc`. **Do not implement from this file**; the
 live contract is `FCMP_PLUS_PLUS.md`'s REJECTED line and
 `PHASE_2A_SEND_PATH.md` §3.0.1. Every `path:line` below is a records-was
 anchor at the pin, most into files this record deleted.
@@ -120,7 +120,7 @@ already records.
 
 Recorded fix (not designed in Round 0): Rust assembler resolves
 `TreePosition → GlobalOutputIndex` before `output_oc`, via `leaf_to_output`
-(S-CURVE's read on redb; `get_leaf_output_index` on LMDB today). Rule 20:
+(S-CURVE's read on redb; `get_leaf_output_index` on LMDB today). `RULE_20_RUST_VS_CPP`:
 the resolution is Rust; C++ stays a callback shim. Whether that fix is
 built at all is `SOK-Q7` (§3.1).
 
@@ -305,7 +305,7 @@ extraction order **6**, DRS-E3: five methods listed
 `get_curve_tree_leaf_count`, `get_curve_tree_root`,
 `get_curve_tree_root_at_height`). **`get_leaf_output_index` is not in that
 list.** This lane is the future *consumer* of that reader, not its author
-(rule 94 §6). A one-line consumer pointer on the S-CURVE / DRS-E3 row is
+(rule 194 §6). A one-line consumer pointer on the S-CURVE / DRS-E3 row is
 the right shape after a ruling; a status change in their cell is not.
 
 S-OUT-KI O1 (`ReadSnapshot::output(GlobalOutputIndex)`) is the type that
@@ -350,7 +350,7 @@ SOK-10's FOLLOWUPS row routes it to "the path-FFI lane (PDM-Q-F9's)"; that
 is this lane. So this lane owns: the fix, the `SOK-10` row's resolution in
 `DRS_E1_SOUT_KI.md` (continue the `SOK-` numbering for anything new —
 findings `SOK-11…`, questions `SOK-Q5…`; do **not** mint a prefix; check
-`IMPLEMENTATION_INDEX.md` §2 first per rule 94 §1), the FOLLOWUPS row, this
+`IMPLEMENTATION_INDEX.md` §2 first per rule 194 §1), the FOLLOWUPS row, this
 plan doc, and the path-FFI half of `PDM-Q-F9` (`rpc_path.rs`,
 `curve_tree_path_ffi.rs`, `curve_tree_path.cpp`, the `get_curve_tree_path`
 handler and its contract prose in `FCMP_PLUS_PLUS.md`). Owner is recorded
@@ -360,7 +360,7 @@ in this file's banner so the next reader does not re-derive it.
 Prefix `SOK-` is unique. Highest finding at this pin is SOK-10; highest
 question is SOK-Q4 (RULED). No new family.
 
-Rows this lane still may **not** write without disclosure (rule 94 §6):
+Rows this lane still may **not** write without disclosure (rule 194 §6):
 S-CURVE / DRS-E3 (the redb `leaf_to_output` reader — this lane is its
 future *consumer*, not its author), DRS-E6, the `PDM-Q*` row itself (F9's
 path-FFI half is this lane's to fix; the PDM lane's row records that it
@@ -380,7 +380,7 @@ a status change in their cell is not.
 | **SOK-11** | Wire field `output_indices` is unlabeled (`FCMP_PLUS_PLUS.md:383`); the handler implements **tree position** (`core_rpc_server.cpp:1522–:1541`). Production spend does not call this RPC (§1.2). A client following the field name would get (b): the whole path for the wrong leaf. In-tree callers today either send a tree position (spike) or `[0]` on a coinciding fixture (e2e). | Contract prose (and possibly a rename) is this lane's `FCMP_PLUS_PLUS.md` half. Do not fold into SOK-10. Question **SOK-Q5**. |
 | **SOK-12** | `db_lmdb.h:971` comments `m_curve_tree_leaves` as keyed by `global_output_index`. The write (`db_lmdb.cpp:9103–:9110`) keys by `old_leaf_count + i` (tree position). Same confusion as SOK-10, in the table header. | Comment is this lane's to correct when the assembler fix lands (file already on the path-FFI touch list via `get_curve_tree_leaf_by_tree_position`). Not a second product. |
 | **SOK-Q5** | What does the JSON field *mean* going forward: pin it as tree position (document + keep the name, or rename), or pin it as `GlobalOutputIndex` and have the handler resolve via `get_output_leaf_index` before assembly? Production has no caller to preserve. | Round 1. |
-| **SOK-Q6** | Where does `TreePosition → GlobalOutputIndex` resolve: a new `PathStore` method / FFI callback (Rust assembler asks; C++ shim calls `get_leaf_output_index`), or change `output_oc`'s `u64` domain from position to gindex after a Rust-side resolve the assembler cannot perform without a new read? Recorded routing says Rust assembler resolves before `output_oc`. That implies a new store read on the trait, not a silent ABI meaning-change of `pos`. | §3.3. **Conditional on Q7 ≠ A.** Rule 20: resolution in Rust; C++ remains the LMDB callback. |
+| **SOK-Q6** | Where does `TreePosition → GlobalOutputIndex` resolve: a new `PathStore` method / FFI callback (Rust assembler asks; C++ shim calls `get_leaf_output_index`), or change `output_oc`'s `u64` domain from position to gindex after a Rust-side resolve the assembler cannot perform without a new read? Recorded routing says Rust assembler resolves before `output_oc`. That implies a new store read on the trait, not a silent ABI meaning-change of `pos`. | §3.3. **Conditional on Q7 ≠ A.** `RULE_20_RUST_VS_CPP`: resolution in Rust; C++ remains the LMDB callback. |
 | **SOK-Q7** | **Does the daemon assembler survive at all?** Zero production consumers; forbidden on the send path by a binding ruling; wrong on every real chain. Same question `get_output_histogram` got (SOK-Q3 → B). | §3.1. **Asked first**; Q5/Q6 are moot under arm A. Default **A — delete**. |
 | **SOK-13** | `FOLLOWUPS.md:254` "C++ path RPC computes a crypto contract (`hash_to_p3`) inline" is **stale at this pin**: the extraction moved `I = Hp(O)` to Rust (`rpc_path.rs:90` `key_image_generator(&o)`); `curve_tree_path.cpp` and the handler contain no `hash_to_p3`. The row survived the fix that closed it. | Path-FFI FOLLOWUPS row, this lane's. Remove under either Q7 arm (rule 91: resolved items are removed). |
 
@@ -503,7 +503,7 @@ action under every reopening this document can name.
 | `DRS_E1_SOUT_KI.md` SOK-10 row (`:414`) and §3.4 | — | resolution recorded: closed by deletion, not by fix |
 | `IMPLEMENTATION_INDEX.md` `SOK-1…SOK-N` row (`:222`) | — | `UPDATE` line: SOK-10 closed by deletion (Q7 A), SOK-11/12/13 |
 
-**Other-lane rows — one-line consumer pointers only (rule 94 §6):**
+**Other-lane rows — one-line consumer pointers only (rule 194 §6):**
 `DAEMON_RPC_KV_CUTOVER.md` RK-9 (`:133`, lists the method);
 `FCMP_SPEND_LINKABILITY_CENSUS.md` S0 "RPC path" row (`:136`) and `:46`,
 `:402` — deletion **closes** that linkability surface, which the census
@@ -540,7 +540,7 @@ Default: pin as **tree position**. Rename the field `tree_positions`
 and write the position semantics into `FCMP_PLUS_PLUS.md` with a pointer to
 `:57–:65`. The alternative — accept `GlobalOutputIndex` and resolve with
 `get_output_leaf_index` in the handler — moves the resolution into C++,
-against rule 20, and makes a spend-revealing query *more* convenient.
+against `RULE_20_RUST_VS_CPP`, and makes a spend-revealing query *more* convenient.
 Under A this question and SOK-11 close with the interface.
 
 ### 3.3 SOK-Q6 — where the resolution lives (only if Q7 ≠ A)
@@ -595,7 +595,7 @@ falsifier). No undisposed attacks.
 | W3 | **Fail-closed vs fail-open — every miss path.** | Moot for the deleted paths. The one *new* behaviour: a client calling `get_curve_tree_path` gets JSON-RPC method-not-found from the Axum dispatch (the row is removed from `get_jsonrpc_table()`), plus `CORE_RPC_VERSION_MINOR` bumped so a client checking `get_version` sees the change. No plausible-looking default remains — the method does not exist. |
 | W4 | **Pruned daemon — which resolver tables survive discard.** | Moot: no resolver. Side-effect recorded for the PDM lane: `output_to_leaf` / `leaf_to_output`'s reader list "on pop and RPC" (`ARCHIVAL_PRUNED_DAEMON_MODE.md:1424`) loses the RPC reader; F9's register row (`:1262`) is moot. Pointer only (§3.4). |
 | W5 | **Privacy — does the change widen what the RPC reveals.** | Closed by construction: deletion strictly narrows. The endpoint that revealed which indices a wallet asks about no longer exists; `get_curve_tree_info` / `get_curve_tree_checkpoint` take no output index. The census lane's S0 "RPC path" row closes (§3.4). |
-| W6 | **Network uniformity (rule 71).** | Closed by construction: no code path remains to branch on nettype. Arm C (a gated endpoint) was the only arm that could have introduced one; rejected. |
+| W6 | **Network uniformity (rule 171).** | Closed by construction: no code path remains to branch on nettype. Arm C (a gated endpoint) was the only arm that could have introduced one; rejected. |
 | W7 | **Type escape hatches — a `TreePosition` built from a gindex's `u64`.** | Moot for the deleted trait. Residue outside this lane, recorded not fixed (§1.4): `shekyl_types::GlobalOutputIndex`'s doc says "in drain order" (wrong order); `LeafIndex`'s doc names a `shekyl-types::TreePosition` that does not exist. Adjacent rows, not this PR. |
 | W8 | **Determinism / KAT — does the assembled byte layout change.** | Moot: no daemon-assembled bytes remain. The wallet's path layout is pinned by CT-4's reconstruct-root KAT (`CT4_ROUND1_CLOSEOUT.md` §6), unchanged by this PR. |
 | W9 | **Something still compiles against the deleted symbols.** | Closed by test: the §3.1 exit `rg` returns nothing in `src/ rust/ tests/`; `cargo build`/`clippy` over the workspace lane and the C++ build of `cryptonote_core`, `rpc`, `unit_tests` are the check. `hash_trim_*` (`db_lmdb.cpp:9426`) and `leaf_from_chunk_entry` (archival tests) keep their consumers and stay. |

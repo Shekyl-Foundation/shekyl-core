@@ -1,6 +1,8 @@
 ---
 description: Documentation must be updated after executing a Plan; the doc update is always the final task.
 alwaysApply: true
+scope: estate
+repos: [core, gui, prism]
 ---
 
 # Documentation After Plans
@@ -18,13 +20,14 @@ the changes.
 - **What to update:** fix outdated steps, names, examples, and TODOs; add
   or revise sections for new behavior; keep cross-references and checklist
   items accurate. Write a CHANGELOG entry **only** for user-visible,
-  consensus, API, or security-relevant deltas, as a file under
-  `docs/changelog.d/`, not an edit of `docs/CHANGELOG.md` (see
-  [`95-documentation-lifecycle.mdc`](95-documentation-lifecycle.mdc)).
+  consensus, API, or security-relevant deltas, in the form the
+  repository's changelog takes (see
+  [`95-documentation-lifecycle.mdc`](95-documentation-lifecycle.mdc);
+  shekyl-core's is a file under `docs/changelog.d/`).
   Design-round archaeology stays in the plan doc. Completing a plan
   includes archive-or-contract: living SoTs stay and flip their Status
-  banner; finished plans/preflights `git mv` to `docs/completed/` in the
-  same change per `IMPLEMENTATION_INDEX.md` §8.
+  banner; finished plans/preflights `git mv` to `docs/completed/` in the same change per the repository's archive checklist
+  (shekyl-core's: `IMPLEMENTATION_INDEX.md` §8).
 - **Scope:** prefer docs under `docs/` and the main README; update
   file-level or inline docs (Doxygen, module READMEs, Rust crate-level
   `//!` comments) when the change touches that code.
@@ -33,8 +36,8 @@ the changes.
   not optional — the doc is wrong and will mislead readers.
 - **Sweep the indexes, not just the text.** A correction is not landed until
   every surface that *points at* the corrected text agrees with it: the item's
-  own **heading**, tables of contents, `docs/design/IMPLEMENTATION_INDEX.md`
-  rows (rule 94), `docs/FOLLOWUPS.md` entry titles, cross-references from other
+  own **heading**, tables of contents, the tracking-index rows (shekyl-core's
+  `docs/design/IMPLEMENTATION_INDEX.md`, [`194-tracking-index`](https://github.com/Shekyl-Foundation/shekyl-core/blob/dev/.cursor/rules/194-tracking-index.mdc)), `docs/FOLLOWUPS.md` entry titles, cross-references from other
   docs, and the doc-comment headings above a corrected Rust item.
 
   **A corrected body under a stale heading is worse than an uncorrected
@@ -108,7 +111,7 @@ When a Plan has N tasks, the (N+1)th task is:
 
 > "Read and update documentation (docs/*.md, README, design/API docs) to
 > reflect the changes. Archive-or-contract per rule 95. Add a
-> `docs/changelog.d/` entry only if the change is user-visible, consensus,
+> changelog entry only if the change is user-visible, consensus,
 > API, or security-relevant."
 
 Complete that task before considering the Plan done.

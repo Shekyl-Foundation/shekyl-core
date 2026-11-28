@@ -150,7 +150,7 @@ one build covers each architecture.
     `rust/.cargo/config.toml`, with no `RUSTFLAGS`.
   - `ca3_pq_sign_timing ml-dsa`: 1,000,000 samples per comparison.
 - **The floor device: the second Raspberry Pi 4, the 4 GB board** (rule
-  76's floor; Cortex-A72; no SSD).
+  176's floor; Cortex-A72; no SSD).
   - Target `aarch64-unknown-linux-gnu`, built on the device at `-j 2` and
     not timed.
   - `ca3_pq_sign_timing ml-dsa 500000`, unless its shake-down says
@@ -303,7 +303,7 @@ seed, so none of them can draw the registered pair by default.
 
 **One registered run per device**, each with its own verdict, from a fresh
 recursive clone of the commit that carries this revision.
-- **The floor device:** the 4 GB Raspberry Pi 4 (rule 76's floor), target
+- **The floor device:** the 4 GB Raspberry Pi 4 (rule 176's floor), target
   `aarch64-unknown-linux-gnu`, built on the device at `-j 2` and not timed,
   under a quiet claim.
 - **The maintainer's Windows laptop** (Intel Core i9-11950H), through the
@@ -805,7 +805,7 @@ series and the conditions are in the estate's private captures.
 
 ### Revision 2: the floor device's shake-down and registered attempt 1 (2026-11-23): INCONCLUSIVE
 
-The floor device is the 4 GB Raspberry Pi 4 (rule 76's floor, Rev 1.2,
+The floor device is the 4 GB Raspberry Pi 4 (rule 176's floor, Rev 1.2,
 `c03112`). The maintainer confirmed it as the floor for these runs on
 2026-11-23, after checking that memory was not a factor:
 - 3.30 to 3.31 GB was available at the start and the end of every run;

@@ -41,7 +41,7 @@
 # Scope, stated so it is not mistaken for a small edit: ~48 cSHAKE call sites,
 # 6 mechanisms, 117 rows across the workspace, and FROST's associated consts do
 # not fit the same shape and need their own treatment. That is a design round
-# (rules 19 + 26), not a review fix.
+# (rules 119 + 26), not a review fix.
 #
 # THROUGH-LINE INVARIANT (SA, ratified): a live domain string's BYTES are
 # consensus / derivation state, not a naming convention. Style inconsistency

@@ -121,7 +121,7 @@ it uses that seed.
 
 **Machines**, by role and processor.
 
-- **The floor device** (rule 76): a Raspberry Pi 4 (Cortex-A72), under a
+- **The floor device** (rule 176): a Raspberry Pi 4 (Cortex-A72), under a
   quiet claim in the estate's usage ledger, from a fresh clone of the
   pushed commit in a new directory. Recorded at the start and the end of
   the run, for the record and not as a line: the CPU governor (it was

@@ -72,7 +72,7 @@ Ground-truthed against code, not doc claims (per the inter-stage cleanup PR).
 **Stage 1 disposition:** critical-path trait extraction is complete, and the
 last V3.0 pre-genesis economics item — the C2c base-subsidy cutover — has now
 landed as its own consensus-path PR (kept out of doc/chore bundling per
-`20-rust-vs-cpp-policy.mdc` and `07-consensus-atomic-cutovers.mdc`).
+`RULE_20_RUST_VS_CPP.md` and `107-consensus-atomic-cutovers.mdc`).
 
 **Tech-debt tracker consolidation (inter-stage cleanup PR #92):** open
 structural-debt *tracking* now lives in a single place — `docs/FOLLOWUPS.md`.

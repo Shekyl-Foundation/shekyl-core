@@ -18,7 +18,7 @@ outgrown: §§10–11.13 record a six-host ring sampled for an hour across three
 providers, a 60-service dialability rig, and 20 hidden services restarted and
 polled to recovery — all on VMs, and all after §9.4's privileged install
 cleared. **A status line that disagrees with its own document is the failure
-rule 94 exists to catch**, and this one was read as current in a later session
+rule 194 exists to catch**, and this one was read as current in a later session
 (`DAEMON_RELAY_PRIVACY.md` §90.3) and used to justify a claim about what had
 been measured.
 
@@ -34,7 +34,7 @@ and a sentence that describes that code says so. **Current (Q12-R1,
 bootstrap. *Records-was (2026-08-13):* the seed estate carried a current
 binary and four hidden services.
 
-Identifiers `Q12-R1…R7` extend the already-registered `Q12-` family (rule 94 §1;
+Identifiers `Q12-R1…R7` extend the already-registered `Q12-` family (rule 194 §1;
 no new prefix is minted).
 
 ---
@@ -118,7 +118,7 @@ construction and costs the seed nothing, but the check is receiver-side and
 unconditional: an exception that lets *some* peers send cross-zone entries
 weakens the guarantee for every non-seed node, because the receiver cannot
 verify that the sender is a seed. Mission hierarchy: privacy is the product and
-is not a per-peer setting (`00-mission` §2, `10-shekyl-first`).
+is not a per-peer setting (`00-mission` §2, `110-shekyl-first`).
 
 ### 2.3 The intent *is* served — by two different mechanisms (*records the code at `14c2ee599`, 2026-08-11*)
 
@@ -275,7 +275,7 @@ the distinction the condition was reaching for.
 
 **Q12-R-W1 — repo PR (small, C++).** Delete the Monero onion and i2p seed
 lists (§2.4).
-[`20-rust-vs-cpp-policy`](../completed/RULE_20_RUST_VS_CPP.md) is
+[`RULE_20_RUST_VS_CPP`](../completed/RULE_20_RUST_VS_CPP.md) is
 named explicitly rather than slid past: the p2p layer has no Rust counterpart
 and is not on the current migration front, and the change is a **data
 constant**. It adds no C++ surface area for the Rust rewrite to pay down.
@@ -555,7 +555,7 @@ design outright, which is the cheapest thing to learn early.
 1. Q12-R-W1 — repo PR: Monero seed deletion. **Q12-R-W3 rides this PR** —
    independent of the run, but both touch `add_zone`'s neighbourhood, so they
    share a validation surface
-   ([`19-validation-surface-discipline`](../../.cursor/rules/19-validation-surface-discipline.mdc)).
+   ([`119-validation-surface-discipline`](../../.cursor/rules/119-validation-surface-discipline.mdc)).
 2. Q12-R-W2 — seed estate: rebuild from `dev`, restart `seedusw`, tor + HS ×4,
    cross-`--add-peer`, **keys backed up**. This is **real scope, not
    configuration** — four binaries predating the arc, one host down, no tor
@@ -745,7 +745,7 @@ ran on three seeds and died with `Illegal instruction` on `skl-seedaus`:
 
 `CMakeLists.txt` defaults `ARCH` to `native` (`set_default_arch`), so the
 container compiled for the machine that was handy — **exactly the failure
-[`76-device-provisioning-floor`](../../.cursor/rules/76-device-provisioning-floor.mdc)
+[`176-device-provisioning-floor`](../../.cursor/rules/176-device-provisioning-floor.mdc)
 names**, reached through a build flag rather than a constant.
 
 Rebuilt with `-DARCH=x86-64` and `-C target-cpu=x86-64` for the Rust side.
@@ -1459,7 +1459,7 @@ a constant carried across a boundary its derivation never crossed.
 
 **Ruled: the suppression window is a property of the transport, and the anon-zone
 value is derived, not picked.** The shape is settled here; the number is not
-invented here ([`76-device-provisioning-floor`](../../.cursor/rules/76-device-provisioning-floor.mdc)
+invented here ([`176-device-provisioning-floor`](../../.cursor/rules/176-device-provisioning-floor.mdc)
 — provisioned at the floor, from a measurement, never at whatever was handy):
 
 - `is_addr_recently_failed` must consult a **per-zone** window rather than one
@@ -1567,7 +1567,7 @@ R11 said the floor is unreachable by **arithmetic** at `A ≤ 12`, because
 `12 > A − 1`. This says it is unreachable by **suppression** up to roughly
 `A ≈ 19` — a band half again as wide, for a completely different reason, and one
 that no amount of population growth inside that band fixes. Both bite exactly
-where rule 76 says to provision: at a young network.
+where rule 176 says to provision: at a young network.
 
 **It also confirms the sequencing ruling.** An `A = 15` arm run under the
 current constants would report roughly a third of nodes at the floor and
@@ -3463,8 +3463,8 @@ gate.
   moved the same conformance vectors as the 3500 ms landing. As ruled, this
   change moves **no derived number** — no embargo, no timeout, no pin — so the
   §90.4 landing decision is free to proceed on its own schedule.
-- **What implementation owes** (registered per rule 94, Rust-owned per rule
-  20): the observer slice — transition logging, the admin-surface field, and
+- **What implementation owes** (registered per rule 194, Rust-owned per
+  `RULE_20_RUST_VS_CPP`): the observer slice — transition logging, the admin-surface field, and
   the named count type at the boundary it crosses, with the floor comparison
   as a constructor that produces a transition record, not as `Ord` (§18.4).
   No consensus surface, no wire change, no C++ beyond the existing snapshot

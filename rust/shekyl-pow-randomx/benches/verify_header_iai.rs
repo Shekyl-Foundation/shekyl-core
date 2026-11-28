@@ -24,7 +24,7 @@
 //! An instruction count on the CI runner's x86, where the verifier
 //! dispatches to the instruction set it finds. It says whether a pull
 //! request changed the work. It is not a time and not a floor figure
-//! (rule 76): the floor's figure is BA-T40's, and the Rust-to-C latency
+//! (rule 176): the floor's figure is BA-T40's, and the Rust-to-C latency
 //! ratio is BA-T27's.
 
 use std::hint::black_box;

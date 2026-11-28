@@ -59,7 +59,7 @@ requires to open before the M1 gate PR merges; it must discharge the
 named obligations O-1 (determinism), O-2 (per-branch monotonicity),
 O-3 (pop-symmetry), recorded here and cross-referenced from M1 §1.3.**
 Per `05-system-thinking.mdc` (specification first) and
-`26-sub-pr-design-discipline.mdc` (cited: consensus-critical sub-PR —
+`126-sub-pr-design-discipline.mdc` (cited: consensus-critical sub-PR —
 the freeze rule is a consensus-state writer feeding the M1 gate and
 the gate-2 challenge verifier).
 
@@ -75,7 +75,7 @@ this round (pre-genesis posture: no running testnet daemon during the
 wallet-rewrite month; `rm -rf ~/.shekyl` is the migration path per
 `15-deletion-and-debt.mdc`). §6 exercises that authorization once
 (one table deleted); §5 advances the FFI boundary per
-`20-rust-vs-cpp-policy.mdc`.
+`RULE_20_RUST_VS_CPP.md`.
 
 **Timeframes (rule 05).** *Now:* the writer that makes the M1 gate's
 input and the gate-2 challenge registry real. *Mining-era end:*
@@ -353,7 +353,7 @@ re-apply cycles and asserts counter == walk at every step.
 
 ---
 
-## 5. FFI boundary advancement (rule 20, authorized)
+## 5. FFI boundary advancement (`RULE_20_RUST_VS_CPP`, authorized)
 
 ### 5.1 Rust owns the freeze rule
 
@@ -361,7 +361,7 @@ re-apply cycles and asserts counter == walk at every step.
 **two production call sites** (connect §4.1, pop §4.2), which is
 precisely the M1-1 off-by-one-drift shape: two sites computing the
 same predicate independently fork at the boundary. Per
-`20-rust-vs-cpp-policy.mdc` (new consensus logic belongs in a
+`RULE_20_RUST_VS_CPP.md` (new consensus logic belongs in a
 `shekyl_*` Rust entry point) and the M1 single-source discipline:
 
 - `shekyl-archival-retention` gains
@@ -373,7 +373,7 @@ same predicate independently fork at the boundary. Per
   FFI. The tripwire (§8) refuses `/ SEGMENT_LEAF_COUNT` and
   `% SEGMENT_LEAF_COUNT` spellings in `src/`.
 
-The LMDB reads/writes themselves stay C++ (rule 20 "C++ if all of"
+The LMDB reads/writes themselves stay C++ (`RULE_20_RUST_VS_CPP` "C++ if all of"
 #4: epee/LMDB re-exposure; the marshaling-shim shape, same as the M1
 count pass).
 

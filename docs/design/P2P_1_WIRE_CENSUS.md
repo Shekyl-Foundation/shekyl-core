@@ -37,7 +37,7 @@ CT- CT-ACT- CW- DQ- DRS- DS- F- GF- LV- M3a– MR- MS- MSW- OA- P- PC- PD- PR-
 PW- Q12- RC- RF- RK- RP- RT- S- SA-R- SCE- SH- SJ-DQ- SM-DQ- SO- SP- TJ- VG-
 WI- WI-RPC- WP- X-` — plus a tree-wide grep for `PWC-` returning zero hits.
 `PWC` is distinct from `PW`, `PC`, `PD`, `PR` and `P`. Registered at birth
-(rule 94 §1) in this document's landing PR.
+(rule 194 §1) in this document's landing PR.
 
 **Scope boundary, re-verified at this pin:**
 [`RPC_TRANSPORT_POSTURE.md`](RPC_TRANSPORT_POSTURE.md) §2.1 — "The
@@ -80,7 +80,7 @@ as the owning doc states it, not as remembered.
 
 **Two locate-level defects found during the sweep**, both inside
 enumerate-don't-fix as *registration hygiene* rather than design changes, and
-both fixed in this PR because the index is load-bearing (rule 94):
+both fixed in this PR because the index is load-bearing (rule 194):
 
 - **Broken link — repaired in this PR.** At the pin, the index's `PW-1…PW-28`
   row linked `P2P_REQUIREMENTS_REGISTER.md`, a path the `30cd547e2` rename had
@@ -233,7 +233,7 @@ grounding absence on the entry points rather than on a headline number.
   consequence: the `_` padding field and `dandelionpp_fluff` on 2002
   (PWC-C2), and fragmentation/noise sizing (PWC-A9).
 - **The persisted peerlist store is IN** — `net_peerlist.cpp`,
-  `net_peerlist_boost_serialization.h` — because rule 42's version-constant
+  `net_peerlist_boost_serialization.h` — because rule 142's version-constant
   discipline applies to it and #587 exercised exactly that.
 - **`contrib/epee` levin transport is IN only where it enforces a wire
   bound** (`levin_protocol_handler_async.h:421-506, 619`); the rest of epee is

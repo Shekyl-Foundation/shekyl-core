@@ -28,7 +28,7 @@
 //! Rule cross-references: `60-no-monero-legacy.mdc` — segregation forks
 //! and pre-fork output sets are Monero-lineage concepts that do not apply
 //! to a V3 fresh-start wallet and are deliberately absent from this
-//! struct. `70-modular-consensus.mdc` — this module lives in
+//! struct. `170-modular-consensus.mdc` — this module lives in
 //! `shekyl-engine-state` rather than `shekyl-consensus` because
 //! `shekyl-consensus` holds only the consensus lock windows; wallet safety
 //! policy is a wallet-state concern.

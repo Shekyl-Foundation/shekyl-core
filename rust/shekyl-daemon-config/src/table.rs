@@ -163,7 +163,7 @@ const fn rejected(name: &'static str, reason: &'static str) -> Row {
     }
 }
 
-const SYNC_PROTOCOL_BUDGETS: &str = "chain sync's protocol constants replace it: the per-response, objects and global byte budgets and the deadlines, provisioned at the floor device (rule 76); a metered link is `p2p-download-max`, and a byte quota reopens under IG-Q40 (P2P_3_CHAIN_SYNC_BRIEF.md CS-Q12)";
+const SYNC_PROTOCOL_BUDGETS: &str = "chain sync's protocol constants replace it: the per-response, objects and global byte budgets and the deadlines, provisioned at the floor device (rule 176); a metered link is `p2p-download-max`, and a byte quota reopens under IG-Q40 (P2P_3_CHAIN_SYNC_BRIEF.md CS-Q12)";
 const SYNC_HASHER_BUDGET: &str = "the shared hasher budget sets it, derived from the floor device's scratchpads (P2P_3_CHAIN_SYNC_BRIEF.md CS-Q12, DRS_X_STORE_FLIP.md DX-Q2 item 6)";
 const NO_DAEMONIZE: &str = "shekyld never daemonizes or registers itself; installing is the installer's and shekyl-cli's, and on Windows shekyld answers the service manager through `service` (RPC_CHANNEL.md RT-16)";
 const NO_TLS: &str = "the RPC channel replaces TLS and HTTP authentication (RPC_CHANNEL.md RT-11)";

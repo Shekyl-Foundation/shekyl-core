@@ -431,7 +431,7 @@ pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(36);
 ///
 /// A newtype rather than a bare `u64` so a height or a count cannot be
 /// handed to the version check by mistake, and so the cell has its own
-/// snapshot under its own name. Per rule 42's *envelope vs payload*
+/// snapshot under its own name. Per rule 142's *envelope vs payload*
 /// distinction this is the **payload/layout** version: it is what the
 /// store's bytes are laid out under, and there is no envelope version
 /// because redb owns the file container (§11.1(c)).

@@ -23,7 +23,7 @@
 //! shares.
 //!
 //! The rates are protocol data, held per connector in [`accept_bound`]
-//! beside its declaration, the same on every node (rule 71). None is an
+//! beside its declaration, the same on every node (rule 171). None is an
 //! operator setting.
 
 use std::collections::HashMap;

@@ -113,7 +113,7 @@ Twice absence was claimed without searching. Search first.
 
 **Process.** Cites
 [`STAGE_1_PER_PR_TEMPLATE.md`](STAGE_1_PER_PR_TEMPLATE.md) and
-[`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc).
+[`126-sub-pr-design-discipline.mdc`](../../.cursor/rules/126-sub-pr-design-discipline.mdc).
 **Halt condition (Track B only):** no Track B implementation until
 design closure + pre-flight + explicit go-ahead. **Track A** is **not**
 held by that halt — still needs **explicit go-ahead** (`feat/msw-*`).
@@ -122,7 +122,7 @@ held by that halt — still needs **explicit go-ahead** (`feat/msw-*`).
 [`V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md)
 §10.3.1 (2026-07-14).
 
-**Identifier families (rule 94).**
+**Identifier families (rule 194).**
 
 | Family | Owns |
 | --- | --- |
@@ -1202,7 +1202,7 @@ not a quiet reopen of MS-8.
    go-ahead** (this doc does not authorize code). F-6/F-7 remain
    Round 1 / Track B and do **not** block Track A or MSW-6.
 
-### §7.2 Track B (MS-*) — rule-26 halt
+### §7.2 Track B (MS-*) — rule-126 halt
 
 1. Satisfy §6 Round 1 closure prerequisites (F-3/F-6/F-7 — ✅ all discharged 2026-07-16).
 2. Round 2 → Round 3 → pre-flight (Round 0 / R0-D#).

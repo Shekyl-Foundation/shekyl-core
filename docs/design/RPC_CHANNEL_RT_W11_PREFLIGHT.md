@@ -1,4 +1,4 @@
-# RT-W11 — the channel's clients and the tunnel: rule-26 pre-flight
+# RT-W11 — the channel's clients and the tunnel: rule-126 pre-flight
 
 **Status:** Round 0 pre-flight — **questions RULED 2026-11-15** (Rick):
 `IG-Q108`…`IG-Q111` as recommended, and `RT-O37` as recommended, with the

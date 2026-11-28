@@ -135,7 +135,7 @@ the commit that carries this record:
   showing `target-feature=+crt-static`, and the binary's dependencies
   without `VCRUNTIME140.dll`.
 - **The floor device: a second Raspberry Pi 4 the maintainer provides**
-  (Cortex-A72, rule 76), not the Pi under the cover-traffic lane's claim.
+  (Cortex-A72, rule 176), not the Pi under the cover-traffic lane's claim.
   Target `aarch64-unknown-linux-gnu`, no rustflags, under a quiet claim in
   the estate's usage ledger. Its identity is recorded before the run: the
   model (`/proc/device-tree/model`), the board revision (`/proc/cpuinfo`),

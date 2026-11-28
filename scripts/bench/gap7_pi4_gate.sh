@@ -5,7 +5,7 @@
 # BSD-3-Clause
 #
 # GAP-7 floor capture: worst-case cold-block connect verification on the
-# stated minimum spec (rule 76: Raspberry Pi 4 Model B; reference-device
+# stated minimum spec (rule 176: Raspberry Pi 4 Model B; reference-device
 # discipline per PERFORMANCE_BASELINE.md §8.2 — active cooling, stock clock,
 # toolchain and RUSTFLAGS named, capture archived under docs/benchmarks/).
 #
@@ -14,7 +14,7 @@
 # FINDING about the floor, not an artifact to smooth (steering ruling,
 # 2026-09-04).
 #
-# Rule 76 §4: values AND INCREMENTS are measured ON this device — the multi-
+# Rule 176 §4: values AND INCREMENTS are measured ON this device — the multi-
 # point budget sweep runs here in full so the marginal cost per weight-byte
 # is the Pi's own, never the dev box's linearity reused.
 #
@@ -92,7 +92,7 @@ thermal_sampler() {
   echo "# filter=${FILTER:-<none>} (criterion's: only the benches the regex names run)"
   echo "# randomx_mode=light/cache BY CONSTRUCTION — not a configuration that can drift between runs: shekyl-pow-randomx is a cache+VM substrate with no dataset arm (rust/shekyl-pow-randomx/src/lib.rs:46-72)"
   echo "# storage_as_run: $(findmnt -no SOURCE -T "${REPO_ROOT}" 2>/dev/null || echo NA) (mmcblk = the SD card, sd = the USB3 SSD); the measured path is CPU-bound and in-memory, so storage does not enter verify_floor"
-  echo "# ram_as_found: 8 GB (Rev 1.4 board) vs the June row's 4 GB — rule 76 names the MODEL and Model B matches; RandomX is light/cache (~256 MB) and the FCMP terms are CPU-bound, so 8 vs 4 GB cannot bind HERE — a future floor measurement that IS memory-sensitive must not inherit this row's device as 'the floor'"
+  echo "# ram_as_found: 8 GB (Rev 1.4 board) vs the June row's 4 GB — rule 176 names the MODEL and Model B matches; RandomX is light/cache (~256 MB) and the FCMP terms are CPU-bound, so 8 vs 4 GB cannot bind HERE — a future floor measurement that IS memory-sensitive must not inherit this row's device as 'the floor'"
   echo "# load_as_found: loadavg $(cut -d' ' -f1-3 /proc/loadavg); busiest: $(ps -eo pcpu=,comm= --sort=-pcpu | head -3 | awk '{printf "%s %s%%; ", $2, $1}')"
   echo "# thermal_start: $(read_temp)"
 } | tee "${OUT_FILE}"
@@ -109,7 +109,7 @@ case "${PHASE}" in
     ;;
   rust)
     # Terms sweep + FULL multi-point budget fill + pow — the increments are
-    # measured here (rule 76 §4), not scaled from anywhere.
+    # measured here (rule 176 §4), not scaled from anywhere.
     if [[ -n "${FILTER}" ]]; then
       (cd "${RUST_ROOT}" && cargo bench -p shekyl-verify-cost --bench block_connect_verify -- "${FILTER}") 2>&1 | tee -a "${OUT_FILE}"
     else

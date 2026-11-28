@@ -5,7 +5,7 @@
 //! value, a discrete-uniform chi-square statistic over a histogram, and a
 //! lag-1 autocorrelation. None of these carry domain semantics — there is no
 //! standoff, label, or funding-seam vocabulary here. This is the
-//! topic-coherent home for reusable GoF math (rule 18 type-placement): a
+//! topic-coherent home for reusable GoF math (rule 118 type-placement): a
 //! consumer such as `shekyl-standoff` (funding-seam conformance) or
 //! `shekyl-crypto-pq` (label-indistinguishability test) depends on
 //! *statistics*, not on another consumer's domain crate.

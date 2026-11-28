@@ -48,7 +48,7 @@ the floor device does not lower `W`'s ceiling, and `W` rests on no open measurem
 Identifier families **`SHT-`** (findings) and
 **`SHT-Q`** (questions), registered in
 [`IMPLEMENTATION_INDEX.md`](../design/IMPLEMENTATION_INDEX.md) §2 with this file
-(rule 94 §1; `check_index_prefix_uniqueness.py` branch (a) — 105 prefixes
+(rule 194 §1; `check_index_prefix_uniqueness.py` branch (a) — 105 prefixes
 unique at the pin, `SHT` clear of `SPR`, `SPR-Q` and `SP-T`). Template: the
 I4 round's shape — state the objective, enumerate constraints at source,
 measure what can be measured, derive bounds, pick by a stated rule,
@@ -476,7 +476,7 @@ pairs ∝ shards × holders ∝ `X/T`. Same direction as `L2`'s per-shard state 
 list, not an operator), this row and that count are what remain of the
 bookkeeping floor. *Domain:* both. *Grade:* **soft**.
 *Falsifier:* a settlement-writer cost measurement at the chosen `T` exceeding
-the per-block budget on the rule-76 floor device.
+the per-block budget on the rule-176 floor device.
 
 ### Upper bounds — `T` too large
 
@@ -565,7 +565,7 @@ becomes a number. The harness exists (PR #746). This is the single measurement
 the round most wants, and it is cheap.
 
 **`U1b` — the server's egress. No authority exists in the tree.** An honest `P`
-on the rule-76 floor device (Pi 4, whose "binding constraint is uplink and Tor
+on the rule-176 floor device (Pi 4, whose "binding constraint is uplink and Tor
 circuit throughput", [`ARCHIVAL_SHARD_FETCH.md`](../design/ARCHIVAL_SHARD_FETCH.md):758)
 must serve, per epoch: 3 challenge reads per drawable `(P, shard)` pair, plus
 organic reads, plus band-2 syncers filling from `(C, h_scarce]`. Each read is
@@ -584,7 +584,7 @@ this round cannot produce it. **Measured 2026-10-03 (§10.8): it does not bind.*
 
 **`U2` — the participation floor.** The smallest holding a small operator can
 take is one shard: at `T = 200` and 16.7 KB/tx that is 3.34 MB against the
-rule-76 device. Non-binding by four orders of magnitude; it would bind only at
+rule-176 device. Non-binding by four orders of magnitude; it would bind only at
 `T ≳ 10⁵`. *Domain:* both. *Grade:* **soft, non-binding at any plausible `T`**.
 *Falsifier:* a floor-device storage budget that one shard exceeds.
 
@@ -638,7 +638,7 @@ asymmetry decides the direction"*:
 - **Too large.** Honest witness misses: **unpriced, and they land on
   operators**. `L`'s ruling refuses to absorb them by raising `L`. They are
   invisible to the operator who suffers them, which is the same failure shape
-  rule 76 exists to refuse — a cost that sorts by hardware and never surfaces.
+  rule 176 exists to refuse — a cost that sorts by hardware and never surfaces.
 - **Too small.** `L2`/`L3` rows: settlement rows, `r_market` rows, personas per
   large archiver. **Node-local, visible, and recoverable** — they cost disk and
   bookkeeping, and a wrong choice can be re-pinned without anyone silently
@@ -708,7 +708,7 @@ quantities — not a value for `T`. (*`L2`'s ruling was the third until
 
 This measurement now decides both `T` and `L` (`SHT-7`), so its analysis is
 registered **before** it runs. Otherwise it is the one number in the round that
-could be read after the fact to land on 200 — the shape rule 76 refuses in a
+could be read after the fact to land on 200 — the shape rule 176 refuses in a
 constant and the same reason `L`'s own falsifier says "the re-pin must not simply
 track the measurement upward".
 
@@ -909,7 +909,7 @@ that gate's bookkeeping:
 | **`SHT-3`** | `SF-D7` still states *"`N` is also `N × SHARD_BYTES` on the Pi 4 floor (the client materialises the segment to verify `R_k`)"* ([`ARCHIVAL_SHARD_FETCH.md`](../design/ARCHIVAL_SHARD_FETCH.md):183). Item 5 retired the whole-shard materialise and refuted F32's reason 2 on that ground. Stale premise on a RULED row, and it is the text a future reader would use to derive a memory bound on `T`. | STALE TEXT on a RULED row — owner `SF-`. **FIXED 2026-10-03:** `SF-D7` carries a dated amendment — the memory leg is `N` times one fetch's peak, one transaction (at most `MAX_TX_SIZE`) under per-tx streaming verification; it records that the streaming seam and a valid maximum response length are fetch Sub-PR 2's to build, and what the shipped client buffers meanwhile |
 | **`SHT-4`** | `U1` is not bounded by `CHALLENGE_RESPONSE_BLOCKS` (500 blocks ⇒ a 10.8 GB budget against a 3.34 MB shard) and the memory leg is retired by item 5. **AMENDED on review:** the first pass then derived the real bound against the 180 KB/s *burst floor* and reported the row as slack, having missed W₂'s **measured** single-attempt figures on the same page (`:1091-1095`). On the measurement the heavy-end ceiling is ~[140, 490] and **`T = 200` is inside it** — `U1a` is unresolved at 200, not slack. The steering prediction that `U1` is the bound most likely to set `T` is **reinstated**; what was wrong in it was only the denominator. | CONFIRMED, then AMENDED — the amendment is the round's headline |
 | **`SHT-7`** | **`L`'s fetch-span component is justified by a byte count from the retired segment, and its own page already contradicts it.** `L = 4`'s span was sized on "~20 s for 3.33 MB" (`ARCHIVAL_SHARD_FETCH.md`:1074-1090, the 180 KB/s floor); W₂ at `:1091-1095` then measured **48.27 / 86.06 s** for the same object — 2.4–4.3× worse — and `L` stayed 4 on a *different* argument ("seven attempts of the cold p99 fit under six minutes"). So the span text is stale relative to the measurement one paragraph below it, and **deriving `T` from that span would be circular**: it would feed the retired 3.33 MB back into `T`'s own bound, which is exactly what this round was opened to remove. The independent half is `SF-D6`'s retry budget; that is the part to keep. Restate `L`'s span **per byte**, or re-pin `T` and `L` together — but do not call selecting inside the current span "the cheaper option", which the first pass did. | CONFIRMED — owner `SF-`, and it is why §4's rule selects from the lower edge. **CLOSED 2026-10-02 (§10.6 item 3):** the span is restated per byte on the worse measured day and `L = 4` holds |
-| **`SHT-5`** | `U1b` — an honest server's sustained egress on the rule-76 floor device — **has no authority anywhere in the tree**. The only transport figure (180 KB/s) is requester-side and a burst floor from a null result. This is the one bound that cannot be closed by reasoning. | OPEN — FOLLOWUPS row, measurement owed. **CLOSED 2026-10-03 (§10.8):** measured on the floor device; at the 1× object 12 of 616 fetches missed (95 % interval 1.12 – 3.37 %), so `U1b` does not lower `W`'s ceiling |
+| **`SHT-5`** | `U1b` — an honest server's sustained egress on the rule-176 floor device — **has no authority anywhere in the tree**. The only transport figure (180 KB/s) is requester-side and a burst floor from a null result. This is the one bound that cannot be closed by reasoning. | OPEN — FOLLOWUPS row, measurement owed. **CLOSED 2026-10-03 (§10.8):** measured on the floor device; at the 1× object 12 of 616 fetches missed (95 % interval 1.12 – 3.37 %), so `U1b` does not lower `W`'s ceiling |
 | **`SHT-6`** | `rust/shekyl-economics-sim/src/burden.rs:33-39`'s `SHARD_BYTES` comment derives 3.33 MB from `SEGMENT_LEAF_COUNT × ~128 B` — the retired **leaf-segment** estimate — while presenting it as the "§2 corpus figure". Corrected in this PR (the only code this round touches). | FIXED here |
 | **`SHT-8`** | **Two of `SHT-Q1`'s five falsifier surfaces were evaluated against the retired partition, and fixing one of them can hand `T` a fifth job.** `FrozenSegmentCount` counts **J-segments** (`escalation.rs:48-58`), and `shard_age_milli`'s no-segment branch is segment-keyed (`admission.rs:305-341`) — the leaf partition `PDM-Q12` retired. So "not frozen, not counted" and "scores `age_milli = 0`" are true of segments and say nothing about an open **T-shard**; for those two surfaces the falsifier is **unrun**, not passed. The consequence is bigger than the table: `staker_pool_share_at` saturates at `shekyl_escalation_knee_n = 100,000`, and re-keying `n` from segments to closed T-shards turns 100,000 × 25,992 leaves (~1.3 × 10⁹ txs) into 100,000 × 200 = 2 × 10⁷ storage ids — the knee **~65× sooner once the ramp is on, with no economics changed** (it ships flat, so the effect is latent — `SCC-Q2`), and every `T` re-pin thereafter moving when the staker share saturates. **It is a consensus operand, not an economics knob.** `n` reaches consensus through `Blockchain::parent_frozen_segment_count` → `validate_miner_transaction` (`src/cryptonote_core/blockchain.cpp:1494-1508`), derived from `get_curve_tree_leaf_count()` — the **retired leaf geometry** — and read at a pinned parent state with a throwing assert (*"escalation operand read-point violated"*). So the coinbase's fee split depends on it. **CORRECTED 2026-09-27 (`SCC-Q2`'s ruling):** the stronger claim this row first made — *"a wrong re-key changes which coinbases are valid"* — holds only **once the escalation is switched on**. It ships **flat**: `shekyl_escalation_asymptote_share` equals the floor `shekyl_staker_pool_share` (`config/economics_params.json:16-18`, *"the DELIBERATE pre-ceremony NEUTRAL value"*), so the split is 25 % whatever `n` is and a wrong re-key changes no coinbase's validity **today**. The requirement that the re-key be one atomic C++/Rust change is unchanged, and its reason is sharper: the operand is computed on both sides, and a mismatch that is harmless while flat becomes a chain split the moment the GF-7 ceremony raises the asymptote. Likewise the ~65× figure bites only after the ceremony. **Blast radius, otherwise bounded:** per `FL-V4` the escalation splits the *burned* amount between destruction and the staker pool and **cannot move a fee rung** (miner income depends on `burn_pct` alone), so what it clocks is **monetary policy** — how much burned value is redirected rather than destroyed — a gate-1/7 concern, not a ladder one. **Also unlisted:** `n` appears in **no** row of `PDM-Q6` item 4's nine-row re-key table, and `knee_n` is named by no design doc that owns its unit — so this is a consumer of the retired geometry that the re-key census missed. Fix: re-key `n` to a `T`-independent burden quantity (§5). | CONFIRMED — found on review of this round's own falsifier table. **Owners RULED 2026-10-01 (§10.4):** `n`'s re-key landed in the Rust validator on 2026-09-30; `g(age)`'s segment-keyed no-segment branch is re-keyed in the **shard-count cutover** ([`ARCHIVAL_SHARD_COUNT_CUTOVER.md`](../design/ARCHIVAL_SHARD_COUNT_CUTOVER.md)), Rust-side — **LANDED 2026-10-01** (`ShardClose`, `shard_close`; falsifier run, §2's falsifier table); `escalation_knee_n`'s re-derivation is the **sim lane's**, per `SCC-Q2` — **LANDED 2026-10-01** (`2,250,000` closed shards, `ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md` §12.13) |
 | **`SHT-9`** | **A `shekyl-chain-rules` fixture carries a shape consensus refuses.** `harness::fixture::serve_credit_only` builds `prunable: None` with empty `pqc_auths` — the **pre-`RF-D1`** serve-credit form, identified by the *absence* of a prunable region. `RF-D1` inverted that: the region is now present and holds one non-empty pruned pass record per credit vin. Verified empirically rather than read off: `Transaction::validate_context_free_pruned` refuses it — *"serve_credit tx must be fee-only — no outputs, empty `pqc_auths`, no spend-proof material, and exactly one pruned pass record per serve-credit vin (§2.5, RF-D1)"*. It does **not** break `SHT-Q1`'s equivalence (a conforming serve-credit body carries good, and `tx_domain_tests` builds one), but a fixture that consensus would refuse is a false negative waiting for any test that assumes it is valid. | CONFIRMED — found while building the equivalence test; owner the `CHAIN_RULES_SLICE` lane, FOLLOWUPS. **FIXED 2026-10-03 (PR #942):** worse than a false fixture — CEN-H20 admitted the shape, which live C++ refuses and the store cannot hold. H20 now requires the `RF-D1` region and CEN-J2, newly implemented, one record per credit vin (a conformance correction, `CHAIN_RULES_SLICE_5.md` §5); both fixtures carry the region, and leg (f) covers a connected credit end to end |
@@ -1146,7 +1146,7 @@ already reasoning in bytes through `U1a` — in place of the transaction count.
 - I13's equality, landed as ruled;
 - option (a)'s prefix descriptor, if chosen;
 - a cumulative-weight cell in `block_info` beside `cumulative_tx_count`, which stays
-  because it feeds the fee ladder. That is +8 B per block, 104 → 112 B, and a rule-42
+  because it feeds the fee ladder. That is +8 B per block, 104 → 112 B, and a rule-142
   schema bump;
 - `SHT-Q1`'s text amended from "`T` transactions" to "weight `W`";
 - the cutover census's family-1 rows re-keyed, and `SHARD_TX_COUNT` /
@@ -1203,7 +1203,7 @@ bytes, pays fee for them, and stays under `TX_WEIGHT_LIMIT`.
 beside `cumulative_tx_count`: the parent's value plus the sum of this block's declared
 lengths, under `checked_add` (SI-8). Every node derives it from kept prefixes, including a
 skeleton-only rebuild, and the pop journal reverts it like the transaction count. That is
-+8 B per block (104 → 112), and a rule-42 schema bump. `cumulative_tx_count` stays, because
++8 B per block (104 → 112), and a rule-142 schema bump. `cumulative_tx_count` stays, because
 it feeds the fee ladder.
 
 **The boundary rule — one sub-choice.**
@@ -1374,7 +1374,7 @@ mixer measures the finished bytes itself.
 
 **Item 1 narrowed by the build brief's rulings (Rick, 2026-09-29).** There is **one**
 txid mixer, in Rust. C++ `calculate_transaction_hash` becomes an FFI call into it, with
-its hashing deleted and no length term added in C++ (rule 20). And **row 3 = (b):** the
+its hashing deleted and no length term added in C++ (`RULE_20_RUST_VS_CPP`). And **row 3 = (b):** the
 C++ LMDB archival path is frozen — no new LMDB tables, cells or archival logic; the
 LMDB/Rust-store partition difference is registered as an intended CSR-3a divergence;
 the engine swap completes before genesis, or this is revisited. The census carries both
@@ -1382,7 +1382,7 @@ the engine swap completes before genesis, or this is revisited. The census carri
 
 **Build status, 2026-10-01.** The blocker below is **lifted by §10.3's ruling (option
 (iv))**, and the mixer term, the pins and the corpora are being built as the family-1
-cutover (rule 07).
+cutover (rule 107).
 
 **Build status, 2026-09-29 (PR #910).** Items 2, 4 and 5 are done, and item 1's row and
 cell are built. Item 1's mixer term and item 3's pins and corpora are held on one

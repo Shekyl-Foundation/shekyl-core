@@ -52,7 +52,7 @@ use crate::pscan_cursor::PScanCursor;
 /// would treat every join as no bond (`FN_DSA_HYBRID.md` §5, `FND-18`).
 /// The load refuses; nothing rewrites `0` into `5`. The postcard type is
 /// unchanged, so the schema snapshot does not move: the version word is
-/// what refuses the file (rules 15 and 42).
+/// what refuses the file (rules 15 and 142).
 /// **v10** renames the v9
 /// `pending_unbonds` map and the `unbond_epoch` field to `pending_releases` /
 /// `release_epoch` (the internal Unbond → Release vocabulary rename; wire
@@ -159,7 +159,7 @@ pub enum MintLineageOutput {
 
 /// A persisted archival bond-post match (SP-6 reconcile evidence): an on-chain
 /// bond-post whose `p_canonical_id` is one of `P`'s personas. The **durable, sealed
-/// twin** of the engine-core extractor's transform-shaped `BondPostMatch` (rule 18):
+/// twin** of the engine-core extractor's transform-shaped `BondPostMatch` (rule 118):
 /// `P` accumulates these as it scans so the reconcile set survives restart — the
 /// cursor never re-scans below its frontier, so a match seen in an earlier run would
 /// otherwise be unavailable when 2d-2 SP-R0 corroborates a `Release` at retire time
@@ -240,7 +240,7 @@ pub struct PFundingOutputRecord {
     /// Height of the block carrying the output.
     pub height: BlockHeight,
     /// The settlement epoch `height` falls in. **No live reader yet** (SA-4
-    /// census): as with [`PScanState::accruals`], the rule-18 resume seam
+    /// census): as with [`PScanState::accruals`], the rule-118 resume seam
     /// round-trips this field (`FundingOutputMatch` ⇄
     /// `PFundingOutputRecord`) — carriage, not a reader, since nothing's
     /// behavior changes with the value; the `accruals` map is the per-epoch

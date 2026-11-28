@@ -23,9 +23,9 @@ daemon-configuration lane's, carrying Rick's rulings of 2026-10-14; those and
 the rulings on this round's questions are §1. Implementation follows §12's
 increments, after §10's pre-flight measurements and the prerequisites
 `TSR-F12` (DC-F12) and `TSR-F17` (#1083).
-Identifier families (registered at birth, rule 94): `TSR-F1…TSR-FN` findings,
+Identifier families (registered at birth, rule 194): `TSR-F1…TSR-FN` findings,
 `TSR-Q1…TSR-QN` questions, `TSR-M1…TSR-MN` the measurements that set every
-bound. Rule 26 is cited: the round changes a process lifecycle every connector
+bound. Rule 126 is cited: the round changes a process lifecycle every connector
 depends on, an FFI boundary, and the threat posture of the node's Tor identity.
 
 **Read at:** `shekyl-core` `dev` `bd444b715`, the merge of PR-3 (#1056),
@@ -2092,7 +2092,7 @@ seven-day soaks run after the alpha.12 fleet deploy (Rick, 2026-11-08).
 Then the seven-day soak per platform, the posture line and the RPC fields as
 the record. PR-3's hundred-stop rig is not an acceptance basis.
 
-## 8. Threat-model addenda (rule 26 A3)
+## 8. Threat-model addenda (rule 126 A3)
 
 | Objective | How | Route |
 | --- | --- | --- |
@@ -2121,7 +2121,7 @@ the record. PR-3's hundred-stop rig is not an acceptance basis.
 
 ## 10. Bounds to measure (FOLLOWUPS rows)
 
-Each on the Pi 4, which sets the value (rule 76), and on one x86 host as a
+Each on the Pi 4, which sets the value (rule 176), and on one x86 host as a
 diagnostic. No figure is set before its row lands. The pre-flight rows were
 measured on 2026-10-19 on the floor device (Pi 4, Ubuntu 26.04.1 aarch64) with
 tor 0.4.9.14 (16.0a14), launched as `TSR-Q7` rules (an inherited owning control
@@ -2170,7 +2170,7 @@ The Windows and Linux stop-path figures (closing our end, and the parent's
 `abort()`, each exiting Tor within about 20 ms; C4, C5) are evidence for the
 stop path, not a bound.
 
-**Pre-flight (rule 26).** `TSR-M1`, `TSR-M3` to `TSR-M7`, `TSR-M9` and
+**Pre-flight (rule 126).** `TSR-M1`, `TSR-M3` to `TSR-M7`, `TSR-M9` and
 `TSR-M10` need only today's managed Tor and a SOCKS self-dial, and are measured
 before increment 3 (§12), the first increment whose code uses a bound they set;
 increment 2 uses none. They were taken on 2026-10-19, after the re-pin, on the Tor that ships
@@ -2257,7 +2257,7 @@ in this order, all done before any outside staker runs a persona:
   manager's re-check bound. Until `TSR-W3` the wallet's old supervisor keeps
   its own remedy, ending the incarnation on any failed pin.
 - **`TSR-W2`:** the driver moves to a shared crate, after a Round 0 design
-  PR (rule 26) that settles the host interface, what stays out of the crate,
+  PR (rule 126) that settles the host interface, what stays out of the crate,
   one instance per identity domain, and three additions to the constraints
   below: each instance's log lines kept apart, each instance's own jitter,
   and who hears a persona's "unreachable". The lifted driver splits a
@@ -2292,7 +2292,7 @@ are fixed before the work starts:
   two domains together by timing if one domain's Tor dying triggered
   another's respawn, or if they shared a backoff schedule.
 
-## 12. Increments (rule 26)
+## 12. Increments (rule 126)
 
 1. P2P lane: `TSR-F1`. The link replaces the zone host's `tor_proxy` slot
    here (Rick's TSR-F1 brief, 2026-10-16): the zone host publishes it, the

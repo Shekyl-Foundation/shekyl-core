@@ -67,14 +67,14 @@ detectability rationale for sequencing this PR after #614 is history — the
 sequencing it argued for happened.
 
 **Identifier family:** `C2-R2-Q1…Q11` (registered in
-[`IMPLEMENTATION_INDEX.md`](../design/IMPLEMENTATION_INDEX.md) this PR, rule 94).
+[`IMPLEMENTATION_INDEX.md`](../design/IMPLEMENTATION_INDEX.md) this PR, rule 194).
 
 **Authority chain:** census §10 R2 + rows CEN-G6, G6b, F14b, H1, H3, M3, M4,
 M10; census §12 GAP-6/GAP-7/GAP-8; FEE_LADDER_DERIVATION.md (FL-R12′, FL-R13,
 FL-D4, FL-D5 — pinned `ccfb85c72`); `DAEMON_SUBMIT_VERDICT.md` §8 rows N3, P2,
 P3; [`CONSENSUS_C2_R1_REORG.md`](CONSENSUS_C2_R1_REORG.md) (round-shape
-precedent); rules 00 / 06 / 16 / 19 / 20 / 21 / 22 / 42 / 50 / 60 / 71 / 76 /
-90 / 94 / 95.
+precedent); rules 00 / 06 / 16 / 119 / `RULE_20_RUST_VS_CPP` / 21 / 22 / 142 / 50 / 60 / 171 / 176 /
+90 / 194 / 95.
 
 **Scope fences (all explicit; see §7 for the GAP-6 decision):**
 
@@ -108,7 +108,7 @@ precedent); rules 00 / 06 / 16 / 19 / 20 / 21 / 22 / 42 / 50 / 60 / 71 / 76 /
 ## 1. Round structure — three groups, split by validation surface
 
 The census's own C/P column is the discriminating axis, and the split is a
-**validation-surface split, not a topic split** (rule 19's criterion —
+**validation-surface split, not a topic split** (rule 119's criterion —
 consensus rows and relay-policy rows fail differently, are tested differently,
 and are ratified against different artifacts). This is stated so a later
 reader does not "tidy" the three groups back into one fee-and-weights topic.
@@ -250,7 +250,7 @@ the arbitration the flag has waited for.
    (Q2/Q3) unbounded above.
 2. **Throughput-floor leg.** At T = 120 s the zone yields a guaranteed
    ~2.5 kB/s of penalty-free chain growth (≈ 79 GB/year worst-case at the
-   permanent free floor) — storage-viable on the rule-76 floor device's
+   permanent free floor) — storage-viable on the rule-176 floor device's
    storage class, and the archival-retention economics (bond floor, horizon)
    were calibrated against chains of this order.
 3. **Verification-cost leg (GAP-7) — the leg no inherited record has.** The
@@ -557,7 +557,7 @@ This identity is load-bearing twice: it is the bridge from the derivation
 to the code it ratifies (the curve derived in `x`-space *is* the formula
 at `emission.rs:150–176`, checkable by the substitution above), and it
 makes the verdict **"examined, value unchanged"** — no consensus change,
-no migration, no rule-42 trigger; the strongest outcome a
+no migration, no rule-142 trigger; the strongest outcome a
 `pinned-not-re-derived` row can reach. Three boundary conditions on
 `P(x) = 1 − x²`, each independently motivated:
 
@@ -1088,10 +1088,10 @@ transient unit `2·3·LTEM` = 1.8 MB at launch.
 The text below stands as the blocker's record as named, pre-measurement.
 
 **The gap (as named):** nothing binds weight to verification time on the
-rule-76 floor (Pi 4). This round's Q1/Q3 ratifications were
+rule-176 floor (Pi 4). This round's Q1/Q3 ratifications were
 **conditional** on it.
 
-**Why it cannot be discharged at this pin:** rule 76 §4 — *"Values AND
+**Why it cannot be discharged at this pin:** rule 176 §4 — *"Values AND
 INCREMENTS for the floor device are measured ON it, never scaled to it"* — a
 dev-box measurement times a ratio is a diagnostic, not a spec input. No
 floor-provisioned verify-time measurements exist in the tree (the verify
@@ -1114,7 +1114,7 @@ verified — the bench's own doc comment), and **no full-block traversal
 bench exists** — that instrument is part of what the discharge must
 define, not only run. Discharge = the two numbers recorded beside the
 constants with the machine named
-(rule 76 §1). Until the measurement, Q1/Q3 were to sign as `ratified` **with the
+(rule 176 §1). Until the measurement, Q1/Q3 were to sign as `ratified` **with the
 GAP-7 condition recorded in the census rows' notes column** (no new evidence
 class — census §2 owns the taxonomy) — the condition is *in the ruling
 text and the row*, loud, with this section as its record.
@@ -1169,7 +1169,7 @@ Ratification-only means these are **specifications the port consumes**:
 - Reopen conjuncts (a)/(b) verified at the artifacts (header); stale §0.1
   passage in FEE_LADDER_DERIVATION.md found via `git log -S`, routed to the
   fee lane.
-- Structure (three groups by validation surface, rule 19) proposed by this
+- Structure (three groups by validation surface, rule 119) proposed by this
   round, adopted by steering; sequencing-after-#614 adopted with the
   premature-clear rationale.
 - Shape request for `margin` sent to the P2P-2 lane (shekyl-core-04);

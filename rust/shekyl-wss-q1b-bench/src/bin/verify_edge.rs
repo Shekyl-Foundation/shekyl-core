@@ -56,7 +56,7 @@ struct Args {
     blocks: u64,
 
     /// Store path. Defaults to a temp file: a file-backed store is the
-    /// production posture rule 76's rig pins, and the I/O term is real.
+    /// production posture rule 176's rig pins, and the I/O term is real.
     #[arg(long)]
     store: Option<String>,
 
@@ -174,7 +174,7 @@ fn run(args: &Args, density: &'static str) -> Result<VerifyEdgeRecord, String> {
     // `grade_requested` is **false**, and not because grading was skipped:
     // there is no ruled threshold to request grading against (`CT-6 Q4` is
     // pending as a derivation). The machine is still captured, because the
-    // rig pins are what make two runs comparable under rule 76 even when
+    // rig pins are what make two runs comparable under rule 176 even when
     // neither is graded.
     let env = Environment::capture();
     let rig_verdict = rig::decide(&env, false, None, false).map_err(|e| format!("rig: {e}"))?;

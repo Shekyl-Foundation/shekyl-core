@@ -62,7 +62,7 @@ the obligations above. Scope (single wave, **no separate Wave 2**):
 `gen`+`fcmp`+`bond_post` inputs (+ deferred `reward_emission` and
 membership-only, §2.1), `tagged_key` output, ct, header, pow-blob, tx `version=3`.
 **rule-21 reopen** (a testnet-revealed change) stays free pre-genesis. **Process:**
-multi-round design ([`26-sub-pr-design-discipline`]) — consensus + FFI surface.
+multi-round design ([`126-sub-pr-design-discipline`]) — consensus + FFI surface.
 **Parents:** `CONSENSUS_PORT_SEQUENCE.md` (Stage 1d),
 [`TRACK2_REGTEST_PARITY.md`](TRACK2_REGTEST_PARITY.md).
 
@@ -100,7 +100,7 @@ just tidiness.
 1. **Clean Shekyl-owned crate.** The canonical serializer lives in a new
    Shekyl crate (working name `shekyl-tx-wire` — but per Q5 it owns block +
    header + PoW hashing-blob + tx, so the name undersells it; final name/placement
-   per [`25-rust-architecture`], candidates `shekyl-wire` or folded into
+   per [`125-rust-architecture`], candidates `shekyl-wire` or folded into
    `shekyl-consensus`). It owns the **entire** genesis tx/block format with
    Shekyl-shaped types: one unified input enum (no split between core and archival
    arms), no `Pruned`/`NotPruned` generic, no ring vestige. The vendored
@@ -114,7 +114,7 @@ just tidiness.
    from monero-oxide. We do **not** plan to upstream it or "re-vendor to
    convergence" (that would risk a future re-vendor silently reverting a
    genesis-format decision). Crypto primitives in `shekyl-oxide` remain vendored;
-   the block/tx/ct *protocol* code is ours ([`10-shekyl-first`]).
+   the block/tx/ct *protocol* code is ours ([`110-shekyl-first`]).
 4. **This PR precedes — and is the first slice of — the broader `shekyl-oxide`
    un-vendor.** Extracting the protocol serializer here removes the part that was
    never legitimately vendored, shrinking the remaining vendored surface to the
@@ -394,7 +394,7 @@ Honest `aG + bH` construction never yields a torsion component, so the rule is
 
 *Safe to freeze pre-genesis.* No installed base ever ran the lax C++ rule; every
 node ships canonical-prime-order from block 0, so "stricter than the inherited
-C++" cannot fork a network that never ran it (rule 07's split concern is between
+C++" cannot fork a network that never ran it (rule 107's split concern is between
 live verifiers — there are none). The single shared verify path
 (`tx_verification_utils.cpp`, mempool + block) makes the rule uniform across the
 daemon. Single home: `shekyl-ct-balance::verify_ct_balance` (renamed from the
@@ -445,7 +445,7 @@ already owning §2.3 point canonicality), exposed via the
 C++ `check_outs_valid` (`cryptonote_format_utils.cpp`, pool txs +
 `prevalidate_miner_transaction` for coinbase output keys) and
 `check_commitment_mask_valid` (`blockchain.cpp`) are thin marshaling shims per
-rule 20 boundary advancement — the native `crypto::check_key` /
+`RULE_20_RUST_VS_CPP` boundary advancement — the native `crypto::check_key` /
 `ct::zeroCommit` logic is retired from the admission path in the same cut.
 
 ### 2.4 Coinbase construction

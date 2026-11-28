@@ -64,7 +64,7 @@
 //!
 //! # This crate has no end of its own
 //!
-//! Rule 25 asks a long-lived task the node starts to report its end through
+//! Rule 125 asks a long-lived task the node starts to report its end through
 //! `Node::ended()` when it can end on its own, by a fault or by a closed
 //! input. This one cannot. `PreparedCache::derive` is infallible. An
 //! allocation failure aborts in `Box::new_zeroed_slice`. Both production

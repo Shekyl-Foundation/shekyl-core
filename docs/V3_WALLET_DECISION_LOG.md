@@ -4653,7 +4653,7 @@ external-review-scoped"; *`shekyl-*` crate* = "ours, no upstream."
 - **MOVED-OUT → first-party** (relocate, PR #188 / dissolve, PR #189), renamed to
   role-honest names: `io → shekyl-curve-io`, `generators → shekyl-curve-generators`,
   `primitives → shekyl-curve-primitives` (kept distinct from `shekyl-types` — these
-  are transform-shaped, rule 18), `fcmp/bulletproofs → shekyl-bulletproofs` (name
+  are transform-shaped, rule 118), `fcmp/bulletproofs → shekyl-bulletproofs` (name
   kept; Q6 path label updated), `fcmp/fcmp++ → shekyl-fcmp-proofs`, `rpc →
   shekyl-rpc-client`, `rpc/simple-request → shekyl-rpc-transport`. The main crate
   **dissolved**: `Timelock → shekyl-types` (block-height-only — the CryptoNote `Time`
@@ -4927,7 +4927,7 @@ serialization, and is never placed on the wire or shared cross-node — verified
 the call graph before minting. Its only consumers compare two ids derived by the
 **same** code version within one wallet process. Nothing persisted or transmitted
 ever compares a pre- to a post-change id, so this is a **fresh mint, not a
-re-spelling**. No persisted-state change ⇒ no rule-42 (serialization-schema) bump.
+re-spelling**. No persisted-state change ⇒ no rule-142 (serialization-schema) bump.
 
 **Reference.** SA-3c (PR in flight, `feat/sa3c-snapshot-id-cshake`);
 `SIGNATURE_ALIGNMENT.md` §5 (the through-line rule) and §3 table;
@@ -5454,7 +5454,7 @@ present iff `post_kind == JoinMarket` and **mandatory** there (a bond
 without an endpoint was the discovery gap), immutable for the record's life.
 Ruled by Rick (`docs/design/ARCHIVAL_ENDPOINT_UPDATE.md` `EU-D3`,
 2026-09-11; narrowed to JoinMarket-only by the 2026-09-13 entry below);
-landed under `07-consensus-atomic-cutovers.mdc` as PR #724 (`f103acd38`,
+landed under `107-consensus-atomic-cutovers.mdc` as PR #724 (`f103acd38`,
 2026-09-13).
 
 **What moves.** Every serialized JoinMarket vin gains 32 bytes after
@@ -5884,7 +5884,7 @@ fingerprint; short of that, the rejection is not revisited on latency grounds.
   local `R_k` is the skeleton the **daemon's** store keeps after discarding
   leaves. Four objects must agree across that boundary, and they are not one
   kind of thing. (1) **Leaf bytes** (128 B = 4 Selene scalars): already
-  consensus — the hash preimage, PL-D3 frozen, rule-42 pinned, `LEAF_BYTES`
+  consensus — the hash preimage, PL-D3 frozen, rule-142 pinned, `LEAF_BYTES`
   derived from `SCALARS_PER_LEAF` with a const-assert (`segment.rs:36`);
   nothing to share. (2) **The segment partition** — `SEGMENT_LAYER_J = 2`,
   `outputs_per_node(j)`, `SegmentId` numbering (`segment.rs:18,:42,:48`) —
@@ -6340,7 +6340,7 @@ same date, on review of #992 and #993).** `SCS-P1`–`P12`, specification
 5. **A record keeps its input tag and `j`** (`SCS-P5`). The pair is
    derived from `(seed, h, j)`; `h` rides the carrier beside the seed;
    the witness key and signature are the carrier's prunable part. One
-   rule-42 bump covers record and carrier.
+   rule-142 bump covers record and carrier.
 6. **The set commitment covers the seed and `h`** (`SCS-P6`), with a
    fifth vector.
 7. **No bound on `anchor_height` at admission** (`SCS-P7`). A lower bound
@@ -6576,7 +6576,7 @@ that horizon.
   A slash missed below one half observed is accepted: the network has
   larger problems than one free rider at that point.
 - **Why now.** Adding the bound when pruning lands would be a consensus
-  change at that point (rule 07). In the rule from the first commit, the
+  change at that point (rule 107). In the rule from the first commit, the
   prune is not one.
 
 **Cost recorded.** A pair with ten misses, more than a retention window of
@@ -6616,7 +6616,7 @@ in [`ARCHIVAL_CHALLENGE_MECHANISM.md`](design/ARCHIVAL_CHALLENGE_MECHANISM.md)
 4. **Uniform, with no knob.** Priority shows only under contention, and
    timing already reveals load; if every `P` runs the same default the
    setting tells an observer nothing, and an opt-out would create a
-   population that behaves differently. Unconditional, under rule 75.
+   population that behaves differently. Unconditional, under rule 175.
 5. **Failure is a warning and a counter, never a refusal to serve.** A
    thread whose priority could not be lowered serves at normal priority.
    The host counts the threads still in that state — a thread that has
@@ -7592,7 +7592,7 @@ torn write).
 - **No migration and no compatibility code.** A pair an earlier build left
   beside a wallet is not read, moved or deleted.
 - `WALLET_PREFS.md` is retired to `docs/completed/`; what still holds is
-  restated in `WALLET_SETTINGS.md`, and rule 42's placement order loses the
+  restated in `WALLET_SETTINGS.md`, and rule 142's placement order loses the
   advisory tier.
 
 **Why.** Fixing the torn write (the body and its HMAC were two replaces,
@@ -7606,4 +7606,4 @@ pattern, while deterministic selection gives every wallet the same shapes.
 
 **Reopens.** The coin-selection knobs, only on a named user job the
 wallet's own selection does not cover. A per-wallet setting, only as
-sealed state (rule 42), never as an advisory file.
+sealed state (rule 142), never as an advisory file.

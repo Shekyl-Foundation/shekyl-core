@@ -138,7 +138,7 @@ the existing `add_subdirectory(external/randomx)` produces:
    with v1's `randomx` target because CMake target names are global.
    Not viable while v1 remains.
 3. **Patch v2's `CMakeLists.txt`** (rename target). **Prohibited** by
-   `10-shekyl-first.mdc` — never contort upstream.
+   `110-shekyl-first.mdc` — never contort upstream.
 
 ### §2.3 Disposition
 
@@ -646,7 +646,7 @@ push; matches §4):
    or duplicating the gating logic. Phase 3 promotes v2 to a
    default-built dependency; that is the right time to add the
    call. This is a narrowing of scope, not an expansion, and stays
-   inside the `07-consensus-atomic-cutovers.mdc`-style
+   inside the `107-consensus-atomic-cutovers.mdc`-style
    implementation-drift discipline.
 
 2. **D2 — `IMPORTED_LOCATION` is single-config; multi-config

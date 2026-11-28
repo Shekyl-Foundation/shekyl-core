@@ -7,7 +7,7 @@
 //! resolution and the build (`DAEMON_CONFIG_CUTOVER.md` §2.2 steps 2–4).
 //!
 //! One parse. The daemon's start and the snapshot a C++ test binary or the
-//! blockchain importer asks for both come through [`load`] (rule 26 B2), so
+//! blockchain importer asks for both come through [`load`] (rule 126 B2), so
 //! what a test constructs is what the daemon would have constructed from the
 //! same arguments. It takes no lock, writes no marker and starts no logging;
 //! those are the daemon's steps after it.

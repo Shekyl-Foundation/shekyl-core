@@ -4,7 +4,7 @@
 **Status:** CLOSED-as-record.
 | | |
 |---|---|
-| **Status** | EXECUTED — **Plan A** (RPC-payment-only this PR), on `chore/rpc-payment-deletion`. Scope surfaced for review; maintainer deferred the A/B + deferral decision to the implementer, so the Rule-19-cleanest cut (Plan A) was taken. During execution an orphaned Rust `RpcPrefs` persisted-prefs bucket surfaced; per the "delete in its entirety" mandate the maintainer approved folding it in as a self-contained Commit 4 (distinct persisted-schema validation surface, `19-validation-surface-discipline.mdc`). See §6 for the as-built commit list. |
+| **Status** | EXECUTED — **Plan A** (RPC-payment-only this PR), on `chore/rpc-payment-deletion`. Scope surfaced for review; maintainer deferred the A/B + deferral decision to the implementer, so the Rule-119-cleanest cut (Plan A) was taken. During execution an orphaned Rust `RpcPrefs` persisted-prefs bucket surfaced; per the "delete in its entirety" mandate the maintainer approved folding it in as a self-contained Commit 4 (distinct persisted-schema validation surface, `119-validation-surface-discipline.mdc`). See §6 for the as-built commit list. |
 | **Author** | (maintainer-reviewed) |
 | **Date** | 2026-06-22 |
 | **Parent** | [`RANDOMX_V2_PHASE3_PLAN.md`](../design/RANDOMX_V2_PHASE3_PLAN.md) (Phase 3 consensus cutover, landed PR #171 `6c3b86484`) |
@@ -24,7 +24,7 @@ leftovers and scopes the immediately-actionable subset into one PR.
 ## 1. Scope decision (the part needing authorization)
 
 The task's "in-scope surface" lists four areas. Source verification (§3) shows
-they do **not** share one validation surface (`19-validation-surface-discipline.mdc`)
+they do **not** share one validation surface (`119-validation-surface-discipline.mdc`)
 and have hard dependency blockers. The rules-correct decomposition is:
 
 ### 1.1 IN SCOPE — this PR
@@ -71,7 +71,7 @@ invocations, the `m_rpc_payment` / `m_rpc_payment_allow_free_loopback` members
 | # | Unit | Blocker / surface | Disposition |
 |---|------|-------------------|-------------|
 | **D1** | **CryptoNight implementation** — `src/crypto/slow-hash.c`, the `cn_slow_hash` / `cn_slow_hash_prehashed` / `cn_variant1_check` decls (`hash.h`, `hash-ops.h`), and the CryptoNight tests (`tests/hash/main.cpp`, `tests/crypto/cnv4-jit.c`, `tests/performance_tests/cn_slow_hash.*`). | **SUPERSEDED 2026-09-15/16 — CLEARED.** The live-C++-KDF blocker (`src/crypto/chacha.h` `generate_chacha_key`, passphrase `encrypt_key`/`decrypt_key`) is gone: C++ `chacha.h` and the CN-KDF are deleted; wallet AEAD is Rust XChaCha20-Poly1305. `slow-hash.c` was deleted with Phase 4. | Separate PR (KDF→Rust migration), *then* delete `slow-hash.c`. **Executed:** Phase 4 + follow-on, not a KDF-migration PR. |
-| **D2** | **PoW abstraction layer** — `pow_schema.h` (`IPowSchema`), `pow_registry.{h,cpp}`, the `rust/shekyl-consensus` crate, and the dead `shekyl_rust_init` / `shekyl_active_consensus_module` FFI exports. **Plus `RX_BLOCK_VERSION` `#define` removal** (see §1.3). | **Different validation surface** (consensus *dispatch* + Rust crate + FFI), not dead code: `get_pow_for_height` is **live** (`miner.cpp:582`, `cryptonote_tx_utils.cpp:886`). Collapsing it inlines RandomX into those consensus sites. `70-modular-consensus.mdc` + `19-validation-surface-discipline.mdc`. | Separate "PoW-abstraction collapse" PR. |
+| **D2** | **PoW abstraction layer** — `pow_schema.h` (`IPowSchema`), `pow_registry.{h,cpp}`, the `rust/shekyl-consensus` crate, and the dead `shekyl_rust_init` / `shekyl_active_consensus_module` FFI exports. **Plus `RX_BLOCK_VERSION` `#define` removal** (see §1.3). | **Different validation surface** (consensus *dispatch* + Rust crate + FFI), not dead code: `get_pow_for_height` is **live** (`miner.cpp:582`, `cryptonote_tx_utils.cpp:886`). Collapsing it inlines RandomX into those consensus sites. `170-modular-consensus.mdc` + `119-validation-surface-discipline.mdc`. | Separate "PoW-abstraction collapse" PR. |
 | **D3** | `shekyl_pow_randomx_v2_seedheight` FFI export + `shekyl-pow-randomx::consensus` module. | C `rx_seedheight` cleanly serves every caller while v1 stays (`RANDOMX_V2_PHASE3_PLAN.md` §5). | Stays deferred (task-directed). Reopens with D4. |
 | **D4** | RandomX **v1** physical deletion — `rx-slow-hash.c`, the `rx_*` C surface, cncrypto RandomX linkage. | **HARD RETENTION** — rollback escape hatch (§4). | Reversion-clause-shaped (§4); reopens only when the v2 rollback window formally closes. |
 
@@ -88,12 +88,12 @@ references," leaving only the bare `#define` (`hash-ops.h:95`) to delete.
 Both remaining references live on the **PoW-dispatch / RandomX-from-genesis
 validation surface**, which is **D2's** surface, not C1's dead-code surface.
 `mining_parity.cpp` is *also* coupled to `get_pow_for_height`/`IPowSchema`
-(deleted in D2). Per `19-validation-surface-discipline.mdc`, `RX_BLOCK_VERSION`
+(deleted in D2). Per `119-validation-surface-discipline.mdc`, `RX_BLOCK_VERSION`
 removal therefore belongs **with D2**, where `mining_parity.cpp` and
 `chaingen.cpp` are touched **once** rather than twice across two PRs.
 
 > **Decision (taken): Plan A.** The A/B choice was surfaced for review and
-> deferred to the implementer; Plan A is the Rule-19-cleanest cut.
+> deferred to the implementer; Plan A is the Rule-119-cleanest cut.
 >
 > - **A (taken):** This PR = **C1 only** (RPC-payment). `RX_BLOCK_VERSION`
 >   `#define` removal folds into the D2 PoW-abstraction PR (shared
@@ -183,7 +183,7 @@ code:
 
 The `rust/shekyl-consensus` crate is reachable only via `shekyl_rust_init` /
 `shekyl_active_consensus_module`, which have **no C++ call sites** (dead-ish
-scaffolding, `70-modular-consensus.mdc`). Deleting all of this is the
+scaffolding, `170-modular-consensus.mdc`). Deleting all of this is the
 "abstraction collapse" surface: it edits consensus-dispatch sites and removes a
 Rust crate + FFI exports — distinct from C1's RPC dead-code removal.
 
@@ -338,7 +338,7 @@ structure (full text written in the docs commit, `91-documentation-after-plans.m
   schema + genesis-identity gate must stay green)
 - `tests/randomx_v2_parity/randomx_v2_full_parity.cpp` (Hole-1 release gate) —
   still passes
-- Persisted-schema snapshot check (`42-serialization-policy.mdc`)
+- Persisted-schema snapshot check (`142-serialization-policy.mdc`)
 - **RandomX v1 still compiles/links** (rollback hatch intact, §4)
 
 ---

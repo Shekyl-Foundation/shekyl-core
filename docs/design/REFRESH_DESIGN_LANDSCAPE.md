@@ -356,7 +356,7 @@ a different prune-shape refinement is preferable.
   §2.3 (Round 2 producer/driver collapse) and §7
   (four-checkpoint cancellation discipline).
 - **Validation-surface guard.**
-  [`19-validation-surface-discipline.mdc`](../../.cursor/rules/19-validation-surface-discipline.mdc)
+  [`119-validation-surface-discipline.mdc`](../../.cursor/rules/119-validation-surface-discipline.mdc)
   (named on `dev` 2026-05-10; cites PR 4 Round 1 as
   forward-looking worked example for FMD / OMR / bandwidth /
   birthday / async-skip surface separation).

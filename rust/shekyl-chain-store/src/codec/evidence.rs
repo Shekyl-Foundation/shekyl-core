@@ -45,7 +45,7 @@ use super::{Canonical, CodecError};
 // shrank as the rows landed — `cumulative_difficulty` (SCHEMA_VERSION 7),
 // `root_after` (15), the two weights, the median and `coins_generated` (16)
 // — and `burned`, the last, went with CEN-F17 / G11; with no field left to
-// name, the cell left the layout (SCHEMA_VERSION 17; rule 42: rebuild,
+// name, the cell left the layout (SCHEMA_VERSION 17; rule 142: rebuild,
 // never migrate) and the type with it. The name framing both cells shared
 // (`encode_names` / `decode_names`) stays with `CoverageGaps`.
 

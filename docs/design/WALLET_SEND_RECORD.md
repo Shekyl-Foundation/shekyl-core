@@ -50,14 +50,14 @@ ratification time, not at PR time.
 
 **Identifier family:** `SJ-DQ-N` (send-journal design questions),
 registered at birth in
-[`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2 (rule 94).
+[`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2 (rule 194).
 
 ---
 
 ## 0. Why this round, and why now
 
 Two open FOLLOWUPS share one validation surface — the **post-dispatch
-send-record lifecycle** — and are bundled per rule 19:
+send-record lifecycle** — and are bundled per rule 119:
 
 - **W-D** (`../FOLLOWUPS.md` "Phase 4b: `get_transfers` OUTGOING filter
   is a no-op"): the Engine ledger holds only receive-side rows;
@@ -232,7 +232,7 @@ only, never the read path.
   states inform users and gate *user-initiated* actions (abandon,
   rescan); no journal state drives lock release or settlement. Refresh
   and the watchdog remain the only settlement authorities.
-- **C4 — rule 42, with the placement exclusion named** *(reworded per
+- **C4 — rule 142, with the placement exclusion named** *(reworded per
   R1-2)*. The row lives in a **dispatch-authored persisted block**
   (`tx_meta` / `bookkeeping` class) and is **excluded from
   `LedgerBlock` by C7** — `LedgerBlock` is reset wholesale by
@@ -469,7 +469,7 @@ only, never the read path.
   variant and its field are additive — old files read forward, no
   version break, no migration.
 - **SJ-DQ-7 — projection contract, widened to cover annotations**
-  *(scope ruling at R1 pass 2, run against rule 19)*. The journal
+  *(scope ruling at R1 pass 2, run against rule 119)*. The journal
   half: OUTGOING rows have no output index — id scheme (`txid`-keyed
   vs. the receive rows' `txid:index`), fee population,
   INCOMING/OUTGOING interleave ordering in `get_transfers`, additive
@@ -607,7 +607,7 @@ only, never the read path.
   defined semantics — an inherited forward-compat reservation that
   never earned a consumer. Rules 60/81 point at deletion, not
   exposure. Disposition to ratify: **delete in PR-SJ-2's schema
-  touch** (the rule-42 bump is already being paid there); rule-21
+  touch** (the rule-142 bump is already being paid there); rule-21
   reopen criterion = a named, typed UX-state need that `tx_notes`
   cannot carry.
   **P3-5 RATIFIED (2026-08-06), as posed** — delete `attributes` in PR-SJ-2's schema bump, with the
@@ -721,7 +721,7 @@ reopen criteria at ratification. Then:
 2. **PR-SJ-2** — projections: `transfer_view` OUTGOING + fee, CLI, GUI
    list; the annotation exposure (`set_tx_note` + note on
    `TransferView`, both directions); the `attributes` deletion (if
-   pass 3 ratifies it — the rule-42 bump is shared). Closes the W-D
+   pass 3 ratifies it — the rule-142 bump is shared). Closes the W-D
    FOLLOWUP.
 3. **PR-SJ-3** — `PresumedDead` entry + `abandon_tx` Engine API + RPC +
    crash-ordering test. Closes the abandon FOLLOWUP.
@@ -736,7 +736,7 @@ reopen criteria at ratification. Then:
    crash-ordering test (`Abandoned → Confirmed` flips loudly, keys
    intact).
 
-Rounds run standard (not rule-26 opt-in): no consensus surface, no FFI
+Rounds run standard (not rule-126 opt-in): no consensus surface, no FFI
 widening, single-team.
 
 ## 5. Non-goals

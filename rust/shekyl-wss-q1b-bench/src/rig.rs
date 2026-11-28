@@ -23,7 +23,7 @@
 use serde::Serialize;
 use std::fmt;
 
-/// Rule 76's floor, as §6.3.4 restates it for this bench.
+/// Rule 176's floor, as §6.3.4 restates it for this bench.
 pub const REQUIRED_ARCH: &str = "aarch64";
 /// 8 GB, in bytes, less a tolerance for firmware carve-out: a board that ships
 /// 8 GB reports slightly under it, and grading must not turn on that gap.

@@ -4,7 +4,7 @@
 and BD-Q5 ruled 2026-10-16** (Rick). **BD-Q4, the window, is open**, with
 the inputs it needs first (§3). No code in this PR; the implementation
 slice (BD-Q2, BD-Q3, the BD-Q5 deletion) is next and does not wait for
-BD-Q4 ([`26-sub-pr-design-discipline`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)).
+BD-Q4 ([`126-sub-pr-design-discipline`](../../.cursor/rules/126-sub-pr-design-discipline.mdc)).
 
 **Ground:** `shekyl-core` `dev` at `0419e6780` (the #1082 merge, after
 the wallet-RPC round, #1079, merged ruled). Every `file:line` below was
@@ -281,7 +281,7 @@ That is a persisted-schema change: a planned state (or kind) in the
 pending-post block, the posture added, `anchor_t0` replaced by the anchor
 rule, and the record's `reference_height` durable (one per record).
 `PENDING_POST_VERSION` (12, `pending_post_block.rs:94`) bumps under rule
-42 with its snapshot (`shekyl-engine-state/schemas/pending_post_block.snap`).
+142 with its snapshot (`shekyl-engine-state/schemas/pending_post_block.snap`).
 WR-Q2 and WR-Q3 take v13 for a durable `reference_height` (ruled, not
 built); that is this record's field, and this change shares that bump or
 takes the next. A mismatched seal
@@ -580,7 +580,7 @@ object from a window ("uniform from funding").
 
 ---
 
-## 4. Attacker objectives (rule 26 A3)
+## 4. Attacker objectives (rule 126 A3)
 
 | Objective | Route |
 | --- | --- |
@@ -659,7 +659,7 @@ wallet-RPC slice's (`WALLET_RPC_STAKING_OUTCOMES.md` WR-Q4).
 ## 6. What passes to the wallet-RPC round
 
 The wallet-RPC round is ruled (`WR-Q1…WR-Q5`, merged in #1079) and not yet
-built. Each carry below is recorded in both documents (rule 26 A5);
+built. Each carry below is recorded in both documents (rule 126 A5);
 `WALLET_RPC_STAKING_OUTCOMES.md` §1.1 points here.
 
 - **The FOLLOWUPS row** "The bond-post delay does not decorrelate the

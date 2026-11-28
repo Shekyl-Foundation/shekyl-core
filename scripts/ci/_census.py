@@ -24,7 +24,7 @@
 # of the census would be derived), a §4 table whose header lacks a column the
 # derivation reads (every table's own header — §4.J carries three under one
 # heading), a header not followed by its GFM delimiter row of the same width
-# (Markdown renders no table, so the rows are not on the page — rule 94 §7),
+# (Markdown renders no table, so the rows are not on the page — rule 194 §7),
 # a row too short for its header, an id cell that is not a well-formed `CEN-`
 # id, a flag or bucket outside the vocabulary, a duplicate id, a census with
 # no §4 tables, no rows, or zero bound rows. Each is a `Refused`, never a
@@ -92,7 +92,7 @@ def require_delimiter(lines: list[str], at: int, ncols: int, where: str) -> None
     GFM makes a table of a header only when the very next line is a delimiter
     row with the same number of cells. Anything else and Markdown renders the
     header as a paragraph — the rows under it do not exist on the page (rule
-    94 §7), so a gate that read them would be checking text no reader sees.
+    194 §7), so a gate that read them would be checking text no reader sees.
     """
     nxt = lines[at + 1] if at + 1 < len(lines) else ""
     delim = row_cells(nxt) if nxt.startswith("|") else []

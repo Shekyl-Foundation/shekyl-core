@@ -1,6 +1,6 @@
 # Daemon configuration cutover — the option surface moves to Rust
 
-**Status: OPEN — implemented and merged (#1088, merge `09402ea19`, 2026-10-17); `shekyld` a Rust binary in the Rust-binary PR (#1254, 2026-11-01: DC-Q13 amended, DC-Q19…DC-Q24 ruled, DC-F15…DC-F45 established); open residue only: the FOLLOWUPS rows this brief owns (§2.2 step 8's parked Tor connector, §3's SOCKS credentials, §5.1's GUI stop and mainnet listener, §9's utilities), and the §10 carries; the Rust-binary PR's items for Rick were ruled 2026-11-02 (§1.1).** Every DC-Q ruled, the grammar's Part B folded in, PR-3 merged. Rule 26 is cited.
+**Status: OPEN — implemented and merged (#1088, merge `09402ea19`, 2026-10-17); `shekyld` a Rust binary in the Rust-binary PR (#1254, 2026-11-01: DC-Q13 amended, DC-Q19…DC-Q24 ruled, DC-F15…DC-F45 established); open residue only: the FOLLOWUPS rows this brief owns (§2.2 step 8's parked Tor connector, §3's SOCKS credentials, §5.1's GUI stop and mainnet listener, §9's utilities), and the §10 carries; the Rust-binary PR's items for Rick were ruled 2026-11-02 (§1.1).** Every DC-Q ruled, the grammar's Part B folded in, PR-3 merged. Rule 126 is cited.
 The input grammar is ruled and merged: Part A (#1067, merge `7cf70b7052`)
 and Part B (#1068, merge `cd1d0cc8ed`). Its rules are the cursor rule
 [`83-input-grammar`](../../.cursor/rules/83-input-grammar.mdc) and the
@@ -614,7 +614,7 @@ advertised address has no C++ reader and is not a field.
 **Where it is defined.** The snapshot's structures, its field count and
 the parse export the C++ test binaries and `shekyl-blockchain-import`
 construct core from (`shekyl_daemon_snapshot_parse` / `_free`, through
-`shekyl_daemon_config::load`, the one parse the start also runs; rule 26
+`shekyl_daemon_config::load`, the one parse the start also runs; rule 126
 B2) are `rust/shekyl-ffi/src/daemon_snapshot_ffi.rs`, in the ordinary
 library. A binary that only constructs core from a snapshot links
 `libshekyl_ffi.a`, the one Rust archive a C++ binary links since the
@@ -762,7 +762,7 @@ the base and zero after (rule 47). A literal pipe in a pattern is `\|`.
 | `utils/conf/shekyld.conf` | the file exists; cited at [`docs/USER_GUIDE.md:131-133`](../USER_GUIDE.md) | gone |
 | `scripts/ci/check_carrier_flag_hidden.sh` | exists | replaced by a table test that `dev-relay-cover` is hidden and refused on mainnet |
 | C++ tests of the deleted mechanism | lines 54 to 120 of `tests/unit_tests/command_line.cpp` at `d26148535e`, `tests/unit_tests/rpc_args_daemon_surface.cpp` | deleted; `IsYes` stays |
-| C++ tests that build a `variables_map` | `rg -n -e 'variables_map' tests/unit_tests/node_server.cpp tests/core_tests/chaingen.h tests/core_tests/chaingen_main.cpp tests/unit_tests/sync_orphan_arm.cpp tests/unit_tests/main.cpp tests/performance_tests/main.cpp` → more than 10 | 0; they construct the remnant from a snapshot built by the real Rust parse of a test argument list (rule 26 B2) |
+| C++ tests that build a `variables_map` | `rg -n -e 'variables_map' tests/unit_tests/node_server.cpp tests/core_tests/chaingen.h tests/core_tests/chaingen_main.cpp tests/unit_tests/sync_orphan_arm.cpp tests/unit_tests/main.cpp tests/performance_tests/main.cpp` → more than 10 | 0; they construct the remnant from a snapshot built by the real Rust parse of a test argument list (rule 126 B2) |
 | the disclose-early rename's acceptance (IG-Q20) | `rg -n -e 'small_network' -e 'SmallNetwork' -e 'SMALL_NETWORK' -e 'small-network' src rust` → 0 at `d26148535e` | no match in `src` or `rust`, the grammar's acceptance (`INPUT_GRAMMAR.md` IG-Q20) |
 
 The Rust-binary PR (#1254, DC-Q19…DC-Q24) adds these rows. "Before" is
@@ -922,7 +922,7 @@ exit status is 2.
 
 ---
 
-## 7. Threat-model addenda (rule 26 A3)
+## 7. Threat-model addenda (rule 126 A3)
 
 1. **Run code as the daemon's account by writing its config file.** The
    notify commands execute programs. Route: the allowlist and the check
@@ -958,7 +958,7 @@ exit status is 2.
 
 ---
 
-## 8. Rejections, with reopening criteria (rules 21, 26 A4)
+## 8. Rejections, with reopening criteria (rules 21, 126 A4)
 
 - **The peer-learned public address (DC-Q10 (b)).** A peer can make the
   node dial any address it names, and a reflector at the candidate passes
@@ -1002,7 +1002,7 @@ they own, and `src/blockchain_utilities/blockchain_import.cpp`'s call to
 `shekyl-blockchain-import`, `-export`, `-stats`, `shekyl-mdb-copy` and
 `shekyl-e2-trace-export`; the header they were going to own went with them.
 
-Pre-flight (rule 26), recorded in `docs/design/DAEMON_CONFIG_CUTOVER_AUDIT.md`
+Pre-flight (rule 126), recorded in `docs/design/DAEMON_CONFIG_CUTOVER_AUDIT.md`
 before the first production commit:
 
 1. Re-pin every citation at the implementation pin; re-run
@@ -1027,7 +1027,7 @@ chain-sync lanes do not touch the option surface.
 
 ---
 
-## 10. Carries (rule 26 A5: each has a FOLLOWUPS row and a target)
+## 10. Carries (rule 126 A5: each has a FOLLOWUPS row and a target)
 
 | Carry | Target |
 | --- | --- |
@@ -1117,8 +1117,8 @@ screen, the mobile wallet, the stressnet harness's own configuration.
 
 ## 13. Instructions to the implementing agent
 
-Written for the agent that lands the cutover. Read rules 00, 06, 08, 17, 19, 20, 22, 23, 25, 26, 35, 36, 40, 45,
-47, 50, 71, 82, 83, 90, 94 and 95, and `INPUT_GRAMMAR.md`, before the first
+Written for the agent that lands the cutover. Read rules 00, 06, 08, 17, 119, `RULE_20_RUST_VS_CPP`, 22, 23, 125, 126, 35, 36, `RULE_40_FFI_DISCIPLINE`, 45,
+47, 50, 171, 82, 83, 90, 194 and 95, and `INPUT_GRAMMAR.md`, before the first
 commit.
 
 1. **Preconditions.** PR-3 is on `dev`. The runtime requests are

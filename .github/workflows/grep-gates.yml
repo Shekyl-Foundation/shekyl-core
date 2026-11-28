@@ -269,9 +269,9 @@ jobs:
             python3 scripts/ci/check_inland_height_u64.py --selftest
           run_one "ARW-Q16: no new bare-u64 height on the archival surface" \
             python3 scripts/ci/check_inland_height_u64.py
-          run_one "Rule 71: the network selects data, not control flow (selftest)" \
+          run_one "Rule 171: the network selects data, not control flow (selftest)" \
             python3 scripts/ci/check_network_uniformity.py --selftest
-          run_one "Rule 71: the network selects data, not control flow" \
+          run_one "Rule 171: the network selects data, not control flow" \
             python3 scripts/ci/check_network_uniformity.py
           run_one "Ignored tests carry their reason in the attribute" \
             scripts/ci/check_ignore_reasons.sh
@@ -324,7 +324,7 @@ jobs:
             python3 scripts/ci/check_depends_fetch.py
           run_one "A feature never changes a public type's shape (selftest)" \
             python3 scripts/ci/check_feature_gated_members.py --selftest
-          run_one "A feature never changes a public type's shape (rule 25)" \
+          run_one "A feature never changes a public type's shape (rule 125)" \
             python3 scripts/ci/check_feature_gated_members.py
           run_one "RandomX symbol-isolation negatives (rule 50)" \
             scripts/ci/test_check_randomx_symbol_isolation.sh
@@ -379,6 +379,28 @@ jobs:
             python3 scripts/ci/check_release_tag_grammar.py
           run_one "Release-tag grammar gate self-test" \
             python3 scripts/ci/check_release_tag_grammar.py --selftest
+          # The rules: estate 00-99 canonical here and copied verbatim into
+          # the GUI and prism, each repository's own series beside them, and
+          # vacated numbers never cited or reused (ruled 2026-11-19 and
+          # 2026-11-27). The consumers run the same three scripts over their
+          # copies, against this repository's manifest.
+          run_one "Rules: no vacated rule number cited or reused" \
+            python3 scripts/ci/check_vacated_rule_numbers.py
+          run_one "Rules: vacated-number gate self-test" \
+            python3 scripts/ci/check_vacated_rule_numbers.py --selftest
+          # The sweep is shekyl-core's rewriter and is not an estate file.
+          # Its selftest rewrites every citation the vacated-number gate
+          # plants, and a path that already names the successor stays put.
+          run_one "Rules: citation sweep self-test" \
+            python3 scripts/rules/sweep_rule_citations.py --selftest
+          run_one "Rules: every rule loads and attaches where it says" \
+            python3 scripts/ci/check_rule_scope.py --repo core
+          run_one "Rules: scope gate self-test" \
+            python3 scripts/ci/check_rule_scope.py --repo core --selftest
+          run_one "Rules: the estate manifest matches the estate files" \
+            python3 scripts/ci/check_estate_manifest.py
+          run_one "Rules: estate manifest gate self-test" \
+            python3 scripts/ci/check_estate_manifest.py --selftest
           # The domain-binding ratchet must be empty at v3.1.0 (the signing
           # envelope §2.5, ruled 2026-11-05); the release-time gate refuses
           # a cut at or past it with rows left. Its rule and its read of

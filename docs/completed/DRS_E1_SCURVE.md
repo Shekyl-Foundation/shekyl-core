@@ -4,7 +4,7 @@
 `dev` @ `fdb5db954` (three commits, §7); **Round 0 executed 2026-09-21** at
 `b680d59e0`, **Round 1 RULED 2026-09-21** (maintainer, on PR #815; §9, each
 row line-local): **SCU-Q1 one row, SCU-Q2 move to `shekyl-types` and write
-the rule down (done: `18-type-placement.mdc`), SCU-Q3 overridden to a tuple
+the rule down (done: `118-type-placement.mdc`), SCU-Q3 overridden to a tuple
 key, SCU-Q4 now with E3 named; SCU-1 regraded the worst of its class.** This
 file stays in `design/` as the E3 boundary statement (§2.3) until E3's plan
 owns that statement; then it archives (rule 95). Implements *from*
@@ -27,10 +27,10 @@ decides the chunk read's fate in §6 item 2); and from
 and **`PDM-Q12`** (the serve-credit verifier and the segment-freeze pipeline
 are retired by ruling and die at E4 / S-ARCH) — the two rulings that decide
 which of this surface's C++ callers are already dead. Process per
-`26-sub-pr-design-discipline.mdc`; identifier families **`SCU-`** (findings)
+`126-sub-pr-design-discipline.mdc`; identifier families **`SCU-`** (findings)
 and **`SCU-Q`** (round questions) registered in
 [`IMPLEMENTATION_INDEX.md`](../design/IMPLEMENTATION_INDEX.md) §2 by the PR that adds
-this file (rule 94 §1; `check_index_prefix_uniqueness.py` branch (a): the two
+this file (rule 194 §1; `check_index_prefix_uniqueness.py` branch (a): the two
 parse to distinct prefixes and clear the 91 registered).
 
 **Two stores, stated once so they are not conflated.** The *daemon's*
@@ -52,7 +52,7 @@ about sharing that vocabulary without coupling the stores.
 | `ReadSnapshot`, `AtHeight`, `AtIndex`, `chain_reads::cell`, the fault policy | landed (S-CHAIN-R, S-OUT-KI) |
 | `curve_tree_roots` shaped: `TableDefinition<u64, Coded<CurveTreeRoot>>` (`schema.rs:478`), written by `connect` from `root_after` (SCW-19), read by `ReadSnapshot::live_root` for the E2 digest (`read.rs:584`) and by `ChainView::root_at` (`store/view.rs:196`) | landed |
 | `curve_tree_leaves`, `curve_tree_layers`, `curve_tree_meta`, `curve_tree_checkpoints`: `Unshaped` (`schema.rs:463–475`) | **this increment shapes the first three; the fourth is E3's (§2.2)** |
-| Layout `SCHEMA_VERSION = 8` (`codec/schema_version.rs:80`); rule-42 snapshot gate | landed — this increment bumps to 9 |
+| Layout `SCHEMA_VERSION = 8` (`codec/schema_version.rs:80`); rule-142 snapshot gate | landed — this increment bumps to 9 |
 | `shekyl-store-codec` (PR A, #794): vocabulary codecs live with the vocabulary (CTS-13) | landed |
 | `PDM-Q3`, `PDM-Q12` | RULED 2026-09-18 |
 
@@ -216,7 +216,7 @@ semantics; otherwise `Option`. Applied:
 
 | Type | Shape | Home (default) | Why |
 |---|---|---|---|
-| `TreePosition` | dense position in drain order, `u64` | **exists**: `shekyl_curve_tree::types::TreePosition` (`types.rs:168`, redb key via `redb_delegated_key!`) | The wallet-side store keys `leaves` by it already (`redb_backend.rs:22`). One vocabulary word, two stores (DRS-D3c wants exactly this). **Placement is the question:** the daemon store cannot depend on `shekyl-curve-tree` (it pulls `shekyl-fcmp`, `shekyl-crypto-pq`, `shekyl-consensus`; `Cargo.toml:30–41`), so either the word moves to `shekyl-types` beside `CurveTreeRoot`, or the daemon store mints a twin. Default: **move it** (rule 18: a foundational newtype two crates key on is `shekyl-types`' — one definition, both stores). |
+| `TreePosition` | dense position in drain order, `u64` | **exists**: `shekyl_curve_tree::types::TreePosition` (`types.rs:168`, redb key via `redb_delegated_key!`) | The wallet-side store keys `leaves` by it already (`redb_backend.rs:22`). One vocabulary word, two stores (DRS-D3c wants exactly this). **Placement is the question:** the daemon store cannot depend on `shekyl-curve-tree` (it pulls `shekyl-fcmp`, `shekyl-crypto-pq`, `shekyl-consensus`; `Cargo.toml:30–41`), so either the word moves to `shekyl-types` beside `CurveTreeRoot`, or the daemon store mints a twin. Default: **move it** (rule 118: a foundational newtype two crates key on is `shekyl-types`' — one definition, both stores). |
 | `TreeLeaf` | `[u8; 128]` — `{O.x, I.x, C.x, CM.x}`, four Selene scalars (`CT_LEAF_SIZE`; `LeafEntry.leaf`, `types.rs:197`) | new, beside `TreePosition` | Today a bare array in both stores (`LeafEntry.leaf`; `LEAVES_TABLE: &[u8; 128]`). A newtype with a `Canonical` codec in the vocabulary crate (CTS-13's orphan rule, via `shekyl-store-codec`). |
 | `LayerChunk` | key of `curve_tree_layers`: **a tuple key `(TreeLayer, ChunkIndex)`** — `u8` layer, `u64` chunk — ordered component-wise by delegated compare (SOK-Q1's mechanism), i.e. layer-major, the same order the C++'s `(layer << 56) \| chunk` packing produced (`db_lmdb.cpp:8745`; SCU-7) | new, daemon store (`ids.rs`) | `SCU-Q3` RULED: the packing existed because LMDB needs one integer key and redb does not; a tuple key gives identical behaviour with nothing to pin, and a layer's chunks are `range((layer, 0)..(layer + 1, 0))`. No 56-bit chunk ceiling. |
 | `LayerHash` | `[u8; 32]` Selene chunk hash | new, daemon store | The value of `curve_tree_layers`; `hash_init` for a chunk that was never written is a *grow-path* default (E3's), never a read's. |
@@ -231,7 +231,7 @@ semantics; otherwise `Option`. Applied:
   layout bump. Accumulator class `Small` (`class.rs:146`); `digest_v0` does
   not read it (the root family is `curve_tree_roots`), so the E2 digest is
   unaffected; the per-table accumulator's bytes change with the shape and the
-  rule-42 snapshot moves with `SCHEMA_VERSION` 8 → 9.
+  rule-142 snapshot moves with `SCHEMA_VERSION` 8 → 9.
 - **The layer key's packing** — **not inherited** (`SCU-Q3` RULED: tuple
   key). The comparator's per-table projection of `curve_tree_layers`
   therefore differs from LMDB's key bytes, as `zerokval` tables already do;
@@ -323,7 +323,7 @@ SI-11's register row landed with commit 1; SI-12 with the review on the implemen
 - **SCU-9 — the digest is untouched by any of this.** `digest_v0`'s root
   family is `curve_tree_roots` (`read.rs:505`); the three tables this
   increment shapes are `Small` / `AppendMostly` / `Derived` classes of the
-  per-table accumulator, not families of the E2 digest. The rule-42 snapshot
+  per-table accumulator, not families of the E2 digest. The rule-142 snapshot
   moves; E2's MATCH does not.
 
 ### 6.1 Reproduced deviations on this surface (DRS §7.6 item 1)
@@ -342,7 +342,7 @@ table's key semantics are inherited and documented (§3.5), not a deviation.
    `(TreeLayer, ChunkIndex)` (`SCU-Q3`), `LayerHash`, `TreeDepth`,
    `LeafCount`, `CurveTreeState` with `Canonical` codecs; the three tables
    re-typed in `schema.rs`; `SCHEMA_VERSION` 9; snapshot regenerated
-   (rule 42); `CurveTreeState::EMPTY` written at store creation; SI-11 in the
+   (rule 142); `CurveTreeState::EMPTY` written at store creation; SI-11 in the
    register.
 2. **The reads.** `store/curve_reads.rs`: C1, C2, C3; `live_root` re-homed on
    C2's `root_row` (decision log 2026-09-21, not C1 as first written);
@@ -358,7 +358,7 @@ table's key semantics are inherited and documented (§3.5), not a deviation.
 ## 8. Denominator — what must stay green, what must be extended
 
 - `check_chain_rules_no_store.sh` (the rules crate reaches no store).
-- Rule-42 schema snapshot: **must move**, and only by the three tables +
+- Rule-142 schema snapshot: **must move**, and only by the three tables +
   version (the gate's diff is the review).
 - `check_conformance_coverage.py`: no register row is touched — the curve
   reads are storage, not a consensus rule (§7 row: "storage only; math in
@@ -374,7 +374,7 @@ table's key semantics are inherited and documented (§3.5), not a deviation.
 | Q | Question | Ruling | Why |
 |---|---|---|---|
 | **SCU-Q1** | Is `curve_tree_meta` one typed row (`CurveTreeState`) or three typed cells? | **RULED: one row** (default held). | The C++ writes the three together and reads them together; three cells reintroduce a state where they can disagree. It also composes with SCU-1's fix: with three cells the written-`EMPTY` repair is applied three times and the three can still disagree about whether the tree is empty — one row makes emptiness a single state. Write amplification is 48 bytes; not a consideration. |
-| **SCU-Q2** | Where does the shared vocabulary live — move `TreePosition` (and mint `TreeLeaf`) into `shekyl-types`, or twin it in the daemon store? | **RULED: move to `shekyl-types`, and write the rule down.** | Third instance of one argument — `KeyImage`, `CurveTreeRoot`, now `TreePosition` / `TreeLeaf`. The general form is now in `18-type-placement.mdc` §"Where each shape lives" (this PR) and lands beside the `hash32!` family in `shekyl-types` with commit 1: *a type both stores need lives in `shekyl-types`; the computation lives in the owning crate.* The daemon store cannot take `shekyl-curve-tree`'s graph; a twin is CTS-3 reborn. |
+| **SCU-Q2** | Where does the shared vocabulary live — move `TreePosition` (and mint `TreeLeaf`) into `shekyl-types`, or twin it in the daemon store? | **RULED: move to `shekyl-types`, and write the rule down.** | Third instance of one argument — `KeyImage`, `CurveTreeRoot`, now `TreePosition` / `TreeLeaf`. The general form is now in `118-type-placement.mdc` §"Where each shape lives" (this PR) and lands beside the `hash32!` family in `shekyl-types` with commit 1: *a type both stores need lives in `shekyl-types`; the computation lives in the owning crate.* The daemon store cannot take `shekyl-curve-tree`'s graph; a twin is CTS-3 reborn. |
 | **SCU-Q3** | Does `LayerChunk` keep the C++ packing `(layer << 56) \| chunk` as its encoding, or become a tuple key at the layout bump? | **RULED: tuple key — the default is overridden.** | The packing appears at exactly three sites, all inside the LMDB backend (`db_lmdb.cpp:8745` the key builder, `:9703` the prefix scan, `db_lmdb.h:916` the comment) and crosses no boundary: it exists because LMDB needs one integer key, and redb does not — SOK-Q1 already established that a tuple key orders component-wise through delegated compare, the same layer-major order the shift produces; the prefix scan becomes `range((layer, 0)..(layer + 1, 0))`. The real comparison is *packing + newtype + KAT* against *tuple + nothing* for identical behaviour, and SCU-7 — nothing pins the packing — argues for removing the thing that needs pinning rather than pinning it. The 56-bit chunk ceiling was a limit nobody chose. Byte-parity with LMDB's key was never the constraint (`zerokval` already diverges; the comparator projects — S-CHAIN-R Q4's correction). No DRS-X reopener needed. |
 | **SCU-Q4** | Does C3 (`leaves(range)`) land now, with E3 as its named reader, or does E3 mint it with its writer? | **RULED: now, E3 named** (default held). | S-TX Q3's precedent, applied for the same reason: a range read over a keyed dense table is what makes it a table. `EMPTY`-tree and `AboveCount` cases are testable today without a writer. |
 
@@ -399,5 +399,5 @@ table's key semantics are inherited and documented (§3.5), not a deviation.
 |---|---|
 | 2026-09-21 | **Review, on the implementation PR.** Three corrections, each toward a type the store already had. **(1)** `LayerChunk`, `TreeLayer`, and `ChunkIndex` live in `ids.rs` beside `OutputSlot` — private fields, `key` / `from_key`, and `layer_range` returning `RangeInclusive<(u8, u64)>` built only through `key()`. The table stays `(u8, u64)`. `to_tuple` / `from_tuple` are gone; `layer_range` returns `RangeInclusive<(u8, u64)>`, the range `table.range` takes. The newtypes stay because a layer is not a `TreeDepth` and a chunk index is not a `TreePosition`; E3 is their caller and is not built yet. **(2)** SI-11's payload is `LeafDensity`: `Length { count, rows }` from the summary read, `Hole { position }` from the walk. The length belt no longer names `leaf_count` as if it were the missing row. **(3)** SI-12 `SummaryRootDiverged`: once the summary is not the seal's `EMPTY`, its root is the live root (`curve_tree_roots[tip + 1]`, or `EMPTY` with no tip). `EMPTY` stays quiet after `connect`, because connect records roots grown or not (SI-4) and E3 is what replaces the seal's row — arming the comparison on `EMPTY` would call today's connect output corrupt. The digest still reads C2. The wallet-side `TreePositionKey` field is private, with `from_raw` / `to_raw`, matching `GindexKey`. |
 | 2026-09-21 | **Implemented** (three commits on the S-CURVE PR, cut from `dev` @ `fdb5db954`). Two departures from the letter of §7, both toward the store's own conventions and disclosed here: **(a)** table keys stay bare `u64` / `(u8, u64)` / `()` at the redb layer per `ids.rs`'s key contract ("table keys stay `u64`; convert at the decoded handle" — as `output_amounts`' bare `(u64, u64)` does), so `LayerChunk` is the *API* type with `to_tuple`/`from_tuple` and `TreePosition` is the handle's type, not a redb `Key` wrapper in the daemon store; the wallet-side store, whose tables were already typed-keyed, wraps the moved `TreePosition` in a store-local `TreePositionKey` (the `GindexKey` precedent, orphan rule) with its `TypeName` unchanged so existing wallet files open. **(b)** the wallet-side `LeafEntry.leaf` stays `[u8; 128]` rather than adopting `TreeLeaf` now — that row is being re-laid-out by the WSS lane (`WALLET_SIDE_STORE.md`, PDM-Q12), which adopts the word when it lays the row out; a rename against a table about to move would be re-done (rule 22: named owner, disclosed in commit 1). `live_root` re-homes on C2's `root_row` rather than on C1 (§7 item 2 said C1): the digest reads the root *at the tip it already decoded*, which is `curve_tree_roots[tip + 1]`, C2's table — C1's row is the same value only while E3 keeps them in step, and a read that is right only while a belt holds is the wrong read (SOK O2's argument). SI-11 armed by C1 (count = table length) and C3 (the walk names the first missing position). **Gate consequence of `SCU-Q3`:** `check_redb_schema_key_types.py`'s INTEGERKEY rule was `u64` only; it gains a fact-derived arm — a shift-or key builder `(uintA_t hi << (64 − A)) \| lo` read off `db_lmdb.cpp` (`ct_layer_chunk_key`, `:8744`) and bound to the table its callers address admits the order-equivalent tuple `(uA, u64)`; a shift that is not `64 − A` mints nothing, and a builder bound to zero or two tables is a raise, not a guess. No table-name allowlist (the gate's own rule). |
-| 2026-09-21 | **Round 1 RULED** (maintainer, PR #815). Three defaults held (Q1 one row — it composes with SCU-1's fix, emptiness becomes a single state; Q2 move to `shekyl-types`, with the general form written into `18-type-placement.mdc` so the fourth instance is a lookup; Q4 now, E3 named). **Q3 overridden: tuple key.** The packing has three sites, all inside the LMDB backend, crossing no boundary; it exists because LMDB needs one integer key and redb does not; SOK-Q1's delegated compare gives the same layer-major order; SCU-7's "nothing pins it" argues for removing the thing that needs pinning. Byte-parity with LMDB's key was never the constraint (`zerokval`; S-CHAIN-R Q4). **SCU-1 regraded:** not the fourth instance but the worst — the C++ documents the ambiguity and delegates its resolution to a second read the caller may skip; CEN-I12 is what happens when one does. |
+| 2026-09-21 | **Round 1 RULED** (maintainer, PR #815). Three defaults held (Q1 one row — it composes with SCU-1's fix, emptiness becomes a single state; Q2 move to `shekyl-types`, with the general form written into `118-type-placement.mdc` so the fourth instance is a lookup; Q4 now, E3 named). **Q3 overridden: tuple key.** The packing has three sites, all inside the LMDB backend, crossing no boundary; it exists because LMDB needs one integer key and redb does not; SOK-Q1's delegated compare gives the same layer-major order; SCU-7's "nothing pins it" argues for removing the thing that needs pinning. Byte-parity with LMDB's key was never the constraint (`zerokval`; S-CHAIN-R Q4). **SCU-1 regraded:** not the fourth instance but the worst — the C++ documents the ambiguity and delegates its resolution to a second read the caller may skip; CEN-I12 is what happens when one does. |
 | 2026-09-21 | **Round 0 executed** at `b680d59e0`. Nine findings (SCU-1…SCU-9); four questions posed with defaults (SCU-Q1…Q4). The surface's five C++ reads map to three Rust reads; two of the five have only retired consumers (SCU-2, SCU-3) and one is already typed in Rust (SCU-4). The E3 boundary is stated: this increment mints the shapes, E3 writes them. S-TX read and archived (§2.5). |

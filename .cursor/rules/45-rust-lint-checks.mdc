@@ -5,13 +5,15 @@ globs:
   - "**/Cargo.toml"
   - "**/rustfmt.toml"
   - "**/clippy.toml"
+scope: estate
+repos: [core, gui, prism]
 ---
 
 # Rust lint checks
 
 Every Rust workspace in the Shekyl ecosystem (`shekyl-core/rust/`,
-`shekyl-gui-wallet/src-tauri/`, vendored `rust/shekyl-oxide/`, and any
-future Rust tree) enforces formatting and clippy gates. CI rejects
+`shekyl-gui-wallet/src-tauri/`, vendored `rust/shekyl-oxide/`, the
+`shekyl-prism` workspace, and any future Rust tree) enforces formatting and clippy gates. CI rejects
 violations; agents must run them locally before claiming a Rust change is
 done.
 
@@ -33,7 +35,8 @@ CI runs:
 - `cargo fmt --check` (formatting drift fails the build)
 - `cargo clippy --all-targets -- -D warnings` (any warning fails the build)
 - `cargo test --workspace` (per `50-testing.mdc`)
-- `cargo audit` on `Cargo.lock` changes (per `25-rust-architecture.mdc`)
+- `cargo audit` on `Cargo.lock` changes (per the repository's
+  Rust-architecture rule; shekyl-core's is [`125-rust-architecture`](https://github.com/Shekyl-Foundation/shekyl-core/blob/dev/.cursor/rules/125-rust-architecture.mdc))
 
 Agents do not "fix CI later" — local runs must match.
 
@@ -60,19 +63,15 @@ entry to revisit.
 
 ## `unsafe`
 
-Per `25-rust-architecture.mdc`: every crate root carries
+Every crate root carries
 `#![deny(unsafe_code)]`. Logic does not need `unsafe`. An exception is a
 reviewed, scoped block with a `SAFETY` comment: code that must call the
 operating system or a C library allows `unsafe_code` on the item or module
 that makes the call, never on the crate, with a `// SAFETY:` comment on each
 `unsafe` block and a `# Safety` section on each `unsafe fn`.
 
-**The two crate-level exceptions** are the crates that exist to bind and
-drive the vendored RandomX C reference for the differential harness, outside
-every shipped binary: `randomx-v2-sys` and `shekyl-randomx-differential`.
-Each carries `#![allow(unsafe_code)]` at its root with the reason stated
-beside it, and still a `// SAFETY:` comment on each `unsafe` block. No other
-crate joins them.
+shekyl-core's two crate-level exceptions are core rule
+[`145-rust-lint-checks-core`](https://github.com/Shekyl-Foundation/shekyl-core/blob/dev/.cursor/rules/145-rust-lint-checks-core.mdc). No other crate in any repository joins them.
 
 ## Patterns clippy will catch that matter
 
@@ -80,8 +79,8 @@ These show up often in CryptoNote-derived code and are real bugs, not
 style:
 
 - `clippy::indexing_slicing` on untrusted input → use `.get()` and propagate
-  `Option`/`Result` (`25-rust-architecture.mdc`, §"Decoding untrusted
-  bytes").
+  `Option`/`Result` (shekyl-core's [`125-rust-architecture`](https://github.com/Shekyl-Foundation/shekyl-core/blob/dev/.cursor/rules/125-rust-architecture.mdc),
+  §"Decoding untrusted bytes").
 - `clippy::arithmetic_side_effects` on amount math → use
   `checked_add`/`checked_mul`: an overflow on an amount is a financial bug.
 - `clippy::needless_collect`, `clippy::redundant_clone` → often a sign that

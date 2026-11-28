@@ -204,7 +204,7 @@ is already readable as `shard_coverage`'s `freeze_height`. The field is
 `archival_cumulative` on the block read (RPC 4.8), built with the fill.
 Admission reads the fold, the price, and the viability check above.
 
-**Rule 94.** This document mints no family. The answer's family is `CEN-J15`
+**Rule 194.** This document mints no family. The answer's family is `CEN-J15`
 (#983), stamped on this document's row in
 [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §7. The questions point
 at the lane, and the lane's row points back.

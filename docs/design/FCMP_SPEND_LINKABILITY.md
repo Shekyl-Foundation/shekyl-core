@@ -2,7 +2,7 @@
 
 **Status:** OPEN — round 1 **RATIFIED by Rick, 2026-09-14** (§12); the
 implementation, built under §10 on its own worktree from `dev`, **lands in
-this document's PR** under rule 07 (§12.1; the clause "no implementation in this document's PR" that stood here was true of the doc-only PR #744 and was superseded 2026-09-14 by #745, which carries both). `PL-D1` (the linkability defect) is verified at source,
+this document's PR** under rule 107 (§12.1; the clause "no implementation in this document's PR" that stood here was true of the doc-only PR #744 and was superseded 2026-09-14 by #745, which carries both). `PL-D1` (the linkability defect) is verified at source,
 not refuted, and **closed by `PL-D3` in this PR** (§12.1). `PL-D2` (the in-circuit PQ binding is only as sound as the
 discrete-log proof enforcing it) is raised here; **ruled 2026-09-14** — the
 four documents that claimed otherwise are corrected at source (§4.5), on
@@ -13,7 +13,7 @@ in the middle of everything else"): a **Pedersen commitment** to the key in
 the leaf's 4th scalar, opened in-circuit by the discrete-log gadget the first
 layer already runs; the hash mechanism is the named successor round `PL-D4`
 (§6.5). Rick ratified the written form on 2026-09-14 (§12) and the
-implementation landed with it under rule 07 (§10, §12.1). The document
+implementation landed with it under rule 107 (§10, §12.1). The document
 corrections `PL-D1` requires are applied at source (§11). The wire, the
 leaf format and the circuit change exactly as §6.2 specifies.
 **Grounded at** `dev` = `42333d34f` (2026-09-13), fresh worktree
@@ -23,18 +23,18 @@ on 2026-09-13; citations into the documents this branch itself corrects
 `37accf6f9`; where an anchor moved between the two pins it is listed in §2.4.
 **Identifier family:** `PL-` (PQC-leaf linkability), registered in
 [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2 in the commit that
-lands this document (rule 94). `PL-D*` are dispositions of this round; `PL-R*`
+lands this document (rule 194). `PL-D*` are dispositions of this round; `PL-R*`
 are review-round findings. `PL-D` and `PL-R` parse as distinct prefixes and
 were clear of the 77 registered families at the anchor
 (`check_index_prefix_uniqueness.py`, exit 0). The finding was first filed as
 `F5` in `ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md` §1.5 on `docs/so-d8-proposal`
 (branch-only, commit `02244f6616`); `F-N` is doc-scoped, so the round mints
 its own family and `F5` stays as the historical name.
-**Process:** [`26-sub-pr-design-discipline`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
+**Process:** [`126-sub-pr-design-discipline`](../../.cursor/rules/126-sub-pr-design-discipline.mdc)
 is invoked — the fix crosses the circuit, the FFI (`shekyl_fcmp_verify`,
 `shekyl_construct_curve_tree_leaf`, `shekyl_fcmp_pqc_leaf_hash` — renamed `shekyl_fcmp_pqc_key_scalar` by the fix), the wire
 (`tx_extra` `0x07`), and the genesis-frozen leaf format.
-[`07-consensus-atomic-cutovers`](../../.cursor/rules/07-consensus-atomic-cutovers.mdc)
+[`107-consensus-atomic-cutovers`](../../.cursor/rules/107-consensus-atomic-cutovers.mdc)
 is named for the implementation PR (§10); this round is the design-first
 half. Every rejection in §7–§8 takes
 [`21-reversion-clause-discipline`](../../.cursor/rules/21-reversion-clause-discipline.mdc)'s
@@ -118,7 +118,7 @@ the hash-and-lookup chain. Each candidate was checked at source:
   `hash_pqc_public_key` (`derivation.rs:66`), serves creation, the C++
   verifier's FFI (`legacy_fcmp.rs` at `ac3836de90` (line 52)) and the Rust verifier
   (`rust/shekyl-fcmp/src/leaf.rs:34`). One domain string, no nettype or era
-  switch (`71-network-uniformity` holds here, unhelpfully).
+  switch (`171-network-uniformity` holds here, unhelpfully).
 - **Any re-randomisation of the 4th scalar?** No. `circuit.rs:165–168`
   pushes `extra_leaf_vars` into the tuple with no blind; the three blinded
   legs at `:131–150` are the contrast.
@@ -209,7 +209,7 @@ special-purpose indexer is needed.
    `ARCHIVAL_BOND_WI4_MEASUREMENT.md:3445, 3721, 3888, 3922` — all rest on
    "funding is FCMP++-hidden". **The principal↔P firewall's stated on-chain
    premise is refuted.** Out of this round's fix scope (brief §7); in its
-   report scope. Each is a rule-26 A5 forward-action in §8, and the whole
+   report scope. Each is a rule-126 A5 forward-action in §8, and the whole
    arc is flagged for Rick in §12.
 5. **An agent-side note** (`tm1-self-inflicted-wallet-disclosure`, the
    session memory that justified MSW-6) carries the same "FCMP++ proof over
@@ -369,7 +369,7 @@ From the brief's §6.1, refined by the census:
   to the revealed key outside the circuit (reveal `k`, `r`), so the `0x07`
   record supports a claim if one is ever needed (§7.5).
 - **R5 — genesis-frozen surface.** Leaf content, `0x07` semantics and the
-  verifier's public-input shape are consensus bytes; the change is a rule-07
+  verifier's public-input shape are consensus bytes; the change is a rule-107
   cutover with the census as its criterion-3 enumeration (§10).
 - **R6 — no new primitive in this cut.** The fix uses only mechanisms the
   circuit and the wallet already run (Wei25519 point arithmetic, the
@@ -392,7 +392,7 @@ one input over a real depth-3 tree built by the production client, signed by
 the production `sign_transaction`, verified by `shekyl_fcmp::proof::verify`;
 `--release`, three runs, throwaway `Instant` timers around the two calls
 (patch not committed). Machine: 16-thread i9-11950H @ 2.6 GHz — a developer
-box, **not** the rule-76 floor; the numbers order candidates, they do not
+box, **not** the rule-176 floor; the numbers order candidates, they do not
 set budgets.
 
 | Quantity | Run 1 | Run 2 | Run 3 |
@@ -591,7 +591,7 @@ ambiguity `O.x` and `C.x` already carry.
 **Cost.** One more claimed point on the four the first layer already
 carries, in the exact shape of an existing leg — so the cost is known by
 analogy today and confirmed by measurement at pre-flight. **Numeric
-correction, 2026-09-14 (rule 26 B6):** the first ratified draft priced the
+correction, 2026-09-14 (rule 126 B6):** the first ratified draft priced the
 proof-size delta as "+128 B per input" by reading one claimed point's four
 words as bytes on the wire; the words are packed into vector commitments,
 and the crate's own formula gives the figures below.
@@ -623,7 +623,7 @@ derivation and every transcript change with it**; the `0x07` shape rule
 becomes a content rule (above) and, under `PL-D3a`, a `64·n` rule; every S1
 class-a/b vector regenerates (§9); the vendored-crypto manifest updates as a
 sanctioned event; the curve-tree store `SCHEMA_VERSION` and LMDB `VERSION`
-bumps are manual duties (the rule-42 snapshot gate is silent, census §5);
+bumps are manual duties (the rule-142 snapshot gate is silent, census §5);
 the `MDEBUG` print at `blockchain.cpp:4225` is dropped or prints only `CM`;
 the census (d)-2 `hp_of_O`/`h_pqc` aliasing on the legacy sign bridge is
 fixed in the same PR or it routes the wrong value.
@@ -678,7 +678,7 @@ Named here, not designed here. What it owes:
   that do not yet exist in approved form — lattice-based threshold
   signatures, or mature isogeny-based signatures (PRISM) — so the hash
   commitment is designed *together with* the post-quantum-sound membership
-  leg it exists to serve, as one leaf-format cutover under rule 07, not as
+  leg it exists to serve, as one leaf-format cutover under rule 107, not as
   a standalone re-commitment of every v3 leaf. Carried in `FOLLOWUPS.md`
   under `Target: V4`. Consequence for `PL-D3a`: the window it covers is the
   **entire v3 era**, which is why the record beside the point is kept
@@ -774,7 +774,7 @@ That round's closure.
 
 ---
 
-## 8. Forward-actions (rule 26 A5) — every consumer of the refuted invariant
+## 8. Forward-actions (rule 126 A5) — every consumer of the refuted invariant
 
 Each carries `file:line` at `42333d34f`; each is absorb-later by a named
 carrier, never "a follow-up". **Carriers (Rick, review 2026-09-14):** rows
@@ -804,7 +804,7 @@ A5-1…A5-7 are a firewall re-ruling, not a leaf fix — their carrier is the
 
 Every site that reads, writes, computes, serialises, stores, verifies,
 documents or tests the 4th leaf scalar, the leaf format, or `tx_extra` `0x07`,
-severity-ordered; the enumeration a rule-07 criterion-3 PR pastes at
+severity-ordered; the enumeration a rule-107 criterion-3 PR pastes at
 `Base commit: 42333d34f`. Counted as **function-level sites** (one row per
 function or passage, not per grep hit).
 
@@ -841,7 +841,7 @@ Layout-only vectors (`WITNESS_HEADER.json`, `TX_EXTRA_PQC_ROUND_TRIP.json`,
 **Gates that fire:** the vendored-crypto manifest (circuit files), the
 workspace test run (every class-a/b KAT), the C++ unit tests on the
 archival fixtures, the docs citation gates. **Gates that do not fire and
-must be done by hand:** the rule-42 snapshot (silent), the domain registry
+must be done by hand:** the rule-142 snapshot (silent), the domain registry
 (silent on a *new* domain). The fuzz inventory checked file presence only
 at this census; the compile gate landed 2026-10-01 (`cargo check --locked`
 of `rust/shekyl-fcmp/fuzz`, now in `fuzz-harness.yml` with every other fuzz
@@ -869,13 +869,13 @@ crate).
 
 ---
 
-## 10. The implementation PR, when ratified (rule 07 framing — not this round) — EXECUTED 2026-09-14, record in §12.1
+## 10. The implementation PR, when ratified (rule 107 framing — not this round) — EXECUTED 2026-09-14, record in §12.1
 
 - **Criterion 1** met: leaf content and the verifier's public-input shape
   are byte-identical-reproduction rules. **Criterion 2** follows. **Criterion 3**: §9 at `Base commit`.
   **Criterion 4**: reviewer map = §9's S0 rows (consensus-affecting), S2/S3
   (mechanical rewires), S1 (regenerated vectors), S4/S5 (docs/tests).
-- **Rule 42**: `0x07`'s semantics change is a persisted-wire change. The
+- **Rule 142**: `0x07`'s semantics change is a persisted-wire change. The
   snapshot gate is **silent** for it (nothing under `shekyl-engine-state`
   carries the value — census §5), so the version-constant bumps are manual
   duties named in the PR: the curve-tree store's `SCHEMA_VERSION`
@@ -885,8 +885,8 @@ crate).
   (Rick, review 2026-09-14): hash the revealed key of every spend in a
   synthetic chain, search every leaf and every `0x07` value, expect zero
   matches — red on today's tree, green only when the commitment hides.
-- **Rule 26 pre-flight** before the first production commit: instrument GBP
-  gate counts; measure the chosen candidate on the rule-76 floor device;
+- **Rule 126 pre-flight** before the first production commit: instrument GBP
+  gate counts; measure the chosen candidate on the rule-176 floor device;
   re-derive every census S1 vector from the ruled derivation; re-run this
   document's §2 chain against the new composition and show the lookup
   **fails** (the fix-falsifier is separate from the defect-falsifier: a test
@@ -1011,14 +1011,14 @@ settled; nothing here is still pending except where an item says so:**
 ### 12.1 Implementation record (2026-09-14)
 
 Landed on `feat/pl-d3-pedersen-leaf-commitment` (a clean worktree from
-`dev` at `a6160a4bd`, ruling 10), rule-07 framing per §10:
+`dev` at `a6160a4bd`, ruling 10), rule-107 framing per §10:
 
 - **Fix-falsifier first** (`rust/shekyl-wire/tests/pl_d1_fix_falsifier.rs`,
   commit `cf063a744`): red on the pre-`PL-D3` tree with exactly one match
   on each surface at the spent index; green after the fix with zero matches
   on both. Binding-falsifier `test_wrong_opening_fails` (vendored circuit
   crate) rejects a wrong `K`.
-- **Rule 26 pre-flight** measured before the first production commit
+- **Rule 126 pre-flight** measured before the first production commit
   (census companion §8) and the cost table in §6.3 corrected to the
   measured figures.
 - Everything §6.2 specifies is implemented: `k` and the record on cSHAKE256
@@ -1057,7 +1057,7 @@ Landed on `feat/pl-d3-pedersen-leaf-commitment` (a clean worktree from
   2026-10-01: `fuzz-harness.yml` `cargo check --locked`s
   `rust/shekyl-fcmp/fuzz`.
 
-## 13. What this round did not find (denominator, rule 26)
+## 13. What this round did not find (denominator, rule 126)
 
 Examined and clean: `docs/design/FCMP_SPEND_SIGNING_PREIMAGE.md` (no
 anonymity claim); the signing preimage itself (`tx_pqc_verify.cpp:58–152`) —

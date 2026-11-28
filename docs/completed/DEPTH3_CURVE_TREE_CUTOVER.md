@@ -66,13 +66,13 @@ helper were removed (rule 15).
 | **Depth-3+ header roots** | **Changed** — now the narrow-recompose root (`== build_layers`). |
 | Depth-0/1/2 roots | **Unaffected** — the daemon was already correct; `recon_kat` (6/6) + `recon_tier_b` (3/3) reconstruct the depth-2 fixtures unchanged against the fixed code. |
 | Genesis (block 0) | **Unaffected** — depth-0/1; no upper layers. |
-| Persisted block **wire format** | **Unchanged** — same serialization; only the depth-3+ root *value* differs, and it is derived from blocks by the fixed code. No schema-snapshot delta (rule 42). |
+| Persisted block **wire format** | **Unchanged** — same serialization; only the depth-3+ root *value* differs, and it is derived from blocks by the fixed code. No schema-snapshot delta (rule 142). |
 | Wallet `build_layers` | **Unchanged** — it was always the correct reference. |
 | Tier-A / Tier-B fixtures | **Unaffected** — both are depth-2 (Tier-A ≈ 151 leaves at height 210; Tier-B ≈ 22–35). No depth-3+ fixture exists, so none needs regeneration. |
 
 ## 4. No version bump, no migration
 
-- **No persisted-wire-format change (rule 42).** The block/header serialization is
+- **No persisted-wire-format change (rule 142).** The block/header serialization is
   byte-identical; only the *computed* depth-3+ root differs. The schema-snapshot
   check is unaffected.
 - **No daemon DB-version bump / no migration.** Pre-genesis, no live chain exists

@@ -1,6 +1,8 @@
 ---
 description: Deletion vs. deferral decisions, and the lifecycle of migration code.
 alwaysApply: true
+scope: estate
+repos: [core, gui, prism]
 ---
 
 # When to delete, when to defer

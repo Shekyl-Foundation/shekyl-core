@@ -622,7 +622,7 @@ derives from `bad_intervals`/`good_through`. One forward doc-amendment (not a bl
 → `Reinstate`** were cleared to build in that order (all three built by 2026-07-14; the middle one
 REJECTED and deleted 2026-09-20 — P2B-7).
 
-**Implementation locus (rule 20 — Rust-first).** All bond-FSM verify/connect logic — including the
+**Implementation locus (`RULE_20_RUST_VS_CPP` — Rust-first).** All bond-FSM verify/connect logic — including the
 **slash-apply body** (write the open `bad_interval`, `bond_debit` the `bonded_total`, remove the shard)
 that the C++ `process_archival_slash_at_height` currently **stubs** — lands in **`shekyl-archival-retention`
 (Rust)**, driven over the FFI from the C++ connect site (which owns the LMDB write txn). Push the FFI
@@ -964,7 +964,7 @@ Parallel: gate-6 §2.3/§2.5 join-Market defanging; gate-2 slash trigger.
   slash-evasion — traced closed: the slash is bit-gated at `H_slash_deadline` and `good_standing` is
   `good_through(bad_intervals)` (`consensus_state.rs:81-112`), so no bad interval exists during grace
   and `Reinstate` is structurally ineligible there. Design round CLOSED (all four; theme: derive from the
-  landed source of truth, don't store). Rust-first locus pinned (rule 20): the slash-apply body the C++
+  landed source of truth, don't store). Rust-first locus pinned (`RULE_20_RUST_VS_CPP`): the slash-apply body the C++
   `process_archival_slash_at_height` stubs lands in `shekyl-archival-retention`, not C++. Also (same
   session): P2B-7 exit reconciled to the §L18 sealed
   verdict; the "`P` rotation" fossil killed at the P2B-1 root (backing "rotation" is not a mechanism

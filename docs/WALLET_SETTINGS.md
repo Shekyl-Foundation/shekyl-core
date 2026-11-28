@@ -8,7 +8,7 @@ lives. A wallet carries no preferences file: the plaintext-with-HMAC
 2026-11-21). The policy that defined that file is
 [`completed/WALLET_PREFS.md`](./completed/WALLET_PREFS.md).
 **Related:** [WALLET_FILE_FORMAT_V1.md](./WALLET_FILE_FORMAT_V1.md) ·
-[`42-serialization-policy.mdc`](../.cursor/rules/42-serialization-policy.mdc) ·
+[`142-serialization-policy.mdc`](../.cursor/rules/142-serialization-policy.mdc) ·
 [`design/INPUT_GRAMMAR.md`](./design/INPUT_GRAMMAR.md) §12.
 
 ## 1. The decision order
@@ -107,7 +107,7 @@ Not user-edited; a reset to default would lose or endanger funds.
   `file_kek` ([WALLET_FILE_FORMAT_V1.md](./WALLET_FILE_FORMAT_V1.md)).
 - **Integrity and evolution:** strict per-block version constants,
   snapshot-pinned and CI-enforced by
-  [`42-serialization-policy.mdc`](../.cursor/rules/42-serialization-policy.mdc);
+  [`142-serialization-policy.mdc`](../.cursor/rules/142-serialization-policy.mdc);
   a version mismatch refuses rather than migrates.
 
 ## 6. Settings with no place

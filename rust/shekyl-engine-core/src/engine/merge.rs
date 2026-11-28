@@ -249,9 +249,11 @@ impl<
 
         // Engine post-pass: idempotent population of the
         // engine-derived fields on the freshly-merged transfers.
-        // Sync at M3b (handle derivation is a pure cryptographic
-        // primitive); becomes async at M3c+ when re-routed through
-        // `KeyEngine::try_claim_output`. Walks only the inserted
+        // Sync (handle derivation is a pure cryptographic primitive);
+        // becomes async if the reroute through
+        // `KeyEngine::try_claim_output` lands (docs/FOLLOWUPS.md, "The
+        // claim reroute through the key owner has no production
+        // caller"). Walks only the inserted
         // indices in O(k) per
         // PERF_MERGE_INSERTION_INDICES_PREFLIGHT.md §1.
         populate_engine_handle_fields(
@@ -1097,8 +1099,10 @@ fn collect_detection_residue(result: &ScanResult) -> DetectionResidue {
 /// handle on its `TransferDetails`) is delivered by the cryptographic
 /// primitive directly.
 ///
-/// M3c+ wires `LocalKeys` onto `Engine` and re-routes this helper
-/// through [`super::traits::key::KeyEngine::try_claim_output`] — at that
+/// The reroute wires `LocalKeys` onto `Engine` and routes this helper
+/// through [`super::traits::key::KeyEngine::try_claim_output`]; it is
+/// carried by docs/FOLLOWUPS.md, "The claim reroute through the key owner
+/// has no production caller", which wires it in or deletes it. At that
 /// point the helper signature becomes `async fn` and
 /// [`Engine::apply_scan_result`] takes the corresponding `.await`.
 /// The two-step trajectory is intentional: M3b's architectural

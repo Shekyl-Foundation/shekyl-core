@@ -1,6 +1,6 @@
 # The p2p remnant cutover — brief (`RC-Q`)
 
-**Family (registered in `IMPLEMENTATION_INDEX.md` §2, rule 94):** **`RC-Q`** (the rulings below). Grep surface: `rg -n -e '\bRC-Q[0-9]'`; the consensus-census family `RC-` is a different family and never carries a `Q`.
+**Family (registered in `IMPLEMENTATION_INDEX.md` §2, rule 194):** **`RC-Q`** (the rulings below). Grep surface: `rg -n -e '\bRC-Q[0-9]'`; the consensus-census family `RC-` is a different family and never carries a `Q`.
 **Ground:** `dev` at `1aed454dd` (2026-11-04); the branch is off PR #1267 (the CS-5 tune-up, `fix/cs5-tuneup`) at `fbadf38a36`, and every anchor below was read at that commit.
 **Status: OPEN — implementing.** Round 0 RULED, Rick 2026-11-04 (§0). The sessions crate (§4 step 1) is being written to §7, which is this document's specification of it.
 **Replaces** in [`P2P_3_IMPLEMENTATION_ROUND.md`](P2P_3_IMPLEMENTATION_ROUND.md) §4.2: slice **4**, **RD**, slice **5**'s remainder (LV-3 step a, the registry) and the timing-engine bridge in **TE**. They are one move because they share one C++ host.
