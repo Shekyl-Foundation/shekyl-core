@@ -293,8 +293,6 @@ pub struct Dev {
     pub difficulty: Option<u64>,
     /// Chain synchronisation with peers.
     pub sync: bool,
-    /// Encrypt the clearnet transport.
-    pub clearnet_encrypt: bool,
     /// The relay's development cover carrier.
     pub relay_cover: bool,
     /// Serve the armed test levers (`dev_block_generate`, `dev_chain_pop`) to the
@@ -803,7 +801,6 @@ fn dev_section(r: &mut Reader<'_>) -> Dev {
     Dev {
         difficulty: r.optional_integer("dev-difficulty"),
         sync,
-        clearnet_encrypt: r.switch("dev-clearnet-encrypt"),
         relay_cover: r.switch("dev-relay-cover"),
         rpc: r.switch("dev-rpc"),
         pow_seed_epoch_blocks: r.optional_integer("dev-pow-seed-epoch-blocks"),

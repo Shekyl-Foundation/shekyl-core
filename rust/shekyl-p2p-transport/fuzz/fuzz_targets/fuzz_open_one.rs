@@ -36,9 +36,11 @@ fuzz_target!(|data: &[u8]| {
 fn halves() -> Option<(SendHalf, RecvHalf)> {
     let network = [0u8; 16];
     let (initiator, message1) = Initiator::new(&network).ok()?;
-    let ready = Responder::new(&network).read_message1(&message1).ok()?;
+    let ready = Responder::new(&network)
+        .read_message1(message1.message())
+        .ok()?;
     let (responder, message2) = ready.write_message2().ok()?;
-    let initiator = initiator.read_message2(&message2).ok()?;
+    let initiator = initiator.read_message2(message2.message()).ok()?;
     let (send, _recv) = initiator.split();
     let (_send, recv) = responder.split();
     Some((send, recv))

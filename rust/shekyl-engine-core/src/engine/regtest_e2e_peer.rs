@@ -6,8 +6,8 @@
 //! A simulated Levin peer for the regtest walks: the adversary, or the
 //! network around the origin, lives here and not in the daemon (Rick,
 //! 2026-10-29: "the adversary belongs in the test; the code under test is
-//! the origin"). Plain Levin over loopback TCP, the clearnet a regtest
-//! daemon speaks with its encryption lever off.
+//! the origin"). Levin over loopback TCP inside the Noise channel, the
+//! clearnet every daemon speaks.
 //!
 //! A peer answers the handshake and every timed sync, records each
 //! `NOTIFY_NEW_TRANSACTIONS` it receives with its fluff flag, and forwards
@@ -27,6 +27,12 @@ use shekyl_levin::{
     HandshakeResponse, NewTransactions, PortableMap, Received, TimedSyncResponse,
     COMMAND_HANDSHAKE, COMMAND_TIMED_SYNC, NOTIFY_NEW_TRANSACTIONS,
 };
+use shekyl_p2p_transport::{Initiator, RecvHalf, Responder, SendHalf};
+
+/// How long the channel's handshake may take on a loaded host.
+const CHANNEL_OPEN_WAIT: Duration = Duration::from_secs(10);
+/// How long one read waits, so the session loop sees its outbox and stop.
+const SESSION_READ_WAIT: Duration = Duration::from_millis(200);
 
 /// One `NOTIFY_NEW_TRANSACTIONS` the peer received.
 #[derive(Debug, Clone)]
@@ -194,11 +200,54 @@ fn serve(stream: TcpStream, shared: &Shared, outbox: &Receiver<Vec<u8>>, initiat
     shared.live.store(false, Ordering::SeqCst);
 }
 
+/// The peer's socket with its open channel.
+struct Link {
+    sock: TcpStream,
+    seal: SendHalf,
+    open: RecvHalf,
+    /// Ciphertext read and not yet opened.
+    pending: Vec<u8>,
+}
+
+impl Link {
+    /// Run this side's half of the handshake: the dialer initiates.
+    fn open(mut sock: TcpStream, initiate: bool) -> Option<Self> {
+        let id = network_id();
+        let (seal, open) = if initiate {
+            Initiator::open(&mut sock, &id).ok()?
+        } else {
+            Responder::accept(&mut sock, &id).ok()?
+        };
+        Some(Self {
+            sock,
+            seal,
+            open,
+            pending: Vec::new(),
+        })
+    }
+
+    /// Seal `plain` and write it. `false` ends the session.
+    fn send(&mut self, plain: &[u8]) -> bool {
+        match self.seal.seal(plain) {
+            Ok(wire) => self.sock.write_all(&wire).is_ok(),
+            Err(_) => false,
+        }
+    }
+
+    /// The next whole record's plaintext, `None` when none has arrived.
+    fn next_record(&mut self) -> Result<Option<Vec<u8>>, shekyl_p2p_transport::RecordError> {
+        self.open.take_one(&mut self.pending)
+    }
+}
+
 fn session(stream: TcpStream, shared: &Shared, outbox: &Receiver<Vec<u8>>, initiate: bool) {
-    drop(stream.set_read_timeout(Some(Duration::from_millis(200))));
+    drop(stream.set_read_timeout(Some(CHANNEL_OPEN_WAIT)));
     drop(stream.set_write_timeout(Some(Duration::from_secs(10))));
     drop(stream.set_nodelay(true));
-    let mut s = stream;
+    let Some(mut s) = Link::open(stream, initiate) else {
+        return;
+    };
+    drop(s.sock.set_read_timeout(Some(SESSION_READ_WAIT)));
     if initiate {
         let request = HandshakeRequest {
             node_data: BasicNodeData {
@@ -209,7 +258,7 @@ fn session(stream: TcpStream, shared: &Shared, outbox: &Receiver<Vec<u8>>, initi
         }
         .store()
         .expect("encode a handshake");
-        if s.write_all(&invoke(COMMAND_HANDSHAKE, &request)).is_err() {
+        if !s.send(&invoke(COMMAND_HANDSHAKE, &request)) {
             return;
         }
     }
@@ -217,7 +266,7 @@ fn session(stream: TcpStream, shared: &Shared, outbox: &Receiver<Vec<u8>>, initi
     let mut buf = vec![0u8; 65_536];
     while !shared.stop.load(Ordering::Relaxed) {
         while let Ok(frame) = outbox.try_recv() {
-            if s.write_all(&frame).is_err() {
+            if !s.send(&frame) {
                 return;
             }
         }
@@ -233,7 +282,7 @@ fn session(stream: TcpStream, shared: &Shared, outbox: &Receiver<Vec<u8>>, initi
                     }
                     .store()
                     .expect("encode a handshake response");
-                    if s.write_all(&response(COMMAND_HANDSHAKE, &body)).is_err() {
+                    if !s.send(&response(COMMAND_HANDSHAKE, &body)) {
                         return;
                     }
                     shared.live.store(true, Ordering::SeqCst);
@@ -245,7 +294,7 @@ fn session(stream: TcpStream, shared: &Shared, outbox: &Receiver<Vec<u8>>, initi
                     }
                     .store()
                     .expect("encode a timed sync response");
-                    if s.write_all(&response(COMMAND_TIMED_SYNC, &body)).is_err() {
+                    if !s.send(&response(COMMAND_TIMED_SYNC, &body)) {
                         return;
                     }
                 }
@@ -272,13 +321,19 @@ fn session(stream: TcpStream, shared: &Shared, outbox: &Receiver<Vec<u8>>, initi
                 Err(_) => return,
             }
         }
-        match s.read(&mut buf) {
-            Ok(0) => return,
-            Ok(n) => {
-                if reader.feed(&buf[..n]).is_err() {
+        match s.next_record() {
+            Ok(Some(plain)) => {
+                if reader.feed(&plain).is_err() {
                     return;
                 }
+                continue;
             }
+            Ok(None) => {}
+            Err(_) => return,
+        }
+        match s.sock.read(&mut buf) {
+            Ok(0) => return,
+            Ok(n) => s.pending.extend_from_slice(&buf[..n]),
             Err(ref e)
                 if e.kind() == std::io::ErrorKind::WouldBlock
                     || e.kind() == std::io::ErrorKind::TimedOut => {}

@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use shekyl_net_address::NetworkAddress;
+use shekyl_p2p_transport::Responder;
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_runtime::runtime;
 use shekyl_timing_engine::{EngineService, MonotonicClock, Tick};
@@ -36,6 +37,13 @@ struct Dialled {
 }
 
 fn dial_session<F>(gap: Tick, accept: F) -> Dialled
+where
+    F: FnOnce(std::net::TcpStream) + Send + 'static,
+{
+    dial_kind(gap, ChannelChoice::Native, accept)
+}
+
+fn dial_kind<F>(gap: Tick, kind: ChannelChoice, accept: F) -> Dialled
 where
     F: FnOnce(std::net::TcpStream) + Send + 'static,
 {
@@ -62,7 +70,7 @@ where
         },
         proxy: None,
         sockets: Sockets::new(),
-        kind: crate::seam::ChannelChoice::Plain,
+        kind,
         network_id: ID,
         dial_within: Tick::new(2_000_000_000),
         proxied_dial_within: Tick::new(2_000_000_000),
@@ -92,13 +100,20 @@ fn dial_against<F>(gap: Tick, accept: F) -> (CloseCause, Vec<CloseKind>)
 where
     F: FnOnce(std::net::TcpStream) + Send + 'static,
 {
+    dial_against_kind(gap, ChannelChoice::Native, accept)
+}
+
+fn dial_against_kind<F>(gap: Tick, kind: ChannelChoice, accept: F) -> (CloseCause, Vec<CloseKind>)
+where
+    F: FnOnce(std::net::TcpStream) + Send + 'static,
+{
     let Dialled {
         engine,
         pool,
         mut session,
         gap,
         seen: recorded,
-    } = dial_session(gap, accept);
+    } = dial_kind(gap, kind, accept);
     let cause = pool.block_on(async {
         while session.recv().await.is_some() {}
         session.close_cause()
@@ -189,7 +204,7 @@ fn accept_peer_that_writes(gap: Tick, opening: &[u8]) -> AcceptedPeer {
         let inbound = super::super::Inbound {
             sockets,
             ceiling: || InboundCeiling::Bounded(4),
-            kind: ChannelChoice::Plain,
+            kind: ChannelChoice::Native,
             network_id: ID,
             handshake_within,
             gap_within: Some(gap),
@@ -418,4 +433,62 @@ fn a_peer_fin_is_peer_closed() {
     });
     assert_eq!(cause.kind(), CloseKind::PeerClosed);
     assert!(seen.contains(&CloseKind::PeerClosed));
+}
+
+/// Answer `frame` as one Noise record, after accepting the node's flight.
+fn sealed_reply(frame: Vec<u8>, hold: Duration) -> impl FnOnce(StdStream) + Send + 'static {
+    move |mut sock| {
+        // The accepted socket is the listener's non-blocking std half.
+        sock.set_nonblocking(false).expect("blocking");
+        sock.set_read_timeout(Some(Duration::from_secs(2)))
+            .expect("timeout");
+        let (mut send, _recv) = Responder::accept(&mut sock, &ID).expect("channel");
+        let wire = send.seal(&frame).expect("seal");
+        sock.write_all(&wire).expect("record");
+        std::thread::sleep(hold);
+        drop(sock);
+    }
+}
+
+/// A Noise record whose plaintext is the handshake response ends the gap.
+/// The gap watches the seam's plaintext, after the channel is up.
+/// Red edit: feed `HandshakeFrame` the ciphertext, or arm the gap before
+/// the channel opens.
+#[test]
+fn a_sealed_handshake_response_ends_the_gap() {
+    let frame = levin_frame(40);
+    let mut dialled = dial_kind(
+        Tick::new(300_000_000),
+        ChannelChoice::Noise,
+        sealed_reply(frame.clone(), Duration::from_millis(1_500)),
+    );
+    assert_eq!(
+        read_bytes(&dialled.pool, &mut dialled.session, frame.len()),
+        frame
+    );
+    std::thread::sleep(Duration::from_millis(900));
+    assert!(
+        !dialled
+            .seen
+            .lock()
+            .expect("causes")
+            .contains(&CloseKind::LevinHandshakeTimeout),
+        "the gap fired after a sealed handshake response"
+    );
+    drop(dialled.gap.take());
+    dialled.pool.shutdown(Duration::from_millis(50));
+    drop(dialled.engine);
+}
+
+/// A Noise record whose plaintext is not the handshake does not end the gap.
+/// Red edit: treat any opened record as the handshake frame.
+#[test]
+fn a_sealed_timed_sync_does_not_end_the_gap() {
+    let (cause, seen) = dial_against_kind(
+        Tick::new(200_000_000),
+        ChannelChoice::Noise,
+        sealed_reply(timed_sync_frame(), Duration::from_secs(2)),
+    );
+    assert_eq!(cause.kind(), CloseKind::LevinHandshakeTimeout);
+    assert!(seen.contains(&CloseKind::LevinHandshakeTimeout));
 }

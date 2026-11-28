@@ -20,8 +20,8 @@ pub struct OpenInit {
 
 impl OpenInit {
     pub fn message1() -> (Self, Vec<u8>) {
-        let (inner, message1) = Initiator::new(&NID).expect("initiator keygen");
-        (Self { inner }, message1)
+        let (inner, flight) = Initiator::new(&NID).expect("initiator keygen");
+        (Self { inner }, flight.message().to_vec())
     }
 
     pub fn finish(self, message2: &[u8]) {
@@ -34,9 +34,9 @@ pub fn responder_message2(message1: &[u8]) -> Vec<u8> {
     let ready = Responder::new(&NID)
         .read_message1(message1)
         .expect("message 1");
-    let (established, message2) = ready.write_message2().expect("message 2");
+    let (established, flight) = ready.write_message2().expect("message 2");
     std::hint::black_box(established);
-    message2
+    flight.message().to_vec()
 }
 
 pub struct Session {
@@ -49,10 +49,10 @@ pub struct Session {
 fn established() -> (crate::Established<true>, crate::Established<false>) {
     let (init, message1) = Initiator::new(&NID).expect("initiator");
     let ready = Responder::new(&NID)
-        .read_message1(&message1)
+        .read_message1(message1.message())
         .expect("message 1");
     let (responder, message2) = ready.write_message2().expect("message 2");
-    let initiator = init.read_message2(&message2).expect("message 2");
+    let initiator = init.read_message2(message2.message()).expect("message 2");
     (initiator, responder)
 }
 

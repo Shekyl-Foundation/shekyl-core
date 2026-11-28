@@ -679,6 +679,13 @@ fi
 #       a_flood_of_notifications_is_read_one_at_a_time_without_growing_memory
 #         — the permit made unlimited and each 2002 kept: "resident set
 #         grew 25040 KiB under a 33554493-byte flood".
+#       the_download_cap_paces_and_counts_the_bytes_on_the_wire — observed
+#         red 2026-11-27 against a daemon whose download budget refunds the
+#         Noise channel's overhead after decoding (it charges plaintext):
+#         the download count never reached the peer's wire bytes. The
+#         honest daemon, three runs: 655,429 wire bytes (425,691 plaintext)
+#         in 9.03 to 9.07 s at 64KiB/s against an 8.1 s wire floor, and the
+#         node's totals equal to the peer's wire bytes after the close.
 #     The first run against the honest daemon was red too: every clearnet
 #     admission on a Tor-off node ended as the node's own failure, because
 #     the pump that hands admissions to the session layer ended when the
@@ -695,6 +702,7 @@ ARMED_LEVIN=(
   session_black_box:transactions_are_ignored_while_unsynchronised_and_judged_once_synced
   session_black_box:the_txpool_complement_is_served
   session_black_box:a_flood_of_notifications_is_read_one_at_a_time_without_growing_memory
+  session_black_box:the_download_cap_paces_and_counts_the_bytes_on_the_wire
 )
 
 for entry in "${ARMED_LEVIN[@]}"; do

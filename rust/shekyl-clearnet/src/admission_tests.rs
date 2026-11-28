@@ -42,7 +42,7 @@ fn dial_a_listener(sockets: Sockets) -> (Option<DialEnd>, bool) {
         },
         proxy: None,
         sockets,
-        kind: crate::seam::ChannelChoice::Plain,
+        kind: crate::seam::ChannelChoice::Native,
         network_id: ID,
         dial_within: Tick::new(2_000_000_000),
         proxied_dial_within: Tick::new(2_000_000_000),

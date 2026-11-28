@@ -265,7 +265,6 @@ const ROWS: &[Row] = &[
     rejected("out-peers", "the outbound degree is a protocol constant"),
     rejected("in-peers", "no operator inbound cap: the descriptor safety bound is the only inbound bound, and the rate rows bound what an operator pays (INPUT_GRAMMAR.md IG-Q40)"),
     rejected("tos-flag", "a traffic-class marking is a label any on-path observer can classify Shekyl traffic by"),
-    dev("dev-clearnet-encrypt", Kind::Switch, Default::Unset, DevGate::Staging(Staging::ClearnetEncrypt), "Encrypt the clearnet transport; deleted at the Noise flip."),
     dev("dev-sync", Kind::OneOf(&["on", "off"]), Default::Value("on"), DevGate::Lever(Lever::Sync), "Chain synchronisation with peers."),
     dev("dev-relay-cover", Kind::Switch, Default::Unset, DevGate::Staging(Staging::RelayCover), "The relay's development cover carrier."),
     dev("dev-rpc", Kind::Switch, Default::Unset, DevGate::Lever(Lever::DevRpc), "Serve the armed test levers to the host's administrator."),
@@ -438,13 +437,13 @@ mod tests {
     #[test]
     fn the_live_count_is_the_grammars() {
         let live = TABLE.rows.iter().filter(|r| r.is_live()).count();
-        assert_eq!(live, 56);
+        assert_eq!(live, 55);
         let levers = TABLE
             .rows
             .iter()
             .filter(|r| matches!(r.visibility, Visibility::Dev { .. }))
             .count();
-        assert_eq!(levers, 9);
+        assert_eq!(levers, 8);
     }
 
     #[test]

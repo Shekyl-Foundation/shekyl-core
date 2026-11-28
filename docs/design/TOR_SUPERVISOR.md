@@ -162,7 +162,7 @@ clearnet" on nodes whose clearnet held nothing (finding 9).
 
 Clearnet-only is the operator's `ClearnetOnly` act, never a default
 (`TSR-Q11`). The node warns on every boot. TB-1 states the consequence,
-including that the link is unencrypted until the Noise flip. The send in
+including that peers can see the node's address. The send in
 that posture is `OwnTx::ClearnetOnly`.
 
 `TSR-F9` and `TSR-F10` propose amending parts of the brief's rulings; each
