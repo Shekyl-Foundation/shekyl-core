@@ -84,8 +84,7 @@ class Session:
 
     def __init__(self, args):
         self.args = args
-        self.work = os.path.abspath(args.work_dir)
-        os.makedirs(self.work, exist_ok=True)
+        self.work = B.owner_dir(args.work_dir)
         self.daemon = B.daemon_executable(args.daemon)
         self.replay = os.path.abspath(args.replay_bin)
         (self.sp2p, self.srpc, self.fp2p, self.frpc, self.bp2p, self.brpc), held = \
@@ -99,7 +98,10 @@ class Session:
         self.prefix = None
 
     def spawn(self, tag, data_dir, extra, p2p, rpc, offline=False):
-        common = ["--network", "regtest", "--dev-difficulty", "1", "--p2p-local",
+        # `--config-file none`: the default file is the machine's
+        # (`/etc/shekyl`), where a host's own regtest node keeps its settings.
+        common = ["--network", "regtest", "--config-file", "none",
+                  "--dev-difficulty", "1", "--p2p-local",
                   "--tor", "off", "--log-level", "info"]
         net = ["--clearnet", "off"] if offline else ["--clearnet-listen", f"127.0.0.1:{p2p}"]
         argv = [self.daemon] + common + ["--data-dir", data_dir] + net + [
@@ -130,7 +132,7 @@ class Session:
             B._await_posted(self.srpc, self.args.startup_timeout)
             timeout = getattr(self.args, "gen_timeout", _GEN_TIMEOUT_S)
             resp = B._rpc(self.srpc, "dev_block_generate", {"count": count}, timeout=timeout)
-            if not B.generated("redb", resp):
+            if not B.generated(resp):
                 B._fail(f"dev_block_generate refused: {json.dumps(resp)[:300]}")
             return B.chain_count(self.srpc)
 
@@ -146,9 +148,7 @@ class Session:
         self.prefix = prefix
         for directory in (seed_dir, fork_dir):
             shutil.rmtree(directory, ignore_errors=True)
-            # Owner-only: the daemon refuses an existing data directory
-            # others can enter (`config.data-dir.exposed`).
-            os.makedirs(directory, mode=B.DATA_DIR_MODE)
+            B.owner_dir(directory)
         self.generate(seed_dir, prefix, address)
         shutil.rmtree(fork_dir)
         shutil.copytree(seed_dir, fork_dir)

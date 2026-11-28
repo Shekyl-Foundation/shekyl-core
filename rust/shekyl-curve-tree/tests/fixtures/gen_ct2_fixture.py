@@ -18,7 +18,7 @@ base64), decoded here by the grammar `shekyl-wire` documents
 (`rust/shekyl-wire/src/block.rs`, `transaction.rs`): the header, the
 coinbase's prefix, and its `Ct(Null)` base with the real `outPk`. The
 decode is held to the daemon's own reply: it must consume the body
-exactly, its root must be the header's `curve_tree_root`, and its count
+exactly, its root must be the header's `curve_root`, and its count
 of other transactions the header's `tx_count`.
 
 Usage:
@@ -47,6 +47,7 @@ _SCRIPTS = Path(__file__).resolve().parents[4] / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
 import armed_lever  # noqa: E402
 import owner_socket  # noqa: E402
+import posted_template  # noqa: E402
 
 _RECIPIENTS = (
     Path(__file__).resolve().parents[3]
@@ -109,6 +110,10 @@ class Daemon:
                 self.binary,
                 "--network",
                 "regtest",
+                # The default file is the machine's (`/etc/shekyl`), where a
+                # host's own regtest node keeps its settings.
+                "--config-file",
+                "none",
                 "--clearnet",
                 "off",
                 "--tor",
@@ -144,6 +149,9 @@ class Daemon:
                         f"the daemon did not announce {armed_lever.ANNOUNCEMENT!r} "
                         f"at start; see {self.log.name}"
                     )
+                # Answering is not ready to mine: a generate before the
+                # first posted template is refused `no_view`.
+                posted_template.await_posted(self.url)
                 return
             time.sleep(0.5)
         raise RuntimeError("daemon RPC did not become ready")
@@ -339,7 +347,7 @@ def decode_coinbase(body: bytes) -> dict:
 
 def record_block(daemon: Daemon, height: int) -> dict:
     blk = daemon.json_rpc("block_show", {"height": height})
-    root = blk["header"]["curve_tree_root"]
+    root = blk["header"]["curve_root"]
     decoded = decode_coinbase(base64.b64decode(blk["body"], validate=True))
     # The decode is held to the daemon's own header: the same root, and the
     # same count of other transactions.

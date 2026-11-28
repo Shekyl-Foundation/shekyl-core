@@ -425,7 +425,9 @@ struct Found {
 struct Regtest {
     child: Child,
     data_dir: PathBuf,
-    config_dir: PathBuf,
+    /// The owner's socket directory: this account's, mode 0700, one per
+    /// spawn. Held until the harness drops, after the daemon is killed.
+    _socket_dir: shekyl_os_account::test_fixture::FixtureDir,
     owner: LocalTarget,
     view_url: String,
     logs: Vec<PathBuf>,
@@ -455,7 +457,7 @@ impl Regtest {
         // Made as the daemon makes a data directory: it refuses an existing
         // one other accounts can enter (`config.data-dir.exposed`).
         shekyl_os_account::create_account_dir_all(&data_dir).expect("data dir");
-        let config_dir = private_config_dir(rpc_port);
+        let socket_dir = shekyl_os_account::test_fixture::tempdir().expect("a socket directory");
         let stdout = std::fs::File::create(data_dir.join("daemon.log")).expect("stdout log");
         let stderr = stdout.try_clone().expect("stderr log");
         let mine = mine_address(&SEED);
@@ -476,17 +478,16 @@ impl Regtest {
             &format!("127.0.0.1:{view_port}"),
             "--data-dir",
             data_dir.to_str().expect("utf8 data dir"),
+            // The default file is the machine's (`/etc/shekyl`), where a
+            // host's own regtest node keeps its settings.
             "--config-file",
-            config_dir
-                .join("shekyld.toml")
-                .to_str()
-                .expect("utf8 config"),
+            "none",
             "--log-file",
             data_dir.join("shekyld.log").to_str().expect("utf8 log"),
-            // The owner's socket in the private configuration directory:
-            // a harness names it (`RPC_CHANNEL.md` §7.1).
+            // The owner's socket in a private directory: a harness names
+            // it (`RPC_CHANNEL.md` §7.1).
             "--rpc-socket-dir",
-            config_dir.to_str().expect("utf8 config"),
+            socket_dir.path().to_str().expect("utf8 socket dir"),
             "--log-level",
             "info",
             "--mine-address",
@@ -497,7 +498,6 @@ impl Regtest {
         .stdin(Stdio::null());
         let child = shekyl_spawn::spawn_lock::spawn(&mut cmd).unwrap_or_else(|error| {
             drop(std::fs::remove_dir_all(&data_dir));
-            drop(std::fs::remove_dir_all(&config_dir));
             panic!("spawn shekyld: {error}");
         });
         Self {
@@ -507,10 +507,10 @@ impl Regtest {
             owner: LocalTarget::test_override(
                 Network::Regtest,
                 &shekyl_rpc_rendezvous::Instance::Default,
-                Some(&config_dir),
+                Some(socket_dir.path()),
                 None,
             ),
-            config_dir,
+            _socket_dir: socket_dir,
             view_url: format!("http://127.0.0.1:{view_port}"),
         }
     }
@@ -672,7 +672,6 @@ impl Drop for Regtest {
         drop(self.child.kill());
         drop(self.child.wait());
         drop(std::fs::remove_dir_all(&self.data_dir));
-        drop(std::fs::remove_dir_all(&self.config_dir));
     }
 }
 
@@ -750,62 +749,4 @@ async fn await_template(rpc: &LocalRpc) {
 
 fn file_len(path: &Path) -> u64 {
     std::fs::metadata(path).map(|meta| meta.len()).unwrap_or(0)
-}
-
-/// A directory only this account can enter, holding one empty configuration
-/// file. The daemon refuses a file with a directory above it that another
-/// account could write, which rules out the data directory under `TMPDIR`.
-fn private_config_dir(rpc_port: u16) -> PathBuf {
-    let parent = config_base().join(".shekyl-regtest");
-    let dir = parent.join(format!("tx-show-{rpc_port}"));
-    drop(std::fs::remove_dir_all(&dir));
-    let mut builder = std::fs::DirBuilder::new();
-    builder.recursive(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt;
-        builder.mode(0o700);
-    }
-    builder.create(&dir).expect("private config dir");
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    drop(
-        options
-            .open(dir.join("shekyld.toml"))
-            .expect("empty config file"),
-    );
-    dir
-}
-
-fn config_base() -> PathBuf {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        // The effective uid, as the daemon's own ownership check reads it
-        // (`shekyl-daemon-config`'s `file.rs`); `/proc/self` is Linux-only.
-        let me = rustix::process::geteuid().as_raw();
-        let candidates = [
-            std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from),
-            std::env::var_os("HOME").map(PathBuf::from),
-            Some(PathBuf::from("/run")),
-        ];
-        for base in candidates.into_iter().flatten() {
-            let owned = base.ancestors().all(|dir| {
-                std::fs::metadata(dir)
-                    .map(|meta| (meta.uid() == 0 || meta.uid() == me) && meta.mode() & 0o022 == 0)
-                    .unwrap_or(false)
-            });
-            if base.is_dir() && owned {
-                return base;
-            }
-        }
-    }
-    panic!(
-        "no directory this account owns the whole way up for the daemon's empty configuration file"
-    );
 }

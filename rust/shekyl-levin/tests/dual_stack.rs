@@ -81,6 +81,10 @@ impl Daemon {
             .args([
                 "--network",
                 "regtest",
+                // The default file is the machine's (`/etc/shekyl`); a host
+                // that runs a regtest node keeps its settings there.
+                "--config-file",
+                "none",
                 "--tor",
                 "off",
                 "--dev-difficulty",
