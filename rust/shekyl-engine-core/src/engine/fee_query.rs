@@ -5,7 +5,7 @@
 
 //! Read-only fee/weight query surface (WI-RPC-1).
 //!
-//! Projects the existing Phase-2a fee substrate — [`predict_weight`](crate::engine::tx_fee_model::predict_weight)'s
+//! Projects the existing Phase-2a fee substrate — [`predict_weight`](shekyl_tx_weight::predict_weight)'s
 //! wire-exact byte model and the daemon's multi-tier
 //! [`FeeEstimates`](super::traits::FeeEstimates) snapshot — as `&self` Engine
 //! queries for the wallet-RPC layer, **without** re-deriving any byte model
@@ -32,7 +32,7 @@ use super::{Engine, EngineSignerKind};
 /// builder would produce from the same counts (it includes the Bp+
 /// verification clawback); `size` is the serialized wire bytes (`weight`
 /// minus the clawback). Both come from the one
-/// [`predict_weight`](super::tx_fee_model::predict_weight) byte model.
+/// [`predict_weight`](shekyl_tx_weight::predict_weight) byte model.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TxShapeEstimate {
     /// Serialized transaction size in bytes.
@@ -94,7 +94,7 @@ impl<
     /// and `n_out` outputs at the wallet's current curve-tree depth.
     ///
     /// Pure structural projection of the Phase-2a byte model
-    /// ([`predict_weight`](super::tx_fee_model::predict_weight), which equals
+    /// ([`predict_weight`](shekyl_tx_weight::predict_weight), which equals
     /// `Transaction::weight()` by KAT) — no daemon round-trip, no state
     /// mutation. `fee` feeds the weight's own `varint(fee)` term; pass the
     /// expected fee when known, `0` for a floor estimate (the difference is
