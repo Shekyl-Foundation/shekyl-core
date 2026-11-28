@@ -396,6 +396,14 @@ pub enum ResolvedCommand {
     /// `shard alarm`: the shards this wallet's bond owes that its body
     /// store did not hold or could not verify this session (`WSS-Q17`).
     ShardAlarm,
+    /// `operator alarm`: every condition the wallet watches for its
+    /// operator, and the faults waiting for acknowledgment (OA-1).
+    OperatorAlarm,
+    /// `operator alarm acknowledge <incident>`: clear a fault whose
+    /// condition has cleared, by the incident `operator alarm` showed.
+    OperatorAlarmAcknowledge {
+        incident: u64,
+    },
 
     // -- Fees (WI-RPC-1) --
     Fee {

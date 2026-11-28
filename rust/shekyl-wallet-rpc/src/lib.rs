@@ -28,6 +28,7 @@ pub mod handlers;
 pub mod lifecycle;
 pub mod message_signing;
 pub mod notes;
+pub mod operator_alarm;
 pub mod params;
 pub mod project;
 pub mod proofs;

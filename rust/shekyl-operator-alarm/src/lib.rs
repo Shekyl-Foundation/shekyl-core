@@ -114,7 +114,12 @@ use tokio::sync::watch;
 /// than [`OperatorAlarm`]: several alarms can describe the same condition
 /// (the vanguard set has three distinct integrity faults), and an operator
 /// looking at "is my guard topology intact" wants one row, not three.
-#[non_exhaustive]
+///
+/// Exhaustive on purpose, as are [`Arming`], [`DisarmedReason`],
+/// [`OperatorAlarm`] and [`DegradedCause`]: the wallet RPC's projection
+/// matches every variant, so a new one does not compile until it has its wire
+/// keyword. The crate is not published, so there is no embedder outside this
+/// workspace for whom an added variant would be a silent break.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum AlarmCondition {
     /// Whether the persona's tor transport is up and staying up (§3c).
@@ -230,11 +235,6 @@ impl AlarmCondition {
 /// The reason this is on the board at all: a check that cannot fire and a check
 /// that fired clean are both *quiet*, and rendering them the same way is how a
 /// stopped watchdog reads as good news.
-///
-/// `#[non_exhaustive]` to match [`DisarmedReason`]: the set of ways a check can
-/// be off grows as producers arrive, and an embedder living outside this
-/// workspace would otherwise take a compile break it gets no warning about here.
-#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Arming {
     /// The check is running; a raised alarm for this condition means the
@@ -249,7 +249,6 @@ pub enum Arming {
 ///
 /// Bounded tags, no free text: this reaches a user-facing surface (rule 82) and
 /// the set of ways a check can be off is a design fact, not a message.
-#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DisarmedReason {
     /// There is no live tor incarnation to report on. Vanguard state is
@@ -360,7 +359,6 @@ pub enum AlarmLifetime {
 /// because *which* fault it is decides what the operator does about it
 /// (rule 82) — reinstalling a rejected tor bundle and waiting out a bootstrap
 /// timeout are not the same instruction.
-#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OperatorAlarm {
     /// §3c: the restart limit tripped (or a trust failure occurred) and the
@@ -672,7 +670,6 @@ impl OperatorAlarm {
 ///
 /// One tag per [`ServiceFailure`](shekyl_tor_control_wallet::service::ServiceFailure) variant,
 /// deliberately not collapsed — see [`OperatorAlarm`].
-#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DegradedCause {
     /// The SP-T0c binary gate refused the tor binary, or discovery found none.
@@ -712,6 +709,14 @@ pub enum DegradedCause {
 pub struct IncidentId(u64);
 
 impl IncidentId {
+    /// The incident a reader names back: the value [`Self::get`] gave it,
+    /// decoded from a request. A value no outstanding fault carries simply
+    /// matches nothing in [`OperatorAlarms::acknowledge`].
+    #[must_use]
+    pub fn from_raw(raw: u64) -> Self {
+        Self(raw)
+    }
+
     /// The raw counter value, for rendering and correlation only.
     #[must_use]
     pub fn get(self) -> u64 {

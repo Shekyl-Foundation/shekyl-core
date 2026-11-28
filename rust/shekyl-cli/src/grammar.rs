@@ -208,6 +208,14 @@ fn parse_ready(id: CommandId, tail: Tail<'_>, args: &[&str]) -> ResolvedCommand 
         ShardShow => one_id(id, args, |shard_id| ResolvedCommand::ShardShow { shard_id }),
         ShardFetch => parse_shard_fetch(args),
         ShardAlarm => bare(id, args, ResolvedCommand::ShardAlarm),
+        OperatorAlarm => bare(id, args, ResolvedCommand::OperatorAlarm),
+        OperatorAlarmAcknowledge => match args {
+            [raw] => match raw.parse::<u64>() {
+                Ok(incident) => ResolvedCommand::OperatorAlarmAcknowledge { incident },
+                Err(_) => diag(format!("{}: {raw:?} is not an incident number", usage(id))),
+            },
+            _ => diag(usage(id)),
+        },
         MineStart => parse_mine_start(args),
         MineStop => bare(id, args, ResolvedCommand::MineStop),
         MineStatus => bare(id, args, ResolvedCommand::MineStatus),
@@ -219,9 +227,9 @@ fn parse_ready(id: CommandId, tail: Tail<'_>, args: &[&str]) -> ResolvedCommand 
         Verify => parse_verify(tail, args),
         // Subjects. `walk` asks for a verb before this match; the arm keeps
         // the match exhaustive if that ever changes.
-        Tx | Request | Uri | Shard | ShardList | Mine | Prove | Check | Block | BlockHeader
-        | Peer | P2p | Sync | Daemon | Txpool | ChainCoinbase | Ban | Option | Rpc | RpcClient
-        | RpcBundle | RpcKey => diag(catalog::need_verb(id)),
+        Tx | Request | Uri | Shard | ShardList | Operator | Mine | Prove | Check | Block
+        | BlockHeader | Peer | P2p | Sync | Daemon | Txpool | ChainCoinbase | Ban | Option
+        | Rpc | RpcClient | RpcBundle | RpcKey => diag(catalog::need_verb(id)),
     }
 }
 
@@ -1104,6 +1112,35 @@ mod tests {
         ] {
             assert!(
                 !matches!(parse(&refused), ResolvedCommand::Enroll(_)),
+                "{refused}"
+            );
+        }
+    }
+
+    /// `operator alarm` runs bare; `acknowledge` takes one incident number
+    /// and refuses anything else.
+    #[test]
+    fn operator_alarm_and_its_acknowledgment_parse() {
+        assert!(matches!(
+            parse("operator alarm"),
+            ResolvedCommand::OperatorAlarm
+        ));
+        assert!(matches!(
+            parse("operator alarm acknowledge 7"),
+            ResolvedCommand::OperatorAlarmAcknowledge { incident: 7 }
+        ));
+        for refused in [
+            "operator alarm acknowledge",
+            "operator alarm acknowledge seven",
+            "operator alarm acknowledge 7 8",
+            "operator alarm now",
+        ] {
+            assert!(
+                !matches!(
+                    parse(refused),
+                    ResolvedCommand::OperatorAlarm
+                        | ResolvedCommand::OperatorAlarmAcknowledge { .. }
+                ),
                 "{refused}"
             );
         }

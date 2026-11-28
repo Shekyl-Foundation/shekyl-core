@@ -19,6 +19,7 @@ mod daemon_view;
 mod fees;
 mod lifecycle;
 pub(crate) mod mine;
+mod operator;
 mod proofs;
 mod receiving;
 pub mod scripted;
@@ -459,6 +460,18 @@ pub fn run(
                 "shard alarm",
                 chain::cmd_shard_alarm(&rpc),
                 chain::show_shard_alarm,
+            ),
+            ResolvedCommand::OperatorAlarm => present(
+                &presentation,
+                "operator alarm",
+                operator::cmd_operator_alarm(&rpc),
+                operator::show_operator_alarm,
+            ),
+            ResolvedCommand::OperatorAlarmAcknowledge { incident } => present(
+                &presentation,
+                "operator alarm acknowledge",
+                operator::cmd_operator_alarm_acknowledge(&rpc, incident),
+                operator::show_acknowledged,
             ),
             ResolvedCommand::ShardShow { shard_id } => present(
                 &presentation,

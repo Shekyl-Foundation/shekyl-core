@@ -730,6 +730,269 @@ pub struct ShardAlarmResult {
     pub alarms: Vec<ShardAlarmView>,
 }
 
+/// A condition the wallet watches on the operator's behalf (`operator_alarm`,
+/// OA-1). One row per condition, every condition, in this order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AlarmConditionView {
+    /// The persona's Tor is up and staying up.
+    TransportLiveness,
+    /// Challengers can reach the persona's onion.
+    OnionReachability,
+    /// The persona's guard set is intact and will survive a restart.
+    VanguardIntegrity,
+    /// The shards the bond owes are pinned and being refreshed.
+    ServeSetIntegrity,
+    /// The volume under the wallet's store has room to grow.
+    ServeDiskHeadroom,
+    /// The requests the persona's host answers are being answered.
+    ServeHealth,
+    /// The wallet's view of the chain is advancing.
+    ChainProgress,
+    /// Settled epochs are being claimed.
+    EpochClaim,
+    /// No claimable value has been let expire.
+    ClaimForfeiture,
+    /// Reserved staking funds were spent only by their own records.
+    PendingFundsIntegrity,
+}
+
+/// Why a condition is not being checked right now (`operator_alarm`).
+/// Rendered as "not checked", never as healthy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DisarmedReasonView {
+    /// The persona's Tor is starting, bootstrapping, retrying or degraded,
+    /// so what only a ready Tor can report is unknown.
+    TransportUnready,
+    /// The persona's Tor supervisor has stopped.
+    TransportStopped,
+    /// The wallet is still catching up to the chain.
+    CatchingUp,
+    /// The free-space probe could not read the volume.
+    DiskUnreadable,
+    /// No serving host is running.
+    HostDown,
+    /// The driver leg that checks it panicked and is parked until a reopen.
+    DriverLegParked,
+    /// No check is reporting on it: not started, stopped with the driver, or
+    /// not in this build.
+    Unreported,
+    /// The check stopped without saying so; a reopen restarts it.
+    CheckStopped,
+}
+
+/// Whether a condition is being checked (`operator_alarm`): one key, its
+/// value `null` or the reason it is not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ArmingView {
+    /// Checked: no fault on the row means checked and clean.
+    Armed(()),
+    /// Not checked, and why.
+    Disarmed(DisarmedReasonView),
+}
+
+/// Why the persona's Tor is degraded (`operator_alarm`, `transport-degraded`):
+/// one key, its value `null`. Where the fault is one `daemon_status` names
+/// (§23), the key is that one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TransportCauseView {
+    /// The pin refused the Tor binary, or none was found.
+    InstallDefect(()),
+    /// The control channel failed.
+    ControlChannelFailed(()),
+    /// Tor came up with no SOCKS listener to dial through.
+    SocksMissing(()),
+    /// Tor did not finish bootstrapping within its deadline.
+    LaunchFailed(()),
+    /// The Tor process ended.
+    Exited(()),
+    /// A fault inside the supervisor, not in Tor.
+    Internal(()),
+    /// Tor would not publish the persona's onion.
+    OnionRefused(()),
+    /// Tor refused the persona's guard pins.
+    GuardsRefused(()),
+}
+
+/// What is wrong (`operator_alarm`): one key, the alarm, its value the
+/// payload object or `null`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AlarmView {
+    /// The persona's Tor keeps failing and is retrying at its slowest pace.
+    TransportDegraded {
+        /// The latest failure, or `null` when it predates this session's
+        /// reading.
+        cause: Nullable<TransportCauseView>,
+    },
+    /// The saved guard set was unusable, so a fresh one was drawn.
+    VanguardStateRedrawn(()),
+    /// The guard set could not be saved, so the next start would draw anew.
+    VanguardStateUnpersisted(()),
+    /// Part of Tor's view of the network did not decode, so guard repair
+    /// was held back this pass.
+    VanguardViewIncomplete {
+        /// Entries that decoded.
+        decoded: u64,
+        /// Entries announced.
+        announced: u64,
+    },
+    /// The serve set has not been refreshed within its bound.
+    ServeSetStale {
+        /// Blocks the wallet ingested since the last refresh.
+        block_count: u64,
+    },
+    /// Refreshes of the serve set keep failing.
+    ServeSetRefreshFailing {
+        /// Consecutive failed attempts.
+        count: u64,
+    },
+    /// Pins for bonded shards are gone from the store; the next refresh
+    /// restores them.
+    ServeSetPinsDropped {
+        /// Members with no pin.
+        dropped_count: u64,
+        /// Members the serve set holds.
+        member_count: u64,
+    },
+    /// The store's declaration that it never prunes is gone.
+    ServeSetPostureLost {
+        /// The prefix length the declaration covered.
+        frozen_count: u64,
+    },
+    /// The wallet's tip moved below the height the pins were made at.
+    ServeSetRolledBack {
+        /// The height the pins were made at.
+        minted_height: u64,
+        /// The wallet's height now.
+        height: u64,
+    },
+    /// Bonded shard bytes are already pruned; a chain replay must rebuild
+    /// them.
+    ServeSetBytesPruned {
+        /// Members whose bytes are gone.
+        member_count: u64,
+    },
+    /// The volume under the wallet's store is running out of room.
+    ServeDiskLow {
+        /// Bytes free.
+        free: u64,
+        /// The fewest bytes free before this is raised.
+        free_min: u64,
+    },
+    /// The wallet's view of the chain stopped advancing.
+    ChainProgressStalled {
+        /// The last height seen.
+        height: u64,
+        /// How long since it was seen, in seconds.
+        age: u64,
+    },
+    /// Settled epochs remain unclaimed past when they should have been.
+    EpochUnclaimed {
+        /// The oldest outstanding epoch.
+        epoch: u64,
+        /// How many are outstanding.
+        epoch_count: u64,
+    },
+    /// Claimable value was let expire this session.
+    ClaimForfeited {
+        /// The newest forfeited epoch.
+        epoch: u64,
+        /// The value forfeited this session, in atomic units.
+        amount: u64,
+    },
+    /// Reserved staking funds were spent by another transaction.
+    ReservationSpentElsewhere {
+        /// Records that carry the outcome.
+        record_count: u64,
+        /// Stakes held with every reserved input spent.
+        held_count: u64,
+    },
+    /// The persona's key refused to countersign passes for shards it holds.
+    ServeSigningRefused {
+        /// Refusals before any byte went out.
+        pre_flight: u64,
+        /// Refusals after the shard was sent.
+        late: u64,
+    },
+    /// Requests the host could not answer, for want of its store or a usable
+    /// daemon tip.
+    ServeLookupFailing {
+        /// Failures in the last window.
+        count: u64,
+    },
+    /// The host's listener failed to accept connections.
+    ServeListenerFailing {
+        /// Accept errors in the last window.
+        count: u64,
+    },
+}
+
+/// A fault and the incident it belongs to (`operator_alarm`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AlarmIncidentView {
+    /// The incident: a counter this open session mints, from 1. It names
+    /// one continuous fault, and is what `operator_alarm_acknowledge`
+    /// takes back. Not persisted; a reopen starts again.
+    pub incident: u64,
+    /// What is wrong.
+    pub alarm: AlarmView,
+}
+
+/// One condition's row (`operator_alarm`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AlarmRowView {
+    /// Which condition.
+    pub condition: AlarmConditionView,
+    /// Whether it is being checked.
+    pub arming: ArmingView,
+    /// What is wrong with it now, or `null` when nothing is. With `arming`
+    /// disarmed, `null` means unknown, not healthy.
+    pub fault: Nullable<AlarmIncidentView>,
+}
+
+/// A fault whose condition has cleared but whose damage stands, waiting for
+/// the operator's acknowledgment (`operator_alarm`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AlarmOutstandingView {
+    /// The incident to acknowledge.
+    pub incident: u64,
+    /// Which condition it was on.
+    pub condition: AlarmConditionView,
+    /// What was wrong.
+    pub alarm: AlarmView,
+}
+
+/// `operator_alarm` result (OA-1): every condition the wallet watches for
+/// the operator, and the faults awaiting acknowledgment. It carries no onion
+/// address, no service id and no clock reading but durations.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OperatorAlarmResult {
+    /// One row per condition, all of them, in a fixed order.
+    pub conditions: Vec<AlarmRowView>,
+    /// Oldest incident first.
+    pub unacknowledged: Vec<AlarmOutstandingView>,
+}
+
+/// `operator_alarm_acknowledge` params.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OperatorAlarmAcknowledgeParams {
+    /// The incident the operator was shown.
+    pub incident: u64,
+}
+
+/// `operator_alarm_acknowledge` result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OperatorAlarmAcknowledgeResult {
+    /// Whether an outstanding fault carried that incident and was cleared.
+    /// `false` changes nothing, so repeating an acknowledgment is harmless.
+    pub acknowledged: bool,
+}
+
 /// `discard_pending_tx` result (empty object).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct DiscardPendingTxResult {}
