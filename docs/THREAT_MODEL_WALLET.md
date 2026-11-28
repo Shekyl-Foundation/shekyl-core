@@ -1,6 +1,6 @@
 # Wallet privacy threat model (V3.0)
 
-> **Last updated:** 2026-06-09  
+> **Last updated:** 2026-11-28  
 > **Status:** Round 4 propagation (FA-9). Genesis wire is closed — this doc
 > explains settled decisions; it does not reopen consensus.
 
@@ -79,6 +79,7 @@ user-behavior only):
 |----|---------|------------------|--------|
 | **T6** | Quantum observer + off-chain address → view-tag receive clustering | **Closed on account-output path** at genesis (FA-6 PQ-keyed `view_tag_prefilter`) | Multisig outputs carry no per-member hints (`0x09` retired): a group scans its one `0x06` ciphertext with the same PQ-keyed `view_tag_prefilter` ([`PQC_MULTISIG.md`](PQC_MULTISIG.md) §8.1) |
 | **T7** | Leaked receive address — phishing, dust, substitution, liveness | **R2-F9 pinned** | Dust **receive/spend oracle closed** (FCMP++); substitution + T6 harvest + app-layer probes **named** below |
+| **T8** | A process on the proving machine timing the FCMP++ prover (`CA-2`) | **Open; a fix is in progress** | Operand-dependent timing in the prover's field arithmetic on some x86_64 processors; local only, not remote. Named below |
 
 ### T6 after FA-6
 
@@ -124,6 +125,21 @@ receive- or spend-tracking oracle** classically.
 | Separate identity from untrusted counterparty | T2 off-chain compare | P3 multi-account or separate wallet file — not address rotation |
 
 Full pin: [`SUBADDRESS_UNDER_PQC.md`](design/SUBADDRESS_UNDER_PQC.md) §5.7.12.
+
+### T8 — timing on the proving machine (`CA-2`)
+
+On some x86_64 processors, the FCMP++ prover's field arithmetic takes time that depends on
+the values it works on.
+
+- **Who can see it:** a process or virtual machine sharing the CPU of the machine that builds
+  the transaction, with a fine-grained clock. It is not observable over the network.
+  Verification works on public data only.
+- **What it affects:** the proof built when you spend. The timing relates to the values the
+  proof hides.
+- **Until the fix ships:** build transactions on a machine whose CPU you do not share with
+  software you do not trust.
+- **Status:** a fix is in progress; this row records the releases before it. The finding and
+  its measurements: [`CRYPTO_AUDIT.md`](design/CRYPTO_AUDIT.md) §2 (`CA-2`).
 
 ---
 
