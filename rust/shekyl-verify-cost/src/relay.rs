@@ -25,7 +25,7 @@
 //! `k` is drawn at random rather than derived from a revealed hybrid public
 //! key (`PqcKeyScalar::from_pqc_public_key`); and there is no transaction
 //! around it for `tx_form` to judge. Building one at the synthetic depths
-//! 3..=7 would need the wallet builder's coordination
+//! 3 and deeper would need the wallet builder's coordination
 //! (`shekyl-tx-builder`), which draws from `OsRng` and so cannot give the
 //! drift gate a byte-identical fixture.
 
@@ -114,8 +114,8 @@ pub enum ChunkLayout {
     /// topology for unrelated spends. The Helios layer holds at most
     /// [`HELIOS_CHUNK_WIDTH`] chunks under one node, so past that many inputs
     /// they are dealt round-robin and share chunks, as they must in a depth-2
-    /// tree; at or below it every input has its own chunk. At depths 3 to 7
-    /// a real tree could fan those inputs out at layer 2 instead. Layout does
+    /// tree; at or below it every input has its own chunk. At depth 3 and
+    /// deeper a real tree could fan those inputs out at layer 2 instead. Layout does
     /// not move verification time: on the floor device (2026-11-27) the two
     /// layouts' medians at depth 2 agree within 1 % at every count from 1 to
     /// 18, so the cells past the width time the shape a fanned-out tree would.
@@ -157,9 +157,9 @@ pub fn build_fixture<R: RngCore + CryptoRng>(
         "Spread needs the Helios layer to hold the sibling chunks; depth 1 has none"
     );
     assert!(
-        (1..=7).contains(&tree_depth),
-        "depth 1 is sub-production; 2 is the production minimum; 3..=7 are the \
-         capacity tiers (§72) and are PROJECTIONS -- synthesized trees under \
+        (1..=shekyl_curve_generators::MAX_TREE_DEPTH).contains(&tree_depth),
+        "depth 1 is sub-production; 2 is the production minimum; 3 up to the \
+         derived maximum depth are PROJECTIONS -- synthesized trees under \
          genesis-era conditions, not measurements of a tree that exists"
     );
     let signable_tx_hash = [0xABu8; 32];
@@ -258,8 +258,9 @@ pub fn build_fixture<R: RngCore + CryptoRng>(
     // below. Each layer above the leaf contributes a 1-wide branch chunk on its
     // own curve, which is what `prove` walks.
     //
-    // Depths 3..=7 are PROJECTIONS: they synthesize the capacity tiers (§72)
-    // under genesis-era conditions rather than measuring a tree that exists.
+    // Depths 3 and deeper are PROJECTIONS: they synthesize the capacity tiers
+    // (§72; through the derived maximum for the block sweep) under
+    // genesis-era conditions rather than measuring a tree that exists.
     // Labelled here as well as at the table (§81.2) so the number carries its
     // status wherever it is read.
     let (tree_root, c1_layers, c2_layers, per_input_chunk): (

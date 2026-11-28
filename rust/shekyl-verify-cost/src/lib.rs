@@ -29,3 +29,4 @@ pub mod connect;
 pub mod door;
 #[cfg(feature = "seeded-rng")]
 pub mod relay;
+pub mod sweep;

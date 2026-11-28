@@ -415,6 +415,7 @@ use shekyl_wire::transaction::weight::{max_inputs_at, NonCoinbaseOutputs};
 use shekyl_wire::transaction::MAX_OUTPUTS;
 
 use shekyl_verify_cost::relay::{admission_verify, masks_check, membership_verify, ChunkLayout};
+use shekyl_verify_cost::sweep::{sweep_candidates, SWEEP_OUTPUTS};
 
 /// The candidate worst-case shapes. The argmax must EMERGE from the sweep —
 /// these are the two density extremes plus the interior, not a presumed
@@ -586,11 +587,122 @@ fn bench_randomx_once(c: &mut Criterion) {
     group.finish();
 }
 
+/// The depths `SHEKYL_DEPTH_SWEEP` names: `2-14`, `8,14`, or one depth.
+/// `None` when it is unset, so an ordinary run of this bench (the PR-tier
+/// capture among them) builds none of the sweep's deep fixtures.
+fn depths_from_env(var: &str) -> Option<Vec<u8>> {
+    let spec = std::env::var(var).ok()?;
+    let mut depths = Vec::new();
+    for part in spec.split(',') {
+        let part = part.trim();
+        if let Some((lo, hi)) = part.split_once('-') {
+            let lo: u8 = lo.parse().expect("a depth range's low end");
+            let hi: u8 = hi.parse().expect("a depth range's high end");
+            depths.extend(lo..=hi);
+        } else {
+            depths.push(part.parse().expect("a depth"));
+        }
+    }
+    Some(depths)
+}
+
+/// The block-verification sweep at the new shapes
+/// (`CEN_I4_INPUT_CAP_DERIVATION.md` §3 and §8): every candidate of
+/// [`sweep_candidates`] at each depth `SHEKYL_DEPTH_SWEEP` names, timed as
+/// one listed slot's whole work ([`slot_verify`]: the parse, the mask row,
+/// one hybrid signature per input, the proof). The range proof is not in it;
+/// a block verifies those together, and the fill below times that.
+///
+/// From these the argmax per weight byte is read at each depth, and only
+/// there is a whole block filled (`SHEKYL_SWEEP_FILL`). Off by default:
+/// building a deep proof per candidate takes the floor device hours, and the
+/// PR-tier capture runs this bench.
+fn bench_depth_sweep(c: &mut Criterion) {
+    let Some(depths) = depths_from_env("SHEKYL_DEPTH_SWEEP") else {
+        return;
+    };
+    let mut group = c.benchmark_group("block_connect_sweep");
+    group.sample_size(10);
+    for depth in depths {
+        let layers = SpendLayers::new(depth).expect("SHEKYL_DEPTH_SWEEP names spend depths");
+        for shape in sweep_candidates(layers) {
+            let fx = build_connect_tx(
+                &mut OsRng,
+                shape.n_in,
+                SWEEP_OUTPUTS.get(),
+                depth,
+                ChunkLayout::Spread,
+            );
+            assert_verifies(&fx);
+            group.throughput(weight_bytes(fx.weight));
+            group.bench_with_input(
+                BenchmarkId::new(
+                    format!("d{depth}"),
+                    format!("in{}_w{}_{:?}", shape.n_in, fx.weight, shape.role),
+                ),
+                &fx,
+                |b, f| b.iter(|| slot_verify(f)),
+            );
+        }
+    }
+    group.finish();
+}
+
+/// A zone-sized block of one sweep shape, each slot verified and the
+/// block's range proofs batched, at the shapes `SHEKYL_SWEEP_FILL` names as
+/// `depth:inputs` pairs (`14:13,7:9`): the argmax the per-slot sweep found.
+/// The batch holds that shape's own count of proofs, not the old argmax's
+/// 46. Off by default, as the sweep is.
+fn bench_sweep_fill(c: &mut Criterion) {
+    let Ok(spec) = std::env::var("SHEKYL_SWEEP_FILL") else {
+        return;
+    };
+    let mut group = c.benchmark_group("block_connect_sweep_fill");
+    group.sample_size(10);
+    for pair in spec.split(',') {
+        let (depth, n_in) = pair.trim().split_once(':').expect("depth:inputs");
+        let depth: u8 = depth.parse().expect("a depth");
+        let n_in: usize = n_in.parse().expect("an input count");
+        let fx = build_connect_tx(
+            &mut OsRng,
+            n_in,
+            SWEEP_OUTPUTS.get(),
+            depth,
+            ChunkLayout::Spread,
+        );
+        assert_verifies(&fx);
+        for budget in [600_000usize, 2_400_000] {
+            let n_txs = budget / fx.weight;
+            assert!(n_txs >= 1, "budget below one tx weight");
+            assert!(bp_verify_block(&fx.bp, n_txs), "the block's fold verifies");
+            group.throughput(weight_bytes(n_txs * fx.weight));
+            group.bench_with_input(
+                BenchmarkId::new(
+                    format!("d{depth}_in{n_in}"),
+                    format!("budget{budget}_n{n_txs}"),
+                ),
+                &fx,
+                |b, f| {
+                    b.iter(|| {
+                        for _ in 0..n_txs {
+                            slot_verify(f);
+                        }
+                        assert!(bp_verify_block(&f.bp, n_txs));
+                    })
+                },
+            );
+        }
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_terms,
     bench_bp_batch,
     bench_budget_fill,
-    bench_randomx_once
+    bench_randomx_once,
+    bench_depth_sweep,
+    bench_sweep_fill
 );
 criterion_main!(benches);
