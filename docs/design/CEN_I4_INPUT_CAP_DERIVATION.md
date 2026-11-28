@@ -1,6 +1,6 @@
 # CEN-I4 — deriving the transaction input cap (`ICD-`)
 
-**Status:** OPEN — Round 0 RULED except the fragment count (Rick, 2026-11-22; §11), docs only.
+**Status:** RULED — Round 0 (Rick, 2026-11-22), and the fragment count (2026-11-27, §11). The cutover is shekyl-core #1543.
 Consensus surface: the design is ruled here before any code moves, then one
 rule-07 cutover PR moves every consumer together. Identifier family `ICD-`
 (registered in [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2):
@@ -19,8 +19,8 @@ rule; `ICD-R7` no rounding to a padding boundary; `ICD-R8` the coupling to the
 weight limit is accepted; `ICD-R9` the maximum tree depth is 14; `ICD-R10` the
 standoff reserve is computed; `ICD-R11` the cap is checked before the weight;
 `ICD-R12` the row floors stay. **Handed to EUP-5 G (§10):** `ICD-Q6`,
-`ICD-F15`. **Still open (§11):** the cover carrier's fragment count, after the
-cover-by-shape run ends on 2026-11-24.
+`ICD-F15`. **Ruled 2026-11-27 (§11):** the cover carrier's fragment count is
+8, as derived; whether the carrier keeps fragments is cover-by-shape's.
 
 ## 0. What the cap is, and why it is decided now
 
@@ -1201,14 +1201,15 @@ outputs. Not done.
   on #1476 at `85803a140c`), reruns unchanged at the cutover for the 22-input
   figures. The cap does not by itself call for the 2 880-run table (§7).
 
-## 11. Still open
+## 11. Ruled after the round
 
-### The cover carrier's fragment count
+### The cover carrier's fragment count — RULED 2026-11-27 (Rick)
 
-`MAX_FRAGMENTS` becomes 8 at the derived cap (`ICD-F14`). Whether the carrier
-keeps a fragment train under cover-by-shape is that design's question, and its
-measuring run ends 2026-11-24. This round asks for it to be ruled after that
-run, with the cap's value in hand.
+`MAX_FRAGMENTS` is 8, as derived (`ICD-F14`): ⌈S_max / 20 480⌉ at the
+derived cap, a correctness bound rather than a choice. It is not a condition
+for this cutover. Whether the carrier keeps fragment trains at all is decided
+with cover-by-shape (`COVER_BY_SHAPE.md`), once its measurement is in; if the
+carrier goes, the constant goes with it.
 
 ## 12. Out of scope
 
@@ -1270,3 +1271,9 @@ the relay lane's round (`ICD-R4`).
   `ICD-F16` closes. The 360-million-year figure and the computed reserve's new
   `shekyl-standoff` dependency on the wire crate are confirmed. Open: the
   fragment count only.
+- **2026-11-27 — the floor session, the relay question, the fragment count
+  (Rick).** Every embargo cell measured on the floor device in one session
+  (§8.1, `ICD-F21`). Whether the embargo follows the transaction's shape is a
+  named question of the relay round (`ICD-R4`). The fragment count is 8, as
+  derived, and not a condition for the cutover; whether the carrier keeps
+  fragments is cover-by-shape's (§11). Nothing in this round is open.
