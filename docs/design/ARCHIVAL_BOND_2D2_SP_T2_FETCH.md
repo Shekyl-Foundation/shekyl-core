@@ -7,8 +7,8 @@
 the fetch model depends on. SP-T2 sits behind SP-0's `BlockSource` trait (`shekyl-engine-core`).
 **Parent designs:** `ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md` (§4 posture, §478 SP-T2, §416 no-principal-path),
 `shekyl-p-transport` (SP-T1 client, PR #204), `ARCHIVAL_BOND_2D2_SP_T0_TOR.md` (the SOCKS endpoint).
-**Process rules:** `26-sub-pr-design-discipline` (this round); `05-system-thinking`;
-`20-rust-vs-cpp-policy` (the daemon axis); `21-reversion-clause-discipline`; `17-dependency-discipline`
+**Process rules:** `126-sub-pr-design-discipline` (this round); `05-system-thinking`;
+`RULE_20_RUST_VS_CPP` (the daemon axis); `21-reversion-clause-discipline`; `17-dependency-discipline`
 (the RPC transport). Mission lens: **#1 (privacy is the product)** is binding — the daemon
 investigation below is a *privacy* investigation wearing a throughput costume.
 

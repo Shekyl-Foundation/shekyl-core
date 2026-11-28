@@ -70,7 +70,7 @@ rate and serving still delivered 5 to 8 responses per second. The
 mechanism that shipped lowers only the serving runtime's threads, by
 their own call, and this session asks whether that gives the daemon the
 same. The floor device is the Raspberry Pi 4 Model B of
-[`76-device-provisioning-floor`](../../.cursor/rules/76-device-provisioning-floor.mdc).
+[`176-device-provisioning-floor`](../../.cursor/rules/176-device-provisioning-floor.mdc).
 Devices are named by role.
 
 ## What this session is

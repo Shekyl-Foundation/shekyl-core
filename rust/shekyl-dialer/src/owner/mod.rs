@@ -378,7 +378,7 @@ impl<C: Clock + Clone + Send + Sync + 'static> Dialer<C> {
     /// `None` means this node does not know a window, so every timeout on a
     /// connector that reads the publish keeps its retries. A connector whose
     /// cutoff is its dial deadline does not read this store: [`Self::window`]
-    /// answers from the profile (rule 71), and a publish does not move it.
+    /// answers from the profile (rule 171), and a publish does not move it.
     pub fn set_window(&self, connector: ConnectorId, window: Option<std::time::Duration>) {
         let nanos = window.map(|window| u64::try_from(window.as_nanos()).unwrap_or(u64::MAX));
         self.shared().published_windows[connector.index()] = nanos;

@@ -3,7 +3,7 @@
 
   | Device and path | Fixed pair | Nulls | Control |
   | --- | --- | --- | --- |
-  | The 4 GB Pi 4, rule 76's floor | 2.90 | 2.77, 1.77 | 200.07 |
+  | The 4 GB Pi 4, rule 176's floor | 2.90 | 2.77, 1.77 | 200.07 |
   | The maintainer's laptop, AVX2 | 1.71 | 2.28, 2.49 | 159.34 |
   | The same laptop, SSE2 | 1.85 | 2.25, 1.99 | 162.04 |
 

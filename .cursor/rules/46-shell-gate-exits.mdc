@@ -3,6 +3,8 @@ description: Shell gate exit-code discipline. Apply when writing or editing any 
 globs:
   - scripts/**
   - .github/workflows/**
+scope: estate
+repos: [core, gui, prism]
 ---
 
 # Gate verdicts never travel through a pipe

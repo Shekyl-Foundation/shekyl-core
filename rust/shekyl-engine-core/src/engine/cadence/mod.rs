@@ -77,7 +77,7 @@ pub(crate) use self::claim::{
     claim_complete, claim_fault, ClaimLegState, CLAIM_FAULT_ALARM_THRESHOLD,
 };
 
-/// Wall-clock interval between tip polls (rule 75: rationale + bounds).
+/// Wall-clock interval between tip polls (rule 175: rationale + bounds).
 ///
 /// **Rationale.** The poll is one `daemon_status`-class read per tick; legs fire
 /// only on an observed height advance, so the poll rate bounds *detection
@@ -96,7 +96,7 @@ pub(crate) use self::claim::{
 pub(crate) const DEFAULT_CADENCE_POLL: Duration = Duration::from_secs(60);
 
 /// Watchdog horizon: no observed tip advance for this long raises
-/// [`AlarmCondition::ChainProgress`] (rule 75: rationale + bounds).
+/// [`AlarmCondition::ChainProgress`] (rule 175: rationale + bounds).
 ///
 /// **Rationale.** 30 minutes = 15 blocks at the 120 s target. Block
 /// intervals are exponential, so multi-minute gaps are routine; 15 missed

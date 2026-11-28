@@ -44,6 +44,9 @@ use shekyl_tor_control_client::control::{
 use shekyl_tor_control_client::supervisor::{
     Action, DirectoryAnswer, DirectoryFetch, DirectoryPlan, Input, Launch, REPLY_BOUND,
 };
+use shekyl_tor_control_client::vanguard_rotation::{
+    VanguardManager, VanguardsAbort, VanguardsActive,
+};
 use shekyl_tor_control_daemon::{
     ControlAsker, DaemonTorConfig, DaemonTorControl, DaemonTorPublishError, DaemonTorStartError,
     KeptDataDir, OnionPow, SpawnError,
@@ -82,6 +85,12 @@ pub(super) enum Answer {
         forward: SocketAddr,
         outcome: Result<ServiceId, DaemonTorPublishError>,
     },
+    /// A guard pin's outcome, and the manager it took, coming home. A
+    /// managed pin is a witness or a fault.
+    Guards {
+        manager: Box<VanguardManager>,
+        outcome: Result<VanguardsActive, VanguardsAbort>,
+    },
 }
 
 impl std::fmt::Debug for Answer {
@@ -94,6 +103,7 @@ impl std::fmt::Debug for Answer {
             Self::Launched(Err(_)) => "LaunchFailed",
             Self::Sampled { .. } => "Sampled",
             Self::Added { .. } => "Added",
+            Self::Guards { .. } => "Guards",
         })
     }
 }
@@ -155,6 +165,7 @@ impl Drive {
             Action::RefetchDescriptor => self.send_refetch(number),
             Action::CheckDirectories => self.send_check(number),
             Action::FetchFromDirectory { hsdir } => self.send_fetch(number, hsdir),
+            Action::PinGuards => self.send_pin(number)?,
             other => unreachable!("{other:?} is not a request"),
         };
         Ok(match answered {
@@ -171,7 +182,11 @@ impl Drive {
     }
 
     /// Run `ask` off the loop and post its answer for `number`.
-    fn answer_later(&self, number: u64, ask: impl Future<Output = Answer> + Send + 'static) {
+    pub(super) fn answer_later(
+        &self,
+        number: u64,
+        ask: impl Future<Output = Answer> + Send + 'static,
+    ) {
         let poster = self.poster.clone();
         tokio::spawn(async move {
             let answer = Box::new(ask.await);
@@ -224,7 +239,7 @@ impl Drive {
         }
     }
 
-    fn asker(&self) -> Option<ControlAsker> {
+    pub(super) fn asker(&self) -> Option<ControlAsker> {
         self.control.as_ref().map(DaemonTorControl::asker)
     }
 
@@ -234,6 +249,8 @@ impl Drive {
     /// comes back in the answer, kept for the launch that follows.
     fn send_reap(&mut self, number: u64) -> Option<Vec<Input>> {
         self.cancel_probe();
+        // The pin confirmed on this Tor goes with it.
+        self.witness = None;
         let Some(control) = self.control.take() else {
             return Some(Vec::new());
         };
@@ -445,8 +462,20 @@ impl Drive {
         &mut self,
         number: u64,
     ) -> Result<Option<Vec<Input>>, super::SupervisorEnd> {
-        let onion = Arc::clone(&self.boot_for(super::TorAsk::Publish)?.onion);
-        let Some(asker) = self.asker() else {
+        let boot = self.boot_for(super::TorAsk::Publish)?;
+        let onion = Arc::clone(&boot.onion);
+        // An onion that keeps its guards is published only through the pin
+        // confirmed on this Tor (`TSR-W1`); a per-boot onion's Tor keeps its
+        // own, and publishes on its control.
+        let asker = if boot.guards.is_some() {
+            let Some(witness) = &self.witness else {
+                return Err(super::SupervisorEnd::UnpinnedPublish);
+            };
+            self.control.as_ref().map(|_| ControlAsker::pinned(witness))
+        } else {
+            self.asker()
+        };
+        let Some(asker) = asker else {
             return Ok(Some(vec![Input::ControlEnded]));
         };
         let Some(forward) = self.forward else {
@@ -614,6 +643,13 @@ impl Drive {
     /// when the core still waits on that number; otherwise dropped, and a
     /// Tor launched for it is stopped so it does not outlive the request.
     pub(super) fn answered(&mut self, number: u64, answer: Answer) -> Vec<Input> {
+        // A pin's manager comes home whatever the core still waits on.
+        let answer = match answer {
+            Answer::Guards { manager, outcome } => {
+                return self.guards_answered(number, *manager, outcome);
+            }
+            other => other,
+        };
         if self.core.in_flight() != Some(number) {
             // A request the core gave up on: whatever it holds is ended off
             // the loop, before the next launch's directory work, so no Tor
@@ -642,6 +678,8 @@ impl Drive {
                 consensus,
             } => self.sampled(reads_network, sample, consensus),
             Answer::Added { forward, outcome } => vec![self.added(forward, outcome)],
+            // Answered above.
+            Answer::Guards { .. } => Vec::new(),
         };
         inputs.push(Input::Replied { number });
         inputs
@@ -661,6 +699,9 @@ impl Drive {
                     self.poster.clone(),
                 ));
                 self.control = Some(up);
+                // A pin confirmed on the Tor before this one is not this
+                // one's.
+                self.witness = None;
                 Input::Spawned
             }
             Err((error, directory)) => {

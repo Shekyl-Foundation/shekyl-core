@@ -74,7 +74,7 @@ Prior rounds (carried forward into the ratified design):
 - Round 4 test-vector concrete-tuple correction.
 - Round 5 `ShekylU128` FFI pivot.
 - Round 7 cleanup of the consensus-atomic-cutover invocation
-  against the now-ratified `07-consensus-atomic-cutovers.mdc`.
+  against the now-ratified `107-consensus-atomic-cutovers.mdc`.
 - Round 8 bias-factor stochastic-vs-deterministic clarification
   and §11 wallet-T touchpoint correction.
 - Round 9 partial-LWMA-3 adoption in §5.3 step 2/3 plus the
@@ -188,7 +188,7 @@ The FTL-disposition choice (local-time-only, no peer-time-derived
 clock) reflects a deliberate threat-model preference for closing
 low-bar consensus attacks at the cost of slightly higher operator
 NTP-hygiene responsibility — consistent with Shekyl's broader
-posture on operator autonomy per `75-system-autonomy.mdc`. The
+posture on operator autonomy per `175-system-autonomy.mdc`. The
 trade is documented and ranked against the residual threat classes
 in §5.5; the positioning observation is named here so that the
 Commitment-1 rationale captures the full security trade and not
@@ -354,7 +354,7 @@ rationale below.
 
 ### 2.1 Rust implementation, from genesis; leaf crate
 
-Per `20-rust-vs-cpp-policy.mdc` rule 2 (Rust if any of: defines a
+Per `RULE_20_RUST_VS_CPP.md` rule 2 (Rust if any of: defines a
 cryptographic contract that other code consumes), the DAA is a
 cryptographic-contract surface — the validator and the miner all
 consume the same `next_difficulty(timestamps[],
@@ -383,7 +383,7 @@ crate; the two will be siblings at the workspace level when both
 land.
 
 The dependency direction is unidirectional and worth stating
-explicitly because it matters for `25-rust-architecture.mdc`'s
+explicitly because it matters for `125-rust-architecture.mdc`'s
 layering discipline:
 
 ```text
@@ -514,7 +514,7 @@ The crate exports, in addition to `lwma1_next`:
    the median of `previous_11`.
 
 These are predicates rather than value-producing transforms, but
-per `18-type-placement.mdc` predicates are just transforms whose
+per `118-type-placement.mdc` predicates are just transforms whose
 codomain is `bool` — same shape, same crate.
 
 **Phase 1 implementation choice (not a Phase 0 blocker).** The
@@ -539,7 +539,7 @@ or refuse the predicate) is preserved at the public boundary.
 
 The disposition to co-locate FTL/MTP with the DAA (rather than
 pre-extracting them into a separate `shekyl-timestamp-validation`
-crate) follows `70-modular-consensus.mdc`'s rule against
+crate) follows `170-modular-consensus.mdc`'s rule against
 speculative scaffolding: there is no second consumer of these
 predicates today, and extracting before a second consumer exists
 produces an empty abstraction that future maintainers cannot
@@ -597,7 +597,7 @@ unknown.
 
 ### 2.7 The DAA is a primitive, not an actor
 
-Per `18-type-placement.mdc`'s transform-vs-state dichotomy, the
+Per `118-type-placement.mdc`'s transform-vs-state dichotomy, the
 LWMA-1 DAA is **transform-shaped**: the value `next_difficulty` is
 defined by the function `lwma1_next(timestamps,
 cumulative_difficulties, chain_height) -> u128`, not by any
@@ -608,7 +608,7 @@ consensus-deterministic, and on-chain.
 The lens applied to the question "where does this live?" returns:
 
 > Transform-shaped types live in the crate of their defining
-> function. (`18-type-placement.mdc` §"Where each shape lives".)
+> function. (`118-type-placement.mdc` §"Where each shape lives".)
 
 — so `lwma1_next` lives in `shekyl-difficulty`, and `Difficulty`
 itself is just `u128` (no newtype required; the inherited
@@ -1001,13 +1001,13 @@ The cross-language generation pipeline is the existing one:
   the generated header; no hand-maintained `#define` for any DAA
   numeric constant.
 - **`shekyl_ffi.h`.** Hand-maintained per
-  `25-rust-architecture.mdc` (the rule permits "cbindgen or
+  `125-rust-architecture.mdc` (the rule permits "cbindgen or
   hand-maintained"; the project's current pattern is
   hand-maintained); numeric constants are sourced from the
   generated header, not duplicated. No `cbindgen.toml` is added
   by this PR.
 
-Per `75-system-autonomy.mdc`, every tunable has a documented rationale
+Per `175-system-autonomy.mdc`, every tunable has a documented rationale
 for its default and bounds for safe adjustment. The "safe adjustment
 bounds" for these values are: **none post-genesis without a hard
 fork.** Any value change is a consensus rule change requiring the
@@ -1488,7 +1488,7 @@ The floor states what difficulty means; it is not a constant someone
 chose and it prices nothing. Any live miner produces at least one hash
 per target interval, so for a chain still mining the true equilibrium
 is at or above one. A floor above one would be a hardware claim
-(`76-device-provisioning-floor`): blocks would take `F / hashrate`
+(`176-device-provisioning-floor`): blocks would take `F / hashrate`
 whenever mining is thin, and the constant would age with hardware.
 
 Why it is needed: canonical LWMA-1 has no floor (`LWMA1_()` returns
@@ -1773,7 +1773,7 @@ as a consensus-rule violation that propagates to other nodes
 (safety loss). This shifts a small portion of the clock-management
 responsibility from "the protocol handles it" to "the operator
 handles it." The shift is consistent with Shekyl's broader
-posture on operator autonomy (`75-system-autonomy.mdc`) but is
+posture on operator autonomy (`175-system-autonomy.mdc`) but is
 named here so a future reader does not misread the local-time-only
 FTL disposition as missing functionality.
 
@@ -1846,7 +1846,7 @@ Three consequences worth surfacing:
 
 ## 6. FFI surface
 
-Per `40-ffi-discipline.mdc`, all exports return `i32` error codes;
+Per `RULE_40_FFI_DISCIPLINE.md`, all exports return `i32` error codes;
 output values reach the caller through out-parameters.
 
 ### 6.1 The one committed export
@@ -2626,7 +2626,7 @@ MTP: 60 → 11) take effect at the daemon consumer sites
 enumerated in §9.5 and §9.6 respectively, simultaneously with
 the §9.4 algorithm rewire, per Phase 4's atomic-cutover
 discipline (see `DAA_LWMA1_PLAN.md` Phase 4 invocation of
-`07-consensus-atomic-cutovers.mdc`). The Round 2 draft's §9.3
+`107-consensus-atomic-cutovers.mdc`). The Round 2 draft's §9.3
 separately enumerated FTL/MTP under "value change with
 relocation to typed-const home"; Round 3 collapsed those
 enumerations into §9.2 and §9.5/§9.6 because there is no
@@ -2957,7 +2957,7 @@ Per `60-no-monero-legacy.mdc`:
 **This PR does not set or change the workspace MSRV.** The
 `shekyl-difficulty` crate inherits whatever workspace MSRV is in
 effect at Phase 1 PR time, per the cross-crate consistency rule in
-`25-rust-architecture.mdc`. The crate uses no nightly features, no
+`125-rust-architecture.mdc`. The crate uses no nightly features, no
 `unsafe`, and no crate-level `#![allow(...)]`, so any workspace MSRV
 that supports the `edition = "2024"` feature set is acceptable.
 
@@ -3027,7 +3027,7 @@ is:
 
 The validator holds no state; the chain-state crate holds the
 state; the DAA crate holds the transform. This is the three-way
-separation `18-type-placement.mdc` and the actor paradigm exist
+separation `118-type-placement.mdc` and the actor paradigm exist
 to enforce.
 
 **Today's `shekyl-engine-state` is wallet-side, not daemon-side.**
@@ -3039,7 +3039,7 @@ data. The future daemon-side chain-state crate is a separate
 workspace member, not an extension of `shekyl-engine-state`.
 
 **No speculation in this PR.** Per
-`70-modular-consensus.mdc`'s rule against speculative
+`170-modular-consensus.mdc`'s rule against speculative
 scaffolding, this design doc does not propose a name, shape, or
 API for the future daemon-side chain-state crate. The disposition
 is: `shekyl-difficulty` exports a transform; when the chain-state
@@ -3068,7 +3068,7 @@ crate exists, it consumes the transform; the transform's signature
   — canonical LWMA-1 specification and reference.
 - `.cursor/rules/00-mission.mdc`, `15-deletion-and-debt.mdc`,
   `16-architectural-inheritance.mdc`, `17-dependency-discipline.mdc`,
-  `18-type-placement.mdc`, `19-validation-surface-discipline.mdc`,
-  `20-rust-vs-cpp-policy.mdc`, `25-rust-architecture.mdc`,
-  `40-ffi-discipline.mdc`, `60-no-monero-legacy.mdc`,
-  `70-modular-consensus.mdc`, `75-system-autonomy.mdc`.
+  `118-type-placement.mdc`, `119-validation-surface-discipline.mdc`,
+  `RULE_20_RUST_VS_CPP.md`, `125-rust-architecture.mdc`,
+  `RULE_40_FFI_DISCIPLINE.md`, `60-no-monero-legacy.mdc`,
+  `170-modular-consensus.mdc`, `175-system-autonomy.mdc`.

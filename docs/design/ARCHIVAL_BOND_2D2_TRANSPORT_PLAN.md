@@ -15,7 +15,7 @@ censorship-circumvention job is not ours.
 `ARCHIVAL_FIREWALL_GATE6.md` (the firewall charter), `ARCHIVAL_FIREWALL_THREATS.md` (C2/C3 +
 TM-3/TM-5/TM-6), `ARCHIVAL_RETENTION_GATE2.md` (the challenge/response wire),
 `ARCHIVAL_FAILURE_CONFIRMATION_PIN.md` (the slash model — read it, §0).
-**Process rule:** `26-sub-pr-design-discipline.mdc`; `17-dependency-discipline.mdc` (the
+**Process rule:** `126-sub-pr-design-discipline.mdc`; `17-dependency-discipline.mdc` (the
 bundled Tor binary); `21-reversion-clause-discipline.mdc`.
 
 ---

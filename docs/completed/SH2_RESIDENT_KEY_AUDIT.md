@@ -15,7 +15,7 @@ slice; item 3's SH-2 closure criterion); `ARCHIVAL_SHARD_FETCH.md` `SF-D13`
 client (`SF-` round)* → SH-2 bullet (the TJ-D counters surface rides here);
 `IMPLEMENTATION_INDEX.md` `SH-1…SH-3`.
 
-This is the rule-26 Round 0 record for the SH-2 remainder: wiring the
+This is the rule-126 Round 0 record for the SH-2 remainder: wiring the
 persona's resident `hybrid_sign_sk` as the `PassKey` that `engine-core`
 binds, in place of `NoResidentKey`. It is not a redesign. Every ruling
 below was put to the maintainer on 2026-10-06 and is recorded with its
@@ -136,7 +136,7 @@ claim-source decode (`shekyl-archival-retention`), a `ReportedSet`
 constructor that takes it, the production pinner in `engine-core` using
 that, and a `cfg(test)` constructor for the task tests' fakes — a
 provenance-sealing change across three crates, which is a different
-validation surface (rule 19) from the resident key. **It is not built in
+validation surface (rule 119) from the resident key. **It is not built in
 this PR.** Whether it lands as a following PR or is re-ruled against the
 reopen criterion (one production pinner, reviewable by reading it) is put
 to the maintainer with this record; the item's text in §9.7 is updated to

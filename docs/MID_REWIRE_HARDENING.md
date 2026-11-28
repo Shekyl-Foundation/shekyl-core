@@ -22,10 +22,10 @@ WALLET_STATE_MIGRATION.md ·
 [15-deletion-and-debt.mdc](../.cursor/rules/15-deletion-and-debt.mdc) ·
 [30-cryptography.mdc](../.cursor/rules/30-cryptography.mdc) ·
 [35-secure-memory.mdc](../.cursor/rules/35-secure-memory.mdc) ·
-[40-ffi-discipline.mdc](completed/RULE_40_FFI_DISCIPLINE.md) ·
+[RULE_40_FFI_DISCIPLINE.md](completed/RULE_40_FFI_DISCIPLINE.md) ·
 [45-rust-lint-checks.mdc](../.cursor/rules/45-rust-lint-checks.mdc) ·
 [50-testing.mdc](../.cursor/rules/50-testing.mdc) ·
-[75-system-autonomy.mdc](../.cursor/rules/75-system-autonomy.mdc).
+[175-system-autonomy.mdc](../.cursor/rules/175-system-autonomy.mdc).
 
 ## 1. Motivation
 
@@ -57,7 +57,7 @@ the C++ rewire resumes:
    that call count is user-visible latency. We have no baseline to
    catch this.
 2. **`block_version` discipline is cultural, not mechanical.**
-   [`42-serialization-policy.mdc`](../.cursor/rules/42-serialization-policy.mdc)
+   [`142-serialization-policy.mdc`](../.cursor/rules/142-serialization-policy.mdc)
    (landing with this pass) mandates bumping `block_version` in the
    same commit as any add/remove/rename/reorder of a block field.
    Nothing in the toolchain enforces this today. Postcard will
@@ -581,7 +581,7 @@ commit. That commit also:
 
 **Scope.** Convert the `block_version` discipline from cultural
 invariant (currently pinned only in
-[`42-serialization-policy.mdc`](../.cursor/rules/42-serialization-policy.mdc))
+[`142-serialization-policy.mdc`](../.cursor/rules/142-serialization-policy.mdc))
 to mechanical check.
 
 **Approach.** Use `postcard::experimental::schema::Schema` (aka

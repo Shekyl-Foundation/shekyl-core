@@ -9,7 +9,7 @@ zeroization audit (Findings 1–4), the §5.2 contract/protocol tests, and the
 This document and its §9 round record remain the design-of-record.
 
 **Process discipline:** authored under
-[`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
+[`126-sub-pr-design-discipline.mdc`](../../.cursor/rules/126-sub-pr-design-discipline.mdc)
 — Round 0 pre-flight (A2 substrate re-audit at source, B6 numeric-constant
 verification, B9 bench plan), adversarial rounds 1–5, a late-round
 threat-model addenda pass (A3, §7), and two external-critique passes
@@ -1347,7 +1347,7 @@ rediscovering them. **Reopen at:** Stage 4 design kickoff.
 
 ## 9. Round-based design record
 
-Authored per `26-sub-pr-design-discipline.mdc`. Target 4–6 adversarial rounds
+Authored per `126-sub-pr-design-discipline.mdc`. Target 4–6 adversarial rounds
 with a late threat-model pass; rounds close on substrate-finding exhaustion,
 not a fixed count (`21-reversion-clause-discipline.mdc` §"Design-round
 closure"). This record is the design's audit trail; the implementation PR

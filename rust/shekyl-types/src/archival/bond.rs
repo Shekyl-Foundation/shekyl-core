@@ -39,7 +39,7 @@ pub const RECEIPT_SIGN_PK_LEN: usize = 1837;
 ///
 /// The JoinMarket bond post commits it and the bond record keeps it, so the
 /// wire, the validator and both stores name the same bytes: the type lives
-/// here (rule 18, a type both stores need), and the computation over it —
+/// here (rule 118, a type both stores need), and the computation over it —
 /// parsing it as a key, verifying under it — stays in `shekyl-crypto-pq`.
 ///
 /// **The length is the type's; that the bytes are a key is not.** A value

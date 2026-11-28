@@ -233,7 +233,7 @@ pub(crate) mod support {
     /// build. The FCMP++ membership proof dominates it, and every
     /// non-vartime multiexp in that prover takes secret scalars, so this
     /// is the figure that prices a change to multiexp's constant-time
-    /// selection (rule 76: read it on the floor device). It includes the
+    /// selection (rule 176: read it on the floor device). It includes the
     /// builder's membership self-verify, which runs inside
     /// `sign_transaction`. Diagnostic, not a gate: it prints, and asserts
     /// only that every cell signs.
@@ -383,7 +383,7 @@ pub(crate) mod support {
     }
 
     #[test]
-    #[ignore = "timing: run in release with --ignored --nocapture; prices the prover (rule 76)"]
+    #[ignore = "timing: run in release with --ignored --nocapture; prices the prover (rule 176)"]
     fn time_sign_transaction_by_shape() {
         const REPS: usize = 5;
         // Depth 1 and 4 are a young tree; the consensus maximum is where

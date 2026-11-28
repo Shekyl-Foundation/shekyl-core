@@ -164,7 +164,7 @@ aes = { version = "0.9", default-features = false, features = ["hazmat"] }
   MSRV must be ≥ 1.85 (§9 below).
 - **Why not port `soft_aes.cpp`'s LUTs in-tree?** Porting 365 lines of
   LUT data + AES-round logic when an audited RustCrypto crate exists
-  contradicts `20-rust-vs-cpp-policy.mdc` "when in doubt, Rust" and
+  contradicts `RULE_20_RUST_VS_CPP.md` "when in doubt, Rust" and
   `17-dependency-discipline.mdc`'s "prefer reuse" guidance. RandomX's
   AES use is not secret-key encryption (the "keys" are public spec
   constants or public block-header-derived bytes); constant-timeness is
@@ -194,7 +194,7 @@ blake2 = { version = "0.10", default-features = false }
 
 ### 4.3 No other new deps
 
-Constants live as `const` items per `25-rust-architecture.mdc`. The
+Constants live as `const` items per `125-rust-architecture.mdc`. The
 existing `argon2 = "0.5"` dep is unchanged. The existing `zeroize`
 transitive (via argon2's `zeroize` feature) is unchanged.
 

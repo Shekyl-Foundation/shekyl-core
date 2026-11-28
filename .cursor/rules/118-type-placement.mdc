@@ -1,3 +1,10 @@
+---
+description: Transform-shaped vs state-shaped types and where each lives; byte-layout discipline. Apply when introducing a type whose crate placement is not obvious, above all one whose serialization is consumed cryptographically.
+globs:
+  - rust/**
+scope: core
+---
+
 # Transform vs state — type placement and byte-layout discipline
 
 Some types are defined by a function over inputs (transform-shaped).

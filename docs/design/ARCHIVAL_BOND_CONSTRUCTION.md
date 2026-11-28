@@ -404,7 +404,7 @@ checked-`u64` newtype over `AtomicUnits` -- make a wrong-side term
 *unrepresentable* (one newtype vs. one enum, comparable machinery, strictly
 stronger). `fee` stays its own distinct field (consensus-load-bearing, already
 wired); the typed slices are the *extra* terms. `shekyl-tx-builder` still never
-learns the word "bond" (`18-type-placement`): it consumes generic typed-side
+learns the word "bond" (`118-type-placement`): it consumes generic typed-side
 terms; the bond-builder supplies `floor` as an `OutputTerm` for JoinMarket.
 
 Note: the economics "burn" (`shekyl-economics::burn::compute_n_split`) is a

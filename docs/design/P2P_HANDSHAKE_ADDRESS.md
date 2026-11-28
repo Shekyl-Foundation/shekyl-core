@@ -71,7 +71,7 @@ is earned in-process by an actual outbound connection.
 
 `CURRENT_PEERLIST_STORAGE_ARCHIVE_VER` has **zero mechanical coupling**
 anywhere in the tree (verified by the #637 lane: all four references are
-inside `net_peerlist.cpp`; rule 42's CI gate covers LMDB, not this store).
+inside `net_peerlist.cpp`; rule 142's CI gate covers LMDB, not this store).
 This unit adds the bite: a fixture test serializes a fixed `peerlist_types`
 and compares against a digest that is a **checked-in hex literal typed into
 the test** — never computed from the build under test, or the oracle

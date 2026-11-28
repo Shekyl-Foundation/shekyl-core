@@ -132,7 +132,7 @@ alongside the `AssertionSink` coherence test (deliberately
 unenforceable burden onto every sink author); (3) the
 emission/return coherence prose names the property test as
 **canonical reference** for coherence semantics per
-[`19-validation-surface-discipline.mdc`](../../.cursor/rules/19-validation-surface-discipline.mdc),
+[`119-validation-surface-discipline.mdc`](../../.cursor/rules/119-validation-surface-discipline.mdc),
 making prose / test drift impossible without explicit
 re-examination. None of these re-open the reframe; they
 tighten its load-bearing contracts so the V3.x consumer-actor
@@ -1562,7 +1562,7 @@ Phase 0 lands.
   build/submit/discard contract over reorg events; reservation-
   tracker reorg surfacing; Stage 4 actor compatibility. The
   validation-surface guard in
-  [`19-validation-surface-discipline.mdc`](../../.cursor/rules/19-validation-surface-discipline.mdc)
+  [`119-validation-surface-discipline.mdc`](../../.cursor/rules/119-validation-surface-discipline.mdc)
   rejects bundling β/γ into PR 4 because they share the feature
   topic “refresh” without sharing PR 4's validation surface.
 - **Round 1 review pass (closed, 2026-05-12).** Corrected §3.1's
@@ -1721,7 +1721,7 @@ trait extraction.
 
 β and γ share the feature topic "refresh" with the α producer-
 redesign decision but do not share its validation surface. Per
-[`19-validation-surface-discipline.mdc`](../../.cursor/rules/19-validation-surface-discipline.mdc)
+[`119-validation-surface-discipline.mdc`](../../.cursor/rules/119-validation-surface-discipline.mdc)
 (named on `dev` 2026-05-10; the rule cites this PR 4 Round 1 as
 its forward-looking worked example):
 
@@ -2250,7 +2250,7 @@ against and Stage 4 has the property to wrap around.
   test is wrong, the test is fixed and the prose follows,
   never the reverse. This is one of the validation
   surfaces for the coherence rule per
-  [`19-validation-surface-discipline.mdc`](../../.cursor/rules/19-validation-surface-discipline.mdc).
+  [`119-validation-surface-discipline.mdc`](../../.cursor/rules/119-validation-surface-discipline.mdc).
   Naming the property test as canonical reference makes
   drift between prose and test impossible without explicit
   re-examination — a future PR that lands prose changes
@@ -2806,7 +2806,7 @@ pub enum RefreshDiagnostic {
 /// test is fixed and the prose follows, never the
 /// reverse. This is one of the validation surfaces for
 /// the coherence rule per
-/// [`19-validation-surface-discipline.mdc`](../../.cursor/rules/19-validation-surface-discipline.mdc);
+/// [`119-validation-surface-discipline.mdc`](../../.cursor/rules/119-validation-surface-discipline.mdc);
 /// the test being authoritative makes prose / test drift
 /// impossible without explicit re-examination.
     fn emit(&self, event: RefreshDiagnostic);
@@ -3293,7 +3293,7 @@ audit is not a one-time check at PR 4 review time; it is a
 continuous obligation that binds on every PR that touches
 the consumer-actor topology. Stage 4's review checklist
 includes the per-consumer recursive trust-boundary audit;
-[`19-validation-surface-discipline.mdc`](../../.cursor/rules/19-validation-surface-discipline.mdc)
+[`119-validation-surface-discipline.mdc`](../../.cursor/rules/119-validation-surface-discipline.mdc)
 is the procedural anchor for the audit cadence (the
 audit-against-this-rule is one validation surface among the
 rule's others).
@@ -3899,7 +3899,7 @@ Apply the same change symmetrically to PR 5 §5.4 R17 (the two
 sections cross-reference each other; if one is hardened and the
 other isn't, the asymmetry confuses readers and creates
 plan-vs-state divergence per
-[`19-validation-surface-discipline.mdc`](../../.cursor/rules/19-validation-surface-discipline.mdc)
+[`119-validation-surface-discipline.mdc`](../../.cursor/rules/119-validation-surface-discipline.mdc)
 adjacent §19 pattern).
 
 **Inline edits applied.**
@@ -4965,7 +4965,7 @@ for PR 4's scope: every item has a named home.
 | Three call modes (cold open / steady-state / post-submit) — invocation-overhead constraint | V3.0 (Round 4 commit decomposition) | §5.4.4 — under (a-instance-scoped) the per-attempt scanner construction moves into `LocalRefresh::new`, satisfying the constraint by construction |
 | Adversarial daemon scenarios under α (reorg amplification, view-tag DoS, withholding, snapshot poisoning, evidence amplifier) | mostly closed (Round 2); reorg amplification deferred via R5 | §5.4.5; mitigations: R5 (V3.x deferral), R6 keeps `&'static str` evidence (strictly bounded), Phase 0a `LedgerSnapshot` value-typed confirmation |
 | Trait-surface contract pins (`Send + Sync + 'static` on `R`; Progress-channel trust boundary) | **closed (Round 2)** | §5.4.6; both pinned as Phase 0a prose amendments |
-| `DiagnosticSink::emit` non-blocking + concurrent-emit clarification + emission/return coherence + canonical-reference-to-test (contract pins) | **closed (Round 2 reframe + contract-pin refinements)** | §5.4.6 / §5.4.7 R6; pinned in trait docstring and §5.4.6 prose; concurrent-emit clarification forecloses `Mutex<VecDeque<_>>`-class implementations; canonical-reference pin makes the Round 4 `AssertionSink` property test authoritative for coherence semantics per [`19-validation-surface-discipline.mdc`](../../.cursor/rules/19-validation-surface-discipline.mdc) |
+| `DiagnosticSink::emit` non-blocking + concurrent-emit clarification + emission/return coherence + canonical-reference-to-test (contract pins) | **closed (Round 2 reframe + contract-pin refinements)** | §5.4.6 / §5.4.7 R6; pinned in trait docstring and §5.4.6 prose; concurrent-emit clarification forecloses `Mutex<VecDeque<_>>`-class implementations; canonical-reference pin makes the Round 4 `AssertionSink` property test authoritative for coherence semantics per [`119-validation-surface-discipline.mdc`](../../.cursor/rules/119-validation-surface-discipline.mdc) |
 | Producer-panic-safety property (Round 4 `PanickingSink` test deliverable) | V3.0 (Round 4 / Phase 1 test design) | §5.4.6 (producer-side property; **not** a sink trait contract — pinning "MUST NOT panic" on `emit` is unenforceable and pushes burden onto sink authors for limited gain). Test wraps `LocalRefresh` with a `PanickingSink` variant; asserts `Scanner` zeroizes via `Drop`, cancellation token in well-defined fired-or-not state, unwind without corruption |
 | (c) split-producer/recoverer view-material shape (R4 deferral) | V3.x | [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) V3.x entry added in this commit; trigger: HW-wallet-backed signing or post-V3 threat-model refinement requires producer-side spend-key isolation |
 | `ViewMaterial` type definition (R4 — Phase 0a) | V3.0 (Round 4 / Phase 0a) | §5.4.7 R4 — public type in `shekyl_engine_core` carrying spend-pub + view-scalar + x25519-sk + ml-kem-dk + spend-secret; `Zeroize + ZeroizeOnDrop` |

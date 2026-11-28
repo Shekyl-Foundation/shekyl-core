@@ -130,7 +130,15 @@ struct DerivedScalars {
 /// `LocalLedger::populate_for_bench`
 /// exactly: bench-only `pub` widening under a feature flag the
 /// public API contract explicitly disclaims.
-#[allow(dead_code)] // M3a wires the implementor; orchestrator integration lands in M3c+.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "docs/FOLLOWUPS.md row \"The claim reroute through the key owner has no \
+                  production caller\": the ownership round's prepared-scan-batches package \
+                  wires try_claim_output in, or deletes it"
+    )
+)]
 pub struct LocalKeys {
     /// Wallet key material. `AllKeysBlob` is `ZeroizeOnDrop` so this
     /// field is wiped on drop.

@@ -1,6 +1,7 @@
 ---
 description: The implementation tracking index (docs/design/IMPLEMENTATION_INDEX.md) is load-bearing. New identifier families register there at birth; phase/track tokens are always prefixed; statuses are dated and verified (code-anchored or decision-anchored). Work items in Phase 3+ / Stage 3+ don't start without an index row. Fail closed if the index is missing.
 alwaysApply: true
+scope: core
 ---
 
 # Tracking-index discipline

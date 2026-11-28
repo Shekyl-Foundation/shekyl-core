@@ -269,11 +269,8 @@ impl Core {
         if self.any_refused() {
             self.inbound_unreachable(now, InboundCause::UploadsRefused);
         } else {
-            self.inbound = if self.onion_published_here() {
-                Inbound::Publishing { since: now }
-            } else {
-                Inbound::NotOffered
-            };
+            // A withheld pin names itself once the clock no longer does.
+            self.inbound = self.inbound_for_unproven(now);
         }
         if matches!(
             self.cause,
@@ -590,7 +587,7 @@ impl Core {
         self.inbound = Inbound::Unreachable { cause, since };
     }
 
-    fn onion_published_here(&self) -> bool {
+    pub(super) fn onion_published_here(&self) -> bool {
         matches!(
             self.phase,
             Phase::Running {

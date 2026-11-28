@@ -64,7 +64,7 @@ restated:
   for the job when it is not warm, inside the cap, and keeps warm the
   seeds the node's ranked list names. That is the sanctioned replacement
   for async/fake prewarm, not a contradiction of Decision #6.
-- **Verifier API shaped by [`18-type-placement.mdc`](../.cursor/rules/18-type-placement.mdc)**:
+- **Verifier API shaped by [`118-type-placement.mdc`](../.cursor/rules/118-type-placement.mdc)**:
   cache/dataset/hash are transform-shaped, and the verifier crate keeps
   no memo of its own. The daemon's caches are the hasher's, above the
   verifier; a CI gate holds cache derivation to it

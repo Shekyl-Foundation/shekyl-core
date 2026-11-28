@@ -18,7 +18,7 @@
 //! inside the stake actor, which holds the key and runs at engine
 //! priority. The hop crosses; the key does not.
 //!
-//! Lowering is unconditional (rule 75): priority shows only under
+//! Lowering is unconditional (rule 175): priority shows only under
 //! contention, timing already reveals load, and a population of personas
 //! that could opt out would be a fingerprint. When the platform refuses,
 //! the thread serves at normal priority for as long as it keeps running.

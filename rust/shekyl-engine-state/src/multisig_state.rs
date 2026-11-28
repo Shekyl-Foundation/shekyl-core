@@ -23,7 +23,7 @@
 //!   seed this member has seen, never the seed. Lost, a malicious proposer
 //!   can reuse a seed, which links two attempts and loses nothing.
 //!
-//! [`MULTISIG_STATE_VERSION`] ↔ `schemas/multisig_state.snap` (rule 42).
+//! [`MULTISIG_STATE_VERSION`] ↔ `schemas/multisig_state.snap` (rule 142).
 
 use std::collections::HashSet;
 

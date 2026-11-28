@@ -49,7 +49,7 @@ use crate::target::{
 ///   term is `N × (largest archival length of one transaction + a read
 ///   chunk)`, bounded by consensus (`max_tx_weight`) and not by `W`. At
 ///   the pin it was `N × max_body_bytes()` with the whole body resident —
-///   `8 × ~6.7 MB ≈ 53 MB` on the Pi 4 floor (rule 76), itself well under
+///   `8 × ~6.7 MB ≈ 53 MB` on the Pi 4 floor (rule 176), itself well under
 ///   the placeholder-64 figure `SF-D7` refused (213 MB). Memory did not
 ///   bind at 8 then and binds less now.
 /// - **Lower bound (throughput).** Reconstruct is a sustained fill over a

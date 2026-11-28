@@ -21,7 +21,7 @@ equivalence audit" (V3.0 queue); `REWARD_EMISSION_E3_GATING_ROUND.md` §9.5
 
 This is a **verification task**, not a consensus change. It puts no new
 consensus code on the genesis critical path. It gates genesis only on
-*finding* divergences while they are still free to fix (`20-rust-vs-cpp-policy.mdc`
+*finding* divergences while they are still free to fix (`RULE_20_RUST_VS_CPP.md`
 "Rust if any of" #2/#3: a C++ decision can be protected only by convention +
 KAT + review, not by the type system).
 
@@ -355,7 +355,7 @@ branch-level C++ evidence that the bool + seeded-state construction cannot give.
   (V3.1) owns FFI, so the audit stays FFI-free. Reopen only if a boundary vector
   proves unreachable through the integration harness.
 
-**Fuzz (Rust side, `20-rust-vs-cpp-policy.mdc` #3):** fuzz targets over each
+**Fuzz (Rust side, `RULE_20_RUST_VS_CPP.md` #3):** fuzz targets over each
 mirror hunting panics and invariant violations (e.g. D-SC-C: no false-negative on
 a planted duplicate; permutation of a dup-free list stays accepting). Cross-language
 differential fuzz (mirror vs live C++) is noted as a V3.1/flip-adjacent
@@ -365,7 +365,7 @@ strengthening, not a V3.0 deliverable.
 
 ## 6. Findings ledger — family **SCE-N**
 
-This doc mints the `SCE-` family (serve-credit equivalence), so per rule 94 §1
+This doc mints the `SCE-` family (serve-credit equivalence), so per rule 194 §1
 ("new identifier families register at birth") the `IMPLEMENTATION_INDEX.md` §2
 registry row lands **in this same design PR** — see §8 for the exact split of
 which bookkeeping rides this PR vs the implementation PR. Collision check:
@@ -436,12 +436,12 @@ them.
   fuzz wiring).
 - No schema change, no wire change, no consensus behavior change ⇒ **no
   `PSCAN_STATE_VERSION` / persisted-schema snapshot bump**, no serialization-policy
-  (rule 42) trigger. (If SCE-1's C++ hygiene fix is taken, it is behavior-preserving
+  (rule 142) trigger. (If SCE-1's C++ hygiene fix is taken, it is behavior-preserving
   and rides its own commit with its own justification.)
 
-## 8. Tracking-index registration (rule 94) — what lands where
+## 8. Tracking-index registration (rule 194) — what lands where
 
-**This design PR** (rule 94 §1 birth-registration + rule 94 §5 start-registered,
+**This design PR** (rule 194 §1 birth-registration + rule 194 §5 start-registered,
 since implementation begins on the go):
 
 1. **§2 registry row:** `**SCE-N** | serve-credit C++-decision equivalence-audit
@@ -473,12 +473,12 @@ since implementation begins on the go):
 5. **Module/name** — `shekyl-archival-retention::serve_credit_decisions`.
    **Confirmed at go (2026-07-09).**
 
-## 10. Review rounds (rule 26 scaffold)
+## 10. Review rounds (rule 126 scaffold)
 
 | Round | Date | Outcome |
 | --- | --- | --- |
 | 1 | 2026-07-08 | Draft. Substrate verified at `ca8edce6b`; SCE-1 surfaced on first read. |
 | 2 | 2026-07-08 | Design decisions resolved (§9): D-SC-B **wide** (full gate mirror), equivalence via **shared-JSON KAT** (no FFI), SCE-1 **unify-after**. Doc updated §1.1/§2.2/§3/§5/§6/§9. |
 | 3 | 2026-07-09 | PR #274 review (SCE-B-1..B-3). **SCE-B-1 pinned (§5):** leg-responsibility split made explicit — C++ leg asserts the verdict `bool` only (all the C++ contract exposes; the consensus-relevant property); reason/branch asserted on the Rust mirror against a source-inspection-authored expected column; no `MERROR_VER` log-parsing anywhere (rejected mechanisms named with reopen criterion). **SCE-B-2 conceded by reviewer** (step-1 grouping of the `:4224–4245` bounds is internally consistent; reason enum keeps the sub-branches distinct) — no change. **SCE-B-3 addressed (§6):** SCE-1 unify rationale sharpened — the native-endian `memcpy` is the representation smell `db_lmdb.cpp:1657–1659` deliberately forbids for composite DB keys, not mere consistency. **Round CLOSED — implementation go issued.** |
-| 3a (post-closure pins) | 2026-07-09 | Copilot findings on PR #274 resolved: §6/§8 wording made accurate by **doing** the rule-94 birth registration in this PR (registry + inventory + doc-directory rows in `IMPLEMENTATION_INDEX.md`, CHANGELOG entry) rather than deferring; §2.1 cross-ref §7→§6 fixed; LE→native-endian wording corrected in §2.1/§3 (mirror pins LE explicitly; decision-invariance fuzz covers it). Reviewer markers carried into §5 as post-closure pins: fixture `substrate_commit` header + C++ gate guard comment (staleness guards), and the **step-9 substrate correction** — the holds accessor at the pinned commit is already the WS-1-corrected as-of-`H_fire` reconstruction (`db_lmdb.cpp:5040–5072`, PR #269), so the mirror snapshots the corrected behavior, with strictly-above slash-boundary vectors on the C++ leg. Not a design reopen (rule 21: substrate-completeness amendments). |
+| 3a (post-closure pins) | 2026-07-09 | Copilot findings on PR #274 resolved: §6/§8 wording made accurate by **doing** the rule-194 birth registration in this PR (registry + inventory + doc-directory rows in `IMPLEMENTATION_INDEX.md`, CHANGELOG entry) rather than deferring; §2.1 cross-ref §7→§6 fixed; LE→native-endian wording corrected in §2.1/§3 (mirror pins LE explicitly; decision-invariance fuzz covers it). Reviewer markers carried into §5 as post-closure pins: fixture `substrate_commit` header + C++ gate guard comment (staleness guards), and the **step-9 substrate correction** — the holds accessor at the pinned commit is already the WS-1-corrected as-of-`H_fire` reconstruction (`db_lmdb.cpp:5040–5072`, PR #269), so the mirror snapshots the corrected behavior, with strictly-above slash-boundary vectors on the C++ leg. Not a design reopen (rule 21: substrate-completeness amendments). |
 | 4 | 2026-07-09 | SCE-1 **RESOLVED** (§6): with both KAT legs green against the pre-unify split, the standalone unify commit re-keyed D-SC-C onto `ArchivalServeCreditKey` (new `bytes()` accessor), the mirror's `serve_credit_block_key` re-pointed to BE, and the fixture re-pinned `expect_equal: true`. §2.3's snippet documents the audited pre-unify substrate. |

@@ -41,7 +41,7 @@ use shekyl_types::{BlockHash, BlockHeight};
 /// There is no public constructor from an arbitrary hash: the only tables
 /// are the per-network constants [`for_network`](Self::for_network) selects
 /// and `NONE` (test and harness builds) — nettype selects *data*, never control flow
-/// (rule 71), and no path exists for a pin the release did not carry.
+/// (rule 171), and no path exists for a pin the release did not carry.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct GenesisPin {
     /// The genesis identity the binary defines for this network; verified
@@ -65,7 +65,7 @@ impl GenesisPin {
     }
 
     /// The genesis pin the release carries for `network`: the table's
-    /// genesis hash. One lookup, the same for every network (rule 71).
+    /// genesis hash. One lookup, the same for every network (rule 171).
     #[must_use]
     pub const fn for_network(network: Network) -> Self {
         Self::genesis_only(network.genesis().hash())

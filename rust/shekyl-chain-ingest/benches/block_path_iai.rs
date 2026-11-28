@@ -43,7 +43,7 @@
 //!
 //! An instruction count on the CI runner's x86. It says whether a pull
 //! request changed the work, and by how much. It is not a time and never a
-//! floor figure (rule 76): `PB-D1`'s seconds are read at a release cut on
+//! floor figure (rule 176): `PB-D1`'s seconds are read at a release cut on
 //! the two devices, and `block_connect_verify` in `shekyl-verify-cost`
 //! stays the wall-clock instrument a device runs.
 //!

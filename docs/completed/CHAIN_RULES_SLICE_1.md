@@ -11,7 +11,7 @@ enforced 153   ratified 126 / enforced 153`. Residue F2 (CEN-A7 count
 bounds) lives in FOLLOWUPS, owner the wire-format port. Template:
 [`CHAIN_RULES_CRATE.md`](../design/CHAIN_RULES_CRATE.md) §7.5.1. Parent
 plan: [`DAEMON_REDB_STORE.md`](../design/DAEMON_REDB_STORE.md) §7.5.
-Cites `26-sub-pr-design-discipline.mdc`. The living contract is
+Cites `126-sub-pr-design-discipline.mdc`. The living contract is
 [`CHAIN_RULES_CRATE.md`](../design/CHAIN_RULES_CRATE.md); do not implement
 from this file.
 
@@ -144,7 +144,7 @@ the same body unchanged. `MockChain::tip()`
 `FaultingView::tip` faults. S-CHAIN-R's `ReadSnapshot::tip()` returns the
 store's own `Option<RecordedTip { height, hash, connect }>` — a wider type for
 a different reader (RPC/wallet), not this trait's; the two share the `Option`
-shape and the SCR-4 reason for it. The workspace must compile at every commit (rule 26
+shape and the SCR-4 reason for it. The workspace must compile at every commit (rule 126
 B5), so the trait method and its two implementors are **one commit**.
 
 ---
@@ -231,7 +231,7 @@ assertion. A1's did not exist: nothing submitted a known block and observed
 `ALREADY_EXISTS`. Minting `held_by_cxx` therefore cost **one** C++ core test,
 `gen_block_already_known_is_already_exists` (same block submitted twice; the
 second submission asserts `already_exists ∧ ¬added ∧ ¬rejected ∧ ¬orphaned`,
-height 2), in `block_validation.cpp` — the minimum C++ touch (rule 20 bars new
+height 2), in `block_validation.cpp` — the minimum C++ touch (`RULE_20_RUST_VS_CPP` bars new
 C++ *logic*; a test that proves the holder refuses is the evidence the status
 requires). The entries name `gen_block_already_known_is_already_exists` (A1)
 and `gen_block_invalid_prev_id` (A4); the existing test gained a comment
@@ -330,7 +330,7 @@ BlockHash::from_bytes(candidate.block.hash())`, which the scaffold already has
 
 ---
 
-## 6. Substrate findings (pre-flight, rule 26 B6/A2)
+## 6. Substrate findings (pre-flight, rule 126 B6/A2)
 
 **F1 — the census's `blockchain.cpp` line pins have drifted (~+15).** Census
 says A2 re-check `5741–5745`, B1 `5727`, B5 `5885–5897`, B7 `5713–5723`; this
@@ -442,7 +442,7 @@ stay here behind Q2–Q6.
    after the `tip()` PR merges (A2 and B5 read the tip). Three PRs, each
    under the 5-day / 10-commit ceiling.
 2. `chain-rules: Rule/BlockRule + SCW-18 pin; CEN-B1/B2/B7; RuleSet::header_major_version`
-   — commits 2 and 3 of the sketch **landed as one** (rule 26 B5): the traits
+   — commits 2 and 3 of the sketch **landed as one** (rule 126 B5): the traits
    with no rule are dead code at the intermediate SHA, and `-D warnings`
    would need a transient `expect(dead_code)` there that the next commit
    removes — a marker with a one-commit life is noise, not staging. Cut
@@ -453,9 +453,9 @@ stay here behind Q2–Q6.
 3. `chain-rules: CEN-A2 parent-is-tip` — after the `tip()` PR
 4. `chain-rules: CEN-B5 header root == root_at(connecting height); CEN-B6 identity under the row`
 5. `chain-rules: held_by_cxx(test) entry status; A1/A4 held; gate prints the subtraction` — macro arm, gate grammar + `--selftest`, `RuleSet::enforced` excludes held rows; **plus the C++ core test A1's entry names** (`gen_block_already_known_is_already_exists`; A4's, `gen_block_invalid_prev_id`, already existed — F4 as corrected). Shipped as its own PR before `tip()` (maintainer, 2026-09-16 20:49: nothing in it reads the tip).
-*Rule 20, stated in the commit message rather than in a review reply:* these
+*`RULE_20_RUST_VS_CPP`, stated in the commit message rather than in a review reply:* these
 are C++ tests for code that will be deleted, which reads cold as new C++.
-Rule 20 bars new C++ *logic*; a test establishing that the holder actually
+`RULE_20_RUST_VS_CPP` bars new C++ *logic*; a test establishing that the holder actually
 refuses is the evidence the `held_by_cxx` status requires, and without it the
 status is a grep wearing a test's name (PWD-B10). A5 gains its `subsumed-by` note in the registry comment (no status: it stays `pending` until slice 7 closes it); A6/A7 stay `pending` with the wire-invariant disposition in their registry comment until the wire-format port mints the register and moves the census rows
 6. `docs: slice 1 landed — CHAIN_RULES_CRATE.md §13, DRS §7 row + §15, index, FOLLOWUPS F2, CHANGELOG`
@@ -580,7 +580,7 @@ the two lanes synchronised — one ruling, one home). What slice 1 owes to
   into the one query unchanged when E2 mints it.
 - **The crate-side statement of what its two figures gate** is
   [`CHAIN_RULES_CRATE.md`](../design/CHAIN_RULES_CRATE.md) §6.3, pointing at §7.6.
-- **Two figures checked against landed text while folding (rule 26 B6),
+- **Two figures checked against landed text while folding (rule 126 B6),
   reported to the §7.6 owner on PR #760 rather than edited across lanes:**
   (i) §7.6 item 3 says parity evidence "was already defined as `implemented
   == ratified == enforced` (§8.1's E6 item, D12)" — the landed definition

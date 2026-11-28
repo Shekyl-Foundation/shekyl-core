@@ -40,7 +40,7 @@ pub const ARTIFACT_TYPE: &str = "application/vnd.shekyl.test-chain";
 
 /// The corpus layer's media type: layout 5 (`shekyl-corpus`'s
 /// `CORPUS_FORMAT_VERSION`). A layout change bumps it with the constant
-/// (rule 42's discipline applied to the artifact); the determinism test
+/// (rule 142's discipline applied to the artifact); the determinism test
 /// holds the two together.
 pub const CORPUS_MEDIA_TYPE: &str = "application/vnd.shekyl.corpus.v5";
 

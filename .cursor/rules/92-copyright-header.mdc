@@ -3,6 +3,11 @@ description: Copyright headers on all source files. Shekyl Foundation is the cop
 globs:
   - "rust/**/*.rs"
   - "src-tauri/**/*.rs"
+  - "prism-*/**/*.rs"
+  - "shekyl-prism/**/*.rs"
+  - "fuzz/**/*.rs"
+scope: estate
+repos: [core, gui, prism]
 ---
 
 # Copyright Header

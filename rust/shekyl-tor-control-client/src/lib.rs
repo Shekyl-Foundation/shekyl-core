@@ -41,6 +41,7 @@ pub mod onion_identity;
 #[cfg(any(test, feature = "unpinned-tor-for-tests"))]
 pub mod outside_kill;
 pub mod supervisor;
+pub mod vanguard_rotation;
 
 #[cfg(test)]
 mod test_support;

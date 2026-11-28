@@ -35,7 +35,7 @@ by the daemon-configuration cutover and ruled 2026-10-14. `RT-O28` and
 ([`RPC_CHANNEL_RT_W10_PREFLIGHT.md`](RPC_CHANNEL_RT_W10_PREFLIGHT.md)),
 ruled 2026-10-25.
 Slice `RT-W15` is the daemon console's move to `shekyl-cli` (§13). No new
-family (rule 94).
+family (rule 194).
 **Decision authority:** Rick.
 **Relationship to R0:** R0's §1 premise (every RPC leg is
 operator-to-operator; the adversary is the path, never the peer) and §3
@@ -903,7 +903,7 @@ drives it):
   network id, with no separator and no length prefix — the first part is a
   constant and the second has a fixed length. A testnet
   client cannot complete a handshake with a mainnet daemon. Nettype selects
-  data only (rule 71).
+  data only (rule 171).
 - **Record layer — RE-RULED 2026-10-12 (PR #1034). Step 1 landed in
   PR #1038.** The shared crate is `shekyl-noise`. It holds the AEAD
   primitives (`hash`, `hkdf`, `seal`, `open`), crate-private; the handshake
@@ -1437,12 +1437,12 @@ can contain either.
   (ruled 2026-10-14, §6.4) are not production capabilities. The regtest
   harnesses depend on `dev_block_generate`
   (`engine/gf7_sealing_run.rs:94`, `engine/daemon_observability.rs`), so
-  RT-W10 carries an **armed-and-pinned override** (rule 71): an explicit
+  RT-W10 carries an **armed-and-pinned override** (rule 171): an explicit
   start switch, `dev-rpc`, logged at every start; when armed, the levers
   are served to the host's administrator only. The switch is the only thing
   that enables them; the network type never does. The switch is refused on
   mainnet with its own error (`INPUT_GRAMMAR.md` IG-Q49): the network type
-  can only restrict the switch, never select the behaviour, so rule 71 and
+  can only restrict the switch, never select the behaviour, so rule 171 and
   IG-Q49 both stand as written (RT-O36, ruled 2026-10-25). `dev_chain_pop`
   has three users, all served there: the regtest roll-back helper, the
   Python framework and the CT-2 fixture generator (§6.4).
@@ -2031,7 +2031,7 @@ a demonstrated operator recovery need returns it as a ruled capability.
   listener, and dials nothing the record names (RT-W10 step 5). **RT-W12
   rules the channel port and gives a service a loopback channel listener
   by default before it retires the plaintext admin listener.**
-- **Every new surface is Rust-owned** (rule 20). The channel listener's
+- **Every new surface is Rust-owned** (`RULE_20_RUST_VS_CPP`). The channel listener's
   flags, the key paths, the enrolled set, and `rpc client add` / `rpc client remove`
   are parsed, stored and served in `shekyl-daemon-rpc`. Nothing is added
   to C++ `rpc_args` or `core_rpc_server`; the C++ RPC bind and restricted
@@ -2072,7 +2072,7 @@ supported configuration (Rick, 2026-11-19; `INSTALLATION_GUIDE.md`,
 "Supported storage"). A stale record, which a crashed daemon
 left, is replaced by the publish the same way, never removed beside it.
 Every rendezvous path is keyed by the genesis-derived network id, not a
-nettype name (rule 71), so daemons of different networks coexist and a
+nettype name (rule 171), so daemons of different networks coexist and a
 client never reaches the wrong network's node.
 
 - **Unix, run-as-me:** the socket itself, one file per daemon, directly
@@ -2288,7 +2288,7 @@ client never reaches the wrong network's node.
   installed one, as one user, and without a named form the start-up
   refusal (§4.5) would stop them. The name is the operator's label, not a
   nettype; the network id still keys the rendezvous, through the hash
-  (rule 71). **RULED (2026-10-09):** the name is 1 to 16 characters from
+  (rule 171). **RULED (2026-10-09):** the name is 1 to 16 characters from
   `[a-z0-9-]`, and its first character is a letter or a digit. The reason
   is typeability: an operator types this name on a command line and reads
   it in a log. It is **not** a path-safety rule — since RT-O10 a name
@@ -2787,7 +2787,7 @@ no reader of a deleted flag or field left in the tree.
 
 The slices are part of the ruled design. Ruling them does not start them:
 each is authorized on its own, by the decision authority, and has its own
-rule-26 pre-flight before its first production commit.
+rule-126 pre-flight before its first production commit.
 
 **Order (ruled 2026-10-25).** The RT-W9 close-out; RT-W10's pre-flight and
 its authorization; RT-W10; RT-W11; then RT-W12, RT-W13 and RT-W14. The

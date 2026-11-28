@@ -708,7 +708,7 @@ Every FCMP++ component is Rust, and there is no FFI. Where each part lives:
 
 The daemon's store is `shekyl-chain-store` (redb). Its tables are declared
 in `rust/shekyl-chain-store/src/schema.rs` and pinned by
-`schemas/tables.snap` (rule 42: a persisted change bumps the schema
+`schemas/tables.snap` (rule 142: a persisted change bumps the schema
 version). The curve tree lives in `curve_tree_leaves`, `curve_tree_layers`,
 `curve_tree_meta`, `curve_tree_roots` (the root at every height, §12) and
 `curve_tree_leaf_counts`, with `output_to_leaf` / `leaf_to_output` mapping

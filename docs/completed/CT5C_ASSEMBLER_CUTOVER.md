@@ -472,7 +472,7 @@ place review rounds concentrate; the migration is itself part of the value
   a full `OutputIdentity` would force the engine to fabricate `h_pqc`/`target` it
   does not hold for an owned output (the real `h_pqc` returns *from* the drained
   leaf). `AssembleInput { gindex, output_key, commitment }` carries exactly what
-  is used (rule 18).
+  is used (rule 118).
 
 - **Reopening trigger (rule-21, Q3).** Any new output class that enters the curve
   tree must re-verify `global_output_index ↔ tree gindex` numbering equivalence

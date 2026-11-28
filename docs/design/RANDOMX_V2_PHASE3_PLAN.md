@@ -20,11 +20,11 @@
 
 Per [`05-system-thinking.mdc`](../../.cursor/rules/05-system-thinking.mdc)
 "specification first, code second" and
-[`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc),
+[`126-sub-pr-design-discipline.mdc`](../../.cursor/rules/126-sub-pr-design-discipline.mdc),
 this document is the design-doc-first step before any Phase 3 code. It
 exists because the cutover touches a consensus-rule boundary (the PoW
 hash a validating node computes for every block) and the
-[`20-rust-vs-cpp-policy.mdc`](../completed/RULE_20_RUST_VS_CPP.md)
+[`RULE_20_RUST_VS_CPP.md`](../completed/RULE_20_RUST_VS_CPP.md)
 C/Rust boundary, both of which the sub-PR discipline requires be
 specified, surveyed, and reviewer-mapped before implementation.
 
@@ -86,12 +86,12 @@ Each deferral carries an explicit reopening criterion per
    T6 adversarial-ratio runs weekly; T5 median-latency runs on the
    daily cron. *Reopen criterion:* discharged.
 
-### 1.3 Why `07-consensus-atomic-cutovers` does not bind
+### 1.3 Why `107-consensus-atomic-cutovers` does not bind
 
 This is a **pre-genesis** change: there is no live chain, no
 deployed validators, and no canonical block whose interpretation
 could diverge across nodes mid-cutover.
-[`07-consensus-atomic-cutovers.mdc`](../../.cursor/rules/07-consensus-atomic-cutovers.mdc)
+[`107-consensus-atomic-cutovers.mdc`](../../.cursor/rules/107-consensus-atomic-cutovers.mdc)
 exists to protect against intermediate split points leaving a *live*
 chain non-canonical; with no live chain its criterion 2
 ("indivisible under flag decomposition") is moot — and in fact 3a/3b
@@ -322,7 +322,7 @@ sticky-pin so the canonical cache survives LRU eviction. The eager
 derive is the **internal** prewarm the user direction sanctioned
 (prewarm is forbidden as *FFI surface*, not as Rust-internal
 behavior); moving canonical-cache management into Rust is the
-[`20-rust-vs-cpp-policy.mdc`](../completed/RULE_20_RUST_VS_CPP.md)
+[`RULE_20_RUST_VS_CPP.md`](../completed/RULE_20_RUST_VS_CPP.md)
 forward cut.
 
 ### 4.4 Latency-profile change (named explicitly)

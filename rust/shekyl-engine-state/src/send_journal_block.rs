@@ -46,7 +46,7 @@ use crate::group_payee::{GroupFingerprint, StoredGroupAddress};
 ///
 /// Version `2` appends [`SendState::Abandoned`] (PR-SJ-3). The append is
 /// wire-additive (the discriminant KAT pins every pre-existing encoding),
-/// so the bump follows rule 42's snapshot pairing, not a byte-layout
+/// so the bump follows rule 142's snapshot pairing, not a byte-layout
 /// break: pre-genesis, strict-equality gating stays the cheapest honest
 /// policy, and the additive-read-forward load path is the A4 reopen's
 /// concern (`docs/FOLLOWUPS.md` "A4 DECIDED").

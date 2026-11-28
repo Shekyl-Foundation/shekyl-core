@@ -686,7 +686,7 @@ mod tests {
     #[test]
     fn tx_secret_key_reads_the_record_bytes_it_always_had() {
         // The wallet record's bytes for one retained key, as written before
-        // the key was typed (rule 42: the shape did not change, so no
+        // the key was typed (rule 142: the shape did not change, so no
         // version bump): a varint length of 32, then the canonical scalar.
         // `[7; 32]` is canonical (its top byte is below ℓ's), so the stored
         // scalar is these bytes as written.

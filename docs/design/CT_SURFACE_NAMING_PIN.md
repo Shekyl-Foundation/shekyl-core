@@ -104,7 +104,7 @@ matches, and none is a miss:
 
 | Family | Where | Disposition |
 |--------|-------|-------------|
-| `num_rct_outs`, `bi_cum_rct`, `pre_rct_outkey` | `src/blockchain_db/lmdb` | **Persisted-schema identifiers** — a different validation surface from a C++ rename ([`19-validation-surface-discipline.mdc`](../../.cursor/rules/19-validation-surface-discipline.mdc)); renaming them belongs with the LMDB/blockchain-db port, not here |
+| `num_rct_outs`, `bi_cum_rct`, `pre_rct_outkey` | `src/blockchain_db/lmdb` | **Persisted-schema identifiers** — a different validation surface from a C++ rename ([`119-validation-surface-discipline.mdc`](../../.cursor/rules/119-validation-surface-discipline.mdc)); renaming them belongs with the LMDB/blockchain-db port, not here |
 | `get_block_cumulative_rct_outputs` | `src/blockchain_db` | Read the above. Deleted 2026-10-05 with its one caller chain ([`CXX_VERSION_GATES.md`](../completed/CXX_VERSION_GATES.md) §6) |
 | `arg_rct_only` / `opt_rct_only` | `src/blockchain_utilities` | A CLI flag on the export tool — user-visible surface, renamed when that tool is touched |
 | `od_rct` | `src/rpc` | Local variable holding an `ct::key`; rule 93 rename-on-touch |
@@ -195,7 +195,7 @@ not act on them:
   `tests/unit_tests/serialization.cpp` and the live-oracle coinbase KAT in
   `rust/shekyl-wire`). No coinbase byte changed, no hash changed,
   `GENESIS_TX` is untouched, and no serialization-version bump applies (the
-  `42-serialization-policy.mdc` gate governs persisted engine-state blocks,
+  `142-serialization-policy.mdc` gate governs persisted engine-state blocks,
   none of which embed the rct base). The deletion PR also removed the three
   caller-less standalone object serializers (`rctSigBase`, `rctSigPrunable`,
   `rctSig`) so a second, disagreeing definition of the bytes cannot produce
@@ -345,7 +345,7 @@ Per [`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clau
 - **Substrate:** *moot* — this criterion existed to shrink the rename PR's
   scope if verifier logic migrated to Rust before Phase 5. The rename has
   landed, so there is no scope left to shrink. Verifier migration continues on
-  its own track ([`20-rust-vs-cpp-policy.mdc`](../completed/RULE_20_RUST_VS_CPP.md));
+  its own track ([`RULE_20_RUST_VS_CPP.md`](../completed/RULE_20_RUST_VS_CPP.md));
   it no longer interacts with this pin.
 
 ---

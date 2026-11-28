@@ -1,13 +1,13 @@
 # C2-R1 — Reorg / alt-chain / checkpoints design round
 
-**Status:** CLOSED as record — all three sub-rounds ruled and built: R1a merged #596 (2026-09-02, rule 71 minted); R1b merged #603 (2026-09-03, watermark pop floor, fork-choice/alt-window FFI crossing, degraded-not-punished semantics); R1c signed in full 2026-09-04 (seven rulings Q1a–Q3b, the Q3b sync-orphan defect fixed and rig-pinned in-round, K1 split K1a/K1b, nine rows → bucket 2, close-of-round sweep §5.7). Landed via PR #612. Corrections land in [`CONSENSUS_RULE_CENSUS.md`](../design/CONSENSUS_RULE_CENSUS.md), never here.
+**Status:** CLOSED as record — all three sub-rounds ruled and built: R1a merged #596 (2026-09-02, rule 171 minted); R1b merged #603 (2026-09-03, watermark pop floor, fork-choice/alt-window FFI crossing, degraded-not-punished semantics); R1c signed in full 2026-09-04 (seven rulings Q1a–Q3b, the Q3b sync-orphan defect fixed and rig-pinned in-round, K1 split K1a/K1b, nine rows → bucket 2, close-of-round sweep §5.7). Landed via PR #612. Corrections land in [`CONSENSUS_RULE_CENSUS.md`](../design/CONSENSUS_RULE_CENSUS.md), never here.
 Second design round of the C2 program
 ([`CONSENSUS_RULE_CENSUS.md`](../design/CONSENSUS_RULE_CENSUS.md) §10 batch R1, 20
 rows). Steering (shekyl-core-00) adopted the three-sub-round structure
 2026-09-02; Rick ratified **both** R1a lines the same day — C2-R1a-Q1
 (delete the mechanism) and the CEN-G8 retirement (put to him separately as
 the first retirement of a ratified bucket-1 row) — and the implementation
-landed in the R1a PR. Rule 71 (network uniformity) was minted the same day
+landed in the R1a PR. Rule 171 (network uniformity) was minted the same day
 at Rick's direction (§4a) and R1b cites it rather than re-deriving it.
 Nothing in §4/§5 is ruled yet. On R1c's close this document moves to
 `docs/completed/` as the round's ruling record (rule 95).
@@ -15,7 +15,7 @@ Nothing in §4/§5 is ruled yet. On R1c's close this document moves to
 2026-09-02 — the C2-R3 merge). Every `file:line` in this doc was located at
 this pin; where a census citation drifted, both numbers are recorded.
 **Identifier family:** `C2-R1a-Q1`, `C2-R1b-Q1…`, `C2-R1c-Q1…` (registered in
-[`IMPLEMENTATION_INDEX.md`](../design/IMPLEMENTATION_INDEX.md) this PR, rule 94).
+[`IMPLEMENTATION_INDEX.md`](../design/IMPLEMENTATION_INDEX.md) this PR, rule 194).
 **Authority chain:** census §10 R1 + rows CEN-K1…K10, E1…E5, A1, A2, A4, D5,
 D6; census §3.5 (main-vs-alt rule application) as the starting exhibit;
 [`CONSENSUS_C2_R3_TIMESTAMPS.md`](../completed/CONSENSUS_C2_R3_TIMESTAMPS.md)
@@ -182,7 +182,7 @@ A fast-sync trust mechanism may be reintroduced only by a design round that:
 - (d) lands with tests exercising covered and uncovered ranges in the same
   build.
 
-**Trigger (interim absolute, provisional):** full initial sync on the rule-76
+**Trigger (interim absolute, provisional):** full initial sync on the rule-176
 provisioning-floor device (Pi 4), measured or projected from measured per-tx
 verify throughput, exceeding **72 hours**. This number is an interim pin so
 the trigger can actually fire — it is replaceable without a design round by
@@ -240,7 +240,7 @@ Sum: 2 + 9 + 9 = 20 ✓. Census: E3/E4/G8 → bucket 3, counts 86/16/5/64
 - `check_debit_auth_single_source.sh`: the required "block fast-check
   debit" arm removed (three sites remain); gate re-run green — the
   retirement's blast radius reached the gate that certified the belt.
-- Rule 71's gate `scripts/ci/check_network_uniformity.sh` landed wired
+- Rule 171's gate `scripts/ci/check_network_uniformity.sh` landed wired
   into `ci/grep-gates`, allowlist seeded with the **7** surviving public-
   nettype branches (annotated with owners) — the check-in's "6" was an
   under-count: the site census had excluded lines containing FAKECHAIN,
@@ -306,7 +306,7 @@ Sum: 2 + 9 + 9 = 20 ✓. Census: E3/E4/G8 → bucket 3, counts 86/16/5/64
   fourth instance (the `blockchain_db.h` "fast-sync resumption" hit is
   the curve-tree checkpoint family, a different mechanism).
   **Fifth-round correction (a body-carried finding that never became a
-  review thread — the reason suppressed findings get read):** rule 71's
+  review thread — the reason suppressed findings get read):** rule 171's
   closing line still said both checkpoint instances "were resolved",
   repeating the completed-migration claim in a sentence the round-3
   tense fix did not sweep; now states one deleted (C2-R1a), one queued
@@ -389,7 +389,7 @@ is R1b's subject**:
   i.e. structurally divergent, behaviorally identical: the shape that
   rots.
 
-The generalization is **rule 71** (minted 2026-09-02 at Rick's direction,
+The generalization is **rule 171** (minted 2026-09-02 at Rick's direction,
 this PR): nettype selects data, never control flow, on the
 consensus/validation surface; a real behavioral divergence must be named,
 ratified, and loud — it can never just fall out of an `if`. The failure
@@ -398,7 +398,7 @@ mode: once nettype selects a code path, "testnet passed" degrades from
 Enforcement landed with the rule (§3.8): the grep gate over
 `cryptonote_core/ + checkpoints/ + blockchain_db/`, both equality
 operators, allowlist seeded at 8 and annotated (§3.8 records the 6→7→8
-count corrections). R1b therefore owes, citing rule 71 rather than re-deriving
+count corrections). R1b therefore owes, citing rule 171 rather than re-deriving
 it:
 
 1. **E2/K6/E5 re-homing:** decide whether the operator-override wiring
@@ -417,7 +417,7 @@ it:
 
 FAKECHAIN's silent consensus skips (CEN-B5's root check, the CTTypeNull
 waiver) are the same class and are **batch R9's subject**; R9 inherits
-rule 71's named-ratified-and-loud exception discipline (the
+rule 171's named-ratified-and-loud exception discipline (the
 `SEEDHASH_EPOCH` override is the compliant counter-pattern: armed,
 datadir-pinned, loud) rather than re-deriving the principle.
 
@@ -475,7 +475,7 @@ confirmed or refuted in the proposal): K6 crosses; D5's selection crosses;
 E1 crossing deferred to the existence ruling (a hash-equality crossing alone
 makes the shim thicker than the rule — the anti-target); K5/K7 orchestration;
 K8 ratify-and-keep (deleting the field would change the persisted
-`alt_block_data_t` layout — rule 42 fence).
+`alt_block_data_t` layout — rule 142 fence).
 
 ## 4b. R1b rulings — RATIFIED 2026-09-03 (as amended at `ad72e1bc9`, + F-1/F-2 below)
 
@@ -506,7 +506,7 @@ difficulty switch back: the discard is the flip-flop terminator. K8
 (alt `already_generated_coins` approximation) is **ratified-and-kept**:
 by construction, documented at site, nothing consensus-bearing reads
 it, and deleting the field would change the persisted
-`alt_block_data_t` layout (rule 42 fence). CEN-K5b (bucket 1) is named
+`alt_block_data_t` layout (rule 142 fence). CEN-K5b (bucket 1) is named
 and preserved: the witness capture-before-pop / re-supply-at-promote
 ordering is untouched by everything ruled here.
 
@@ -516,7 +516,7 @@ re-validation does not contain — R1c's cheap-fork wargame seeds are the
 watch-list; a confirmed sub-51% forced-reorg cycle reopens this ruling,
 not just R1c's.
 
-**Q1b (crossings — rule 20/71, joining the established
+**Q1b (crossings — rule `RULE_20_RUST_VS_CPP`/171, joining the established
 `shekyl-difficulty` family).** The fork-choice comparison crosses to
 Rust: a pure `shekyl-difficulty` predicate over the two cumulative
 difficulties (u128 as the FFI's existing two-u64 halves) plus the
@@ -536,7 +536,7 @@ is the shell-gate instance of the same principle; cited as analogy,
 not authority). **CEN-E1 does
 NOT cross — a decision, not a deferral** (rule 22): the checkpoint set
 is a `std::map` filled by an epee JSON loader — glue and state under
-rule 20's "C++ if all of" — and its predicate is a hash equality with
+`RULE_20_RUST_VS_CPP`'s "C++ if all of" — and its predicate is a hash equality with
 no derivation content; crossing only the equality makes the shim
 thicker than the rule. The rule content crosses if and when the
 checkpoint set itself moves into the Rust store — named owner: the DRS
@@ -713,7 +713,7 @@ inserted before R1c); ratifying "the mechanism is kept" now would
 either churn or freeze a trusted-party override the network may not
 need. **What is ratified now is everything that is right whether or
 not the mechanism survives:** *while the mechanism exists*, it is
-**wired uniformly across all three public networks** per rule 71 —
+**wired uniformly across all three public networks** per rule 171 —
 both nettype sites (`:254`, `:326`) are deleted, every network loads
 `<datadir>/checkpoints.json` at init and reloads on the 600 s path,
 and an operator can rehearse a checkpoint override on testnet before
@@ -723,7 +723,7 @@ fence: this re-homes the **checkpoint mechanism only**; the hard-fork
 table selection stays the allowlist's named migration debt.
 
 *Falsifier (Q2a):* the wiring ruling — any future per-network
-divergence requires rule 71 §2's named-ratified-loud form; the gate
+divergence requires rule 171 §2's named-ratified-loud form; the gate
 enforces the default. The held existence question resolves in C2-R0's
 comparison; if the mechanism is retired there, the uniform wiring
 retires with it at zero additional cost (it is a deletion of two
@@ -810,7 +810,7 @@ the one operator-authority input (Q2b).
 | Operator error: conflicting JSON | datadir file | SIGTERM (undocumented) | same, ratified + named-output obligation (rule 82) | fail-stop on ambiguous pins is the safe direction; authority-not-access priced |
 | Malware with datadir write | checkpoint file | could pin a false chain or kill the node | unchanged — datadir write is already LMDB-corruption-equivalent; no new position | the file adds no access an attacker lacks; refusing to ship the mechanism would not remove the position |
 | Checkpoint-forced lighter chain | operator pin + K6 arm | switch + discard of heavier demoted chain | ratified with rationale: discard is the flip-flop terminator | the discard faces the oscillation, which is the actual failure mode |
-| Testnet operator rehearsing recovery | checkpoints.json on testnet | **structurally impossible** (`:254`/`:326`) | first-class on every network | the rehearsal gap was the rule-71 lead exhibit; closing it is the point |
+| Testnet operator rehearsing recovery | checkpoints.json on testnet | **structurally impossible** (`:254`/`:326`) | first-class on every network | the rehearsal gap was the rule-171 lead exhibit; closing it is the point |
 
 **Positive check (steering's addition, owed at build):** the
 checkpoint-mechanism tests run against **all three** public
@@ -826,7 +826,7 @@ Phases, in landing order, each red-first where a losing leg exists:
 
 1. **Q2a** — both nettype guards deleted (`:254`'s `return true`
    false-positive and the `:326` init wrapper); `init_default_checkpoints`
-   collapsed to one body (per-network DATA only). **Rule-71 allowlist
+   collapsed to one body (per-network DATA only). **Rule-171 allowlist
    8 → 4, exceeding the ratified 8 → 6 deliberately**: the two
    `checkpoints.cpp` no-op-arm entries carried the disposition
    "C2-R1b re-homes or deletes" — leaving them would have left their own
@@ -1314,7 +1314,7 @@ work it never did"). Three instances, one subsystem, one of them
 fixed-and-annotated in place: the posture inheritance's
 first-in-reading-order ranking claimed a property, and the tree
 agrees. Build lands in this round (orchestration, C++ protocol
-handler; rule 20 — no rule content crosses, and the diff direction is
+handler; `RULE_20_RUST_VS_CPP` — no rule content crosses, and the diff direction is
 stated as an expectation the build is measured against: the fix
 REMOVES a punishment path and falls back to existing live-path
 semantics, so the C++ diff must be net-negative or flat — thickening
@@ -1367,7 +1367,7 @@ a requested callback — so the context sat synchronizing-and-silent
 forever, and the pre-fix arm's severing had BEEN the recovery
 mechanism. The behavioral rig now pins the healing (a chain request
 observed on the context, request time live again), observed red-first
-against the bare-return form. **Diff measurement (the rule-20
+against the bare-return form. **Diff measurement (the `RULE_20_RUST_VS_CPP`
 expectation, measured not assumed): mechanism −9/+2, net −7** — the
 two added mechanism lines are the replacement log statement and its
 brace; raw is +2 only from the design-comment block, which is
@@ -1454,7 +1454,7 @@ column. On this close the document moves to `docs/completed/`.
 - 2026-09-02 — Rick ratified C2-R1a-Q1 and the CEN-G8 retirement (both
   explicit); raised the two-checkpoint-mechanisms finding (§4a) and
   directed the network-uniformity principle be minted as a standing rule
-  first (rule 71) with R1b citing it; implementation + rule + gate landed
+  first (rule 171) with R1b citing it; implementation + rule + gate landed
   in the R1a PR (execution record §3.8).
 - 2026-09-02 — R1a merged by Rick (#596 → `4b9807c5e`; 56 files,
   +924/−1012 vs its dev parent) after five Copilot rounds (§3.8 carries
@@ -1501,7 +1501,7 @@ column. On this close the document moves to `docs/completed/`.
   safety property.
 - 2026-09-03 — Built (§4c): all six rulings implemented red-first on
   `feat/c2-r1b-impl`; the belt's losing leg observed red before
-  enforcement; every gate green (rule-71 at allowlist 4, invariants
+  enforcement; every gate green (rule-171 at allowlist 4, invariants
   6/6, fmt/clippy workspace-wide, crate + FFI + vector suites).
 - 2026-09-03 — **RATIFIED by Rick** as amended at `ad72e1bc9`: every
   new source claim re-verified by him (the wrap at `:6725`, the

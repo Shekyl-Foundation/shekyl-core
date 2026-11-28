@@ -5,11 +5,11 @@ the ruling was made on the record before the round existed and this document is
 its transcription. `PC-D1`…`PC-D7` ruled; implementation lands in this round's
 PR, not a later one.
 
-**Process:** [`26-sub-pr-design-discipline`](../../.cursor/rules/26-sub-pr-design-discipline.mdc),
-and **[`07-consensus-atomic-cutovers`](../../.cursor/rules/07-consensus-atomic-cutovers.mdc)
+**Process:** [`126-sub-pr-design-discipline`](../../.cursor/rules/126-sub-pr-design-discipline.mdc),
+and **[`107-consensus-atomic-cutovers`](../../.cursor/rules/107-consensus-atomic-cutovers.mdc)
 is opted into**: this changes an admission path in place, on a genesis-frozen
 wire. Disposition IDs **`PC-D1` … `PC-Dn`**, registered at birth per
-[`94-tracking-index`](../../.cursor/rules/94-tracking-index.mdc); prefix `PC-`
+[`194-tracking-index`](../../.cursor/rules/194-tracking-index.mdc); prefix `PC-`
 checked unique against CB/CR/CT/CW/DS/GF/LV/MR/MS/MSW/OA/PF/PR/RF/RP/SA/SH/SO/
 SP/TJ/VG/WI/WP/WS.
 
@@ -397,7 +397,7 @@ re-derivation is owed, and the honest price is the one already carried.
 
 ## 5. Blast radius — everything this touches
 
-Enumerated at source before implementation, per rule 26's substrate pass.
+Enumerated at source before implementation, per rule 126's substrate pass.
 Sites are named by **function**, not by line number: this round's own edits moved
 every line cited in the opening draft, which is the same drift that made
 `ARCHIVAL_CHALLENGE_MECHANISM.md` §5.6 unreachable (see `path.rs`'s header).
@@ -409,14 +409,14 @@ moved from serialization to the four readers.
 **Does NOT change (and this is the round's main saving):** the vin layout,
 `ArchivalServeCreditResponse`'s fields, `canonical_bytes`' length, the pruned
 half, `SERVE_CREDIT_PRUNED_MAX_BYTES` and its pinned twin, and — because no
-persisted block byte moves — **rule 42 does not fire and no persisted-block
+persisted block byte moves — **rule 142 does not fire and no persisted-block
 version constant bumps.** Each was on the opening draft's list and each comes
 off with the block going implicit. Recorded so nobody re-adds a wire-schema
 bump "to be safe": a bump with no wire change is a false signal that costs the
 next reader a grounding pass.
 
 **CORRECTED IN SCOPE 2026-08-26: a version DID bump — the other one.** The
-statement above is about rule 42's persisted-block wire constant, and it
+statement above is about rule 142's persisted-block wire constant, and it
 stands: no block blob byte moves (verified byte-identical in the fixture
 regen). But the **LMDB schema version** is a separate guard with a separate
 question — "can this code read an existing datadir" — and for that one the

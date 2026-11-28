@@ -7,7 +7,7 @@
 //! validator and the wallet read from one place.
 //!
 //! Consensus is proof of work with one proof type (rule
-//! `70-modular-consensus`): there is no proof trait or registry here, and
+//! `170-modular-consensus`): there is no proof trait or registry here, and
 //! one is added only with an accepted design for a second proof type.
 
 #![deny(unsafe_code)]

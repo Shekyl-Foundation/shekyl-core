@@ -4746,7 +4746,7 @@ enum FixtureStake {
 }
 
 /// Fund → stake → dispatch → confirm: the production staking sequence both
-/// PR-4 e2e legs share (rule 19: one definition — the bond e2e asserts on
+/// PR-4 e2e legs share (rule 119: one definition — the bond e2e asserts on
 /// the returned fixture, the emission e2e builds its claim on it). The
 /// caller owns the daemon spawn (and with it the SEB lever decision), the
 /// stake entry (see [`FixtureStake`] — the emission e2e needs a market

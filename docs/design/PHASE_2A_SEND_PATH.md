@@ -26,14 +26,14 @@ folded into §3.10.3 / §3.2 — **PF1**: `FeeEstimationContext` must carry the 
 `FeeEstimates` snapshot (not only `output_count`) so the frozen *synchronous*
 `estimate_fee` produces a non-stub fee; **PF2**: the fee-source handle is a
 separate narrowed capability beside `fee_estimator: F`, not a stateful
-`DaemonFeeEstimator`. Neither is a frozen-signature reopen (rule-26 A1), so **no
+`DaemonFeeEstimator`. Neither is a frozen-signature reopen (rule-126 A1), so **no
 design round is required**. Full trail: `PHASE_2A_SEND_PATH_AUDIT.md`.  
 **Scope:** Land a **real** transfer on `Engine<S>`: daemon-backed fees, signed
 `tx_bytes`, daemon broadcast. Excludes Phase **2b** (stake), **2c**
 (addresses/proofs), **2d** (cold bundles), and Phase **6** regtest e2e (tracked
 separately; 2a unit/hybrid tests use `TestDaemon`).
 
-**Process:** Per `26-sub-pr-design-discipline.mdc`, adversarial review on this
+**Process:** Per `126-sub-pr-design-discipline.mdc`, adversarial review on this
 doc before the first implementation commit. Sub-PRs stay within
 `06-branching.mdc` size guidance (~5 files / ~200 lines each where possible).
 
@@ -990,7 +990,7 @@ with-change fee and a change of at least one unit), so `InsufficientFunds` at
 the build is a **defensive** outcome (an input locked/spent between select and
 sign), not the normal re-selection driver.
 
-**Denominated in spend cost, not nominal SKL (rule 05 + rule 75).** An output is
+**Denominated in spend cost, not nominal SKL (rule 05 + rule 175).** An output is
 dust iff it is worth less than `k×` **the cost to spend it later** — the Bitcoin
 Core `dustRelayFee` model (`k ≈ 3`), measured against `MARGINAL_INPUT_WEIGHT`
 (the weight one input adds when *spent*), **not** the output's own
@@ -998,7 +998,7 @@ inclusion weight. (Prose and formula must agree on this: the threshold is the
 *spend* cost.) Reachable for free because the per-weight `FeeRate` primitive
 (`shekyl-oxide` rpc `calculate_fee_from_weight`) already exists and §3.8.2 already
 holds the rate. Properties: (a) **self-scaling** with the adaptive fee market
-(`shekyl-economics::burn`, rule 75's "no hard-coded thresholds" model);
+(`shekyl-economics::burn`, rule 175's "no hard-coded thresholds" model);
 (b) **immune to nominal drift** — if SKL appreciates, the per-weight fee falls in
 SKL terms and the threshold falls with it, so the satoshi-in-2009 problem (a
 *nominal* problem) cannot recur; (c) **wallet policy only** — see the consensus
@@ -1559,7 +1559,7 @@ upstream **primitives** (dalek, generators, bulletproofs); its
 transaction/FCMP++/PQC-auth/fee layer (`transaction.rs`, `fcmp.rs`,
 `CTTypeFcmpPlusPlusPqc`, `pqc_auths`, sentinel `encrypted_labels`) is Shekyl's
 own divergence. So `shekyl-tx-builder → shekyl-oxide` is a first-party in-tree
-edge, **not** a `10-shekyl-first.mdc` "depend on the fork" violation — that rule
+edge, **not** a `110-shekyl-first.mdc` "depend on the fork" violation — that rule
 governs the separate `monero-oxide` repo, not this vendored-but-owned copy.
 
 - **Reject a dedicated `shekyl-tx-wire` crate** (the §4-Round-0 alternative):

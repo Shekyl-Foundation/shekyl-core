@@ -16,7 +16,7 @@
 //! [`dial_profile`] holds the only per-connector match for these values.
 //! Adding a connector is one row, and the compiler refuses a connector
 //! without one. Every value is protocol data, the same on every node for
-//! that connector (rule 71); none is an operator setting. The one runtime
+//! that connector (rule 171); none is an operator setting. The one runtime
 //! input is a published retry window, and only a connector whose
 //! [`WindowSource`] is [`WindowSource::Published`] reads it.
 

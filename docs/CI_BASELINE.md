@@ -84,7 +84,7 @@ chaingen-dependent test that exercises tx construction is dead under v3.
 
 The deletion was not a "defer to wallet2 removal" disposition; it is a
 decision to consolidate validation-invariant coverage in Rust (per
-`.cursor/rules/20-rust-vs-cpp-policy.mdc` — tx validation defines a
+`docs/completed/RULE_20_RUST_VS_CPP.md` — tx validation defines a
 cryptographic contract → Rust). Each invariant the deleted tests covered has
 a tracked Rust replacement entry in [`docs/FOLLOWUPS.md`](FOLLOWUPS.md) under
 the V3.x daemon-validation port.

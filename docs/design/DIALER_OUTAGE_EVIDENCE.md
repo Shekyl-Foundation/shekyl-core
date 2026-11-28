@@ -73,11 +73,11 @@ enum StreamEnd { PeerClosed, IoError, SendQueueFull }
   - **the Levin layer:** a rejected handshake, a wrong network or a refused peer list through `refused_by_peer`; a Levin handshake timeout is `Uncertain`;
   - **the dialer and the hub:** `Local` for their own failures (the socket table exhausted, `OpenError::Exhausted`; a session refused; their own close, `DialEnd::local_close()`).
 - **Inbound refusals** never build a `DialFailure`, so the accept-only kinds (`InboundNotAccepted`, `AcceptRateExceeded`) need nothing.
-- **No persisted state changes.** The address file keeps addresses, not seats, so rule 42 is not touched.
+- **No persisted state changes.** The address file keeps addresses, not seats, so rule 142 is not touched.
 
 ## 3. What each connector declares
 
-As data, in a `FailureJudging` declaration on each connector's `DialProfile` row in `shekyl-transport-layer/src/profile.rs`, one `const fn` row per connector (rule 71: data, never control flow):
+As data, in a `FailureJudging` declaration on each connector's `DialProfile` row in `shekyl-transport-layer/src/profile.rs`, one `const fn` row per connector (rule 171: data, never control flow):
 1. **The mapping:** carried by the connector's own stamping into `DialFailure` (§2.2, §3.1, §3.2); the declaration holds nothing extra, so there is one source.
 2. **Its source of path readings** and the longest the judge waits for one (§3.3).
 3. **Its `destination_authenticated` flag:** whether the destination is authenticated, which is the only thing that lets misbehaviour be built (§2.2).

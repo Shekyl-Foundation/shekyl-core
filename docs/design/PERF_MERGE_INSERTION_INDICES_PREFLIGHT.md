@@ -603,7 +603,7 @@ without a named home is the failure mode" discipline.
 
 The unbundling is a deliberate choice: each of the three items is
 its own validation surface (per the discipline recorded in
-`.cursor/rules/19-validation-surface-discipline.mdc`), and bundling
+`.cursor/rules/119-validation-surface-discipline.mdc`), and bundling
 them would conflate three independent reviews. The deferrals are
 discipline-grade rather than open-ended.
 
