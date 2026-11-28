@@ -8,7 +8,10 @@ operand-dependent timing in the vendored `HelioseleneField` on x86_64,
 mechanism open (§2). `CA-3` opened 2026-11-21 by Rick's ruling: no
 registered timing evidence then covered any of Shekyl's post-quantum signers (§3).
 All three signers have since passed their registered runs. CA-3 closed on
-2026-11-25 (§3.1–§3.3).
+2026-11-25 (§3.1–§3.3). `CA-4` was split from CA-2 by Rick's ruling of
+2026-11-22: ML-KEM-768 decapsulates invalid ciphertexts slower than valid
+ones on one Tiger Lake laptop, accepted under `RPC_CHANNEL.md` §4.3's
+bounds (§4).
 
 One row per advisory or audit finding that touches a cryptographic
 dependency or primitive and cannot be closed by a routine lockfile bump. A
@@ -23,6 +26,7 @@ bump's commit is its record.
 | `CA-1` | `crypto-bigint` 0.5.5, RUSTSEC-2026-0387 (timing variability) | **IGNORED BY RULING 2026-10-24** — fix undesigned (§1) |
 | `CA-2` | Operand-dependent timing in the vendored `HelioseleneField` on x86_64, outside BINSEC's model | **OPEN 2026-10-24** — mechanism open (§2) |
 | `CA-3` | No constant-time evidence for post-quantum signing: FN-DSA (receipt countersignature), ML-DSA-65 (transactions), SLH-DSA-192s (messages) | **CLOSED 2026-11-25**. FN-DSA (§3.1) and SLH-DSA (§3.3) passed their registered runs. Post-fork ML-DSA-65 passed on the floor (pair 3.57, delta10 657 ns) and the physical Windows desktop (pair 3.33, delta10 139 ns), meeting the final signing criterion (§3.2). |
+| `CA-4` | ML-KEM-768 decapsulation: invalid ciphertexts slower than valid ones on one Tiger Lake laptop (about 36 ns, under 0.06 %); flat on the floor device and on an i9-13900K desktop | **ACCEPTED** by rulings of 2026-10-25 and 2026-11-21 under `RPC_CHANNEL.md` §4.3's bounds; cause unexplained (§4) |
 
 ## 1. `CA-1` — crypto-bigint 0.5.5, RUSTSEC-2026-0387
 
@@ -399,7 +403,7 @@ vendored crate or upstream and re-measured flat with this harness on the
 direct path on both x86_64 hosts, with a note in the wallet's threat model
 for the release that predates it.
 
-### 2.1 Localisation, and ML-KEM decapsulation's validity gap (registered 2026-11-21)
+### 2.1 Localisation (registered 2026-11-21)
 
 The [original registration](../formal/checkct/results/2026-11-21/ca2-localisation-registration.md)
 tests the inlined halves and sparse Montgomery `Field25519` rows.
@@ -411,43 +415,8 @@ Montgomery-sparse square 3.16 and mul 1.18. The nulls and positive
 controls met their lines. These results do not localise the previously
 observed field timing effect, and CA-2 remains open.
 
-The same registration covers an observation from RT-P4 that belongs here.
-On the laptop, invalid ML-KEM-768 ciphertexts decapsulate slower than
-valid ones:
-- `valid-vs-invalid` 45.41, about 36 ns;
-- `fixed-vs-bitflip` 10.98;
-- the gap roughly doubled between runs of identical code.
-
-The maintainer has accepted it under `RPC_CHANNEL.md` §4.3's bounds
-(2026-10-25, reaffirmed 2026-11-21). The source holds no branch on
-validity:
-- `fips203` 0.5.0 computes `J(z‖c)` unconditionally (`ml_kem.rs:128`);
-- it selects the key with `conditional_assign` over `subtle`'s `ct_ne`
-  (`:144`).
-
-The hypothesis to test is this core's low-activity effect: a valid
-ciphertext's compare folds equal bytes. The registration times the compare
-alone (`ct_ne 1088` rows), and RT-P4's validity comparisons on other
-silicon and under DOITM, a pinned clock and turbostat. It predicts no gap
-on the floor device. The isolated desktop `ct_ne 1088` rows were
-flat at 1.42 and 1.99 with 100,000 batches per class, reduced to fit
-memory. The harness now keeps those rows on a windowed schedule: a window
-is built, then timed, with a cache pad written between the two, so the
-registered count fits. This figure is the run made before that. The full
-RT-P4 desktop run used one million samples per comparison.
-
-**Floor cross-check (2026-11-25).** The existing [RT-P4 fips203 0.5.0
-floor capture](../benchmarks/rt_p4_mlkem_decaps_timing_20261121_message.md#the-floor-device--pass)
-records `valid-vs-invalid` at 2.26 and `fixed-vs-bitflip` at 1.66.
-The nulls were 2.29 and 1.82, and the planted control was 1331.37.
-Both validity rows are flat under the registered CA-2 thresholds, as
-predicted for the Cortex-A72. This satisfies the floor cross-check.
-**Desktop cross-check (2026-11-25).** The physical i9-13900K
-MSVC build read 1.53 on `valid-vs-invalid` and 2.96 on
-`fixed-vs-bitflip`, with nulls 1.91 and 1.55 and positive control
-409.94. Both comparisons were flat. The desktop did not reproduce
-the Tiger Lake laptop's gap. Its cause remains unresolved. See the
-[desktop RT-P4 record](../formal/checkct/results/2026-11-25/ca2-desktop-rt-p4.md).
+The ML-KEM-768 validity gap this registration also covered is its own row
+since 2026-11-22: `CA-4` (§4).
 
 ## 3. `CA-3` — no constant-time evidence for post-quantum signing
 
@@ -897,3 +866,65 @@ message.
    1.27 and was not detected. At this signature's cost, the registered run
    needs a sample count and control size chosen together, and on the floor
    device each thousand samples is over an hour per comparison.
+
+## 4. `CA-4` — ML-KEM-768 decapsulation: valid versus invalid ciphertexts on one Tiger Lake laptop
+
+**Opened 2026-11-22 by Rick's ruling**, which moved this out of `CA-2`'s
+§2.1 into its own row. Owner: the crypto-audit lane.
+
+**Status: ACCEPTED**, by Rick's rulings of 2026-10-25 and 2026-11-21,
+under [`RPC_CHANNEL.md`](RPC_CHANNEL.md) §4.3's bounds:
+- only a bundle holder reaches decapsulation, because mac1 is checked
+  before the static key is used;
+- the handshake budget caps the rate;
+- the key is hybrid, so the ML-KEM-768 key alone breaks only the
+  post-quantum half.
+
+**The finding.** RT-P4's harness, on Rick's Tiger Lake laptop (Core
+i9-11950H, Windows, MSVC), reads invalid ML-KEM-768 ciphertexts as
+decapsulating slower than valid ones. The gap roughly doubled between
+runs of identical decapsulation code: about 16 ns on 2026-10-23
+([record](../benchmarks/rt_p4_mlkem_decaps_timing_20261023.md)), and about
+36 ns at `d4917e9f79` on 2026-11-21
+([record](../benchmarks/rt_p4_mlkem_decaps_timing_20261121_message.md)),
+under 0.06 % of a decapsulation. The 2026-11-21 figure is the accepted one.
+
+| Host | `valid-vs-invalid` | `fixed-vs-bitflip` | Record |
+| --- | --- | --- | --- |
+| Tiger Lake laptop (i9-11950H) | **45.41** (35.6 ns) | **10.98** (10.3 ns) | [RT-P4, 2026-11-21](../benchmarks/rt_p4_mlkem_decaps_timing_20261121_message.md) |
+| Floor device (Pi 4, Cortex-A72) | 2.26 | 1.66 | [RT-P4 floor](../benchmarks/rt_p4_mlkem_decaps_timing_20261121_message.md#the-floor-device--pass) (nulls 2.29 and 1.82, control 1331.37) |
+| Desktop (i9-13900K, Windows, MSVC) | 1.53 | 2.96 | [desktop RT-P4](../formal/checkct/results/2026-11-25/ca2-desktop-rt-p4.md) (nulls 1.91 and 1.55, control 409.94) |
+
+The figures are `|t|`; RT-P4 reads above 10 as a crossing and below 4.5
+as flat.
+
+**The compare alone.** `ct_ne` over 1,088 bytes, equal against random and
+equal against one bit flipped (the `ct_ne 1088` rows of
+`docs/formal/checkct/dynamic/`), is flat on the desktop at 1.42 and 1.99,
+with 100,000 batches per class
+([capture](../formal/checkct/results/2026-11-25/ca2-desktop-compare-1088.txt)).
+It has not been timed on Tiger Lake.
+
+**The source.** There is no branch on validity. `fips203` 0.5.0 computes
+`J(z‖c)` unconditionally (`ml_kem.rs:128`) and selects the key with
+`conditional_assign` over `subtle`'s `ct_ne` (`ml_kem.rs:144`).
+
+**The cause.** Unexplained. The hypothesis that was registered (a
+valid ciphertext's compare folds equal bytes, and this core runs
+low-activity operands in fewer cycles) is untested on the machine that
+shows the gap. The desktop's flat compare does not test it there.
+
+**Shared with `CA-2`.** Neither row has shown up on the floor device or on
+the desktop. `CA-4` has shown up only on the Tiger Lake laptop. `CA-2`
+has shown up on a Tiger Lake workstation and on a fleet VM whose physical
+CPU is not recorded (QEMU's generic model). The
+before-measurement of the `CA-1`/`CA-2` Round 0 runs RT-P4's
+two validity comparisons in the same session as `CA-2`'s direct rows, on
+a Tiger Lake host, and is the next observation of this row.
+
+**Reopen when any of:**
+1. the gap appears on other silicon;
+2. it grows past the accepted figure (`valid-vs-invalid` about 36 ns, `|t|`
+   45.41, on the laptop);
+3. `RPC_CHANNEL.md` §4.3's bounds change, mac1 or the handshake budget
+   among them.
