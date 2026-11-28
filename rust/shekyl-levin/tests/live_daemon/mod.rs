@@ -76,6 +76,10 @@ impl Daemon {
             "regtest",
             "--tor",
             "off",
+            // The default file is the machine's (`/etc/shekyl`); a host
+            // that runs a regtest node keeps its settings there.
+            "--config-file",
+            "none",
             "--dev-difficulty",
             "1",
             "--clearnet-listen",

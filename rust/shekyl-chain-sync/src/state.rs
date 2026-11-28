@@ -39,7 +39,7 @@ pub enum SyncState {
 }
 
 impl SyncState {
-    /// The RPC `sync` parameter under `mine.not_synced`.
+    /// The RPC `sync` parameter under `mine.syncing`.
     ///
     /// The spelling is the contract. The work and frontier payloads stay
     /// off the wire.

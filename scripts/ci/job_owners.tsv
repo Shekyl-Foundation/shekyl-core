@@ -26,6 +26,7 @@ scripts/ci/check_estate_manifest.py	grep-gates:grep-gates
 scripts/ci/check_fips204_branch_counts.py	nightly:fips204-branch-count,nightly:report-red
 scripts/ci/check_gui_lock_shared.py	gui-drift:gui-pin,gui-drift:gui-pin-nightly
 scripts/ci/check_owner_socket_launchers.py	grep-gates:grep-gates
+scripts/ci/check_launcher_config_file.py	grep-gates:grep-gates
 scripts/ci/check_bench_not_a_dependency.py	docs-gates:check-doc-links
 scripts/ci/check_binary_hardening.sh	build:build-macos,build:build-ubuntu,build:build-windows-msvc,depends:build-cross
 scripts/ci/check_block_rule_corrupt_sites.py	docs-gates:check-doc-links
