@@ -403,4 +403,55 @@ already predate it. That timing is Rick's call (§9).
 
 ## 9. Questions for Rick
 
-*Pending the measurements.*
+The measurements still owed before these can be answered on numbers:
+- the laptop baseline (§3);
+- each surviving shape's direct rows on that host;
+- the field and one-proof costs on the floor device and x86_64.
+
+They are posed now so the reading can be argued while the measurements
+run.
+
+1. **Which representation for `HelioseleneField`?**
+   - The problem: `CA-2` closes only on the code side, and both
+     prototypes are bit-identical to the current field down to the
+     proof bytes. They differ in what audited code they replace and in
+     what they add to the dependency graph.
+   - (a) puts the field on an unreleased serai crate and crypto-bigint
+     0.7, whose last audit predates 0.7's divergence.
+   - (d) puts it on fiat-crypto's generated code, proved correct in Coq,
+     with no new dependency.
+   - (b) is the same representation as (d), hand-written, and is not
+     prototyped.
+   - (c) blinding costs at least one extra multiplication per
+     multiplication, and its reach is unclear.
+   - Option: none of them, until the baseline and the direct rows say
+     whether a representation change is flat at all.
+   - Which, if any, should go to a fork PR once the measurements are in?
+2. **What closes `CA-1` beyond the field?** `Field25519` and
+   `ciphersuite` keep crypto-bigint 0.5 in every lock until one of:
+   - serai releases `dalek-ff-group` and `ciphersuite` on 0.7;
+   - Shekyl pins serai `next` by revision, with the API migration of §6.
+     That is a consensus-boundary PR of its own.
+   - A third route: `Field25519` on fiat-crypto as well. This one is not
+     examined here.
+   - Is the ignore kept until a serai release, or is the pin built?
+3. **Upstream.** monero-oxide's Contributing.md rule 1 bars contributions
+   written with an LLM agent, so what can go upstream is a notice with
+   links, as in October.
+   - Should the notice on monero-oxide#210 offer (d)'s shape (fiat-crypto
+     Montgomery for this prime) as a finding, once it is measured?
+4. **The threat-model note (§8).** It lands with the fix's release by
+   `CA-2`'s criterion. Alpha releases already predate the fix. Does it
+   land now?
+5. **The order against the resync.** DRS-X proposes resyncing the fork
+   to upstream's 2026-11-26 commits. That changes the prover's divisor
+   path, which the one-proof timing measures, and the curve code a port
+   touches.
+   - Does the resync go first?
+   - Does a field port wait for it, or go into the same fork round?
+
+One check §2's threat frame rests on is not made yet: whether the shipped
+binaries' prover inlines `HelioseleneField` mul and square without a call
+boundary on each target. The harness's direct path stands in for it. A
+disassembly of the release binaries settles it, and it goes into this
+document before the questions are ruled.
