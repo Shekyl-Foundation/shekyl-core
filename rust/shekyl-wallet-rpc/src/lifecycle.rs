@@ -636,7 +636,7 @@ async fn wrap_and_start_tasks(
     tor_file: &TorFile,
 ) -> Result<(SharedEngine, OpenTasks), WalletRpcError> {
     let (shared, cadence) = engine.into_shared(daemon, tor_file);
-    let pscan = match StakeFacade::start_pscan_if_staker(shared.clone()).await {
+    let pscan = match StakeFacade::start_pscan_if_staker(shared.clone(), daemon).await {
         Ok(handle) => handle,
         Err(e) => {
             // Log the engine error. A stale outer version names the seal path
@@ -888,6 +888,7 @@ fn first_stake_rpc_error(error: shekyl_engine_core::FirstStakeError) -> WalletRp
     use shekyl_engine_core::FirstStakeError as E;
     match error {
         E::BondInFlight => WalletRpcError::StakeInFlight,
+        E::EndedStakeReturning => WalletRpcError::StakeFundsReturning,
         E::AlreadyStaked => WalletRpcError::AlreadyStaked,
         E::Funding(detail) => WalletRpcError::StakeNotReady { detail },
         // Neither -29500 ("fund and retry" — funding more worsens
@@ -1162,7 +1163,7 @@ async fn reopen_with_first_stake_intent(
     // exact state the `stake` entry's `has_pscan` check routes back through
     // this reopen, so a retry re-attempts the scan instead of spinning dark.
     let (shared, cadence) = engine.into_shared(&endpoint, &tor_file);
-    match Engine::start_pscan(shared.clone()).await {
+    match Engine::start_pscan(shared.clone(), &endpoint).await {
         Ok(handle) => {
             // The scan is the fail-closed one on this path (above); serving is
             // best-effort here because a serving failure must not block the
@@ -1235,7 +1236,7 @@ async fn restart_tasks(
     tor_file: &TorFile,
 ) -> OpenTasks {
     let cadence = Engine::start_cadence(shared, daemon, tor_file);
-    let pscan = match StakeFacade::start_pscan_if_staker(shared.clone()).await {
+    let pscan = match StakeFacade::start_pscan_if_staker(shared.clone(), daemon).await {
         Ok(handle) => handle,
         Err(e) => {
             tracing::warn!(

@@ -82,8 +82,9 @@ pub use payment_request::{
     PaymentRequestState, ReceiveAttribution,
 };
 pub use pending_post_block::{
-    PendingBondPost, PendingDrain, PendingEmissionClaim, PendingPostBlock, PendingPostState,
-    PendingRelease, PENDING_POST_VERSION,
+    DrainedEndedPlan, EndedPlan, PendingBondPlan, PendingBondPost, PendingDrain,
+    PendingEmissionClaim, PendingPostBlock, PendingPostState, PendingRelease, PlanEnding, PlanWait,
+    PlannedPosture, SignAdmission, StakeStage, WaitingStake, Withdrawal, PENDING_POST_VERSION,
 };
 pub use safety_constants::{
     ReorgDepthBelowLockWindow, ReorgDepthOverride, WalletSafetyConstants, MIN_REORG_DEPTH,

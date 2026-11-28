@@ -33,7 +33,7 @@
 use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
-use shekyl_types::{BlockCount, BlockHeight, ChainCount, GlobalOutputIndex, PCanonicalId, PSlot};
+use shekyl_types::{BlockHeight, ChainCount, GlobalOutputIndex, PCanonicalId, PSlot};
 
 use crate::error::WalletLedgerError;
 
@@ -41,6 +41,12 @@ mod outcomes;
 pub use outcomes::{
     end_date, end_date_disposition, every_reserved_spent, record_was_sent, EndDateDisposition,
     EndedRecord, EndedRelease, LiveFunding, OutcomeKind, RecordKind, SealedRecord, StakingOutcome,
+};
+
+mod plan;
+pub use plan::{
+    DrainedEndedPlan, EndedPlan, PendingBondPlan, PlanEnding, PlanWait, PlannedPosture,
+    SignAdmission, StakeStage, WaitingStake, Withdrawal,
 };
 
 /// Schema version of the durable pending-post block. **v13** gives every
@@ -55,8 +61,8 @@ pub use outcomes::{
 /// beside a later ending of the same pair until it is acknowledged.
 /// Pre-genesis: refuse, don't
 /// migrate. **v12** retypes
-/// [`PendingBondPost::bond_post_offset_blocks`] from bare `u64` to
-/// [`BlockCount`] (height-semantics Phase 2e, C4; postcard bytes of the
+/// `PendingBondPost::bond_post_offset_blocks` (deleted in v15) from bare `u64` to
+/// [`BlockCount`](shekyl_types::BlockCount) (height-semantics Phase 2e, C4; postcard bytes of the
 /// transparent `u64` are identical; the schema type-name change still
 /// bumps per rule 142). Pre-genesis: refuse, don't migrate. **v11** retypes the
 /// dispatch-clock stamp fields (`anchor_t0`, `Dispatched::at`) from
@@ -110,7 +116,20 @@ pub use outcomes::{
 /// (rule 15).
 /// **v14** appends [`TerminalCause::ConsensusRule`] with its row (the flip,
 /// 2026-10-29).
-pub const PENDING_POST_VERSION: u32 = 14;
+/// **v15** signs the stake at its due block (`ARCHIVAL_BOND_POST_DELAY.md`
+/// BD-Q2, BD-Q3, ruled 2026-10-16; how a plan ends, ruled 2026-11-26): the
+/// request seals a [`PendingBondPlan`] (posture, draw, request count,
+/// reservation, wait reason) and no bytes; a plan that ends without a bond
+/// becomes an [`EndedPlan`] until its persona's funding is drained;
+/// [`PendingBondPost`] loses `bond_post_offset_blocks` and `anchor_t0` (the
+/// due is the plan's, recomputed from the funding) and gains `posture` and
+/// `wait` (why a post never sent could not be signed again);
+/// [`OutcomeKind`] gains `Withdrawn`, `Unbondable` and `WaitedOut`.
+/// **v16** puts the same wait reason on a post never sent
+/// ([`PendingBondPost::wait`]), so a blocked re-sign shows it. A file
+/// sealed at v15 has no such field and is refused.
+/// Pre-genesis: refuse, don't migrate.
+pub const PENDING_POST_VERSION: u32 = 16;
 
 /// Dispatch state of a pending bond post. The WI-2 assemble path writes only
 /// [`Self::Pending`]; WI-3's block-timed dispatch driver owns the
@@ -229,14 +248,13 @@ pub enum TerminalCause {
     },
 }
 
-/// One durable pending bond post: the assembled, signed, wire-encoded
-/// transaction bytes bound to their persona, the entry-seam placement they
-/// were drawn with, and the funding reservation they hold.
+/// One durable pending bond post: the bytes signed at the plan's due block,
+/// bound to their persona, and the funding reservation they hold.
 ///
-/// Every field is `P`-side behavioral history (persona, plan offsets, funding
-/// placement) — the same class as the pscan state's persona-history rows — so
-/// the type carries the redacted-`Debug` discipline (contents *and* count at
-/// the block level).
+/// Every field is `P`-side behavioral history (persona, funding placement) —
+/// the same class as the pscan state's persona-history rows — so the type
+/// carries the redacted-`Debug` discipline (contents *and* count at the
+/// block level).
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq, postcard_schema::Schema)]
 pub struct PendingBondPost {
     /// The owning persona's slot ordinal.
@@ -248,29 +266,16 @@ pub struct PendingBondPost {
     /// The fully-assembled, signed, wire-encoded transaction bytes — the
     /// value itself, per pin P-2: retries re-send these stored bytes.
     pub tx_bytes: Vec<u8>,
-    /// Blocks from `anchor_t0` to the bond-post broadcast — a span
-    /// ([`BlockCount`]), on the same clock as `anchor_t0`.
-    ///
-    /// ```
-    /// fn needs_span(offset: shekyl_types::BlockCount) {}
-    /// fn check(post: &shekyl_engine_state::PendingBondPost) {
-    ///     needs_span(post.bond_post_offset_blocks);
-    /// }
-    /// ```
-    ///
-    /// ```compile_fail
-    /// // HEIGHT_SEMANTICS.md C9: the due-count offset is a span, not an ordinal.
-    /// fn needs_height(_: shekyl_types::BlockHeight) {}
-    /// fn check(post: &shekyl_engine_state::PendingBondPost) {
-    ///     needs_height(post.bond_post_offset_blocks);
-    /// }
-    /// ```
-    pub bond_post_offset_blocks: BlockCount,
-    /// Claimed chain **count** at assemble time — the private intent
-    /// anchor `t0` the plan's offsets are relative to. WI-3's due-check
-    /// is pure: `due = anchor_t0 + bond_post_offset_blocks` on this
-    /// count clock (not an ordinal).
-    pub anchor_t0: ChainCount,
+    /// The obligation the bytes post, kept so a post never sent can be
+    /// signed again at a canonical reference (BD-Q3 Rule 1).
+    pub posture: PlannedPosture,
+    /// The plan's due count when it was signed. A post never sent whose
+    /// re-sign stays blocked for a limited reason past the plan's maximum
+    /// wait from this count ends as its plan would have.
+    pub due: ChainCount,
+    /// The highest block the funding it spends sits in (see
+    /// [`PendingBondPlan::funded_through`]).
+    pub funded_through: BlockHeight,
     /// Global output indexes of the funding outputs this post spends — the
     /// reservation set: funding selection excludes these while the post is
     /// live (`ARCHIVAL_BOND_WI2_ASSEMBLY.md` §3.2 rule 1).
@@ -284,6 +289,10 @@ pub struct PendingBondPost {
     /// is held to its end date regardless (BD-Q3 Rule 2); this only stops
     /// further sends and names the outcome.
     pub terminal: Option<TerminalCause>,
+    /// Why the last re-sign was blocked, when no submit has been attempted.
+    /// A sent post carries none: it is no longer waiting to be signed.
+    /// Cleared when the post is signed again.
+    pub wait: Option<PlanWait>,
 }
 
 impl std::fmt::Debug for PendingBondPost {
@@ -544,6 +553,13 @@ pub struct PendingPostBlock {
     /// unpersisted counter would reset to zero on each load and never refuse
     /// anything.
     generation: u64,
+    /// The live planned stakes, not yet signed (v15). A persona holds at
+    /// most one plan or one post, never both: signing replaces the plan
+    /// with the post in one mutation.
+    plans: Vec<PendingBondPlan>,
+    /// Plans that ended without a bond and whose persona's funding is still
+    /// being drained (v15). Reserves nothing.
+    ended_plans: Vec<EndedPlan>,
     /// The live pending posts. At most one per persona at genesis
     /// (JoinMarket-only; the assemble path refuses a second — `ARCHIVAL_BOND_WI2_ASSEMBLY.md`
     /// §3.5 "one live post per persona").
@@ -577,6 +593,8 @@ impl std::fmt::Debug for PendingPostBlock {
             // strictly more telling than the in-flight count the doc names.
             // The field is kept so a reader can see the guard exists.
             .field("generation", &"<redacted release count>")
+            .field("plans", &"<redacted pending-plans>")
+            .field("ended_plans", &"<redacted ended-plans>")
             .field("posts", &"<redacted pending-posts>")
             .field("claims", &"<redacted pending-claims>")
             .field("drains", &"<redacted pending-drains>")
@@ -598,6 +616,8 @@ impl PendingPostBlock {
         Self {
             version: PENDING_POST_VERSION,
             generation: 0,
+            plans: Vec::new(),
+            ended_plans: Vec::new(),
             posts: Vec::new(),
             claims: Vec::new(),
             drains: Vec::new(),
@@ -611,15 +631,41 @@ impl PendingPostBlock {
         self.version
     }
 
-    /// The live pending posts.
+    /// The live pending posts (signed at due).
     pub fn posts(&self) -> &[PendingBondPost] {
         &self.posts
     }
 
-    /// Whether `persona` already has a live pending post — the
-    /// `PendingPostExists` refusal predicate.
+    /// The live planned stakes (not yet signed).
+    pub fn plans(&self) -> &[PendingBondPlan] {
+        &self.plans
+    }
+
+    /// The plans that ended without a bond and still owe their persona's
+    /// drain.
+    pub fn ended_plans(&self) -> &[EndedPlan] {
+        &self.ended_plans
+    }
+
+    /// The slots of every stake in flight, of any stage: the open-time
+    /// phantom reconcile keeps these slots, because each one's persona must
+    /// stay derivable (a plan to sign, a post to settle, a drain to sign).
+    pub fn stake_slots(&self) -> BTreeSet<PSlot> {
+        self.stake_stages().map(StakeStage::p_slot).collect()
+    }
+
+    /// Whether `persona` already has a live stake record of any stage — the
+    /// `PendingPostExists` refusal predicate. A persona plans once: a plan,
+    /// its post and its ending are the same persona's one stake.
     pub fn has_live_post_for(&self, persona: &PCanonicalId) -> bool {
-        self.posts.iter().any(|p| &p.persona == persona)
+        self.stake_stage(persona).is_some()
+    }
+
+    /// Whether `persona`'s plan ended and its drain is owed: its drain sweeps
+    /// to zero with no exit reserve, because it never bonded and so owes no
+    /// exit.
+    pub fn has_ended_plan_for(&self, persona: &PCanonicalId) -> bool {
+        self.ended_plans.iter().any(|p| &p.persona == persona)
     }
 
     /// The live pending emission claims.
@@ -660,16 +706,21 @@ impl PendingPostBlock {
         self.releases.iter().any(|u| &u.persona == persona)
     }
 
-    /// Every funding gindex reserved by a live post, a live claim's fee
+    /// Every funding gindex reserved by a live plan, a live post, a live claim's fee
     /// sweep, a live drain's input set, **or a live `Release` exit's input
     /// set** — the exclusion set for funding selection
     /// (`ARCHIVAL_BOND_WI2_ASSEMBLY.md` §3.2 rule 1): no bond sweep, claim
     /// fee sweep, drain, or exit may select an output an in-flight tx already
     /// spends.
     pub fn reserved_gindexes(&self) -> std::collections::BTreeSet<GlobalOutputIndex> {
-        self.posts
+        self.plans
             .iter()
             .flat_map(|p| p.funding_gindexes.iter().copied())
+            .chain(
+                self.posts
+                    .iter()
+                    .flat_map(|p| p.funding_gindexes.iter().copied()),
+            )
             .chain(
                 self.claims
                     .iter()
@@ -1204,11 +1255,13 @@ mod tests {
 
     fn post(persona_byte: u8, gindexes: &[u64]) -> PendingBondPost {
         PendingBondPost {
+            wait: None,
             p_slot: PSlot::from_raw(0),
             persona: PCanonicalId::from_bytes([persona_byte; 32]),
             tx_bytes: vec![0xAB; 16],
-            bond_post_offset_blocks: BlockCount::from_raw(12),
-            anchor_t0: ChainCount::from_raw(1_000),
+            posture: PlannedPosture::SupportCompleteTree,
+            due: ChainCount::from_raw(1_000),
+            funded_through: BlockHeight::from_raw(1_000),
             funding_gindexes: gindexes
                 .iter()
                 .copied()
@@ -1663,6 +1716,8 @@ mod tests {
         let wrong = PendingPostBlock {
             version: PENDING_POST_VERSION + 1,
             generation: 0,
+            plans: Vec::new(),
+            ended_plans: Vec::new(),
             posts: Vec::new(),
             claims: Vec::new(),
             drains: Vec::new(),
@@ -1712,6 +1767,8 @@ mod tests {
         let v1 = PendingPostBlock {
             version: 1,
             generation: 0,
+            plans: Vec::new(),
+            ended_plans: Vec::new(),
             posts: Vec::new(),
             claims: Vec::new(),
             drains: Vec::new(),

@@ -28,8 +28,9 @@
 //! its one publish; this driver republishes on a running Tor (§4.4,
 //! Service), so it holds the witness and lends it to each publish.
 
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use shekyl_timing_engine::{Clock, MonotonicClock};
 use shekyl_tor_control_client::awake;
 use shekyl_tor_control_client::control::ControlError;
 use shekyl_tor_control_client::directory_cache::GuardState;
@@ -136,6 +137,8 @@ impl Drive {
         };
         let actor = asker.actor().clone();
         self.answer_later(number, async move {
+            let clock = MonotonicClock::new();
+            let sent = clock.now();
             let pinned = awake::timeout(
                 REPLY_BOUND,
                 manager.pin(&actor, REPLY_BOUND, SystemTime::now()),
@@ -147,6 +150,7 @@ impl Drive {
             Answer::Guards {
                 manager: Box::new(manager),
                 outcome,
+                took: Duration::from_nanos(clock.now().get().saturating_sub(sent.get())),
             }
         });
         Ok(None)
@@ -156,12 +160,20 @@ impl Drive {
     /// on. The core folds the outcome only when `number` is in flight; a
     /// stale answer's witness names a Tor the core gave up on, and is
     /// dropped.
+    ///
+    /// Every answer, a stale one included, says how long the pin took. The
+    /// floor device's soak counts each pin over 10 s (`TOR_SUPERVISOR.md`
+    /// `TSR-M16`; Rick, 2026-11-28): the worst of 20 passes on the floor was
+    /// 8.9 s against the 30 s reply bound, eleven times the typical pass.
     pub(super) fn guards_answered(
         &mut self,
         number: u64,
         manager: VanguardManager,
         outcome: Result<VanguardsActive, VanguardsAbort>,
+        took: Duration,
     ) -> Vec<Input> {
+        let took_ms = u64::try_from(took.as_millis()).unwrap_or(u64::MAX);
+        tracing::info!(target: "tor", took_ms, "this onion's guard pin answered");
         let next_expiry = manager.next_expiry();
         let warning = manager.warning();
         let waiting = match self.guard_slot() {
@@ -261,6 +273,8 @@ impl Drive {
 
 #[cfg(all(test, unix))]
 mod tests {
+    use std::time::Duration;
+
     use shekyl_tor_control_client::binary::VerifiedTorBinary;
     use shekyl_tor_control_client::control::ControlError;
     use shekyl_tor_control_client::supervisor::{Action, Core, Input};
@@ -321,9 +335,11 @@ mod tests {
     /// home.** The manager's state moved with the pin; dropping it with a stale
     /// answer would make the next pin draw a new set, the restart-driven
     /// rotation the manager exists to prevent. A pin asked while the manager
-    /// was out waits for it, off the loop. Red edit: return before
+    /// was out waits for it, off the loop. The stale answer still says how
+    /// long the pin took, since a pin past the bound is the slow one the
+    /// floor's soak counts (`TSR-M16`). Red edits: return before
     /// `guards_answered` puts the manager home when the number is not in
-    /// flight.
+    /// flight; or drop its `took_ms` line.
     #[test]
     fn a_pin_answer_the_core_gave_up_on_brings_the_manager_home() {
         on_the_loops_runtime(|dir| async move {
@@ -342,7 +358,19 @@ mod tests {
                 None,
                 "the first pin is not in flight"
             );
-            let folded = drive.guards_answered(5, manager, Err(VanguardsAbort::ActorGone));
+            let mut folded = Vec::new();
+            let log = crate::logged(|| {
+                folded = drive.guards_answered(
+                    5,
+                    manager,
+                    Err(VanguardsAbort::ActorGone),
+                    Duration::from_millis(12_345),
+                );
+            });
+            assert!(
+                log.contains("took_ms=12345"),
+                "a stale answer still says how long the pin took: {log}"
+            );
             assert!(
                 folded.is_empty(),
                 "a stale answer folds nothing: {folded:?}"
@@ -378,6 +406,7 @@ mod tests {
                 Err(VanguardsAbort::Failed(VanguardsError::PinsRefused {
                     status: 552,
                 })),
+                Duration::ZERO,
             );
             assert!(
                 folded

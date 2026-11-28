@@ -1,0 +1,1 @@
+- **Each guard pin of a persistent onion now logs how long it took** (`took_ms` on the `tor` target, in the awake time the 30 s reply bound runs on; `TOR_SUPERVISOR.md` `TSR-M16`). The line appears even for an answer that came after the supervisor gave up on it. On the floor device the worst of 20 measured pins took 8.9 s, and the seven-day soak counts any over 10 s.

@@ -3375,3 +3375,43 @@ decimals stay until EUP-5 rules the size. The loop is correct for any mask.
 `--stage2` prints the step in basis points of that year's mean ordinary
 fee. Year 1 on the baseline is 0.0084 bp. Where the fee prints 0.0001 SKL
 the step is 169.4915 bp, above the 50 bp bar FL-V12 uses.
+
+### The rate's minimum of one atomic unit per weight unit — OPEN, owed to EUP-5
+
+This is a second grain, separate from the lattice above. The lattice is a
+step of 1,000 atomic on the total fee. This one is on the rate:
+`relay_fee_floor` (`rust/shekyl-economics/src/fee/relay.rs`) divides
+`R·C·w_ref/M²` down to whole atomic units per weight unit and floors the
+result at 1 (`.max(1)`).
+
+- **The truncation** is FL-V12's quantizer. It is a requirement on the
+  floor-basis round, EUP-5 G, which must state the rate's resolution.
+- **The floor of 1** is this item. The code gives a reason for a non-zero
+  floor ("a zero floor admits everything, and a failed block reward is not
+  an admission"). Neither the code nor any record gives a reason for its
+  size: §11.6 kept `max(1)` as inherited. One atomic unit per weight unit
+  is the smallest non-zero value the unit can hold.
+
+**What it does late in the chain.** `R` and `C` decay (FL-V11), so `F`
+comes down to the floor. On the nightly slice (A-honest, gross, N = 90,
+seed 1;
+[`ECONOMICS_SIM_PRODUCTION_REBASE.md`](ECONOMICS_SIM_PRODUCTION_REBASE.md)
+§5.38.1), the Economy rung sits at 1 to 3 atomic units per weight unit from
+about year 100. At year 135 it is 1, and the Standard rung is 4. From there
+the fee no longer follows `C`: holding the stakers' share at 15 % lowers `C`
+by 15 % and leaves the year-135 fee where it was. In the tail era, the floor
+acts as a fixed fee floor in atomic units per weight unit, independent of the
+reward, the median and `C`.
+
+**What depends on it.** The tail criterion
+([`ECONOMY_UMBRELLA_PLAN.md`](ECONOMY_UMBRELLA_PLAN.md) §3.2, 3, and §4) holds
+the tail at maturity to at least `k` times the per-block fee revenue: the
+miner's net, the 95th-percentile block, `k` = 1 provisional. At maturity that
+revenue is the floor's, so the criterion's right-hand side is set by
+`max(1)`, and so is the ratio of the asymptote read off it. §3.2, 4 rules that
+fees are decoupled from the reward and gives the basis to FL-R13's round in
+EUP-5 G. One of that round's arms is a fixed atomic amount per byte, which is
+what the floor already is at the end of the curve.
+
+**The design question for EUP-5:** is the floor of one atomic unit per
+weight unit an intended permanent minimum fee, or an accident of the unit?
