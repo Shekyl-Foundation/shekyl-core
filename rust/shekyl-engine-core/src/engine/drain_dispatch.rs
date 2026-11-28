@@ -353,19 +353,17 @@ where
             .as_ref()
             .map(|s| s.funding_outputs())
             .unwrap_or(&[]);
-        // Exempt from the exit-fee reserve once the persona's terminal `Release`
-        // has confirmed — i.e. it lives in `pending_releases`, the authoritative
-        // "no future Release is owed" signal. `retired_records()` is the WRONG
-        // source here: retirement is funded-gated (`retire_persona` only writes
-        // a retired record once the slot holds no funding), so a just-released
-        // persona is absent from it throughout the very drain-all that would
-        // empty the slot. Reading it would keep the reserve pinned on an
-        // released persona, refusing the sweep to zero (`ReserveBreached`) and
-        // deadlocking the funded-gated retirement — the pool can never fully
-        // drain, so the persona can never retire (DS-4 post-retirement sweep).
-        let retired = pscan_state
-            .as_ref()
-            .is_some_and(|s| s.pending_releases().contains_key(&p_canonical_id));
+        // Exempt from the exit-fee reserve once the persona owes no exit: its
+        // terminal `Release` has confirmed (it lives in `pending_releases`,
+        // the authoritative "no future Release is owed" signal), or its
+        // planned stake ended without a bond (it never bonded). `retired_records()`
+        // is the WRONG source here: retirement is funded-gated (`retire_persona`
+        // only writes a retired record once the slot holds no funding), so a
+        // just-released persona is absent from it throughout the very drain-all
+        // that would empty the slot. Reading it would keep the reserve pinned,
+        // refusing the sweep to zero (`ReserveBreached`) and deadlocking the
+        // funded-gated retirement (DS-4 post-retirement sweep).
+        let retired = basis.owes_no_exit(&p_canonical_id);
         let snapshot_generation = basis.generation();
         let reserved = basis.reserved();
 

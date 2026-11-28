@@ -58,16 +58,17 @@ Nothing in `staking_info` names a record in flight, refused or stuck:
   projected through the transfer queries (`project.rs:197`,
   `queries.rs:547`). Pending records never pass through that journal.
 
-### 1.1 Dependency: the bond-post delay does not decorrelate the funding transfer from the bond — OPEN, posed in the bond lane's Round 0
+### 1.1 Dependency: the bond-post delay does not decorrelate the funding transfer from the bond — RULED in the bond lane's Round 0, built in its slice
 
 Recorded in `docs/FOLLOWUPS.md` as "The bond-post delay does not
 decorrelate the funding transfer from the bond", owned by the bond lane's
 Round 0, [`ARCHIVAL_BOND_POST_DELAY.md`](ARCHIVAL_BOND_POST_DELAY.md)
 (`BD-Q1…BD-Q5`: the observers, the delay's anchor, signing at the due
 time, the window, `MIN_COLD_START_SPACING`). BD-Q1, BD-Q2, BD-Q3 and BD-Q5
-were ruled 2026-10-16 and the window is open; the dependency is blocked on
-that round's implementation slice. Its §6 lists what it passes back to this
-round.
+were ruled 2026-10-16, how a plan ends on 2026-11-26 (its §3.6), and the
+window is open. The implementation slice builds them; its §5 says where,
+and its §6 lists what it passes back to this round. "What the code does"
+below describes the code at this document's ground.
 
 **What the code does.**
 

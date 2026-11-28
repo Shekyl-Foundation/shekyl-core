@@ -7,8 +7,6 @@
 
 use kameo::message::{Context, Message};
 
-use crate::engine::holdings_fill::FilledHoldings;
-use shekyl_archival_bond_builder::{build_join_market_vin, JoinMarketVin};
 use shekyl_archival_retention::PassTranscript;
 use shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridSignature;
 use shekyl_tor_control_wallet::service::OnionIdentity;
@@ -95,6 +93,34 @@ impl Message<ActivatePersona> for StakeEngine {
         self.generation = self.generation.saturating_add(1);
 
         Ok(self.identity_of(target))
+    }
+}
+
+/// Stop the persona at `p_slot` being the active one, if it is: its planned
+/// stake ended without a bond (`ARCHIVAL_BOND_POST_DELAY.md` BD-Q3 as ruled
+/// 2026-11-26), so it must never receive a second funding, and staking again
+/// is a new persona. The persona stays held (its drain is signed with its
+/// keys); only the active slot is cleared, and the generation advances
+/// because the active slot changed (typed contract #2). Idempotent: a slot
+/// that is not active changes nothing.
+pub(crate) struct DeactivateEndedPersona {
+    /// The slot whose plan ended.
+    pub p_slot: PSlot,
+}
+
+impl Message<DeactivateEndedPersona> for StakeEngine {
+    type Reply = Result<(), StakeEngineError>;
+
+    async fn handle(
+        &mut self,
+        msg: DeactivateEndedPersona,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        if self.active == Some(msg.p_slot) {
+            self.active = None;
+            self.generation = self.generation.saturating_add(1);
+        }
+        Ok(())
     }
 }
 
@@ -288,32 +314,22 @@ impl Message<ActivePersonaPaymentDestination> for StakeEngine {
     }
 }
 
-/// Request the StakeEngine to construct a JoinMarket archival bond-post vin
-/// and draw its placement, consuming the persist-before-use typestate
-/// (Bond-PR 2c-2b, S1/S2). Formerly `SignBond`; renamed when SA-2b deleted
-/// on-vin signing — the handler constructs and plans, it signs nothing
-/// (surface-A signing is the assemble path).
+/// Plan a stake at the request (`ARCHIVAL_BOND_POST_DELAY.md` BD-Q2, BD-Q3):
+/// validate the persist-before-use typestate and draw the bond-post delay,
+/// once. Nothing is built or signed: the post is assembled at its due block
+/// by [`AssembleBond`](super::bond::AssembleBond), which never draws.
 ///
 /// Both `handle` and `ticket` must name the same persona slot: the handle
 /// proves the slot is currently held at the generation this message was minted
 /// for; the ticket proves its live-bond record was durably committed before
-/// construction. This structural pairing makes "construct before persist" and
-/// "construct for an unheld persona" unexpressible (typed contracts #1 and #2).
+/// the plan. This structural pairing makes "plan before persist" and "plan
+/// for an unheld persona" unexpressible (typed contracts #1 and #2).
 ///
-/// The entry-gap timing draw runs inside the handler (S4/S5): the OS entropy
-/// source is preflighted via `try_fill_bytes` (fail-loud on source failure —
-/// no silent fallback to a weaker source), then [`super::helpers::draw_entry_gap_guarded`]
+/// The draw runs inside the handler (S4/S5): the OS entropy source is
+/// preflighted via `try_fill_bytes` (fail-loud on source failure — no silent
+/// fallback to a weaker source), then [`super::helpers::draw_entry_gap_guarded`]
 /// draws a run of pairs. An equal pair is drawn again inside the guard. The
 /// handler rejects only when the whole run collided, which is a stuck source.
-///
-/// The `ArchivalPKeys` bundle is borrowed inside the actor and never crosses
-/// the actor boundary (rule 36-secret-locality). `build_join_market_vin` is
-/// called here with **public** key halves only; the reply is a
-/// [`BondPostPlacement`] carrying the constructed `JoinMarketVin` **and** the
-/// bond-post placement offset from this request's entry-gap draw — the caller
-/// receives the placement offset with the bytes it places, so the draw cannot
-/// be lost between construction and scheduling. On-vin signing is gone (SA-2b);
-/// surface-A `pqc_auths` signing happens later in assemble.
 ///
 /// Does **not** advance the activation generation — this path does not change
 /// the active slot or wipe any persona.
@@ -321,92 +337,35 @@ impl Message<ActivePersonaPaymentDestination> for StakeEngine {
 /// # Caller workflow
 ///
 /// ```text
-/// stake.mint_handle(slot)      → handle1
-/// stake.activate_persona(handle1)           (sets active slot; handle1 consumed)
 /// engine.persist_bond_record(slot) → ticket (durable; Engine, not actor)
-/// stake.mint_handle(slot)      → handle2
-/// stake.plan_bond_post(handle2, ticket, holdings) → BondPostPlacement
+/// stake.mint_handle(slot)          → handle
+/// stake.plan_bond_post(handle, ticket) → draw (sealed in the plan)
 /// ```
 pub(crate) struct PlanBondPost {
     /// Operation-scoped capability proving the slot is currently held (typed
     /// contract #2). Must match `ticket.p_slot()`.
     pub handle: PersonaHandle,
     /// Proof that the live-bond record was durably persisted for this slot
-    /// before construction (typed contract #1). Must match `handle.p_slot()`.
+    /// before the plan (typed contract #1). Must match `handle.p_slot()`.
     pub ticket: crate::engine::stake_persist::PersistedBondTicket,
-    /// Holdings to compute `bond_floor` from. Passed to
-    /// [`build_join_market_vin`] inside the actor.
-    pub holdings: FilledHoldings,
-}
-
-/// Reply of [`PlanBondPost`]: the constructed bond vin **and** the block-timed
-/// placement offset derived from the same request's entry-gap draw.
-///
-/// Pairing them in one reply is the seam discipline: the caller that receives
-/// the bytes to place also receives *where to place them* (blocks from its
-/// private intent anchor `t0`), so the placement offset cannot be lost between
-/// construction and scheduling. The offset is relative; the anchor itself never
-/// leaves the caller. The vin carries no on-vin signature (SA-2b).
-#[derive(Debug)]
-#[allow(dead_code)] // 2c-2b: the field readers land with the request path — this is `PlanBondPost`'s reply, not `AssembleBond`'s (that is `AssembledBondPost`).
-pub(crate) struct BondPostPlacement {
-    /// The constructed JoinMarket bond vin, ready for transaction assembly.
-    /// Authorization is the later surface-A `pqc_auths` slot, not an on-vin blob.
-    pub vin: JoinMarketVin,
-    /// Blocks from the private-intent anchor `t0` to the bond-post broadcast —
-    /// the drawn entry-gap spread. (No entry offset: only the bond post is
-    /// chain-attributable, so there is no second event to place.) A
-    /// [`BlockCount`] (height-semantics C4), not an instant.
-    pub bond_post_offset_blocks: BlockCount,
 }
 
 impl Message<PlanBondPost> for StakeEngine {
-    type Reply = Result<BondPostPlacement, StakeEngineError>;
+    type Reply = Result<BlockCount, StakeEngineError>;
 
     async fn handle(
         &mut self,
         msg: PlanBondPost,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        // Steps 1–5 (validate + slot cross-check + entropy preflight + guarded
-        // draw + entry-seam plan + GF-7 hooks) are the shared bond-handler
-        // prologue; see `validate_and_draw_bond_offset`.
-        //
-        // GF-7 SCOPE (`ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md` §4): the jitter that
-        // prologue draws decorrelates the bond-post from `P`'s own observable
-        // funding/entry event (the funding-seam ordering prior) **only** — NOT
-        // from the principal's lifecycle timeline, nor from `P`'s other
-        // broadcasts. That correlation (GATE6 §10.12 GF-7) remains a **genesis
-        // gate**; the measurement pipeline that will quantify it is the
-        // `gf7-hooks` observer seam the prologue emits to
-        // (`ARCHIVAL_BOND_2C_GF7_HOOKS.md`), evaluated in `shekyl-staking-sim`.
-        //
-        // Assembly and submission happen after this handler returns the plan and input.
-        let (handle_slot, bond_post_offset_blocks) =
-            self.validate_and_draw_bond_offset(&msg.handle, msg.ticket.p_slot())?;
-
-        // 6. Borrow the held bundle — slot membership confirmed by step 1.
-        let keys = self
-            .held
-            .get(&handle_slot)
-            .expect("validate_handle confirmed slot is held")
-            .keys();
-
-        // 7. Construct the JoinMarket vin inside the actor (public keys only;
-        //    SA-2b — no on-vin signature). `ArchivalPKeys` is borrowed here and
-        //    never returned to the caller (rule 36-secret-locality): only the
-        //    constructed `JoinMarketVin` (paired with its placement offset)
-        //    crosses the actor boundary.
-        let endpoint = keys.onion_keypair().public_key();
-        let vin = build_join_market_vin(
-            keys.bond_post_keys(),
-            msg.holdings.descriptor().clone(),
-            endpoint,
-        )
-        .map_err(StakeEngineError::BondBuild)?;
-        Ok(BondPostPlacement {
-            vin,
-            bond_post_offset_blocks,
-        })
+        // GF-7 SCOPE (`ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md` §4): the delay
+        // decorrelates the bond post from `P`'s own observable funding event
+        // (BD-Q2: measured from the funding's anchor) **only** — NOT from the
+        // principal's lifecycle timeline, nor from `P`'s other broadcasts.
+        // That correlation (GATE6 §10.12 GF-7) remains a **genesis gate**; the
+        // measurement pipeline is the `gf7-hooks` observer seam the draw
+        // emits to (`ARCHIVAL_BOND_2C_GF7_HOOKS.md`).
+        let handle_slot = self.validate_bond_handle(&msg.handle, msg.ticket.p_slot())?;
+        self.draw_bond_delay(handle_slot)
     }
 }

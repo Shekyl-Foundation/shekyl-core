@@ -380,6 +380,21 @@ impl RetirementWitness {
         )
         .then_some(Self { p_canonical_id })
     }
+
+    /// Build a witness for a persona whose planned stake ended without a
+    /// bond (`ARCHIVAL_BOND_POST_DELAY.md` BD-Q3 as ruled 2026-11-26).
+    /// `drained` is produced only by
+    /// [`PendingPostBlock::drained_plans`](shekyl_engine_state::PendingPostBlock::drained_plans),
+    /// so the value is the predicate: the scan covers the funding block, the
+    /// slot holds no live funding, and no drain is in flight. The persona
+    /// never bonded, so it has no claim window and no `Release` to owe. The
+    /// actor's funded-gate still refuses a slot that gained funding after
+    /// that read.
+    pub(crate) fn from_drained(drained: &shekyl_engine_state::DrainedEndedPlan) -> Self {
+        Self {
+            p_canonical_id: drained.persona(),
+        }
+    }
 }
 
 /// What the witness-gated retire ([`RetireBondedPersona`](crate::engine::stake_engine::retire::RetireBondedPersona)) did. All outcomes are
