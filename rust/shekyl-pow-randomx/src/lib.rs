@@ -166,6 +166,9 @@ mod argon2d;
 mod blake2_generator;
 mod cache;
 pub(crate) mod fpu_rounding;
+// PROTOTYPE: the rounding candidates (b) and (c).
+#[doc(hidden)]
+pub mod fp_proto;
 mod prepared_cache;
 // The seed-epoch *schedule* (`seedheight`, the 2048/64 constants) is
 // consensus arithmetic the validator evaluates, and lives in

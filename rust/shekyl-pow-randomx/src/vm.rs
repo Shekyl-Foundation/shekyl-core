@@ -137,25 +137,48 @@ impl core::ops::IndexMut<usize> for F128 {
     }
 }
 
+// PROTOTYPE: with a `proto-rounding-*` feature the op runs through
+// `fp_proto` under the tracked mode; without one, today's code runs
+// under whatever mode CFROUND wrote into the hardware.
+macro_rules! fp_op {
+    ($op:ident, $a:expr, $b:expr, $mode:expr, $plain:expr) => {{
+        #[cfg(any(feature = "proto-rounding-b", feature = "proto-rounding-c"))]
+        {
+            Self(crate::fp_proto::op(
+                crate::fp_proto::VM_IMPL,
+                crate::fp_proto::Op::$op,
+                $a,
+                $b,
+                $mode,
+            ))
+        }
+        #[cfg(not(any(feature = "proto-rounding-b", feature = "proto-rounding-c")))]
+        {
+            let _ = $mode;
+            $plain
+        }
+    }};
+}
+
 impl F128 {
-    fn add_unrestricted(self, rhs: Self) -> Self {
-        Self([self[0] + rhs[0], self[1] + rhs[1]])
+    fn add_unrestricted(self, rhs: Self, mode: u32) -> Self {
+        fp_op!(Add, self.0, rhs.0, mode, Self([self[0] + rhs[0], self[1] + rhs[1]]))
     }
 
-    fn sub_unrestricted(self, rhs: Self) -> Self {
-        Self([self[0] - rhs[0], self[1] - rhs[1]])
+    fn sub_unrestricted(self, rhs: Self, mode: u32) -> Self {
+        fp_op!(Sub, self.0, rhs.0, mode, Self([self[0] - rhs[0], self[1] - rhs[1]]))
     }
 
-    fn mul_unrestricted(self, rhs: Self) -> Self {
-        Self([self[0] * rhs[0], self[1] * rhs[1]])
+    fn mul_unrestricted(self, rhs: Self, mode: u32) -> Self {
+        fp_op!(Mul, self.0, rhs.0, mode, Self([self[0] * rhs[0], self[1] * rhs[1]]))
     }
 
-    fn div_masked(self, rhs: Self) -> Self {
-        Self([self[0] / rhs[0], self[1] / rhs[1]])
+    fn div_masked(self, rhs: Self, mode: u32) -> Self {
+        fp_op!(Div, self.0, rhs.0, mode, Self([self[0] / rhs[0], self[1] / rhs[1]]))
     }
 
-    fn sqrt_unrestricted(self) -> Self {
-        Self([self[0].sqrt(), self[1].sqrt()])
+    fn sqrt_unrestricted(self, mode: u32) -> Self {
+        fp_op!(Sqrt, self.0, self.0, mode, Self([self[0].sqrt(), self[1].sqrt()]))
     }
 
     fn swap_lanes(self) -> Self {
@@ -168,6 +191,33 @@ impl F128 {
             f64::from_bits(self[0].to_bits() ^ FSCAL_MASK),
             f64::from_bits(self[1].to_bits() ^ FSCAL_MASK),
         ])
+    }
+}
+
+/// PROTOTYPE test hook: panic after a set number of dispatched
+/// instructions, to show where the rounding mode is left on unwind.
+#[cfg(test)]
+pub(crate) mod proto_panic_hook {
+    use std::cell::Cell;
+    thread_local! {
+        pub(crate) static PANIC_AFTER: Cell<u64> = const { Cell::new(u64::MAX) };
+    }
+    /// Counts down; once at zero, panics at the first instruction
+    /// dispatched while the rounding mode is not nearest.
+    pub(crate) fn tick(fprc: u32) {
+        PANIC_AFTER.with(|c| {
+            let n = c.get();
+            if n == 0 {
+                if fprc != 0 {
+                    c.set(u64::MAX);
+                    panic!("proto_panic_hook: planted panic mid-hash, mode {fprc}");
+                }
+                return;
+            }
+            if n != u64::MAX {
+                c.set(n - 1);
+            }
+        });
     }
 }
 
@@ -894,6 +944,7 @@ fn execute_cfround(instr: &Instruction, state: &mut VmState) {
 
     if (isrc & 60) == 0 {
         let mode = (isrc & 3) as u32;
+        #[cfg(not(any(feature = "proto-rounding-b", feature = "proto-rounding-c")))]
         crate::fpu_rounding::set_rounding_mode(mode);
         state.fprc = mode;
     }
@@ -1725,11 +1776,24 @@ impl VmState {
         // In Phase 2c the body is NOP per §5.1.1 frozen surface 1;
         // Phase 2d replaces dispatch_instruction's body with the
         // 28 opcode-handler dispatch table.
+        #[cfg(feature = "proto-fp-census")]
+        let mut runs = [0u16; PROGRAM_SIZE];
+        #[cfg(feature = "proto-fp-census")]
+        let mut fdiv_runs = [0u32; REGISTER_COUNT_FLT];
         let mut instr_idx = 0usize;
         while instr_idx < PROGRAM_SIZE {
             self.exec_pc = u16::try_from(instr_idx).expect("PROGRAM_SIZE fits in u16");
             self.branch_pc = u16::MAX;
             let instr = self.program.instructions[instr_idx];
+            #[cfg(test)]
+            proto_panic_hook::tick(self.fprc);
+            #[cfg(feature = "proto-fp-census")]
+            {
+                runs[instr_idx] += 1;
+                if matches!(decode_instruction_type(instr.opcode), InstructionType::FDivM) {
+                    fdiv_runs[fp_reg(instr.dst)] += 1;
+                }
+            }
             dispatch_instruction(&instr, self);
             if self.branch_pc == u16::MAX {
                 instr_idx += 1;
@@ -1739,6 +1803,29 @@ impl VmState {
         }
         self.exec_pc = u16::MAX;
         self.branch_pc = u16::MAX;
+        #[cfg(feature = "proto-fp-census")]
+        crate::fp_proto::census::CENSUS.with(|c| {
+            let mut c = c.borrow_mut();
+            let r = u64::from(*runs.iter().max().unwrap_or(&0));
+            if r > c.max_runs_per_instruction {
+                c.max_runs_per_instruction = r;
+            }
+            let f = u64::from(*fdiv_runs.iter().max().unwrap_or(&0));
+            if f > c.max_fdiv_runs_per_e_register {
+                c.max_fdiv_runs_per_e_register = f;
+            }
+            let mut stat = [0u64; REGISTER_COUNT_FLT];
+            for ins in &self.program.instructions {
+                if matches!(decode_instruction_type(ins.opcode), InstructionType::FDivM) {
+                    stat[fp_reg(ins.dst)] += 1;
+                }
+            }
+            let st = *stat.iter().max().unwrap_or(&0);
+            if st > c.max_fdiv_instrs_per_e_register {
+                c.max_fdiv_instrs_per_e_register = st;
+            }
+            c.iterations += 1;
+        });
 
         // Spec §4.6.5: dataset read prep — capture read_ptr from
         // the pre-mutation `ma`, then XOR-mutate `ma` from
@@ -2059,7 +2146,7 @@ fn dispatch_instruction(instr: &Instruction, state: &mut VmState) {
         InstructionType::FAddR => {
             let dst = fp_reg(instr.dst);
             let src = fp_reg(instr.src);
-            state.f[dst] = state.f[dst].add_unrestricted(state.a[src]);
+            state.f[dst] = state.f[dst].add_unrestricted(state.a[src], state.fprc);
         }
         InstructionType::FAddM => {
             let dst = fp_reg(instr.dst);
@@ -2070,12 +2157,12 @@ fn dispatch_instruction(instr: &Instruction, state: &mut VmState) {
                 SCRATCHPAD_L2_MASK
             };
             let value = load_scratchpad_f128(state, state.r[src], imm, mask);
-            state.f[dst] = state.f[dst].add_unrestricted(value);
+            state.f[dst] = state.f[dst].add_unrestricted(value, state.fprc);
         }
         InstructionType::FSubR => {
             let dst = fp_reg(instr.dst);
             let src = fp_reg(instr.src);
-            state.f[dst] = state.f[dst].sub_unrestricted(state.a[src]);
+            state.f[dst] = state.f[dst].sub_unrestricted(state.a[src], state.fprc);
         }
         InstructionType::FSubM => {
             let dst = fp_reg(instr.dst);
@@ -2086,7 +2173,7 @@ fn dispatch_instruction(instr: &Instruction, state: &mut VmState) {
                 SCRATCHPAD_L2_MASK
             };
             let value = load_scratchpad_f128(state, state.r[src], imm, mask);
-            state.f[dst] = state.f[dst].sub_unrestricted(value);
+            state.f[dst] = state.f[dst].sub_unrestricted(value, state.fprc);
         }
         InstructionType::FScalR => {
             let dst = fp_reg(instr.dst);
@@ -2095,7 +2182,7 @@ fn dispatch_instruction(instr: &Instruction, state: &mut VmState) {
         InstructionType::FMulR => {
             let dst = fp_reg(instr.dst);
             let src = fp_reg(instr.src);
-            state.e[dst] = state.e[dst].mul_unrestricted(state.a[src]);
+            state.e[dst] = state.e[dst].mul_unrestricted(state.a[src], state.fprc);
         }
         InstructionType::FDivM => {
             let dst = fp_reg(instr.dst);
@@ -2107,11 +2194,11 @@ fn dispatch_instruction(instr: &Instruction, state: &mut VmState) {
             };
             let value = load_scratchpad_f128(state, state.r[src], imm, mask);
             let value = mask_register_exponent_mantissa(value, state.e_mask);
-            state.e[dst] = state.e[dst].div_masked(value);
+            state.e[dst] = state.e[dst].div_masked(value, state.fprc);
         }
         InstructionType::FSqrtR => {
             let dst = fp_reg(instr.dst);
-            state.e[dst] = state.e[dst].sqrt_unrestricted();
+            state.e[dst] = state.e[dst].sqrt_unrestricted(state.fprc);
         }
     }
 }
@@ -2355,6 +2442,7 @@ pub(crate) fn compute_hash_inner(
     use blake2::digest::consts::U32;
     use blake2::{Blake2b, Blake2b512, Digest};
 
+    #[cfg(not(any(feature = "proto-rounding-b", feature = "proto-rounding-c")))]
     crate::fpu_rounding::set_rounding_mode(0);
 
     // Pool-reuse safety: reset `fprc` so a recycled `VmState` from
@@ -2429,6 +2517,7 @@ pub(crate) fn compute_hash_inner(
     let out = hasher.finalize();
     let mut output = [0u8; 32];
     output.copy_from_slice(&out);
+    #[cfg(not(any(feature = "proto-rounding-b", feature = "proto-rounding-c")))]
     crate::fpu_rounding::set_rounding_mode(0);
     output
 }
@@ -3818,5 +3907,64 @@ mod tests {
             expected,
             "T15 CFROUND-throttle dispatch diverged from fork pin aaafe71",
         );
+    }
+}
+
+/// PROTOTYPE: a hash must leave the thread's FP control word exactly as
+/// it found it, on return and on unwind. Today's code fails both on
+/// x86_64 (it writes 0x9FC0, flush-to-zero and denormals-are-zero on,
+/// instead of restoring the caller's word) and fails the unwind case on
+/// both architectures (a panic skips the closing reset).
+#[cfg(test)]
+mod proto_leak_tests {
+    use super::*;
+    use crate::fp_proto::control_word;
+
+    fn prepared() -> crate::PreparedCache {
+        crate::PreparedCache::derive(crate::Seedhash::from_bytes([0x5A; 32]))
+    }
+
+    /// Inputs whose hash ends with CFROUND's mode not nearest.
+    fn inputs_ending_directed(p: &crate::PreparedCache, n: usize) -> Vec<Vec<u8>> {
+        let mut out = Vec::new();
+        for i in 0u32..256 {
+            let d = i.to_le_bytes().to_vec();
+            let mut st = VmState::new();
+            let _ = compute_hash_inner(&mut st, p, &d);
+            if st.fprc != 0 {
+                out.push(d);
+                if out.len() == n {
+                    break;
+                }
+            }
+        }
+        assert_eq!(out.len(), n, "found too few inputs ending in a directed mode");
+        out
+    }
+
+    #[test]
+    fn a_hash_returns_the_control_word_it_found() {
+        let p = prepared();
+        let before = control_word();
+        for d in inputs_ending_directed(&p, 4) {
+            let _ = crate::compute_hash(&p, &d);
+            assert_eq!(control_word(), before, "control word changed by a hash ({before:#x} -> {:#x})", control_word());
+        }
+    }
+
+    #[test]
+    fn a_panic_mid_hash_leaves_the_control_word_it_found() {
+        let p = prepared();
+        let d = inputs_ending_directed(&p, 1).remove(0);
+        let before = control_word();
+        // Late in the hash, at the first instruction after that point
+        // that runs in a directed mode.
+        proto_panic_hook::PANIC_AFTER.with(|c| c.set(5_000_000));
+        let r = std::panic::catch_unwind(|| crate::compute_hash(&p, &d));
+        proto_panic_hook::PANIC_AFTER.with(|c| c.set(u64::MAX));
+        assert!(r.is_err(), "the planted panic did not fire");
+        let after = control_word();
+        // restore for the rest of the test binary before asserting
+        assert_eq!(after, before, "control word after unwind {after:#x}, before {before:#x}");
     }
 }
