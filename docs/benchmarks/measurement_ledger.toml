@@ -216,6 +216,7 @@ stale_through = [
   { through = "08ee35aaef58304227340e0bda03d8ccf5b31db3", note = "The rules sweep (structural PR 4a) rewrites rule-number citations in comments on these paths, the core-class rules having moved to 101-199. No code line changed; no cost moved." },
   { through = "8a6cd32c9657495f6ba24a02954f5f78a69f2ea9", note = "The RandomX rounding fix (option (b), RANDOMX_ROUNDING_DECISION.md, from the prototype fcc63aef32 to this commit): each floating-point instruction runs in its own asm! block that writes a fixed control word and writes the caller's back, with test-only oracles, a census and new tests beside it. The PoW hash block verification pays rises: the header hash on the floor device went 1,480.6 -> 1,526.7 ms at the thread-CPU 99th percentile, +3.1 % (docs/benchmarks/rt_w10_hash_series_20261128.md). Not a block-weight re-measurement; the block-weight rows stay stale from PL-D3." },
   { through = "707ebbb4e107f271d1a6db19bf89529808669930", note = "fpu_rounding.rs's x86_64 fixed words become one promoted array reference (FIXED_TABLE), so a block's ldmxcsr operand is the table plus four times the mode with no pointer load in front. x86_64 only; the aarch64 code the floor captures timed is unchanged. The block-weight rows stay stale from PL-D3." },
+  { through = "2f9bbc2e938ba7c4a2c782cdcc75c818facf9d2a", note = "A test only: fpu_rounding's tests gain a_new_thread_starts_at_the_fixed_nearest_word. No code the hash runs changes. The block-weight rows stay stale from PL-D3." },
 ]
 
 [[constant]]
@@ -1360,6 +1361,7 @@ stale_through = [
   { through = "08ee35aaef58304227340e0bda03d8ccf5b31db3", note = "The rules sweep (structural PR 4a) rewrites rule-number citations in comments on these paths, the core-class rules having moved to 101-199. No code line changed; no cost moved." },
   { through = "8a6cd32c9657495f6ba24a02954f5f78a69f2ea9", note = "The RandomX rounding fix (option (b), RANDOMX_ROUNDING_DECISION.md): the VM's floating-point instructions and their tests. Cache derivation runs no floating-point instruction and is unchanged. Re-measured on the floor for the record at 76c23f2f49 (docs/benchmarks/cache_derive_pi4_20261128.txt): 2.30 s median on the second floor device at 1.5 GHz, after 2.09 s on the first at 1.8 GHz (cache_derive_pi4_20261110.txt). Both are eleven times the 200 ms target, which is drift (RANDOMX_ROUNDING_DECISION.md section 7); the row stays stale until the target is restated." },
   { through = "707ebbb4e107f271d1a6db19bf89529808669930", note = "fpu_rounding.rs's x86_64 fixed words become one promoted array reference (FIXED_TABLE), so a block's ldmxcsr operand is the table plus four times the mode with no pointer load in front. x86_64 only; the aarch64 code the floor captures timed is unchanged. Cache derivation is unchanged; the row stays stale." },
+  { through = "2f9bbc2e938ba7c4a2c782cdcc75c818facf9d2a", note = "A test only: fpu_rounding's tests gain a_new_thread_starts_at_the_fixed_nearest_word. No code the hash runs changes. The row stays stale." },
 ]
 
 [[constant]]
@@ -1567,6 +1569,7 @@ cleared = [
   { through = "8a6cd32c9657495f6ba24a02954f5f78a69f2ea9", reason = "After the capture's build (2d5f7e1367): fpu_rounding.rs's x86_64 fixed words become promoted constants in place of a static. x86_64 only; the aarch64 code the capture timed is unchanged." },
   { through = "3fd14496b7021fc271aab1dc3730efa84543efd2", reason = "Sets HASH_CPU_NANOS from this capture (1,526,655,460, the header CPU p99 at 2d5f7e1367) and the test of the interval it implies (6,107 ms). The instrument the capture timed is unchanged." },
   { through = "707ebbb4e107f271d1a6db19bf89529808669930", reason = "fpu_rounding.rs's x86_64 fixed words become one promoted array reference (FIXED_TABLE), so a block's ldmxcsr operand is the table plus four times the mode with no pointer load in front. x86_64 only; the aarch64 code the floor captures timed is unchanged." },
+  { through = "2f9bbc2e938ba7c4a2c782cdcc75c818facf9d2a", reason = "A test only: fpu_rounding's tests gain a_new_thread_starts_at_the_fixed_nearest_word. No code the hash runs changes." },
 ]
 
 [[constant]]
