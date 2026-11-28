@@ -29,7 +29,7 @@
 use std::hint::black_box;
 use std::path::{Path, PathBuf};
 
-use gungraun::{library_benchmark, library_benchmark_group, main};
+use gungraun::{library_benchmark, library_benchmark_group, main, LibraryBenchmarkConfig};
 use shekyl_chain_forge::hosted;
 use shekyl_chain_ingest::bench_support::{BlockPath, Claimed};
 use shekyl_chain_ingest::snapshot::{
@@ -118,8 +118,11 @@ fn crypto_bench_block_connect_emission_claim(
     (chain, claimed)
 }
 
+// The runner clears the environment; the cache's root is the one variable
+// the setup reads, so a run that moved the cache finds it here too.
 library_benchmark_group!(
     name = emission_claim_group;
+    config = LibraryBenchmarkConfig::default().pass_through_env("SHEKYL_CHAIN_SNAPSHOTS");
     benchmarks = crypto_bench_block_connect_emission_claim
 );
 
