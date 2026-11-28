@@ -68,7 +68,7 @@ pub mod reserve;
 
 pub use cover::draw_cover_amount;
 pub use draw::{bounded_uniform, draw_entry_gap, GapRng, DEFAULT_ENTRY_GAP_WINDOW};
-pub use reserve::{EXIT_FEE_HEADROOM_RATE, EXIT_FEE_RESERVE_ATOMIC, P_LANE_WEIGHT_CEILING};
+pub use reserve::{EXIT_FEE_HEADROOM_RATE, EXIT_FEE_RESERVE_ATOMIC, EXIT_RESERVE_WEIGHT};
 
 #[cfg(feature = "conformance")]
 pub mod conformance;

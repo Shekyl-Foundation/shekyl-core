@@ -23,10 +23,10 @@ use shekyl_curve_tree::{
 use shekyl_engine_file::WalletFile;
 use shekyl_engine_state::pending_post_block::{PendingBondPost, PendingPostState, SealAdmission};
 use shekyl_rpc_transport::DaemonTarget;
-use shekyl_standoff::P_LANE_WEIGHT_CEILING;
 use shekyl_tx_builder::{LeafEntry, TreeContext};
 use shekyl_types::{BlockHeight, PSlot};
 use shekyl_units::AtomicUnits;
+use shekyl_wire::transaction::TX_WEIGHT_LIMIT;
 use tokio::sync::RwLock;
 
 use shekyl_curve_tree::ClientError;
@@ -83,14 +83,14 @@ fn bond_fee_from_estimates(
     })
 }
 
-/// The `P`-lane fee at the weight ceiling: the interim every leg still on it
-/// pays until it prices its own weight (P-lane fee ruling, 2026-11-23). Each
-/// leg moves to [`p_lane_floor_fee`] in this PR, and this function goes with
-/// the last of them.
+/// The `P`-lane fee at the consensus weight limit: the interim the bond post
+/// pays until it prices its own weight (P-lane fee ruling, 2026-11-23). The
+/// bond post moves to [`p_lane_extra_input_fee`] in this PR, and this
+/// function goes with it.
 pub(crate) fn p_lane_ceiling_fee(
     estimates: super::traits::FeeEstimates,
 ) -> Result<AtomicUnits, FeeEstimatorError> {
-    p_lane_floor_fee(estimates, P_LANE_WEIGHT_CEILING)
+    p_lane_floor_fee(estimates, TX_WEIGHT_LIMIT)
 }
 
 /// The `P`-lane floor fee for a transaction of `weight`: the validated

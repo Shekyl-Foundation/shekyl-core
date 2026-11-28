@@ -4816,7 +4816,7 @@ async fn stake_persona_and_submit_bond(
             .expect("daemon fee estimates");
         estimates
             .economy
-            .calculate_fee_from_weight(shekyl_standoff::P_LANE_WEIGHT_CEILING)
+            .calculate_fee_from_weight(shekyl_wire::transaction::TX_WEIGHT_LIMIT)
     };
     eprintln!("bond fee from daemon estimate: {bond_fee}");
 

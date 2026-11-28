@@ -23,31 +23,30 @@
 //! site that sees both.
 
 use shekyl_economics::quantized_fee;
-use shekyl_wire::transaction::TX_WEIGHT_LIMIT;
+use shekyl_wire::transaction::weight::heaviest_legal_release_weight;
 
-/// The weight every `P`-lane spend quotes its fee over, so that the lane's
-/// transactions pay one fee whatever their shape.
-///
-/// It is the consensus weight limit. A `JoinMarket` post carries up to
-/// `MAX_HOLDINGS_SHARDS` shard ids, so a legal post can fill the limit, and a
-/// fee quoted over anything lighter could undercut the daemon's per-byte floor
-/// on a legal spend.
-pub const P_LANE_WEIGHT_CEILING: usize = TX_WEIGHT_LIMIT;
+/// The weight the exit-fee reserve is priced on: the heaviest legal
+/// `Release` (`ICD-R10`, ruled 2026-11-23), derived from the wire's weight
+/// model — every legal depth and funding count under the weight limit, the
+/// consensus minimum of outputs, the widest debit and fee varints. A `P`-lane
+/// spend pays the floor rate on its own weight, so no fee reads this; it is
+/// the reserve's operand alone.
+pub const EXIT_RESERVE_WEIGHT: usize = heaviest_legal_release_weight();
 
 /// The fee rate, in atomic units per weight byte, the exit-fee reserve is
 /// priced at. **Assumption** (`ICD-R10`,
 /// `docs/design/CEN_I4_INPUT_CAP_DERIVATION.md`).
 pub const EXIT_FEE_HEADROOM_RATE: u64 = 600;
 
-/// The exit-fee reserve in atomic units (1 SKL = 1_000_000_000 atomic): one
-/// `Release` fee at [`EXIT_FEE_HEADROOM_RATE`], computed from the weight limit
+/// The exit-fee reserve in atomic units (1 SKL = 1_000_000_000 atomic): the
+/// fee of the heaviest legal `Release` at [`EXIT_FEE_HEADROOM_RATE`]
 /// (`ICD-R10`; `ARCHIVAL_DRAIN_SEND_FD2.md` DS-4,
 /// `ARCHIVAL_BOND_CONSTRUCTION.md` §7.2).
 ///
-/// A `Release` pays the lane's one fee, quoted over [`P_LANE_WEIGHT_CEILING`],
-/// so that weight is what the reserve prices, and not the `Release`'s own. The
-/// product rounds up to the fee lattice, as every paid fee does. At today's
-/// limit that is `148,614 × 600`, or `89,169,000` atomic.
+/// A `Release` pays the floor rate on its own weight, so the reserve covers
+/// any exit by pricing the heaviest one, [`EXIT_RESERVE_WEIGHT`]. The product
+/// rounds up to the fee lattice, as every paid fee does. At today's limit
+/// that is `148,388 × 600`, or `89,033,000` atomic.
 ///
 /// **Bounds for safe adjustment** (rule 75). Must satisfy
 /// `0 < EXIT_FEE_RESERVE_ATOMIC < rung`, the rung the archival bond floor
@@ -70,7 +69,7 @@ pub const EXIT_FEE_HEADROOM_RATE: u64 = 600;
 /// it risks an underfunded terminal `Release` under a fee spike — mitigated,
 /// not fatal, by the same §7.2 destitute-corner escape.
 pub const EXIT_FEE_RESERVE_ATOMIC: u64 =
-    match quantized_fee(P_LANE_WEIGHT_CEILING as u64, EXIT_FEE_HEADROOM_RATE) {
+    match quantized_fee(EXIT_RESERVE_WEIGHT as u64, EXIT_FEE_HEADROOM_RATE) {
         Some(fee) => fee,
         None => panic!("the exit-fee reserve does not fit in u64"),
     };

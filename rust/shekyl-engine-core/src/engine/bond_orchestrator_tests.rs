@@ -835,9 +835,9 @@ fn bond_fee_refuses_what_the_send_path_refuses() {
         fee.to_raw(),
         shekyl_rpc_client::tx_fee::fee_from_weight(
             &FeeRate::new(333).expect("rate"),
-            shekyl_standoff::P_LANE_WEIGHT_CEILING
+            shekyl_wire::transaction::TX_WEIGHT_LIMIT
         ),
-        "the bond fee is economy over the P-lane ceiling, via the shared formula"
+        "the interim bond fee is economy over the weight limit, via the shared formula"
     );
 
     // Economy itself over the absolute cap: refused as a REFUSAL, not
@@ -880,10 +880,10 @@ fn bond_fee_refuses_what_the_send_path_refuses() {
     }
 }
 
-/// The reserve pays one `Release` at the headroom rate: the fee the lane
-/// actually quotes at that rate, through the wallet's fee path, is what the
-/// computed reserve holds back. Bites against the reserve and the quoted fee
-/// being priced over different weights or rounded differently.
+/// The reserve pays the heaviest legal `Release` at the headroom rate: the
+/// fee the lane quotes for that weight at that rate, through the wallet's fee
+/// path, is what the computed reserve holds back. Bites against the reserve
+/// and the quoted fee being rounded differently.
 #[test]
 fn the_reserve_pays_the_quoted_release_fee_at_the_headroom_rate() {
     use super::p_lane_floor_fee;
@@ -898,7 +898,7 @@ fn the_reserve_pays_the_quoted_release_fee_at_the_headroom_rate() {
             standard: rate,
             high: rate,
         },
-        shekyl_standoff::P_LANE_WEIGHT_CEILING,
+        shekyl_standoff::EXIT_RESERVE_WEIGHT,
     )
     .expect("the headroom rate is a valid estimate");
     assert_eq!(quoted.to_raw(), EXIT_FEE_RESERVE_ATOMIC);

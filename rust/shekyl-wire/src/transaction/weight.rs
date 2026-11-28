@@ -165,6 +165,64 @@ pub const fn spend_weight_with_extra_input(
         + pqc_auth_weight()
 }
 
+/// The length of the bond-post input a full `Release` of `bond_debit` writes,
+/// tag included: [`Input::write`] over a non-JoinMarket post whose holdings
+/// are the empty compact set and whose post-connect total and credit are
+/// zero, which is the only `Release` consensus admits (its vin statics in
+/// `shekyl-archival-retention`). Only the debit's varint varies.
+///
+/// [`Input::write`]: super::Input::write
+#[must_use]
+pub const fn release_input_len(bond_debit: u64) -> usize {
+    1 // input tag (`TAG_INPUT_BOND_POST`)
+        + varint_len(PQC_HYBRID_SINGLE_KEY_LEN as u64) // hybrid_public_key length
+        + PQC_HYBRID_SINGLE_KEY_LEN // hybrid_public_key
+        + P_CANONICAL_ID_LEN // p_canonical_id
+        + 1 // post_kind
+        + 1 // holdings kind (`HOLDINGS_SHARD_SET_COMPACT`)
+        + varint_len(0) // holdings shard count: none
+        + varint_len(0) // bonded_total_atomic
+        + varint_len(0) // bond_credit
+        + varint_len(bond_debit) // bond_debit
+}
+
+/// `p_canonical_id`'s length on the wire: a `PCanonicalId`'s 32 bytes,
+/// written whole.
+const P_CANONICAL_ID_LEN: usize = 32;
+
+/// The weight of the heaviest legal `Release` (`ICD-R10`): over every legal
+/// depth and every funding count the weight limit admits, a `Release` paying
+/// the consensus minimum of outputs, with the widest debit and the widest
+/// fee varint. The exit-fee reserve is priced on it.
+#[must_use]
+pub const fn heaviest_legal_release_weight() -> usize {
+    let release = release_input_len(u64::MAX);
+    let mut heaviest = 0;
+    let mut depth = MIN_SPEND_LAYERS;
+    while depth <= MAX_TREE_DEPTH {
+        let layers = SpendLayers::known(depth).as_proof();
+        let mut n_in = 1;
+        loop {
+            let weight = spend_weight_with_extra_input(
+                n_in,
+                MIN_NON_COINBASE_OUTPUTS,
+                layers,
+                u64::MAX,
+                release,
+            );
+            if weight > TX_WEIGHT_LIMIT {
+                break;
+            }
+            if weight > heaviest {
+                heaviest = weight;
+            }
+            n_in += 1;
+        }
+        depth += 1;
+    }
+    heaviest
+}
+
 /// The field sum, with the depth byte and the proof length supplied. Public
 /// callers go through [`spend_weight`]. The depth derivation also calls this
 /// one step past [`SpendLayers`], which is how it learns where that type ends.

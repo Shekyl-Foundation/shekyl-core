@@ -609,8 +609,9 @@ bytes** (22 inputs, two outputs, depth 4). The cutover's scan reads the
 legal-shape function (below), which answers per shape and fee width, so it
 cannot fall below a legal spend. At a pinned 0.05 SKL the reserve's head-room
 would fall from about 600 to about 337 atomic per weight byte; instead the
-reserve is computed from the ceiling at 600 (`ICD-R10`: 89 113 000 atomic,
-about 0.0891 SKL, with the rule-75 bounds re-checked against the rung). (The
+reserve is computed from the heaviest legal `Release` at 600 (`ICD-R10`:
+89 033 000 atomic, about 0.0890 SKL, with the rule-75 bounds re-checked
+against the rung). (The
 reserve's comment gives today's ceiling as 80 456 bytes; the weight model gives
 79 625 for the same shape at a 10-byte fee varint. The comment likely predates
 the 2026-09-14 proof-size re-measurement; the computed reserve replaces both
@@ -1086,30 +1087,36 @@ as a constant expression, rounded up to the fee lattice
 (`shekyl_economics::FEE_QUANTIZATION_MASK`, 1 000 atomic units), because the
 fee a `Release` actually pays is quantized up to it.
 
-- **The heaviest legal `Release` weight** comes from the legal-shape function
-  (below) over depths 2 to 14: **148 521 bytes** (22 inputs, two outputs,
-  depth 4). With depths above 14 no longer legal, the 148 614-byte shape at
-  depth 23 (`ICD-F11`) drops out.
+- **The heaviest legal `Release` weight** comes from the wire's weight model
+  (`heaviest_legal_release_weight`, `shekyl-wire`'s `weight.rs`): over depths
+  2 to 14 and every funding count the weight limit admits, a `Release` paying
+  the minimum two outputs, its 2 046-byte bond-post input at the widest debit
+  varint, and the widest fee varint. That is **148 388 bytes** (19 funding
+  inputs, depth 9), the figure Rick ruled 2026-11-23; the test
+  `the_heaviest_legal_release_is_the_ruled_weight` holds it. A `Release` is
+  lighter than a plain spend of the same count by its extra input and auth
+  slot, which is why it is not the 148 521-byte plain spend (22 inputs, depth
+  4).
 - **The headroom rate stays 600 atomic units per weight byte, an Assumption.**
   Its basis, "600 times any observed floor", is replaced when the fee
   ladder's own maximum rate exists (EUP-5 G).
-- **Today's value:** 148 521 × 600 = 89 112 600, rounded up to **89 113 000
-  atomic units, about 0.0891 SKL** (from 0.05).
+- **Today's value:** 148 388 × 600 = 89 032 800, rounded up to **89 033 000
+  atomic units, about 0.0890 SKL** (from 0.05).
 - **What it costs.** A fresh persona's protocol cover draw, uniform over
   `[1, rung)` with the rung at 0.75 SKL, clears the reserve with probability
-  1 − 89 113 000 / 750 000 000 ≈ **88.1 %**, down from 93.3 %; the reserve is
+  1 − 89 033 000 / 750 000 000 ≈ **88.1 %**, down from 93.3 %; the reserve is
   about 1/8.4 of the rung, against 1/15. The §7.2 zero-fee-input escape still
   funds a `Release` over an underfunded pool
   (`ARCHIVAL_BOND_CONSTRUCTION.md` §7.2), so the larger corner strands value
   until earnings or retirement but bricks nothing.
-- **Rule-75 bounds re-checked:** `0 < 89 113 000 < 750 000 000`. The engine's
+- **Rule-75 bounds re-checked:** `0 < 89 033 000 < 750 000 000`. The engine's
   assertion that the reserve is below one cover rung
   (`the_exit_fee_reserve_is_below_one_cover_rung`) holds.
-- **Placement.** `shekyl-standoff` today depends on nothing and states that it
-  reads no consensus constant (`reserve.rs`). The computed reserve needs the
-  wire's legal ceiling and the fee lattice, so the cutover gives the crate those
-  two dependencies and restates that sentence; the rung assertion stays in
-  `shekyl-engine-core`, where the rung is visible.
+- **Placement.** `shekyl-standoff` computes the reserve as
+  `EXIT_RESERVE_WEIGHT` × the headroom rate, reading the wire's weight model
+  and the fee lattice (`shekyl-wire`, `shekyl-economics`). No `P`-lane fee
+  reads that weight: each spend pays the floor rate on its own. The rung
+  assertion stays in `shekyl-engine-core`, where the rung is visible.
 
 #### `ICD-R11` — the cap is checked before the weight (was `ICD-Q8`) — RULED
 
@@ -1257,7 +1264,7 @@ the relay lane's round (`ICD-R4`).
   superseded, and `ICD-Q8` asks to confirm the rule order the test needs),
   `ICD-R7` (no snap), `ICD-R8` (coupling accepted), `ICD-R9` (maximum depth 14:
   floor 12 on the write budget, then the deepest tree needing no more
-  generators), `ICD-R10` (reserve computed: 89 113 000 atomic today). Cutover
+  generators), `ICD-R10` (reserve computed: 89 033 000 atomic today). Cutover
   additions recorded: the legal-shape function scoped to consensus, the builder
   on it (#1534 lands the minimum first), the engine's restated two-output
   floors deleted (`ICD-F19`, the zero-output edge on those lines), the send

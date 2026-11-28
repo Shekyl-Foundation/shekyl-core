@@ -8,10 +8,11 @@
 use shekyl_fcmp_proofs::FcmpPlusPlus;
 
 use super::weight::{
-    fcmp_proof_len, is_legal_shape, max_buildable_inputs, max_inputs_at, pqc_auth_weight,
-    spend_weight, NonCoinbaseOutputs, TREE_DEPTH_FLOOR,
+    fcmp_proof_len, heaviest_legal_release_weight, is_legal_shape, max_buildable_inputs,
+    max_inputs_at, pqc_auth_weight, release_input_len, spend_weight, NonCoinbaseOutputs,
+    TREE_DEPTH_FLOOR,
 };
-use super::{MAX_FCMP_INPUTS, TX_WEIGHT_LIMIT};
+use super::{MAX_FCMP_INPUTS, PQC_HYBRID_SINGLE_KEY_LEN, TX_WEIGHT_LIMIT};
 use shekyl_curve_generators::{ProofLayers, SpendLayers, MAX_TREE_DEPTH};
 
 /// Measured FCMP++ proof sizes in bytes, indexed `[n_in][tree_depth]` over
@@ -224,4 +225,38 @@ fn the_buildable_limit_fits_at_the_widest_fee() {
     assert_eq!(max_buildable_inputs(two, SpendLayers::known(4)), 22);
     assert_eq!(max_buildable_inputs(two, SpendLayers::known(5)), 21);
     assert_eq!(max_buildable_inputs(two, SpendLayers::DEEPEST), 18);
+}
+
+/// The `Release` input's length is the writer's: a non-JoinMarket post over
+/// the empty compact holdings, zero total and credit, at a one-byte, a
+/// mid-width and the widest debit.
+#[test]
+fn the_release_input_length_is_what_the_writer_emits() {
+    use crate::{BondPost, BondPostKind, Holdings, Input};
+    for debit in [1u64, 2_250_000_000, u64::MAX] {
+        let input = Input::BondPost(Box::new(BondPost {
+            hybrid_public_key: vec![0; PQC_HYBRID_SINGLE_KEY_LEN],
+            p_canonical_id: shekyl_types::PCanonicalId::from_bytes([0; 32]),
+            kind: BondPostKind::Other(2),
+            holdings: Holdings::ShardSetCompact(Vec::new()),
+            bonded_total_atomic: 0,
+            bond_credit: 0,
+            bond_debit: debit,
+        }));
+        assert_eq!(
+            Some(release_input_len(debit)),
+            input.serialized_len(),
+            "debit {debit}"
+        );
+    }
+}
+
+/// `ICD-R10`'s weight, ruled 2026-11-23: the heaviest legal `Release` at
+/// today's weight limit is 148,388 bytes (19 funding inputs at depth 9, the
+/// widest debit and fee varints). The exit-fee reserve is priced on it, so
+/// a model or limit change that moves it fails here and goes back to the
+/// ruling.
+#[test]
+fn the_heaviest_legal_release_is_the_ruled_weight() {
+    assert_eq!(heaviest_legal_release_weight(), 148_388);
 }
