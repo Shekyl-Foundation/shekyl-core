@@ -109,7 +109,7 @@ use crate::{
 /// Version `14` appends `SendState::Abandoned`
 /// (`SEND_JOURNAL_BLOCK_VERSION` 2, `WALLET_SEND_RECORD.md` PR-SJ-3);
 /// the append is encoding-additive (discriminant KAT), the bump is
-/// rule-42 snapshot pairing.
+/// rule-142 snapshot pairing.
 /// Version `15` removes `TransferDetails::awaiting_confirmation`
 /// (`LEDGER_BLOCK_VERSION` 10, PR-SJ-1b): the F14 lock retires from
 /// persisted state — journal facts derive it on demand.
@@ -133,7 +133,7 @@ use crate::{
 /// the on-disk bundle *bytes* themselves shift whenever any nested
 /// type's serialized shape changes — even if the aggregator's
 /// top-level layout (number of blocks, their order) is untouched.
-/// `.cursor/rules/42-serialization-policy.mdc` and
+/// `.cursor/rules/142-serialization-policy.mdc` and
 /// `docs/MID_REWIRE_HARDENING.md §3.4` make the pairing strict: a
 /// `wallet_ledger.snap` drift implies a `WALLET_LEDGER_FORMAT_VERSION`
 /// bump in the same PR, regardless of whether any direct field of

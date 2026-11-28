@@ -130,7 +130,7 @@ result.
 @505/~487, `ProofBase::read` @~415, `Proofs::read`, `TransactionPrefix` @348,
 `Output` @214) and `block.rs` (`Block::read/write` @223/159, `BlockHeader` @21).
 
-This is **vendored `shekyl-oxide`** — *ours* per rule 10 (the RPC sibling already
+This is **vendored `shekyl-oxide`** — *ours* per rule 110 (the RPC sibling already
 carries two tracked local patches; see [`SHEKYL_OXIDE_VENDORING.md`](../SHEKYL_OXIDE_VENDORING.md)).
 Record new local patches there and plan to upstream to
 `Shekyl-Foundation/monero-oxide@fcmp++` (divergence dissolves on the next
@@ -157,12 +157,12 @@ re-vendor that includes them).
 
 ## 7. Constraints / rules
 
-- **Rule 42 (serialization-policy):** a *persisted-block wire change* ⇒
+- **Rule 142 (serialization-policy):** a *persisted-block wire change* ⇒
   version-constant bump (CI-enforced). This slice **implements the existing C++
   format in Rust, not changing it** → expected **no** bump; confirm. If the format
   itself must change, that is a genesis-format-definition decision to **surface**,
   not make silently.
-- Rule 10 (shekyl-oxide is ours), rule 18 (byte-layout / type-placement), rule 30
+- Rule 110 (shekyl-oxide is ours), rule 118 (byte-layout / type-placement), rule 30
   (crypto discipline), rule 45 (`cargo fmt` + `cargo clippy --all-targets -- -D
   warnings`), rule 50 (testing / diagnostics), rule 06 (short-lived branch off
   `dev`, each push separately authorized).

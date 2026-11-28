@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The rule-42 codec gate for the chain store.
+//! The rule-142 codec gate for the chain store.
 //!
 //! One committed fixture snapshot per codec this store's layout uses,
 //! under `rust/shekyl-chain-store/schemas/<NAME>.snap`: the codec's name
@@ -237,7 +237,7 @@ impl Layout {
     /// The header every snapshot in the directory starts with.
     fn header(self) -> String {
         format!(
-            "# shekyl-chain-store canonical codec snapshot (rule 42). Do not edit by hand:\n\
+            "# shekyl-chain-store canonical codec snapshot (rule 142). Do not edit by hand:\n\
              #   UPDATE_SNAPSHOTS=1 cargo test -p shekyl-chain-store {TEST_FILTER}\n\
              # and bump {} in {} in the same PR.\n",
             self.constant(),
@@ -839,7 +839,7 @@ impl Fixtures for IssuedDigest {
 impl Fixtures for QueuedBundle {
     fn fixtures() -> Vec<(&'static str, Self)> {
         use shekyl_archival_retention::{BundleKept, BundleRef, PassBitmap};
-        // Inline literals (rule 42): a kept part of nine economy draws with
+        // Inline literals (rule 142): a kept part of nine economy draws with
         // two passes and two support draws with one, and a prunable hash
         // whose every byte is distinct.
         let kept = |count: u32, passes: &[u32], support: PassBitmap| BundleKept {
@@ -875,7 +875,7 @@ impl Fixtures for QueuedBody {
         use shekyl_archival_retention::{
             BundleBody, BundleRecord, BUNDLE_SIGNATURE_LEN, BUNDLE_WITNESS_KEY_LEN,
         };
-        // Inline literals (rule 42): the codec carries the bytes and does
+        // Inline literals (rule 142): the codec carries the bytes and does
         // not parse the key or the signatures, so fills stand for them.
         let key = [0x5Au8; BUNDLE_WITNESS_KEY_LEN];
         let signature = [0xA5u8; BUNDLE_SIGNATURE_LEN];
@@ -1476,7 +1476,7 @@ fn quoted_after(line: &str, prefix: &str) -> Option<String> {
 /// Source scan of `property.rs` — the one module that can implement the
 /// sealed [`PropertyCell`]. A cell written by hand beside the
 /// `property_cells!` invocation compiles (same module as the seal) but
-/// never reaches [`PROPERTY_CELLS`] or `properties.snap`, so the rule-42
+/// never reaches [`PROPERTY_CELLS`] or `properties.snap`, so the rule-142
 /// gate would pass a layout change without its bump. Three things hold:
 ///
 /// 1. the `impl PropertyCell for` sites are exactly the macro's template
@@ -1809,7 +1809,7 @@ fn scan_impls(dir: &Path, out: &mut BTreeSet<String>) {
             // snapshot. Only the plain spelling is readable here, so every
             // other spelling (path-qualified, generic, trailing generics on
             // the type) is refused loudly instead of skipped: a codec the
-            // scan cannot see is a codec Rule 42 cannot see.
+            // scan cannot see is a codec Rule 142 cannot see.
             let Some((before, _)) = rest.split_once("Canonical for") else {
                 continue;
             };

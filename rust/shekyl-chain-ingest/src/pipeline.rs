@@ -84,7 +84,7 @@ use crate::source::{IngestEvent, SequenceNo, Sequenced, Source};
 use crate::target::TargetLedger;
 use crate::trace::Trace;
 
-/// Knobs with a rationale each (rule 75; module docs).
+/// Knobs with a rationale each (rule 175; module docs).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PipelineConfig {
     /// Blocks formed ahead of the writer at once — in flight plus waiting
@@ -114,7 +114,7 @@ impl PipelineConfig {
 
     /// The default hasher count: the host's parallelism, one when the
     /// platform will not say. Read at run time, never provisioned as a
-    /// constant (rule 76: the floor is a stated device, and a knob that
+    /// constant (rule 176: the floor is a stated device, and a knob that
     /// silently assumed it would mis-size every other host).
     #[must_use]
     pub fn default_hashers() -> NonZeroUsize {

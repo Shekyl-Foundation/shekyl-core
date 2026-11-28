@@ -15,7 +15,7 @@ Where a claim could not be verified in code it is marked as such rather than
 asserted.
 
 **Process:** disposition IDs `SL-D1` … `SL-Dn`, registered at birth per
-[`94-tracking-index`](../../.cursor/rules/94-tracking-index.mdc). Prefix `SL-`
+[`194-tracking-index`](../../.cursor/rules/194-tracking-index.mdc). Prefix `SL-`
 checked tree-wide across `docs/`, `src/`, `rust/`, `.cursor/` — **zero hits**
 before this document. `SA-` was the obvious choice and is **taken** by the
 signature-alignment round (`SA-R-1`…`SA-R-7`).

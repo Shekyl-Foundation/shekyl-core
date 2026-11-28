@@ -32,7 +32,7 @@
 //!   [`RANDOMX_V2_RUST.md`](../../docs/design/RANDOMX_V2_RUST.md) §3.
 //! - **Derived-first.** `PreparedCache`, `Vm`, and `Hash` are
 //!   transform-shaped per
-//!   [`18-type-placement.mdc`](../../.cursor/rules/18-type-placement.mdc):
+//!   [`118-type-placement.mdc`](../../.cursor/rules/118-type-placement.mdc):
 //!   their canonical definitions are functions (e.g.
 //!   `PreparedCache::derive(seedhash) -> PreparedCache`); storage
 //!   is a memoization of the function's output. See

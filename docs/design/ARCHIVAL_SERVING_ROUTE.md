@@ -54,8 +54,8 @@ server is a P-served onion; no wallet talks to a wallet (`EU-D1`,
 [`ARCHIVAL_ENDPOINT_UPDATE.md`](ARCHIVAL_ENDPOINT_UPDATE.md), ruled
 2026-09-11) — not a consensus wire.
 Changing it after the freeze is a coordinated software upgrade
-([rule 75](../../.cursor/rules/75-system-autonomy.mdc)), not a hard fork
-([rule 42](../../.cursor/rules/42-serialization-policy.mdc) does not
+([rule 175](../../.cursor/rules/175-system-autonomy.mdc)), not a hard fork
+([rule 142](../../.cursor/rules/142-serialization-policy.mdc) does not
 fire; `RF-D4` already checked this class of artifact).
 
 The contract freezes at the **earliest** of:

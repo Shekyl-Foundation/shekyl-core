@@ -314,7 +314,7 @@ below; supersedes this record's C++-owner framing).** The §7 plan's
 "consensus changes land in C++ first, C++ runs stressnet until the C3
 cutover" originated in the steering brief (the umbrella chat has recorded
 the origin as its own — this is a brief-drafting error unwound, not a
-defect of the round's rulings), and Rick's rule-20 steering reminder
+defect of the round's rulings), and Rick's `RULE_20_RUST_VS_CPP` steering reminder
 unwound it for rules: **a C2 ruling whose content is a RULE lands in Rust
 behind the FFI with the C++ copy deleted; only orchestration stays C++**
 — now the standing principle for R1 onward, so C3 shrinks with every
@@ -418,11 +418,11 @@ fix evaluated on the merits rather than adopted verbatim:
   the two paths that (re)install block 0.
 - One review prescription was **rejected on the merits** (recorded here
   so it is not re-litigated per surface): routing the C++ rule owner
-  through the Rust predicates via FFI now. Rule 20's
+  through the Rust predicates via FFI now. `RULE_20_RUST_VS_CPP`'s
   new-consensus-logic-behind-FFI clause is governed here by its own
   migration-is-a-planning-activity clause: the consensus validator's
   Rust migration is the census **C3** program (ruled 2026-08-31) with a
-  rule-07 atomic cutover, and until that cutover the C++ owner and the
+  rule-107 atomic cutover, and until that cutover the C++ owner and the
   Rust twins stay deliberately **independent** so the shared vectors can
   detect drift between two implementations — wiring the predicate in
   pre-C3 would make the differential pair circular and split rule
@@ -486,7 +486,7 @@ fix evaluated on the merits rather than adopted verbatim:
    file addition per rule 30).
 8. **No wire change expected:** all three rulings are validation-only; no
    persisted-block layout is touched. If implementation contradicts this,
-   stop and re-read rule 42 before proceeding.
+   stop and re-read rule 142 before proceeding.
 9. **Stressnet disposition:** stressnet daemons rebuild after the fix lands
    (stale-binary oracle pitfall); the estate rebuild already required by the
    V11 schema + genesis remint (§3) absorbs regenesis — stated in the PR so

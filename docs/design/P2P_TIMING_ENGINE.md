@@ -3,7 +3,7 @@
 **Status: CLOSED — Round 2, 2026-09-25.** The nine proposals are ruled.
 Wakes go to the owner's home. The wake set is ordered by time. Slice 1
 holds one list deadline. PWD-B2 leaves the interim tick first. Nothing
-here is a number. Periods belong to their owners. **Rule 26 is cited
+here is a number. Periods belong to their owners. **Rule 126 is cited
 explicitly.** This document mints no identifier family. The register
 row is P2P-3's **TE**. The design is closed. The pre-flight is
 `ca825e8df`, which re-read `dev` `78eef562d` and landed before the

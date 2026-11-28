@@ -59,10 +59,10 @@ CEN-K3 ("belt survives the engine change only if re-specified" — this is the
 re-specification) and the §4.K slice's six walks; and from
 [`ARCHIVAL_CREDIT_WIRE.md`](../completed/ARCHIVAL_CREDIT_WIRE.md) §3 CW-2 (the hash-keyed
 witness is *owned by the alt-block table* and never outlives its block).
-Process per `26-sub-pr-design-discipline.mdc`; identifier families **`SAL-`**
+Process per `126-sub-pr-design-discipline.mdc`; identifier families **`SAL-`**
 (findings) and **`SAL-Q`** (round questions) registered in
 [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2 by the PR that adds
-this file (rule 94 §1; `check_index_prefix_uniqueness.py` branch (a): the
+this file (rule 194 §1; `check_index_prefix_uniqueness.py` branch (a): the
 two parse to `SAL` and `SAL-Q`, distinct, clear of the 99 registered —
 `SAR-` is a different prefix by the gate's grammar, checked rather than
 judged by appearance).
@@ -110,7 +110,7 @@ every other E1 surface has.
 | A `Coded<V>` record carrying variable-length bytes (`BondRecord.hybrid_pubkey: Vec<u8>`, `codec/archival.rs:305`) | landed — the precedent for one row carrying block bytes beside the record (`SAL-Q2`) |
 | `alt_blocks`, `archival_alt_attestation_witness` in the redb schema | landed, **both `Unshaped`, in the consensus file** (`schema.rs:384`, `:423`; `tables.snap` #13, #21); `accumulator/class.rs:108`, `:110` grade both `Excluded` |
 | `check_redb_schema_bijection.py` — X-macro ↔ `schema.rs`, plus `RUST_ONLY_TABLES` (Rust has a table LMDB never had) and `MIRRORED_ELSEWHERE` (LMDB's twin lives in another file) | landed — has **no** "folded into another table's record" direction (SAL-2) |
-| `SCHEMA_VERSION = 12` (`codec/schema_version.rs:132`) | landed — this increment bumps to **13** (two `Unshaped` → one shaped, one table folded; rule 42) |
+| `SCHEMA_VERSION = 12` (`codec/schema_version.rs:132`) | landed — this increment bumps to **13** (two `Unshaped` → one shaped, one table folded; rule 142) |
 | `SAR-Q5` — the witness pair is S-ALT's | **RULED 2026-09-23** (`DRS_E1_SARCH.md` §9) |
 | E5 (pool / alt / prune) | **not started**; named in the DRS graph (§7, `E4 --> E5`); no plan document yet |
 
@@ -334,7 +334,7 @@ from the verdict.
 | `alt_blocks` | `LmdbHashKey → Unshaped` (#13) | `LmdbHashKey → Coded<AltBlock>` — the key type **stays** `LmdbHashKey`: the LMDB table is `compare_hash32`, the key-types gate maps that comparator to `LmdbHashKey`, and `BlockHash` converts at the API boundary (`alt_reads::key`). *Corrected on review (Copilot, PR #856): the first draft wrote `[u8; 32]`, the pool file's deliberate exception, which would have failed the gate or silently changed key order.* | AL1–AL7 |
 | `archival_alt_attestation_witness` | `LmdbHashKey → Unshaped` (#21) | **folded** — no definition in `schema.rs`; named in `FOLDED_INTO` with `alt_blocks` as the host (SAL-2) | — |
 
-`SCHEMA_VERSION` 12 → 13 (rule 42; `tables.snap` loses exactly one row and
+`SCHEMA_VERSION` 12 → 13 (rule 142; `tables.snap` loses exactly one row and
 re-types one; the pinned-ordinals test records the shift for every ordinal
 after #21). `accumulator/class.rs` keeps its two rows — the class table is
 the LMDB inventory (S-POOL as-built deviation (2)); a `FOLDED_INTO` entry is
@@ -584,7 +584,7 @@ Nothing that was accepted becomes refused, or the reverse.
 | `check_redb_schema_bijection.py` | 47 ↔ 45 + 2 ↔ 47 | **as built:** 47 censused ↔ 44 here + 2 mirrored + 1 folded ↔ 47 classes; 46 definitions; selftest 4 clean shapes / 19 refusals (five `FOLDED_INTO` refusals plus the absent-const parse refusal) |
 | `check_redb_schema_key_types.py` | floor 25 | **25 → 24 as built** — the folded table's `compare_hash32` constraint left with it (SAL-2, corrected) |
 | `check_drs_c_surface_map.py` | 95 ↔ 95 across 10 surfaces | unchanged — the S-ALT Methods cell stays 6; witness methods stay in S-ARCH's cell (SAL-3) |
-| rule-42 snapshot gate | `SCHEMA_VERSION = 12` | 13; `tables.snap` −1 row, one re-typed; `alt_block.snap` new |
+| rule-142 snapshot gate | `SCHEMA_VERSION = 12` | 13; `tables.snap` −1 row, one re-typed; `alt_block.snap` new |
 | `check_store_invariant_register.py` | 16 rows / 14 ↔ 14 | unchanged (no new SI) |
 | digest exclusion tests (`accumulator`) | `txpool` pair only — alt boundary "declared, not enforced" | + the `alt_blocks` exclusion test (SAL-15) |
 | `check_conformance_coverage.py`, `check_consensus_invariants.sh` | 126 / 2 / 5 over 133 rows | unchanged (no verdict moves; CEN-K3's anchor text updates) |

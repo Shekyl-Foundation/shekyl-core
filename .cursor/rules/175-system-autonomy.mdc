@@ -1,6 +1,7 @@
 ---
 description: Self-regulating system design principles. Minimize need for manual intervention or coordinated upgrades.
 alwaysApply: true
+scope: core
 ---
 
 # System Autonomy

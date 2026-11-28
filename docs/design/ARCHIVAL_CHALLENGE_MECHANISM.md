@@ -1018,7 +1018,7 @@ the round kept trying to add forensics underneath it.
    wire. *(The question as posed: whether the attestation Ed25519 leg
    *is* the onion key or a sibling with an onion-key proof-of-possession
    over the bond record at post.)* Hence (ii) — the persisted-wire change
-   ⇒ version-constant bump (rule 42) — does **not** arise from (i). (iii) **RESOLVED — no change (2026-08-11, verified at
+   ⇒ version-constant bump (rule 142) — does **not** arise from (i). (iii) **RESOLVED — no change (2026-08-11, verified at
    source): `hybrid_sign` hot is safe, because the emission claim is
    two-of-two and only one factor is the identity hybrid.**
    `emission_vin_verify_auth` requires Auth-P (hybrid signature under
@@ -1187,7 +1187,7 @@ the round kept trying to add forensics underneath it.
    are the **rig's** output — shipping them guess-tuned would arm a
    circuit-killer against our own bulk transfers. Because it is a
    multi-week, multi-validation-surface build, PR-C decomposes (rules
-   19/26): **C1** the `SETCONF` wire path (injection-safe, closed-set);
+   119/126): **C1** the `SETCONF` wire path (injection-safe, closed-set);
    **C2** consensus retrieval + weighted L2/L3 selection; **C3** rotation +
    persistence + supervisor reload + the knob threaded through.
 
@@ -1391,9 +1391,9 @@ record, none silently:
   `λ·D/E` is *draws per block assigned to that block's **producer***, so the
   ~97 figure describes a **miner**, and this paragraph's own "from the same
   client" says so. It was first re-addressed to a "device-requirement question"
-  — *can a rule-76 floor device carry ~97 concurrent circuits* — which closed
+  — *can a rule-176 floor device carry ~97 concurrent circuits* — which closed
   the same day as **incoherent**: nobody mines on a Pi 4, so the floor device
-  is never in that role. The two sides do not share a floor. Rule 76
+  is never in that role. The two sides do not share a floor. Rule 176
   provisions the anonymity of the node being protected, the staker running `P`,
   which is the **serving** side: many readers on one persona, a handful at a
   time once the block's draws spread across the pair population, and already
@@ -1497,7 +1497,7 @@ than repealing it:
    pinned-L2 behaviour under ~97 simultaneous rendezvous circuits, and
    whether Bandguards' cap trips are structural and largely
    hardware-independent, but the absolute quantile W₂ derives from
-   comes from the Pi floor (rule 76) — **build the rig so a floor run
+   comes from the Pi floor (rule 176) — **build the rig so a floor run
    is a re-run, not a rewrite**. Measure on the **real Tor network**,
    never a local test net (chutney has none of the latency structure
    that makes the distribution heavy-tailed); synthetic payloads sized in
@@ -1835,7 +1835,7 @@ the onion is the wallet's own `WalletTorControl`, and
 the connected `held_shard_ids` come back over the **existing**
 `get_archival_emission_claim_source` RPC, whose wallet-side decode already
 exists in Rust and already rides the persona transport. Recorded because the
-rule-20 question was asked explicitly and the honest answer is *no C++ was
+`RULE_20_RUST_VS_CPP` question was asked explicitly and the honest answer is *no C++ was
 added and none needed deleting* — the boundary did not move because this
 slice never reaches it.
 
@@ -1900,7 +1900,7 @@ implementation may construct as a literal — so the fabrication path is now
 "a different pinner", injected at the one `spawn_serving_task` call site. The
 criterion above applies to `ReportedSet` verbatim. The SH-2 resident-key PR
 does not build the seal (a provenance-sealing change across three crates is a
-separate validation surface, rule 19); whether it lands as a following PR or
+separate validation surface, rule 119); whether it lands as a following PR or
 is re-ruled against the reopen criterion is the maintainer's, put to them with
 that record.
 
@@ -1974,7 +1974,7 @@ refresh axis after the construction axis closed it.
 its pin forever. At `MAX_HOLDINGS_SHARDS = 4096` and
 ~`SHARD_BYTES` ≈ 3.33 MB per shard (the boundary metric, `PDM-Q-F32`), unbounded churn against a
 growing `D` retains up to ~13.6 GB the node is no longer obligated to hold —
-on a rule-76 Pi-4 floor. Not a rounding error, and not self-correcting.
+on a rule-176 Pi-4 floor. Not a rounding error, and not self-correcting.
 
 **The asymmetry that should govern the fix, ruled here so SH-2 does not
 decide it implicitly: acquiring a pin needs no finality; releasing one
@@ -2137,7 +2137,7 @@ scaffolding something to say. That is the half-step item 6a already named:
 a check whose only possible outcome is a safe-direction move, applied to a
 one-sided constraint, confirms what the asymmetry already settled — and the
 implementation failed open besides (`ARCH == "aarch64"` certified any Apple
-Silicon box as a rule-76 floor datum; the producing shape measured the
+Silicon box as a rule-176 floor datum; the producing shape measured the
 co-activation layout this harness already forbids). Rule 15 deletes unused
 callees; the type is gone with the rig. The requirement below is retained
 as written because the reasoning is what generalises, not because a run is
@@ -2145,7 +2145,7 @@ owed. If a ruling premise returns and a measurement is scoped, this is how
 it ships — not before.
 
 *Original text, retained:* **the W₂ rig's three provenance requirements are
-stated in §9.5 but not wired.** `VanguardsMode::Managed`, the rule-76 Pi-4 floor, and the
+stated in §9.5 but not wired.** `VanguardsMode::Managed`, the rule-176 Pi-4 floor, and the
 real Tor network (never chutney) are today three sentences of prose in three
 places. Each one's failure mode is silent and points the same way: a
 non-vanguards run measures a shorter path than production ships, an off-floor
@@ -2160,8 +2160,8 @@ a number that then gets cited.
 was not sufficient.** The first cut implemented the original requirement *to
 spec* — one type, three attestations, no constructor taking fewer — and the
 gate still **faded open**. `is_floor_datum()` certified any `aarch64` box as a
-rule-76 floor datum, so a producer-shaped batch run on a floor device would
-have stamped "rule-76 provisioning input" on the wrong machine's number. That
+rule-176 floor datum, so a producer-shaped batch run on a floor device would
+have stamped "rule-176 provisioning input" on the wrong machine's number. That
 is precisely the laundering this item exists to prevent, and it arrived
 **through a field nobody had listed**.
 
@@ -2340,7 +2340,7 @@ by default.
    daemon is a question of scheduling topology, answered by the
    confirming run below, not by the counter.
 
-4. **Uniform, with no knob (rule 75).** Priority shows only under
+4. **Uniform, with no knob (rule 175).** Priority shows only under
    contention, and timing already reveals load, so if every `P` runs the
    same default the setting tells an observer nothing. An opt-out would
    create a population that behaves differently under load, which is a

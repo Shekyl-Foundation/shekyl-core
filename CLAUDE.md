@@ -14,7 +14,7 @@ stack (`shekyl-cli`, `shekyl-wallet-rpc`, `shekyl-engine-core` and
 siblings). The tree holds no first-party C or C++; the only C/C++ is
 vendored under `external/` (the RandomX references). How the workspace is
 laid out, and the gate that holds that end state, is
-[`25-rust-architecture`](.cursor/rules/25-rust-architecture.mdc).
+[`125-rust-architecture`](.cursor/rules/125-rust-architecture.mdc).
 
 ---
 
@@ -45,58 +45,79 @@ When you invoke the hierarchy, name which commitment is binding and why.
 
 ## Rule index
 
+Two series. **Estate rules (00–99)** are canonical here and copied verbatim
+into `shekyl-gui-wallet` and `shekyl-prism`; each carries `scope: estate` and
+the `repos:` it governs. **shekyl-core's own rules (101–199)** carry
+`scope: core`; an estate rule's core-only part is its companion `1NN`
+(06 → 106). The GUI's series is 201–299 and prism's 901–999. A vacated
+number is never reused or cited
+([`vacated-numbers.tsv`](.cursor/rules/vacated-numbers.tsv)); the estate
+files' hashes are in [`ESTATE_MANIFEST`](.cursor/rules/ESTATE_MANIFEST), which
+the GUI and prism check their copies against.
+
 Foundations & process
 
 - [`00-mission`](.cursor/rules/00-mission.mdc) — mission + priority hierarchy (always applies)
 - [`05-system-thinking`](.cursor/rules/05-system-thinking.mdc) — system-level design discipline
 - [`06-branching`](.cursor/rules/06-branching.mdc) — branch policy (always applies): `main`=stable, `dev`=integration; short-lived branches off `dev`; each push is separately authorized
-- [`07-consensus-atomic-cutovers`](.cursor/rules/07-consensus-atomic-cutovers.mdc) — named, opt-in exception to `06` for consensus-boundary PRs
+  - core part: [`106-branching-core`](.cursor/rules/106-branching-core.mdc) — the consensus-cutover exception and how CI tests merges into `dev`
+- [`107-consensus-atomic-cutovers`](.cursor/rules/107-consensus-atomic-cutovers.mdc) — named, opt-in exception to `06` for consensus-boundary PRs
 - [`08-worktree-hygiene`](.cursor/rules/08-worktree-hygiene.mdc) — the tested tree is the shipped tree (always applies): stage explicit paths, never `-A`/`-a`; verify from a fresh checkout of the pushed SHA; read back anything published (a PR body, a comment) rather than trusting the send's exit status
-- [`37-internal-information-boundary`](.cursor/rules/37-internal-information-boundary.mdc) — `shekyl-core` is public (always applies): write the role, never the host; host identities, operational state and local paths live in `shekyl-dev`
+- [`37-internal-information-boundary`](.cursor/rules/37-internal-information-boundary.mdc) — `shekyl-core`, `shekyl-gui-wallet` and `shekyl-prism` are public (always applies): write the role, never the host; host identities, operational state and local paths live in `shekyl-dev`
+  - core part: [`137-internal-information-boundary-core`](.cursor/rules/137-internal-information-boundary-core.mdc) — the gate for host identities and local paths
 - [`38-shared-estate-coordination`](.cursor/rules/38-shared-estate-coordination.mdc) — Foundation hosts are shared (always applies): read and claim in `shekyl-dev`'s `infrastructure/USAGE.md` before using one; a long-running test is a `quiet` claim nobody else disturbs
 - [`90-commits`](.cursor/rules/90-commits.mdc) — commit message & PR discipline
 - [`91-documentation-after-plans`](.cursor/rules/91-documentation-after-plans.mdc) — docs update is the final task of a plan
-- [`94-tracking-index`](.cursor/rules/94-tracking-index.mdc) — `docs/design/IMPLEMENTATION_INDEX.md` is load-bearing; identifier families register at birth; Phase 3+ / Stage 3+ items start with an index row
+- [`194-tracking-index`](.cursor/rules/194-tracking-index.mdc) — `docs/design/IMPLEMENTATION_INDEX.md` is load-bearing; identifier families register at birth; Phase 3+ / Stage 3+ items start with an index row
 - [`95-documentation-lifecycle`](.cursor/rules/95-documentation-lifecycle.mdc) — document classes, status banners, archive-or-contract, FOLLOWUPS one-liners, CHANGELOG scope, three work-item targets
-- [`26-sub-pr-design-discipline`](.cursor/rules/26-sub-pr-design-discipline.mdc) — a new crate or consensus-boundary change is its own change (always); opt-in design-round process for multi-round/consensus/reference-port sub-PRs
+  - core part: [`195-documentation-lifecycle-core`](.cursor/rules/195-documentation-lifecycle-core.mdc) — front door, archive checklist, protected spec names, `changelog.d`, document gates
+- [`126-sub-pr-design-discipline`](.cursor/rules/126-sub-pr-design-discipline.mdc) — a new crate or consensus-boundary change is its own change (always); opt-in design-round process for multi-round/consensus/reference-port sub-PRs
 
 Architecture & scope
 
-- [`10-shekyl-first`](.cursor/rules/10-shekyl-first.mdc) — shekyl-core is primary; the `shekyl-oxide` fork is a disposable downstream consumer
+- [`110-shekyl-first`](.cursor/rules/110-shekyl-first.mdc) — shekyl-core is primary; the `shekyl-oxide` fork is a disposable downstream consumer
 - [`15-deletion-and-debt`](.cursor/rules/15-deletion-and-debt.mdc) — when to delete vs. defer; migration-code lifecycle
 - [`16-architectural-inheritance`](.cursor/rules/16-architectural-inheritance.mdc) — inherited code is not inherited architecture; migrate flows that contradict the threat model
-- [`19-validation-surface-discipline`](.cursor/rules/19-validation-surface-discipline.mdc) — bundle work by validation surface, not feature topic
+- [`119-validation-surface-discipline`](.cursor/rules/119-validation-surface-discipline.mdc) — bundle work by validation surface, not feature topic
 - [`21-reversion-clause-discipline`](.cursor/rules/21-reversion-clause-discipline.mdc) — reject-now-with-reopening-criteria over pre-provisioned flexibility
 - [`22-no-lazy-deferral`](.cursor/rules/22-no-lazy-deferral.mdc) — scoped work lands where scoped (always applies); deferral needs a named blocker, disclosed in the deferring commit
+  - core part: [`122-no-lazy-deferral-core`](.cursor/rules/122-no-lazy-deferral-core.mdc) — a FOLLOWUPS `Owner:` may be an identifier family; the cell is gated
 - [`23-disposition-visibility`](.cursor/rules/23-disposition-visibility.mdc) — REJECTED / DEFERRED / STAGED / RESERVED each has a defined grep surface; zero code symbols unless staged; refused names stay in namespace contracts as structured statuses
 - [`60-no-monero-legacy`](.cursor/rules/60-no-monero-legacy.mdc) — v3-from-genesis, no Monero chain history; remove dead pre-genesis code
-- [`70-modular-consensus`](.cursor/rules/70-modular-consensus.mdc) — PoW consensus; staking is economic; no speculative consensus scaffolding
-- [`71-network-uniformity`](.cursor/rules/71-network-uniformity.mdc) — nettype selects data, never control flow, on the consensus surface; a behavioral divergence must be named, ratified, and loud
-- [`75-system-autonomy`](.cursor/rules/75-system-autonomy.mdc) — self-regulating design; minimize coordinated upgrades
-- [`76-device-provisioning-floor`](.cursor/rules/76-device-provisioning-floor.mdc) — stated minimum supported device (Pi 4); constants derived from work time are provisioned at the floor, never at the machine that was handy
+- [`170-modular-consensus`](.cursor/rules/170-modular-consensus.mdc) — PoW consensus; staking is economic; no speculative consensus scaffolding
+- [`171-network-uniformity`](.cursor/rules/171-network-uniformity.mdc) — nettype selects data, never control flow, on the consensus surface; a behavioral divergence must be named, ratified, and loud
+- [`175-system-autonomy`](.cursor/rules/175-system-autonomy.mdc) — self-regulating design; minimize coordinated upgrades
+- [`176-device-provisioning-floor`](.cursor/rules/176-device-provisioning-floor.mdc) — stated minimum supported device (Pi 4); constants derived from work time are provisioned at the floor, never at the machine that was handy
 
 Rust
 
-- [`25-rust-architecture`](.cursor/rules/25-rust-architecture.mdc) — workspace layout, no first-party C and no C ABI, dependency rules, decoding untrusted bytes
+- [`125-rust-architecture`](.cursor/rules/125-rust-architecture.mdc) — workspace layout, no first-party C and no C ABI, dependency rules, decoding untrusted bytes
 - [`17-dependency-discipline`](.cursor/rules/17-dependency-discipline.mdc) — verify deps at source before adding
-- [`18-type-placement`](.cursor/rules/18-type-placement.mdc) — transform- vs state-shaped types; byte-layout discipline
-- [`42-serialization-policy`](.cursor/rules/42-serialization-policy.mdc) — persisted-block wire change ⇒ version-constant bump (CI-enforced)
+- [`118-type-placement`](.cursor/rules/118-type-placement.mdc) — transform- vs state-shaped types; byte-layout discipline
+- [`142-serialization-policy`](.cursor/rules/142-serialization-policy.mdc) — persisted-block wire change ⇒ version-constant bump (CI-enforced)
 - [`45-rust-lint-checks`](.cursor/rules/45-rust-lint-checks.mdc) — `cargo fmt` + `cargo clippy --all-targets -- -D warnings` before any Rust commit
+  - core part: [`145-rust-lint-checks-core`](.cursor/rules/145-rust-lint-checks-core.mdc) — the two crates allowed `unsafe_code` at their root
 - [`46-shell-gate-exits`](.cursor/rules/46-shell-gate-exits.mdc) — gate verdicts never travel through a pipe; `PIPESTATUS`/unpiped exits; the pipefail SIGPIPE trap; `pgrep -f` matches the caller
 - [`47-gate-subject-assertion`](.cursor/rules/47-gate-subject-assertion.mdc) — a gate must assert its own subject exists; absence of signal is first evidence the subject is absent
+- [`43-absence-is-not-a-value`](.cursor/rules/43-absence-is-not-a-value.mdc) — zero is a value; "no result" is `None` / `null`, never an in-band sentinel
+  - core part: [`143-absence-is-not-a-value-core`](.cursor/rules/143-absence-is-not-a-value-core.mdc) — the required-nullable reply wrapper and the sentinel record
 - [`93-legacy-symbol-migration`](.cursor/rules/93-legacy-symbol-migration.mdc) — never introduce a `MONERO_*` identifier; frozen domain separators stay
 
 Cryptography & secrets
 
 - [`30-cryptography`](.cursor/rules/30-cryptography.mdc) — crypto implementation discipline (hybrid PQC, domain separators, pinned test vectors)
+  - core part: [`130-cryptography-core`](.cursor/rules/130-cryptography-core.mdc) — per-output PQC keys, the vector path, the domain registry
 - [`35-secure-memory`](.cursor/rules/35-secure-memory.mdc) — structural secret wiping (`Zeroizing` / `ZeroizeOnDrop`)
+  - core part: [`135-secure-memory-core`](.cursor/rules/135-secure-memory-core.mdc) — process hardening and locked storage as core implements them
 - [`36-secret-locality`](.cursor/rules/36-secret-locality.mdc) — secret bytes are clamped, reduced and combined only in the crypto-owning crates (gated)
+  - core part: [`136-secret-locality-core`](.cursor/rules/136-secret-locality-core.mdc) — the crypto-crate list, the gate and its inventory
 - [`65-address-format-discipline`](.cursor/rules/65-address-format-discipline.mdc) — address format rules
 - [`92-copyright-header`](.cursor/rules/92-copyright-header.mdc) — Shekyl Foundation header; never add Monero copyright to a file that lacks one
 
 Testing
 
 - [`50-testing`](.cursor/rules/50-testing.mdc) — test-gate & diagnostic-output discipline
+  - core part: [`150-testing-core`](.cursor/rules/150-testing-core.mdc) — where the chain witness lives; flaky-test retry, report and quarantine
 
 UX (end-user-facing surfaces)
 
@@ -117,7 +138,7 @@ siblings, and inherited data flows that contradict Shekyl's threat model are
 [`60`](.cursor/rules/60-no-monero-legacy.mdc)). The vendored
 `rust/shekyl-oxide/` is a **disposable downstream consumer**, used for its
 crypto primitives; the rest of that tree's application/protocol code is ours
-([`10`](.cursor/rules/10-shekyl-first.mdc)).
+([`110`](.cursor/rules/110-shekyl-first.mdc)).
 
 ---
 
@@ -139,7 +160,7 @@ Key Rust crates: `shekyl-engine-*` (wallet orchestrator/state/file), `shekyl-sca
 `shekyl-chain-store` / `shekyl-chain-rules` (daemon store and the consensus
 validator that alone mints what it connects — the two share no code), and
 `shekyl-units` / `shekyl-types` (foundational newtypes). See
-[`25-rust-architecture`](.cursor/rules/25-rust-architecture.mdc).
+[`125-rust-architecture`](.cursor/rules/125-rust-architecture.mdc).
 
 Documentation starts at [`docs/README.md`](docs/README.md). Binding
 history: [`docs/V3_WALLET_DECISION_LOG.md`](docs/V3_WALLET_DECISION_LOG.md).
@@ -190,5 +211,5 @@ cargo test --workspace --exclude shekyl-randomx-differential
 ```
 
 CI mirrors these plus `cargo audit` on `Cargo.lock` changes and the
-persisted-schema snapshot check ([`42`](.cursor/rules/42-serialization-policy.mdc)). Run them locally before
+persisted-schema snapshot check ([`142`](.cursor/rules/142-serialization-policy.mdc)). Run them locally before
 claiming a change is done — "fix CI later" is not the workflow.

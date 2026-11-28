@@ -13,7 +13,7 @@ eight findings (F-1…F-8) hold; citation line numbers were refreshed to the cur
 (several had drifted by tens of lines) and the remote-branch count corrected to 22. The
 staking audit (§2, F-1) is now **confirmed in landed code**: `StakingBlock` is a sealed
 tier-4 `WalletLedger` block, not advisory TOML. **This PR executes the moves in §5:** it
-deletes the orphan (Move 1), names tier 4 in WALLET_PREFS + rule 42 (Move 2), and removes
+deletes the orphan (Move 1), names tier 4 in WALLET_PREFS + rule 142 (Move 2), and removes
 the dead C++ prefs FFI boundary (Move 3).
 
 **Verdict:** The region-2 task is neither "make Rust a consumer" nor "decompose-and-retire."
@@ -170,22 +170,22 @@ occur on that wiring.
 
 Severity-ordered. Reopen criteria per rule 21.
 
-### F-1 [HIGH → process; amendment included in this PR] — WALLET_PREFS and rule 42 lacked tier 4; the next funds-relevant toggle would be misfiled
+### F-1 [HIGH → process; amendment included in this PR] — WALLET_PREFS and rule 142 lacked tier 4; the next funds-relevant toggle would be misfiled
 
 **This is the only finding that produces durable new work.** Everything else is one-time cleanup.
 
 - **Substrate:** WALLET_PREFS §2 named three layers, and its own rule — "adding a new
   wallet-tunable field requires explicitly choosing a layer" (WALLET_PREFS §2) — offered a
-  three-wide menu that omits sealed funds-load-bearing state. Rule `42-serialization-policy.mdc`
+  three-wide menu that omits sealed funds-load-bearing state. Rule `142-serialization-policy.mdc`
   enforces version pairing for persisted (tier-4) blocks but did not pin *placement*. The
   staking trap and the `max_reorg_depth` misfile (§F-3) are both instances.
 - **Disposition:** Amend WALLET_PREFS §2 to add **Tier 4 — sealed funds-load-bearing wallet
   state (file-layout region 2 / `shekyl-engine-state` blocks): AEAD-sealed, strict version,
-  refuse-to-load.** Amend rule 42 to pin the **funds-first decision order**
+  refuse-to-load.** Amend rule 142 to pin the **funds-first decision order**
   ("does reset lose/endanger funds?" precedes "is it user-tunable?"). **Done in this PR (Move
-  2): WALLET_PREFS §2 four-layer model + §2.4 + decision procedure; rule 42 "Funds-first tier
+  2): WALLET_PREFS §2 four-layer model + §2.4 + decision procedure; rule 142 "Funds-first tier
   placement".**
-- **Reopen:** Closed when WALLET_PREFS §2 names tier 4 and rule 42 encodes the funds-first
+- **Reopen:** Closed when WALLET_PREFS §2 names tier 4 and rule 142 encodes the funds-first
   order — **both now done in this PR.** Reopen only if a field appears that is funds-relevant
   yet *not* chain-reconciled (would imply a fifth category — none known today).
 
@@ -315,12 +315,12 @@ recreation only. Secrets and the mis-defaulted `max_reorg_depth` die with it. **
 this PR**, with the two external dangling intra-doc links
 (`shekyl-engine-state/src/{error.rs,lib.rs}`) repointed.
 
-**Move 2 — Name tier 4 in WALLET_PREFS and rule 42 (F-1).** Add the sealed-funds-bearing tier
+**Move 2 — Name tier 4 in WALLET_PREFS and rule 142 (F-1).** Add the sealed-funds-bearing tier
 and the funds-first decision order, so the next funds-relevant toggle cannot be reflexively
 filed into advisory TOML and silently default-reset into a funds-loss. This is the only durable
 deliverable; the staking trap and the `max_reorg_depth` misfile are both symptoms of its
 absence. **Executed in this PR** (WALLET_PREFS §2 four-layer model + §2.4 + decision procedure;
-rule 42 "Funds-first tier placement").
+rule 142 "Funds-first tier placement").
 
 **Move 3 — Remove the dead C++ prefs (tier-3) FFI boundary.** Prefs are already Rust-owned
 end to end: the engine consumes `shekyl-engine-prefs` natively (`load_prefs`/`save_prefs`),

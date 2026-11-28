@@ -73,7 +73,7 @@ runner-class distribution (covers ≥99.7% of allocations). If the
 observed distribution is non-Gaussian (long-tail; bimodal across
 allocator pools), the margin is set to the 99.7th-percentile of the
 observed distribution and a substrate-finding note is queued for
-rule-26 amendment.
+rule-126 amendment.
 
 Per `21-reversion-clause-discipline.mdc`, the `× 3` factor's
 reopening criteria:
@@ -205,7 +205,7 @@ The per-recipe latency integration test (`tests/per_recipe_latency.rs`)
 asserts measured-on-this-runner values are within
 `RUNNER_NOISE_MARGIN` of the committed values; divergence is a
 substrate finding per R3's "substrate-finding-class outcome promotes
-rule-26 amendment trigger from queued to fire" close criterion.
+rule-126 amendment trigger from queued to fire" close criterion.
 
 ## 5. Reopening criteria
 
@@ -247,7 +247,7 @@ the M1 substrate pair (methodology + results).
 - **Rule references**:
   [`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc)
   (reopening-criteria discipline);
-  [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
-  (pre-implementation round + rule-26 amendment-trigger);
+  [`126-sub-pr-design-discipline.mdc`](../../.cursor/rules/126-sub-pr-design-discipline.mdc)
+  (pre-implementation round + rule-126 amendment-trigger);
   [`16-architectural-inheritance.mdc`](../../.cursor/rules/16-architectural-inheritance.mdc)
   (substrate-anchored-evidence discipline).

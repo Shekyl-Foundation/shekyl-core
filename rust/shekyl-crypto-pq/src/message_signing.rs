@@ -373,7 +373,7 @@ pub fn outer_bytes(
 /// the key actor (both secret-locality postures preserved).
 ///
 /// **CPU-bound and slow by design** — a full SLH-DSA-192s keygen plus
-/// sign, priced at ~4.3 s on the Pi-4 provisioning floor (rule 76).
+/// sign, priced at ~4.3 s on the Pi-4 provisioning floor (rule 176).
 /// Async callers must not run this on an executor thread.
 ///
 /// # Errors

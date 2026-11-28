@@ -249,7 +249,7 @@ fn the_debit_rule_agrees_with_the_consensus_commitment_rule() {
     // funding arithmetic, so no such transaction is ever offered to a node.
     //
     // It stays zero deliberately, because the two rules live on **different
-    // validation surfaces** (rule 19) and `verify_debit_funding` owns only the
+    // validation surfaces** (rule 119) and `verify_debit_funding` owns only the
     // scalar one: whether the amounts admit a balanced transaction. Folding an
     // input-count floor into an amount rule would make the amount rule
     // untestable at its own boundary and would put the shape rule somewhere

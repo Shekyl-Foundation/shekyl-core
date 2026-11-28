@@ -9,7 +9,7 @@ authority** for the chain's numbering, the 2b→Model-D supersession, the KAT
 lineage, and the CT-5 cross-series gate.
 
 **Parent design:** `ARCHIVAL_BOND_CONSTRUCTION.md` (the frozen design; Round 1
-closed §11.1). **Process:** `26-sub-pr-design-discipline.mdc` (opt-in, cited per
+closed §11.1). **Process:** `126-sub-pr-design-discipline.mdc` (opt-in, cited per
 its Scope clause — the chain is multi-round per-trait work on the gate-6 firewall
 surface).
 
@@ -263,7 +263,7 @@ into the 2A signer):
 
 - This arc doc is the index; **full per-PR plan docs exist only for unstarted
   PRs** (2c-2b now, 2d when 2c-2b closes), each following the
-  `26-sub-pr-design-discipline.mdc` round + pre-flight shape.
+  `126-sub-pr-design-discipline.mdc` round + pre-flight shape.
 - Landed PRs are **status-of-record** here (§3), not retrofitted into full plan
   docs — the design rationale already lives in `ARCHIVAL_BOND_CONSTRUCTION.md`
   §10 and is not re-derived.

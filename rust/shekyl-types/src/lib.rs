@@ -14,7 +14,7 @@
 //! in-transaction output index used as a ledger-wide global index.
 //!
 //! This crate is the canonical home for these types per
-//! `18-type-placement.mdc` (state-shaped types live with a foundational
+//! `118-type-placement.mdc` (state-shaped types live with a foundational
 //! semantic owner, not in `shekyl-curve-tree` where some predecessors
 //! incidentally landed). It is the vocabulary crate of
 //! `docs/design/RAW_TYPE_NEWTYPE_MIGRATION.md` (`RTN-1…RTN-N`); downstream
@@ -61,7 +61,7 @@
 //! `#[repr(transparent)]` keep every type wire- and ABI-identical to the
 //! primitive it wraps: postcard bytes match the bare `u64`. A type-name
 //! change in a persisted field still bumps the owning block's version
-//! (`42-serialization-policy.mdc`); the schema snapshot is the identity.
+//! (`142-serialization-policy.mdc`); the schema snapshot is the identity.
 //!
 //! ## What lives here when two stores need it
 //!
@@ -70,7 +70,7 @@
 //! wallet-side store (`shekyl-curve-tree`) key and hold the same chain facts
 //! and neither may depend on the other's graph. [`KeyImage`],
 //! [`CurveTreeRoot`], [`TreePosition`] and [`TreeLeaf`] each reached this
-//! answer by the same argument (`18-type-placement.mdc`, "Where each shape
+//! answer by the same argument (`118-type-placement.mdc`, "Where each shape
 //! lives"); the sentence is here so the next instance is a lookup, not a
 //! question. The arithmetic over those bytes — the Selene hash, path
 //! assembly, the drain order — stays in `shekyl-curve-tree` / `shekyl-fcmp`;
@@ -991,7 +991,7 @@ hash32! {
     /// §3.4): the validation crate must *name* a key image without acquiring
     /// the crypto crate's dependency graph, and two same-named newtypes in two
     /// crates are an unchecked drift source. The derivation `I = x · H_p(O)`
-    /// remains transform-shaped and stays in `shekyl-crypto-pq` (rule 18);
+    /// remains transform-shaped and stays in `shekyl-crypto-pq` (rule 118);
     /// the *name* lives here because that is the consumer graph, not because
     /// the value became state-shaped.
     ///
@@ -1023,7 +1023,7 @@ hash32! {
     ///
     /// `#[serde(transparent)]`: byte-identical to `[u8; 32]`, which is what
     /// keeps `TransferDetails`' on-disk and postcard-schema layouts unchanged
-    /// (`schema_snapshot` tests, rule 42).
+    /// (`schema_snapshot` tests, rule 142).
     KeyImage, redact, no_display
 }
 
@@ -1054,7 +1054,7 @@ hash32! {
     /// function (the firewall protects only `P`↔principal), and this id is how a
     /// bond-post, a scan match, the funding accrual, and the DQ8 retire path all
     /// name the *same* persona. A domain type, not a wire field: low-level consensus
-    /// wire structs store the raw `[u8; 32]` (rule 18 byte-layout) and convert at
+    /// wire structs store the raw `[u8; 32]` (rule 118 byte-layout) and convert at
     /// their edge via [`PCanonicalId::as_bytes`] / [`PCanonicalId::from_bytes`].
     /// Distinct from [`TxHash`] / [`BlockHash`] so a hash of one kind can never be
     /// passed where another is expected.
@@ -1135,7 +1135,7 @@ impl Timestamp {
 /// default timelock; an explicit one, if set, takes the later of the two.
 ///
 /// Brought native off the vendored `shekyl-oxide` in the un-vendor slice-2 dissolve;
-/// `Block` wraps [`BlockHeight`] (rule 18) rather than a bare integer. Serialization
+/// `Block` wraps [`BlockHeight`] (rule 118) rather than a bare integer. Serialization
 /// is decoupled — the owning wire format encodes [`Timelock::to_unlock_raw`] as a
 /// varint — so this foundational crate stays free of an io/curve dependency.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]

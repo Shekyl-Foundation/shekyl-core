@@ -778,7 +778,7 @@ pub fn derive_archival_p_keys(
 /// `identity_pk_matches_the_full_bundle`). What it skips is the rest of the
 /// bundle: the ML-KEM-768 keygen, the receive spend/view scalar mults +
 /// X25519 conversion, the onion keypair, and the GF-1 bond-spend hybrid keygen —
-/// the cost that made the probe-window id derivation heavy at the rule-76
+/// the cost that made the probe-window id derivation heavy at the rule-176
 /// device floor. The secret half of the identity hybrid is still derived
 /// (keygen is seed→keypair) but is dropped here — `HybridSecretKey` is
 /// `ZeroizeOnDrop`, so nothing secret outlives the call.

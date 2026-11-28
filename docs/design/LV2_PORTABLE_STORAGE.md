@@ -26,7 +26,7 @@ genesis).
 
 **Process.** Spec-first per
 [`05-system-thinking.mdc`](../../.cursor/rules/05-system-thinking.mdc).
-Not a multi-round per-trait PR; [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
+Not a multi-round per-trait PR; [`126-sub-pr-design-discipline.mdc`](../../.cursor/rules/126-sub-pr-design-discipline.mdc)
 is not invoked. Implementation PRs still need their own KATs and the
 usual Rust gates.
 
@@ -113,7 +113,7 @@ for the Levin maps with a derive / `epee_object!`-shaped equivalent of
 `KV_SERIALIZE` / `KV_SERIALIZE_OPT` / `KV_SERIALIZE_VAL_POD_AS_BLOB` /
 `KV_SERIALIZE_CONTAINER_POD_AS_BLOB`.
 
-Fits shekyl-first ([`10-shekyl-first.mdc`](../../.cursor/rules/10-shekyl-first.mdc)),
+Fits shekyl-first ([`110-shekyl-first.mdc`](../../.cursor/rules/110-shekyl-first.mdc)),
 the Levin KAT discipline, and Shekyl-only fields (`attestation_witness`,
 PQC-sized blobs). Collapses the two existing one-off parsers.
 
@@ -127,7 +127,7 @@ Real code, MIT, non-serde, `epee_object!` maps 1:1 onto the KV macros.
 crates.io is still a `0.0.0-placeholder`. Consuming it is pin-a-git-commit
 and vendor — the posture
 [`DAEMON_RELAY_PRIVACY.md`](DAEMON_RELAY_PRIVACY.md) §8 already recorded
-as a rule-17 / rule-10 question, and deferred to this document.
+as a rule-17 / rule-110 question, and deferred to this document.
 
 The codec fits. The schemas do not: Cuprate's command types are Monero's
 (no `attestation_witness`, no Shekyl address/PQC sizing). We would still
@@ -392,7 +392,7 @@ inventory. This document does not scope it.
 
 ---
 
-## 13. Identifier notes (rule 94)
+## 13. Identifier notes (rule 194)
 
 `LV-2a` and `LV-2b` are work items in the existing `LV-1…LV-N` family,
 not a new prefix. No registry row is minted. Bare `2a`/`2b` are

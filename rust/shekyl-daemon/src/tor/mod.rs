@@ -185,7 +185,7 @@ pub struct Supervisor {
     managed: bool,
 }
 
-/// Why the supervisor ended while the daemon ran (rule 25: a long-lived task
+/// Why the supervisor ended while the daemon ran (rule 125: a long-lived task
 /// reports its end). The daemon stops on it and exits failed: with `tor =
 /// managed` and clearnet off, a node without its supervisor has no network,
 /// and under every setting `daemon_status` answers "not ready".

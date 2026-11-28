@@ -64,12 +64,12 @@ what DQ1 replaced) — not a genesis-live entry point.
 > - **2a-iii — `ClaimableInfo` / `has_claimable_rewards` / `claimable_outputs`** tie into the
 >   persisted **staked-fields**, so they belong with 2b, not 2a.
 
-**2b — tier machinery + `StakingMeta` (cross-language + rule-42).**
+**2b — tier machinery + `StakingMeta` (cross-language + rule-142).**
 - `tiers.rs` (`LockTier`, `StakeTier`, `TIERS`, `TierTable`, `tier_by_id`, `MAX_CLAIM_RANGE`),
   `meta.rs` (`StakingMeta`).
 - **FFI → C++:** `shekyl_stake_weight` / `_lock_blocks` / `_yield_multiplier` / `_max_claim_range`
   (shekyl-ffi). Removal needs the paired C++ caller cleanup (`07`-style consensus-adjacent care).
-- **Persisted (rule-42 bump):** `TransferDetails.{staked, stake_tier, stake_lock_until,
+- **Persisted (rule-142 bump):** `TransferDetails.{staked, stake_tier, stake_lock_until,
   last_claimed_height}` + `WalletOutput` `StakingMeta` tag `0x04` → `LEDGER_BLOCK_VERSION`
   6→7 + regenerate `ledger_block.snap` (CI `schema-snapshot.yml` enforces the pairing).
 - **Consumers to update:** economics snapshot (`TIERS`/`TierTable`), `set_staking_info`, scanner deser.
@@ -117,20 +117,20 @@ separate C++ consensus effort coordinated with 2b/2c, not this Rust cleanup.
   adjusted at source.** The mapped "paired C++ caller cleanup" turned out to be the full
   claim-era C++ consensus surface (the `shekyl_stake_*` callers sit inside the stake-ratio
   cache, `txout_to_staked_key` maturity/validation, and claim-range validation in
-  blockchain.cpp/blockchain_db.cpp — a rule-07 consensus-boundary cutover, not thin call
+  blockchain.cpp/blockchain_db.cpp — a rule-107 consensus-boundary cutover, not thin call
   sites), so C++ split off as **PR-4**. PR-3 delivers the complete Rust sweep: 2a-ii
   (staker_pool + `chain_economics_source` +
   `EconomicsEngine::pool_weighted_total` removal; `LocalEconomics` de-genericized to a pure
   constants rulebook; `ScanResult::stake_events`/`StakeEvent` + `RefreshSummary.stake_events`
   gone) and 2b (`StakingMeta` + `WalletOutput.staking` + `TransferDetails.{staked, stake_tier,
   stake_lock_until, last_claimed_height}` + `ClaimableInfo` + the staked `LedgerBlock` queries
-  + `BalanceSummary` staked buckets + the four claim-era RPC methods). **Rule-42:**
+  + `BalanceSummary` staked buckets + the four claim-era RPC methods). **Rule-142:**
   `LEDGER_BLOCK_VERSION` 6→7 **and** `WALLET_LEDGER_FORMAT_VERSION` 8→9 (both snaps moved);
   economics snapshot digest format 0x01→0x02 (tier table left the digest). `shekyl-staking`
   survives **quarantined** (tiers.rs + build.rs only, banner in lib.rs): sole consumer =
   shekyl-ffi's four `shekyl_stake_*` C ABI exports that back the not-yet-deleted C++ paths.
   Unblocks `MintLineageOutput` landing in a `StakingMeta`-free `WalletOutput`.
-- **PR-4 (this PR, the C++ consensus cutover — rule-07 atomic):** the claim-era wire and
+- **PR-4 (this PR, the C++ consensus cutover — rule-107 atomic):** the claim-era wire and
   everything reachable from it, in one cut. Wire types `txin_stake_claim` + `txout_to_staked_key`
   (variants, boost/json/debug serialization, VARIANT_TAGs 0xf2/0xf3 retired unreassigned) and
   `check_output_types` narrowed to tagged-key-only — the actual acceptance flip. Blockchain:

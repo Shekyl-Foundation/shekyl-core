@@ -27,7 +27,7 @@ quarry: evidence for the invariant, and a list of behaviors the Rust model
 drops.
 
 Owed before slice 1's first increment
-([`26-sub-pr-design-discipline`](../../.cursor/rules/26-sub-pr-design-discipline.mdc),
+([`126-sub-pr-design-discipline`](../../.cursor/rules/126-sub-pr-design-discipline.mdc),
 [`P2P_3_IMPLEMENTATION_ROUND.md`](P2P_3_IMPLEMENTATION_ROUND.md) §4.4).
 Quarry lines below were read at `81746913c`. **Re-read 2026-10-08
 against `dev` `f317d979c4`.** *Records-was: the 2026-10-07 pass pinned
@@ -225,13 +225,13 @@ Four scope lines, each ruled:
   §99 Level 2 testnet is one). It lifts the refusal at `admit_gray`
   and the exclusion at `disclose` together: a network that admitted
   private addresses but never disclosed them could not discover beyond
-  `--add-peer`. It is a flag, not keyed on nettype (rule 71); and under
+  `--add-peer`. It is a flag, not keyed on nettype (rule 171); and under
   the exception audit it is data the rule reads, not a branch — the
   rule is "refuse a network-learned address in the refused set", and
   the flag chooses the set (the table above, or empty).
 
 *Why Rust.* The list and the dialer are Rust, and address policy is
-list policy (rules 20 and 40); a C++ filter in front of a Rust list
+list policy (`RULE_20_RUST_VS_CPP` and `RULE_40_FFI_DISCIPLINE`); a C++ filter in front of a Rust list
 would be the second site rule 05 forbids.
 
 The draws are not a check site. *Records-was, the brief's first
@@ -723,7 +723,7 @@ How long the process was down does not matter; a wall clock would answer the
 duration and would still not be the door in §2.
 
 Dropping `last_seen` from the stored entry is a format change. The version
-constant bumps (rule 42). The loader already drops a pre-current file
+constant bumps (rule 142). The loader already drops a pre-current file
 wholesale.
 
 A node boots with gray only. The compiled seed addresses are in gray from
@@ -1018,7 +1018,7 @@ whether a ban removes or marks entries, whether banned addresses are
 refused at admit and excluded from disclosure, and what an expiry
 does.*
 
-## 16. PR-2 — pre-flight (rule 26 Round 0, 2026-10-09)
+## 16. PR-2 — pre-flight (rule 126 Round 0, 2026-10-09)
 
 **Status: LANDED (as of 2026-10-10) — PR-2 merged as #1021
 (`5d68a72302`): increments 1 and 2 are on `dev`, the §5a measurement is

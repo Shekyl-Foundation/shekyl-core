@@ -363,7 +363,7 @@ mod tests {
         // Empty `LedgerBlock` builds an empty snapshot via the
         // canonical `from_ledger` path (no test-only
         // `LedgerSnapshot` constructor exists, and per
-        // `25-rust-architecture.mdc` we route through the production
+        // `125-rust-architecture.mdc` we route through the production
         // constructor rather than bypass it).
         let snapshot = LedgerSnapshot::from_ledger(&LedgerBlock::empty());
         let cancel = CancellationToken::new();

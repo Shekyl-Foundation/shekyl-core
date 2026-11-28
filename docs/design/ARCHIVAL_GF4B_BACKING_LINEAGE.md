@@ -17,7 +17,7 @@
 > zero-pre-bond-output test). This is an *addendum* to those two GF-4b
 > sections and to [`ARCHIVAL_BOND_WI2_ASSEMBLY.md`](ARCHIVAL_BOND_WI2_ASSEMBLY.md)
 > §3.2 (whose D-A2 selection policy §3.1 below reconciles) — not a fresh
-> 4–6-round design cycle. No new identifier family is minted (rule 94):
+> 4–6-round design cycle. No new identifier family is minted (rule 194):
 > dispositions are referenced by section number of this doc.
 >
 > **Timeframes (rule 05):** *now* — the pre-genesis wallet pre-join path;
@@ -37,7 +37,7 @@ Land the three wallet-side GF-4b artifacts, smallest coherent cuts:
 1. **`MintLineageOutput`** — the scan-provenance enum, classified at the
    SP-3 dual-extract seam, propagated into the persisted funding records
    alongside the `spendable_height` field (§3.6)
-   (`PSCAN_STATE_VERSION` 4 → 5, rule 42).
+   (`PSCAN_STATE_VERSION` 4 → 5, rule 142).
 2. **Sweep conversion** — `select_funding_outputs` (oldest-first greedy
    *subset* accumulation, WI-2 D-A2) becomes `sweep_funding_outputs`
    (full-unreserved-**spendable**-set consumption, §3.1/§3.6; no subset
@@ -270,7 +270,7 @@ acceptable.
 compiler forces the twin update (the documented duplication guard doing
 its job).
 
-**Rule-42 schema impact.** `PFundingOutputRecord` is persisted state:
+**Rule-142 schema impact.** `PFundingOutputRecord` is persisted state:
 `PSCAN_STATE_VERSION` **4 → 5** (one bump covers both new fields),
 snapshot regenerated, CI snapshot check covers it. Pre-genesis: loads refuse on mismatch, no migration code,
 `rm -rf ~/.shekyl` is the path (rules 15/16).

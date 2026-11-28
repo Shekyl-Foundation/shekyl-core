@@ -9,7 +9,7 @@ name: chain-forge
 # that both match the tree match each other.
 #
 # - x86_64 on GitHub's hosted `ubuntu-24.04`; aarch64 on the hosted
-#   `ubuntu-24.04-arm`. The Pi 4 floor device (rule 76) is aarch64 too; its
+#   `ubuntu-24.04-arm`. The Pi 4 floor device (rule 176) is aarch64 too; its
 #   run is fleet evidence recorded with the increment, not a CI leg.
 # - The seeded primitives first (seconds): when the legs disagree, that step
 #   names the primitive.

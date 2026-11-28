@@ -257,7 +257,7 @@ reading, and the burned collateral is what makes it not a cheap reset.
 
 **Nothing persisted — with one thing to keep in sync.** The window is recomputed from
 the `serve_credit_bit` ledger and the bond record, both of which `pop_block` already
-reverts (gate-2 §8, gate-4 §5). No new schema, no `42-serialization-policy` bump, and
+reverts (gate-2 §8, gate-4 §5). No new schema, no `142-serialization-policy` bump, and
 reorg safety comes free: a rewound bit is a rewound observation.
 
 The price is that **`n` is now a retention constraint**. The decision used to read one

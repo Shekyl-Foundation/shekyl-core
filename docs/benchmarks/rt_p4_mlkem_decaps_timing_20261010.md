@@ -70,7 +70,7 @@ quoted with any verdict.
   sessions build and test on it. Noise widens both distributions and lowers
   sensitivity; it does not by itself create a difference between two
   interleaved classes. The control says whether enough sensitivity was left.
-- **The floor device** (rule 76): the Pi 4, under a quiet claim in the
+- **The floor device** (rule 176): the Pi 4, under a quiet claim in the
   estate's usage ledger for the length of the run.
 
 **What is not measured, and is read instead.** Timing statistics cannot

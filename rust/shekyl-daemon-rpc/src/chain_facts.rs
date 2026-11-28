@@ -151,8 +151,8 @@ pub struct BlockHeaderFacts {
     /// newtypes exist to prevent.
     pub miner_tx_hash: TxHash,
     /// The header's two committed roots, as the types `shekyl-wire::BlockHeader`
-    /// carries them (RTN-7). The C ABI POD they are read from is raw (rule
-    /// 40); the facts layer is where each root's kind is known, so it is
+    /// carries them (RTN-7). The C ABI POD they are read from is raw (
+    /// `RULE_40_FFI_DISCIPLINE`); the facts layer is where each root's kind is known, so it is
     /// named here and stays named until the handler renders hex.
     pub curve_tree_root: CurveTreeRoot,
     pub section_root: SectionRoot,

@@ -16,7 +16,7 @@
 //!
 //! [`RuleSchedule`] is the identity: every network, every height names
 //! [`RuleSet::GENESIS`]. A later activation is a design document before a
-//! step is added. Nettype selects **data** (rule 71): one schedule per
+//! step is added. Nettype selects **data** (rule 171): one schedule per
 //! network, one `rules_at`, no `match network` anywhere a rule runs.
 //!
 //! [`AdmissionPolicy`] is relay/pool policy — a separate input with a
@@ -138,7 +138,7 @@ pub struct RuleSet {
 /// A settlement epoch and the reorg cap that must sit inside it, as one
 /// validated pair. Every network's issued rule set carries
 /// [`Self::PRODUCTION`]. A network whose row permits the levers may name
-/// another pair; the pair itself has no network (rule 71).
+/// another pair; the pair itself has no network (rule 171).
 ///
 /// The cap is strictly inside the epoch (`0 < cap < SEB`, SPR-9 /
 /// `reorg.rs`'s `SEB > D_max`), two caps fit inside one RandomX seed
@@ -436,7 +436,7 @@ const _: () = assert!(
 /// issued-set path (`RuleSchedule::for_network` → `rules_at` → `for_id`)
 /// cannot name `Fixed`. Which network may pull the lever is its row's
 /// `permits`, checked once by `ChainRules::new` (NI-R6). `with_levers`
-/// does not know the network (rule 71).
+/// does not know the network (rule 171).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum DifficultyRule {
     /// LWMA-1 over the recorded window; the genesis constant below `N`.
@@ -516,7 +516,7 @@ impl RuleSet {
     /// closes and is slash-final, which epoch a height closes. The
     /// validator reads epoch arithmetic here and nowhere else — never the
     /// process-latched `SettlementSchedule::effective()`, which is the
-    /// daemon's and the FFI's entry point (rule 71: the schedule in force is
+    /// daemon's and the FFI's entry point (rule 171: the schedule in force is
     /// data on the set in force). The store pins the same number in its
     /// header and refuses a session whose in-force set names another.
     #[must_use]
@@ -696,7 +696,7 @@ impl RuleSchedule {
     };
 
     /// The schedule for `network`. One value per network, selected as
-    /// data (rule 71). Today every network is the identity. Adding a
+    /// data (rule 171). Today every network is the identity. Adding a
     /// network is a compile error until this match names its schedule.
     #[must_use]
     pub const fn for_network(network: Network) -> Self {

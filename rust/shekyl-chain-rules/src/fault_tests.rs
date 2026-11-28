@@ -29,7 +29,7 @@ fn first_is_attempt_one() {
 #[test]
 fn the_bound_is_small_and_positive() {
     // Two consecutive ≥ 64-block reorgs during one admission is not organic;
-    // the value is a DoS bound, not a liveness knob (rule 75 rationale on
+    // the value is a DoS bound, not a liveness knob (rule 175 rationale on
     // the constant). A bound of 1 would make a single reorg terminal.
     assert!((2..=8).contains(&MAX_FORM_ATTEMPTS));
 }

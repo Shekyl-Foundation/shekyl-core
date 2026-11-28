@@ -1,7 +1,7 @@
 # The txpool origin-zone field — with Q-12's disposition as one of its outputs
 
 **Design round, opened 2026-08-10.** Scoped per
-[`26-sub-pr-design-discipline`](../../.cursor/rules/26-sub-pr-design-discipline.mdc):
+[`126-sub-pr-design-discipline`](../../.cursor/rules/126-sub-pr-design-discipline.mdc):
 multi-round, FFI boundary, persisted-layout change. Cited explicitly, as that
 rule requires.
 
@@ -10,7 +10,7 @@ rule requires.
 text below is the design as opened and is kept as the record of the
 questions; the as-built sections at the end are what the code does now.
 Every numeric claim in the opening is subject to verification at
-pre-flight (rule 26's B6/B9). Where a number is inherited rather than
+pre-flight (rule 126's B6/B9). Where a number is inherited rather than
 derived, it says so.
 
 ---
@@ -620,7 +620,7 @@ else.
 §65.4 scoped two reserved bits on `txpool_tx_meta_t` with `zone::invalid == 0`
 as the migration-free default, which the epee enum still fits
 (`invalid=0 … tor=3`). Reinstate verbatim, or has anything since consumed
-`bf_padding`? Rule 42 was verified inapplicable at §89.2 (its globs are
+`bf_padding`? Rule 142 was verified inapplicable at §89.2 (its globs are
 `rust/shekyl-engine-{state,file}/**`); re-verify at pre-flight rather than
 inherit.
 

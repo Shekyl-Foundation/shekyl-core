@@ -1,6 +1,8 @@
 ---
 description: Shekyl is v3-from-genesis with no Monero chain history. Remove dead pre-genesis code.
 alwaysApply: true
+scope: estate
+repos: [core, gui, prism]
 ---
 
 # No Monero legacy

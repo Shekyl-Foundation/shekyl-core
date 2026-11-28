@@ -90,7 +90,7 @@ shekyl-harness-wallet = { path = "../shekyl-harness-wallet", features = ["seeded
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 # The release-admission tests open under `GenesisPin::for_network`.
 # The store admits a table and does not know which networks exist (rule
-# 71); the test needs the type that selects the production tables. Already
+# 171); the test needs the type that selects the production tables. Already
 # a normal dependency of shekyl-chain-rules (rule 17); test-only here.
 shekyl-address = { path = "../shekyl-address" }
 # The constants the connect tests compare recorded columns against since E6

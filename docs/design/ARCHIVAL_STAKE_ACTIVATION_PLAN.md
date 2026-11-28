@@ -8,7 +8,7 @@ entire archival-`P` subsystem: nothing downstream runs in production until it la
 **Status:** ROUND 0 (scoping) + **ROUND 1 (per-SA-DQ design, §5 — source-grounded; SA-R1-a/c/d
 ratified, SA-R1-b ratified-with-crash-taxonomy, §5.7, 2026-07-18)** — for review; no code. Rounds
 accrete in this one doc. **Process rule:**
-[`26-sub-pr-design-discipline`](../../.cursor/rules/26-sub-pr-design-discipline.mdc) (the
+[`126-sub-pr-design-discipline`](../../.cursor/rules/126-sub-pr-design-discipline.mdc) (the
 first-stake bootstrap derives persona key material — getting the derive boundary wrong is a
 privacy break, so the boundary is decided first). **Target: V3.0 pre-genesis** — it gates every
 genesis-critical archival arm.

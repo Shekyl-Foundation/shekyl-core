@@ -293,7 +293,7 @@ support count (`archival_support_block`, layout 35; §13.1). Admission
 reads a past block's roster from its seat row, as written when it
 connected, with each seat's key from the epoch snapshot, so it never
 replays the carry. Unanswered support draws are not that counter and
-are not `shortfall` or `issued_short`. Rule 42: the snapshot gate is the
+are not `shortfall` or `issued_short`. Rule 142: the snapshot gate is the
 red check.
 
 ## 6. What each site becomes
@@ -435,7 +435,7 @@ question adopts. It is not a second interim rule.
   term in §7.6.
 - `CONSENSUS_RULE_CENSUS.md`: the drawable-set rows and the support-draw
   rows. No new identifier family: this is `SO-D12`'s stream. A family
-  minted later registers in the same PR (rule 94).
+  minted later registers in the same PR (rule 194).
 - `IMPLEMENTATION_INDEX.md` and `CHANGELOG`. The change is consensus,
   pre-genesis, so it is a regenesis, and the release note says so.
 - The rename in §8, in that PR, not before.

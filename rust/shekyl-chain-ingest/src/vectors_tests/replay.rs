@@ -32,7 +32,7 @@ use super::Manifest;
 
 /// Hasher count the captured-chain tests pin, so one chain is the same run
 /// on every host. The host's parallelism would make the width, and the
-/// metrics, a property of the machine (rule 76).
+/// metrics, a property of the machine (rule 176).
 pub(crate) const CAPTURED_REPLAY_HASHERS: std::num::NonZeroUsize =
     match std::num::NonZeroUsize::new(4) {
         Some(n) => n,

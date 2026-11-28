@@ -29,7 +29,7 @@ specification.
 **Identifiers.** Family `SCS-`: `SCS-P#` for a question this round posed
 and its ruling (§13.3), `SCS-F#` for a defect found while grounding (§14).
 
-**Process.** [`26-sub-pr-design-discipline`](../../.cursor/rules/26-sub-pr-design-discipline.mdc):
+**Process.** [`126-sub-pr-design-discipline`](../../.cursor/rules/126-sub-pr-design-discipline.mdc):
 a design round on consensus behaviour. No implementation commit lands
 before the preconditions in §11 hold.
 
@@ -471,7 +471,7 @@ not claim `P` stores them.
   `rust/shekyl-crypto-pq/src/signature.rs:52`, `:66`). The new scheme
   keeps both values. The scheme byte is the algorithm tag. The receipt uses a new value, 3: Ed25519 + FN-DSA-1024.
   A later change of scheme is a new value and a version bump under
-  [`42-serialization-policy`](../../.cursor/rules/42-serialization-policy.mdc).
+  [`142-serialization-policy`](../../.cursor/rules/142-serialization-policy.mdc).
 - **FN-DSA-1024 (level V)**, inside the hybrid structure, for the receipt
   and for the witness's signature on the bundle. Ruled (§13.1).
 - **Implementation.** The `fn-dsa` crate, pinned to an exact version with
@@ -599,7 +599,7 @@ The bundle for `h` is admissible only in a block `h_incl` with
 - The bitmap has a fixed length, so there is no list of `j` to frame and no
   repeat to refuse.
 - Every record is the same width, 1,397 bytes.
-- One rule-42 version bump covers the bundle.
+- One rule-142 version bump covers the bundle.
 
 **The bitmap** (`SCS-P35`): draw `j` is bit `j mod 8` of byte `⌊j / 8⌋`,
 least significant bit first. Padding bits are zero, and a set padding bit
@@ -641,7 +641,7 @@ one network verifies on no other.
   signature is not fixed-width breaks this construction**, and needs
   frames or a different commitment along with its version bump.
 - **The header field is renamed** (`SCS-P34`): the block header's
-  `attestation_root` becomes `section_root`, in the same rule-42 bump that
+  `attestation_root` becomes `section_root`, in the same rule-142 bump that
   changes what it commits to. The field keeps its place; it does not keep
   a name for a value it no longer holds.
 - **The prunable hash and the header root**, fixed with the verifier's
@@ -943,7 +943,7 @@ the fork point.
 - **Above:** `anchor_height < h`, checked at admission. It is what makes
   "nothing above `h` enters a bundle's validity" a property of this rule.
   An honest read satisfies it because `W₂ + L ≤` anchor depth, and that
-  relation is asserted on every rule set, as rule-set data (rule 71), so
+  relation is asserted on every rule set, as rule-set data (rule 171), so
   a set that shortens the epoch or the depth cannot break it silently.
   A Fakechain schedule that breaks it is refused where it is built, as a
   typed error (PR #1047, merged 2026-10-13;
@@ -1672,7 +1672,7 @@ epoch's open (§4.3), so no epoch's counts depend on the one before.
 | `SCS-P2` | "Revealed once" against the weight limit | **Each carrier carries the whole seed.** SUPERSEDED 2026-10-11 (`SCS-P14`): one bundle, one seed |
 | `SCS-P3` | Re-derivable coinbase key material | **Dropped; Q10 stands.** The seed and the witness key are fresh randomness per block, independent of each other, in memory only. A value derived from the coinbase shared secret is known to the coinbase recipient. A persistent witness secret is rejected. Loss is harmless: NonObservation, never misses |
 | `SCS-P4` | The form of the draw mapping | **Rejection sampling over the static set**, capped at 256 attempts, the cap pinned by a vector (§4.4, §4.5) |
-| `SCS-P5` | The record layout | **Kept: input tag and `j`.** `(P, s)` is derived. `h` is the carrier's, beside the seed. Prunable per record: `attempt` (added by `SCS-P13`), `anchor_height`, `delivery_digest`, the receipt. One rule-42 bump for record and carrier. A selection KAT and a test-only replay assertion; no runtime field. The kept half is SUPERSEDED 2026-10-11 (`SCS-P17`): a pass bitmap replaces the input tag and `j` (§7.2) |
+| `SCS-P5` | The record layout | **Kept: input tag and `j`.** `(P, s)` is derived. `h` is the carrier's, beside the seed. Prunable per record: `attempt` (added by `SCS-P13`), `anchor_height`, `delivery_digest`, the receipt. One rule-142 bump for record and carrier. A selection KAT and a test-only replay assertion; no runtime field. The kept half is SUPERSEDED 2026-10-11 (`SCS-P17`): a pass bitmap replaces the input tag and `j` (§7.2) |
 | `SCS-P6` | Q9 bytes | **Amended:** the commitment covers the seed, `h`, and each record's `j` with its prunable fields. The bytes are SUPERSEDED 2026-10-11 (`SCS-P16`); the coverage stands, with the bitmap in place of each `j` (§7.3) |
 | `SCS-P7` | A bound on `anchor_height` | **None.** The lower bound keyed on `h` is implied by the nonce, which contains `block_hash(h)`, and is not checked (§9.1) *Amended 2026-10-12 (`SCS-P32`):* "none" is the lower bound's answer. An upper bound, `anchor_height < h`, is checked at admission (§9.1) |
 | `SCS-P8` | `issued` above 255 | **Saturate.** The list of issued draws is the selection's operand |
@@ -1717,7 +1717,7 @@ under rule 21 as a re-alignment.
 | `SCS-P28` | Where a bundle waits for inclusion | **A separate bundle queue in the pool**, not a transaction record: keyed by `h`, one per `h`, bounded at `W₂`, admitted by the bundle rule against the tip, re-checked after a reorg, persisted (§7.5) |
 | `SCS-P29` | The pool's fee floor for a transaction returned from a popped block | **No bypass based on how a transaction arrived.** "`kept_by_block` skips `policy_form`" is deleted in DRS-E5 (`E5-Q1`, partly reopened). The ruling of 2026-10-02 applied |
 | `SCS-P30` | Housekeeping | **`SCV-Q5`'s gate accepts `ByConstruction`** for a rule the bundle cannot express: `SO-D9` (i) and membership. §2 is re-pinned whole. The proposal's §2.2 is restated as referential integrity only, and its evidence item 11 is marked as not yet true. The sim calls the production draw functions (`SCS-F15`) |
-| `SCS-P31` | Which lane builds what | **Three lanes, split by what needs checking** (rule 19). This slice: validity — this specification, the verifier's view trait, the pure verifier in `shekyl-chain-rules`, and FN-DSA increments 3 and 4. `SO-D12`: state — its increment 1, the snapshot in its increment 2, and one cutover increment (rule 07) that implements the view on its store, calls the verifier at admission, writes the kept projection, and deletes the attestation path. DRS-E5: transport. **The contracts between lanes are the view trait and the kept projection type**, defined here first (§9.6) |
+| `SCS-P31` | Which lane builds what | **Three lanes, split by what needs checking** (rule 119). This slice: validity — this specification, the verifier's view trait, the pure verifier in `shekyl-chain-rules`, and FN-DSA increments 3 and 4. `SO-D12`: state — its increment 1, the snapshot in its increment 2, and one cutover increment (rule 107) that implements the view on its store, calls the verifier at admission, writes the kept projection, and deletes the attestation path. DRS-E5: transport. **The contracts between lanes are the view trait and the kept projection type**, defined here first (§9.6) |
 
 ### 13.6 Posed 2026-10-11, ruled 2026-10-12
 
@@ -1728,7 +1728,7 @@ Found while writing the bundle into §7 and §9, and the contracts into
 | --- | --- | --- |
 | `SCS-P32` | `SCS-P15` says a bundle's validity depends on nothing above `h`, but the receipt's anchor was held below `h` only by today's constants | **Admission checks `anchor_height < h`, and `W₂ + L ≤` anchor depth is asserted on every rule set**, as rule-set data. Recorded as an **amendment to `SCS-P7`**, not a reversal: P7's reason for no lower bound stands (§9.1) |
 | `SCS-P33` | The budget's integer form: `c · 9·D / SEB` floors to zero below about 555 pairs; a bundle from the previous epoch was counted against the new `D`; a block can have `count(h) = 0` | **Budget = `c · (⌊9·D / SEB⌋ + 1)`, with `D` the largest `D` among the epochs of the bundles in the section.** *Adjusted wording:* one rule, not a two-epoch exception. **A `count(h) = 0` bundle is admissible**, which keeps the rule uniform; not filing it is challenger policy (§7.1, §7.4) |
-| `SCS-P34` | Whether the header root is the existing `attestation_root` field, and CEN-B4's fate | **Reuse the field and rename it**, `section_root` (the root commits the block's section, one reference per admitted bundle; `INPUT_GRAMMAR.md` IG-Q102), in the same rule-42 bump. *Adjusted:* the rename; a field does not keep a name for a value it no longer holds (rule 93). **B4 is retired by ruling for a new row**, through the census arm. `SCS-F19` is smaller than it read: DRS-E5 has nothing to reopen (§14) |
+| `SCS-P34` | Whether the header root is the existing `attestation_root` field, and CEN-B4's fate | **Reuse the field and rename it**, `section_root` (the root commits the block's section, one reference per admitted bundle; `INPUT_GRAMMAR.md` IG-Q102), in the same rule-142 bump. *Adjusted:* the rename; a field does not keep a name for a value it no longer holds (rule 93). **B4 is retired by ruling for a new row**, through the census arm. `SCS-F19` is smaller than it read: DRS-E5 has nothing to reopen (§14) |
 | `SCS-P35` | The bundle's bytes | **The commitment of §7.3 under a new label; the bitmap least significant bit first with zero padding, checked.** *Stated outright:* records follow in ascending `j` over the set bits and their number equals the popcount, or the bundle is refused; and "no frame" rests on fixed-width records, which rests on FN-DSA-1024's padded signature and the fixed canonical encoding, written down where a scheme change will meet it (§7.2, §7.3). `…-batch-v1` and its registry row are superseded; *re-ruled 2026-10-12*, they are not deleted (§11.1) |
 | `SCS-P36` | What a backfill verifies | **Hash equality against the header root's term is the acceptance rule.** Re-verifying receipts is optional and bounded by the bond journals' horizon. This corrects `SCS-P22`'s "can be re-verified" (§8) |
 | `SCS-P37` | Whether the verifier returns the derived draws | **Yes.** `Admitted::draws` is part of the contract between the verifier and the writer, in §9.6 beside the view trait, and the settlement lane sees it before it builds its cutover increment |

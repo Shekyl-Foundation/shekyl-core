@@ -74,7 +74,7 @@ host to select exactly its three arms.
 
 | | |
 | --- | --- |
-| Device | The floor device (rule 76): Raspberry Pi 4 Model B, 4 cores, aarch64 |
+| Device | The floor device (rule 176): Raspberry Pi 4 Model B, 4 cores, aarch64 |
 | Toolchain | rustc 1.94.0, LLVM 21.1.8, `aarch64-unknown-linux-gnu` |
 | Codegen | `RUSTFLAGS` and `CARGO_BUILD_RUSTFLAGS` unset; no cargo configuration file. The shipping configuration: no `target-cpu` |
 | Governor | `ondemand` on every core |

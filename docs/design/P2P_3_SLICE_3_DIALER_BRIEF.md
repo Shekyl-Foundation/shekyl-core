@@ -1,7 +1,7 @@
 # P2P-3 slice 3 — discovery and the dialer
 
 **Status: IMPLEMENTED (PR-3, #1056, 2026-10-13) — §3.1–§3.3 of the consolidated plan landed: the Rust dialer is the only dialer, the C++ dial path and the C++ peerlist are deleted, every row of the deletion table checks clean, the freeze list's function rows are discharged; un-drafted after the three-node run.** *Records-was: REVIEWED — closed 2026-10-12 (Rick), on #1037 (R1–R5 and the
-corrections); implementation is PR-3.** Design before code. Rule 26 is
+corrections); implementation is PR-3.** Design before code. Rule 126 is
 cited. Every PR-3 commit implements this file as it stands at that commit.
 *Records-was: OPEN — no implementation starts from this file until a
 review of it has closed.*

@@ -475,7 +475,7 @@ post-state form was chosen over a current-set echo with a separate drop-shard fi
 REJECTED (2026-09-20); the post-state form stays because `Release` and `Reinstate` read uniformly
 under it.
 
-Rust-native verify: `shekyl-archival-retention::bond_post` (rule 20). **Ratified by the maintainer;**
+Rust-native verify: `shekyl-archival-retention::bond_post` (`RULE_20_RUST_VS_CPP`). **Ratified by the maintainer;**
 the current-set-echo alternative is declined.
 
 On block connect for **JoinMarket:** create `ArchivalBondRecord` (§4.1); credit
@@ -483,7 +483,7 @@ On block connect for **JoinMarket:** create `ArchivalBondRecord` (§4.1); credit
 
 On block connect for **Release** (§4.3 "On confirm"; connect fold + pop twin landed
 Rust-native, `shekyl-archival-retention::bond_connect` over
-`shekyl_archival_release_connect` (deleted, `DEL-008`) / `shekyl_archival_release_pop` (deleted, `DEL-008`) — rule 20, P2B-8
+`shekyl_archival_release_connect` (deleted, `DEL-008`) / `shekyl_archival_release_pop` (deleted, `DEL-008`) — `RULE_20_RUST_VS_CPP`, P2B-8
 implementation locus; **C++ dispatch wiring LANDED**: `add_transaction` Release arm →
 `apply_archival_release` single writer, `m_archival_bond_release_log` pre-image
 journal, `pop_block` → `revert_archival_releases_at_height`, verify dispatch in

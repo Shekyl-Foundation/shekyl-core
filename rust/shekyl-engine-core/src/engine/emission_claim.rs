@@ -214,7 +214,7 @@ use super::emission_source::{BondContext, EmissionClaimSource, EpochSnapshot};
 
 /// Bytes of the [`TX_WEIGHT_LIMIT`] envelope reserved for everything
 /// outside the emission vin, sized by worst-case arithmetic over the wire
-/// layout (`tx_fee_model`'s field constants; rule 75: rationale + bounds):
+/// layout (`tx_fee_model`'s field constants; rule 175: rationale + bounds):
 ///
 /// - tx prefix + 16 vouts + their `tx_extra` KEM ciphertexts (the dominant
 ///   vout-side term: 16 × ~1.1 KiB) ≈ 19.4 KiB,
@@ -276,7 +276,7 @@ pub enum EmissionClaimError {
     /// disagrees with the pair-indexed accumulation; a reward sum
     /// overflowing `u64`; a window epoch whose close height does not
     /// exist) — malformed input from an untrusted daemon, refused loudly
-    /// (`25-rust-architecture.mdc`, §"Decoding untrusted bytes"), never
+    /// (`125-rust-architecture.mdc`, §"Decoding untrusted bytes"), never
     /// skipped-and-continued: a
     /// daemon that mis-serializes one epoch cannot be trusted for the
     /// window.

@@ -22,7 +22,7 @@
 //! re-send the *stored* value through the same choke path (pin P-2), never a
 //! re-encode.
 //!
-//! ## Rule-18 note on the bound-bytes twin
+//! ## Rule-118 note on the bound-bytes twin
 //!
 //! Engine-core's `PBoundBytes` is the transform-shaped byte↔persona pairing;
 //! this block persists its state-shaped twin as `(persona, tx_bytes)` fields.
@@ -58,11 +58,11 @@ pub use outcomes::{
 /// [`PendingBondPost::bond_post_offset_blocks`] from bare `u64` to
 /// [`BlockCount`] (height-semantics Phase 2e, C4; postcard bytes of the
 /// transparent `u64` are identical; the schema type-name change still
-/// bumps per rule 42). Pre-genesis: refuse, don't migrate. **v11** retypes the
+/// bumps per rule 142). Pre-genesis: refuse, don't migrate. **v11** retypes the
 /// dispatch-clock stamp fields (`anchor_t0`, `Dispatched::at`) from
 /// ordinal `BlockHeight` to [`ChainCount`] (height-semantics Phase 2b;
 /// postcard bytes of the transparent `u64` are identical; the schema
-/// type-name change still bumps per rule 42). Pre-genesis: refuse, don't
+/// type-name change still bumps per rule 142). Pre-genesis: refuse, don't
 /// migrate. **v10** renames the
 /// v9 `PendingUnbond` record set to [`PendingRelease`] (the internal
 /// Unbond → Release vocabulary rename; wire `BondPostKind` discriminant `2`
@@ -196,7 +196,7 @@ impl core::fmt::Display for CenRowName {
 /// The cause of a terminal daemon verdict, as the pending record keeps it.
 ///
 /// The persisted twin of engine-core's `TerminalErrorKind`, which this crate
-/// cannot name (rule 18: the state-shaped copy lives with the record that
+/// cannot name (rule 118: the state-shaped copy lives with the record that
 /// persists it). Engine-core converts into it; a cause that conversion does
 /// not know becomes [`Self::Unrecognized`], so a future engine-side variant
 /// can never fail to persist.

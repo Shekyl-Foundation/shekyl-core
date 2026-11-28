@@ -8,7 +8,7 @@
 //! [`OutputHandle`] is the engine-side opaque identifier for a wallet
 //! output position. It is produced by [`derive_output_handle`] from
 //! `(view_secret, tx_hash, output_index)` via cSHAKE256. Per
-//! `.cursor/rules/18-type-placement.mdc`, this is a transform-shaped
+//! `.cursor/rules/118-type-placement.mdc`, this is a transform-shaped
 //! type: the canonical definition is the function, and the byte value
 //! is reproducible by anyone with the inputs. Storage of a handle in
 //! `TransferDetails` (or elsewhere) is a memo of the function's
@@ -50,7 +50,7 @@
 //! # `view_secret` parameter type
 //!
 //! Takes `&[u8; 32]` rather than the typed `ViewSecret` newtype.
-//! Per the canonical-bytes pattern in `.cursor/rules/18-type-placement.mdc`,
+//! Per the canonical-bytes pattern in `.cursor/rules/118-type-placement.mdc`,
 //! the cryptographic function consumes byte primitives; the call site
 //! converts via `keys.view_sk.as_canonical_bytes()`. This keeps the
 //! crate consumable by callers with raw-byte view-secret material

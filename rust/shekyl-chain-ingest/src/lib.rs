@@ -206,7 +206,7 @@ pub mod pow;
 /// What a forged transaction pays (`CHAIN_FORGE.md` §11.4).
 #[cfg(all(feature = "pipeline", any(test, feature = "forge")))]
 pub mod priced;
-/// The seat `Follow::producer` holds, in every `pipeline` build (rule 25).
+/// The seat `Follow::producer` holds, in every `pipeline` build (rule 125).
 #[cfg(feature = "pipeline")]
 pub mod producer_seat;
 #[cfg(feature = "pipeline")]

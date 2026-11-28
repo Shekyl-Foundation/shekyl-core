@@ -203,7 +203,7 @@ impl std::fmt::Debug for BondPostMatch {
 
 /// A recovered `P`-owned funding output's **public identity** (WI-2 D-A1,
 /// `ARCHIVAL_BOND_WI2_ASSEMBLY.md` §3.1) — the transform-shaped twin of the
-/// persisted [`PFundingOutputRecord`] (rule 18), carrying everything bond
+/// persisted [`PFundingOutputRecord`] (rule 118), carrying everything bond
 /// assembly needs to select, path-prove, and re-derive spend secrets for the
 /// output without a targeted network fetch. **No derived secrets** — `y` / `z`
 /// / `k_amount` / `combined_shared_secret` stay inside the offload closure and
@@ -218,7 +218,7 @@ impl std::fmt::Debug for BondPostMatch {
 /// engine-core↔engine-state *serialization boundary*, not incidental
 /// duplication. `PFundingOutputRecord` carries `Serialize`/`Deserialize`/`Schema`
 /// and *is* the on-disk format gated by `PSCAN_STATE_VERSION` — changing it is a
-/// persisted-schema event (rule 42: version bump + snapshot check). This
+/// persisted-schema event (rule 142: version bump + snapshot check). This
 /// transform twin is the in-memory scan-extraction result crossing the actor
 /// boundary, version-free, so the live scan path can evolve without touching the
 /// frozen persisted format. That decoupling is also the seam along which the two
@@ -277,7 +277,7 @@ impl std::fmt::Debug for FundingOutputMatch {
 }
 
 impl From<&FundingOutputMatch> for PFundingOutputRecord {
-    /// The rule-18 transform→state seam: field-for-field into the persisted twin.
+    /// The rule-118 transform→state seam: field-for-field into the persisted twin.
     fn from(m: &FundingOutputMatch) -> Self {
         PFundingOutputRecord {
             p_slot: m.p_slot,
@@ -297,7 +297,7 @@ impl From<&FundingOutputMatch> for PFundingOutputRecord {
 }
 
 impl From<&PFundingOutputRecord> for FundingOutputMatch {
-    /// The rule-18 state→transform seam (resume from a sealed state).
+    /// The rule-118 state→transform seam (resume from a sealed state).
     fn from(r: &PFundingOutputRecord) -> Self {
         FundingOutputMatch {
             p_slot: r.p_slot,
