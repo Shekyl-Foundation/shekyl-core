@@ -267,7 +267,7 @@ const fn inputs_under_weight_limit(outputs: NonCoinbaseOutputs, layers: SpendLay
 }
 
 /// The input cap (`ICD-R1`): the most inputs the weight limit admits at the
-/// lightest legal shape, over every legal depth. [`MAX_FCMP_INPUTS`] is this.
+/// lightest legal shape, over every legal depth. [`MAX_FCMP_INPUTS`](super::MAX_FCMP_INPUTS) is this.
 pub(super) const fn derive_input_cap() -> usize {
     let mut cap = 0;
     let mut depth = MIN_SPEND_LAYERS;
