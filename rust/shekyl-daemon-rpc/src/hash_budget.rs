@@ -25,12 +25,14 @@ use std::time::{Duration, Instant};
 
 use shekyl_rpc_types::errors::{Diagnostic, ErrorClass, RpcError};
 
-/// One RandomX hash on the floor device, thread-CPU 99th percentile
-/// (RT-W10, `docs/benchmarks/rt_w10_request_cost_20261102.md`).
+/// One RandomX hash on the floor device, thread-CPU 99th percentile:
+/// RT-W10's header series on the second floor device (1.5 GHz) with
+/// the RandomX rounding fix,
+/// `docs/benchmarks/rt_w10_hash_series_20261128.md`.
 /// `pow` spends this once, after the seed's cache is held.
 /// A header read with `pow` does not: it reads the hash recorded at
 /// validation.
-pub const HASH_CPU_NANOS: u64 = 1_290_885_199;
+pub const HASH_CPU_NANOS: u64 = 1_526_655_460;
 
 /// The share of one core the long-run charge rate allows, in thousandths.
 /// The handshake budget's share.
@@ -204,7 +206,7 @@ mod tests {
     }
 
     #[test]
-    fn one_hash_is_about_five_seconds_of_the_share() {
-        assert_eq!(HASH_EARNED_EVERY, Duration::from_millis(5164));
+    fn one_hash_is_about_six_seconds_of_the_share() {
+        assert_eq!(HASH_EARNED_EVERY, Duration::from_millis(6107));
     }
 }

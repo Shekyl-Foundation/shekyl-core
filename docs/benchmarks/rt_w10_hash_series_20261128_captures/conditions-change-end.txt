@@ -1,0 +1,23 @@
+when 2026-11-28T12:17:07Z
+load 1.00 1.01 1.24
+governor ondemand
+cur_khz 1500000
+temp_millic 51608
+daemon inactive
+---time_in_state---
+600000 46325914
+700000 386877
+800000 49155
+900000 12849
+1000000 15503
+1100000 18092
+1200000 15964
+1300000 17776
+1400000 15193
+1500000 10841508
+---total_trans---
+450822
+---hwmon---
+name cpu_thermal
+name rpi_volt
+alarm 0

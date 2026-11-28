@@ -149,8 +149,14 @@ profile because the default is too slow under callgrind).
 ## 9. RandomX cache derivation (`BA-T14`)
 
 **Instrument.** `shekyl-pow-randomx`'s `cache_derive` bench, light mode,
-100 samples: never yet run on the floor (341 ms on x86 against the 200 ms
-target).
+100 samples. Run on the floor twice: 2.09 s
+([`cache_derive_pi4_20261110.txt`](cache_derive_pi4_20261110.txt), 1.8 GHz)
+and 2.30 s ([`cache_derive_pi4_20261128.txt`](cache_derive_pi4_20261128.txt),
+the second floor device at 1.5 GHz), each eleven times the 200 ms target.
+The target is drift
+([`RANDOMX_ROUNDING_DECISION.md`](../design/RANDOMX_ROUNDING_DECISION.md)
+§7). The row stays here until it is restated; the session then re-runs
+this bench against the restated value.
 
 | Constant | What the session reads |
 | --- | --- |

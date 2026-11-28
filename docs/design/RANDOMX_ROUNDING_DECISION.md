@@ -14,7 +14,7 @@ RandomX rounds every floating-point instruction by the mode the last CFROUND cho
 2. computes both lanes;
 3. writes back the caller's word before the block ends.
 
-The caller's word is read once per program run (`FpEnv::capture`, from `VmState::execute_program`: eight reads per hash), not per instruction. When the mode is nearest and the caller's control bits already equal the fixed nearest word, the instruction is plain Rust. Otherwise it goes through a block too, so a caller with flush-to-zero on still gets IEEE results.
+The caller's word is read once per program run (`FpEnv::capture`, from `VmState::execute_program`: eight reads per hash), not per instruction. When the mode is nearest and the caller's control bits already equal the fixed nearest word, the instruction is plain Rust. Otherwise it goes through a block too, so a caller with flush-to-zero on still gets IEEE results. Whether the caller's word allows plain Rust is decided once per iteration, by which of two instruction loops runs, not in each instruction (§6).
 
 Two things follow by construction:
 
@@ -184,11 +184,52 @@ inputs by default), runs nightly.
 
 Both candidates were byte-identical to the C reference in every differential leg on both architectures: T2, all 1,024 canonical pins, and correctness mode. (c) matched the hardware instruction in every operation × mode cell of the per-op fuzz: 350,006,561 cases per cell on x86_64 and 70,006,561 on aarch64, with 0 mismatches. (c)'s x86 figure is an upper bound from a scalar, per-lane prototype. Compiling the FMA in, so that no run-time check remains, did not lower it.
 
-<!-- READ-ONCE -->
+**Reading the caller's word once per run, against once per instruction (ruled: measure in this change).** On the floor device, one thread, the production path, four interleaved rounds of three passes over eight inputs; every variant built from the same tree, a bench-only edit of `fpu_rounding.rs` that is not committed:
+
+| variant | median ms per hash |
+|---|---|
+| the code before this change | 1,474.7 |
+| read once per run, fixed word from a table (as built) | 1,637.5 |
+| read once per run, fixed word computed in a register | 1,635.5 |
+| read in every block (`mrs` before the write), fixed word in a register | 1,638.1 |
+
+Reading once per run and reading in every block differ by 0.04 %, inside the rounds' spread: on this core an `mrs` of FPCR costs nothing measurable beside the two `msr` writes. The read stays once per run. The table load costs 0.1 %, also noise, and x86_64 needs the table anyway (`ldmxcsr` takes only a memory operand).
+
+The same rounds put that build 2.5 % behind the comparison's per-instruction prototype (1,598 ms). Two things in it cost time, and they had to go together:
+
+- **The per-instruction test of whether nearest may run as plain Rust** (`mode == NEAREST && plain_nearest`). That fact is fixed for the run, so the VM now picks one of two instruction loops per iteration (`run_instructions::<PLAIN>`), and an instruction tests only its mode.
+- **The table of fixed words on aarch64.** With two loops in one function, the table's address spilled to the stack, and every directed-mode instruction then loaded it and the word before its `msr`. With the loops split and the table kept, the hash measured 1,643 ms, no faster. On aarch64 the fixed word is now computed from the mode in a register (two instructions, no load). x86_64 keeps a table of promoted constants, because `ldmxcsr` takes only a memory operand.
+
+Three more interleaved rounds on the floor device, one thread:
+
+| build | median ms per hash | against the code before |
+|---|---|---|
+| the code before this change | 1,477.5 | |
+| loops split, table kept (`a09ef87e16`) | 1,643.2 | +11.2 % |
+| loops split, fixed word in a register (`2d5f7e1367`, as built) | 1,531.8 | +3.7 % |
+
+As built, the change costs 3.7 % of a single-thread hash on the floor device, against the comparison's 9.4 % for the per-instruction prototype. On four cores the floor device's rate goes from 2.80 to 2.67 hashes per second.
+
+The raw logs of these rounds are in the Foundation's private operations records, beside the comparison's.
 
 ## 7. Measured with this change, for the record
 
-<!-- RECORD -->
+Every number here is from the second floor device (a Raspberry Pi 4 Model B with 4 GB, 1.5 GHz), as built at `2d5f7e1367`; the commit after it changes only x86_64 code.
+
+**`HASH_CPU_NANOS`** is now 1,526,655,460 ns, RT-W10's header series at the thread-CPU 99th percentile ([`rt_w10_hash_series_20261128.md`](../benchmarks/rt_w10_hash_series_20261128.md)). The same device measured 1,480,596,442 ns before the change, so the fix adds 3.1 % at the 99th percentile. The rest of the move from 1,290,885,199 ns is the device: that figure came from the first floor device at 1.8 GHz, and rule 176 provisions at the slower one. One hash is now earned every 6,107 ms of the budget's quarter-core share, up from 5,164 ms.
+
+**The cache derivation (BA-T14)** runs no floating-point instruction, and this change does not touch it. Re-measured for the record: 2.30 s median over three criterion runs ([`cache_derive_pi4_20261128.txt`](../benchmarks/cache_derive_pi4_20261128.txt)).
+
+**`RANDOMX_V2_RUST.md` §8's targets are drift.** None of them was restated anywhere:
+
+- The 36 ms ceiling was "3.0x the C light-VM-JIT median" (12 ms), measured against a C path that no longer exists (§8 cites `src/crypto/rx-slow-hash.c`, deleted). The CI gate kept the ratio (`LATENCY_RATIO_BUDGET = 3.0`, `shekyl-randomx-differential/src/mode_latency.rs`), but against the C reference interpreted, not JIT. The absolute ceiling and the "about four hours" of sync it implies were never restated; `RANDOMX_V2_PLAN.md` still repeats them. A single-thread hash measures 0.74 s on the x86 build VM and 1.53 s on the floor device, 20 and 42 times the ceiling.
+- The 200 ms cache-derivation target: the floor device measures 2.09 s (2026-11-10, 1.8 GHz) and 2.30 s (this run), eleven times the target. The ledger row stays stale until the target is restated.
+
+Restating them is a decision this record does not make.
+
+**The floor in `RANDOMX_V2_MINING_ASYMMETRY.md`** is Appendix B.1: this device's single-thread latency and four-core aggregate rate, before and after the change, with the §2 provenance.
+
+**Owed: x86_64 on bare metal.** These re-measurements are to be repeated for x86_64 on bare metal, not on the shared build VM. No bare-metal x86_64 host is free for it yet.
 
 ## 8. Open
 

@@ -1629,7 +1629,9 @@ the admin listener.
   - Bounded callers share one hash budget, the handshake budget's shape
     (`charges ≤ share × elapsed + capacity`). The share is a quarter of
     one core. One charge is `HASH_CPU_NANOS`, the header series' thread-CPU
-    99th percentile, 1,290,885,199 ns. A one-second burst of the share
+    99th percentile, 1,526,655,460 ns (re-measured 2026-11-28 on the
+    second floor device with the RandomX rounding fix,
+    [`rt_w10_hash_series_20261128.md`](../benchmarks/rt_w10_hash_series_20261128.md)). A one-second burst of the share
     cannot pay that charge, so the bucket holds one hash. A `pow`
     spends that hash after the seed's cache is held and before RandomX.
     A `pow` while the bucket is empty is `OverResourceBound`,

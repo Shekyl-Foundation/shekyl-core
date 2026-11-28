@@ -1,0 +1,61 @@
+# cache_derive on the second floor device (Raspberry Pi 4 Model B Rev 1.2, 4 GB, 1.5 GHz)
+# BA-T14, light mode, criterion 100 samples, three runs. Re-measured for the record with the RandomX
+# rounding fix (RANDOMX_ROUNDING_DECISION.md section 7); cache derivation runs no floating-point instruction.
+git revision 76c23f2f49363d72e6d234979c734223d18fecb5
+rustc 1.94.0, --release, target aarch64-unknown-linux-gnu (no target-cpu), cross-built on a build VM; binary checked by SHA-256 on the device
+standing daemon: none on this device; nothing else ran
+## run 1
+when 2026-11-28T09:19:31Z
+load 0.37 0.82 1.02
+governor ondemand
+cur_khz 1500000
+temp_millic 48686
+daemon inactive
+Gnuplot not found, using plotters backend
+Benchmarking cache_derive/derive
+Benchmarking cache_derive/derive: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 231.4s, or reduce sample count to 10.
+Benchmarking cache_derive/derive: Collecting 100 samples in estimated 231.36 s (100 iterations)
+Benchmarking cache_derive/derive: Analyzing
+cache_derive/derive     time:   [2.3072 s 2.3086 s 2.3101 s]
+
+## run 2
+when 2026-11-28T09:23:33Z
+load 1.23 0.98 1.02
+governor ondemand
+cur_khz 1500000
+temp_millic 56478
+daemon inactive
+Gnuplot not found, using plotters backend
+Benchmarking cache_derive/derive
+Benchmarking cache_derive/derive: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 230.0s, or reduce sample count to 10.
+Benchmarking cache_derive/derive: Collecting 100 samples in estimated 230.04 s (100 iterations)
+Benchmarking cache_derive/derive: Analyzing
+cache_derive/derive     time:   [2.3014 s 2.3047 s 2.3079 s]
+                        change: [-0.3207% -0.1709% -0.0218%] (p = 0.03 < 0.05)
+                        Change within noise threshold.
+
+## run 3
+when 2026-11-28T09:27:37Z
+load 1.24 1.05 1.02
+governor ondemand
+cur_khz 1500000
+temp_millic 58426
+daemon inactive
+Gnuplot not found, using plotters backend
+Benchmarking cache_derive/derive
+Benchmarking cache_derive/derive: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 236.0s, or reduce sample count to 10.
+Benchmarking cache_derive/derive: Collecting 100 samples in estimated 236.04 s (100 iterations)
+Benchmarking cache_derive/derive: Analyzing
+cache_derive/derive     time:   [2.3123 s 2.3150 s 2.3178 s]
+                        change: [+0.2674% +0.4486% +0.6340%] (p = 0.00 < 0.05)
+                        Change within noise threshold.
+
+## time at speed, core 3, run 1 start to run 3 end (09:19:31Z to 09:31:42Z)
+1500000 kHz: 73,006 jiffies of 10 ms; every lower bin together: 106 (99.86 % at the top clock)
+under-voltage alarm: 0 at both ends

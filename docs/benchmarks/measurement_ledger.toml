@@ -214,6 +214,7 @@ stale_through = [
   { through = "0c6029d37c8844e0c69213cba9a1d3f0c02e5b50", note = "Comments and doc strings only: text that described LMDB or the C++ store as live is restated for the Rust store. No code, constant or path changed, and nothing the capture priced moved." },
   { through = "a9f3fe58b815d59ff1d1bd42f8e0347edb03fc18", note = "Manifest only: the vendored circuit-abstraction and ec-gadgets declare rust-version 1.81, and the pin and content manifest move to the fork head that does. No code changed; nothing the capture priced moved." },
   { through = "08ee35aaef58304227340e0bda03d8ccf5b31db3", note = "The rules sweep (structural PR 4a) rewrites rule-number citations in comments on these paths, the core-class rules having moved to 101-199. No code line changed; no cost moved." },
+  { through = "8a6cd32c9657495f6ba24a02954f5f78a69f2ea9", note = "The RandomX rounding fix (option (b), RANDOMX_ROUNDING_DECISION.md, from the prototype fcc63aef32 to this commit): each floating-point instruction runs in its own asm! block that writes a fixed control word and writes the caller's back, with test-only oracles, a census and new tests beside it. The PoW hash block verification pays rises: the header hash on the floor device went 1,480.6 -> 1,526.7 ms at the thread-CPU 99th percentile, +3.1 % (docs/benchmarks/rt_w10_hash_series_20261128.md). Not a block-weight re-measurement; the block-weight rows stay stale from PL-D3." },
 ]
 
 [[constant]]
@@ -1356,6 +1357,7 @@ stale_through = [
   { through = "28529f778001552baf1dc36f1891d0b46d7d2463", note = "The hashing actor's cutover: cache_store.rs is deleted and the crate's docs restated; the caller of the derivation is now shekyl-hasher's builder thread. PreparedCache::derive itself is unchanged, so the 341 ms record and the 200 ms target are untouched, and the row stays stale. The floor device's derive is on record since 2026-11-10 (docs/benchmarks/cache_derive_pi4_20261110.txt, about 2.1 s) under the gated row cache_derive_iai. A later commit of the same change, 28529f7780, rewords one sentence of the crate's docs and touches no code." },
   { through = "12bd06df77dadaad90ee68e61d503e1197dd67a4", note = "Rustdoc only: the workspace rustdoc gate's link fixes (#1445, this commit and its parent a5e9d05d66) change doc and plain comment lines and no code; nothing the measurement ran is added, removed or reordered. Not re-measured." },
   { through = "08ee35aaef58304227340e0bda03d8ccf5b31db3", note = "The rules sweep (structural PR 4a) rewrites rule-number citations in comments on these paths, the core-class rules having moved to 101-199. No code line changed; no cost moved." },
+  { through = "8a6cd32c9657495f6ba24a02954f5f78a69f2ea9", note = "The RandomX rounding fix (option (b), RANDOMX_ROUNDING_DECISION.md): the VM's floating-point instructions and their tests. Cache derivation runs no floating-point instruction and is unchanged. Re-measured on the floor for the record at 76c23f2f49 (docs/benchmarks/cache_derive_pi4_20261128.txt): 2.30 s median on the second floor device at 1.5 GHz, after 2.09 s on the first at 1.8 GHz (cache_derive_pi4_20261110.txt). Both are eleven times the 200 ms target, which is drift (RANDOMX_ROUNDING_DECISION.md section 7); the row stays stale until the target is restated." },
 ]
 
 [[constant]]
@@ -1365,7 +1367,7 @@ needle = "Cache derivation must be at most 200 ms."
 measured_by = ["BA-T14"]
 status = "stale"
 stale_since = "bd7cea464ecd827489d5d7eac8e88eb0a192578d"
-carrier = "BA-T14 (BA-G9, BA-Q19). The record predates the real dispatch core; 341 ms on x86 against the 200 ms target, never run on the floor."
+carrier = "BA-T14 (BA-G9, BA-Q19). The ledger's capture predates the real dispatch core: 341 ms on x86. The floor device has since measured 2.09 s (2026-11-10, 1.8 GHz) and 2.30 s (2026-11-28, 1.5 GHz; docs/benchmarks/cache_derive_pi4_20261128.txt), eleven times the 200 ms target. The target is drift (RANDOMX_ROUNDING_DECISION.md section 7); until it is restated, a floor capture would mark current a target the floor contradicts."
 capture = "rust/shekyl-pow-randomx/BENCH_RESULTS.md"
 capture_rev = "f237aad327aba71cb2c59518c887e5bd44b5df8e"
 rev_source = "not recorded in the record; the last commit touching the crate's sources on the run date, 2026-05-22"
@@ -1381,6 +1383,7 @@ cleared = [
   { through = "d56e34bda4ac3b05c0018cbd8c4c607698aa2bab", reason = "In this path set, vm.rs's test module gains the_verifier_reproduces_the_canonical_known_answer (2f8386e9ae), which hashes one blob under the existing canonical test cache, its doc comment is reworded (df9ec749d1), and the test's seed check casts with try_from (d56e34bda4). Test code and a comment only: no code the verifier, the cache derivation or the VM runs is changed. VM allocation is unchanged." },
   { through = "c42ef64a2d2d26391d73686c2a8cd026a8887c15", reason = "C++ removal (#1299): comments only in shekyl-pow-randomx vm.rs; no code path changed, and nothing the capture priced has moved." },
   { through = "12bd06df77dadaad90ee68e61d503e1197dd67a4", reason = "Rustdoc only: the workspace rustdoc gate's link fixes (#1445, this commit and its parent a5e9d05d66) change doc and plain comment lines and no code; nothing the measurement ran is added, removed or reordered." },
+  { through = "8a6cd32c9657495f6ba24a02954f5f78a69f2ea9", reason = "The RandomX rounding fix (option (b), RANDOMX_ROUNDING_DECISION.md): VmState gains one field, fp: FpEnv, a Copy struct of the caller's control word and a bool, held inline; no heap allocation is added, removed or resized, so the per-call Vm allocation the capture timed is unchanged. The rest is the instruction loop and tests." },
 ]
 
 [[constant]]
@@ -1559,17 +1562,18 @@ cleared = [
   { through = "28529f778001552baf1dc36f1891d0b46d7d2463", reason = "The hashing actor's cutover: in the RandomX sources this row watches, cache_store.rs is deleted and docs are restated. compute_hash is unchanged, and pow still runs one hash under one CalcPow permit, now on a warm loan from the hasher. The per-hash thread CPU the capture timed has not moved, and HASH_CPU_NANOS is unchanged. A later commit of the same change, 28529f7780, rewords one sentence of the crate's docs and touches no code." },
   { through = "12bd06df77dadaad90ee68e61d503e1197dd67a4", reason = "Rustdoc only: the workspace rustdoc gate's link fixes (#1445, this commit and its parent a5e9d05d66) change doc and plain comment lines and no code; nothing the measurement ran is added, removed or reordered. HASH_CPU_NANOS is unchanged." },
   { through = "08ee35aaef58304227340e0bda03d8ccf5b31db3", reason = "The rules sweep (structural PR 4a) rewrites rule-number citations in comments on these paths, the core-class rules having moved to 101-199. No code line changed; no cost moved." },
+  { through = "8a6cd32c9657495f6ba24a02954f5f78a69f2ea9", reason = "After the capture's build (2d5f7e1367): fpu_rounding.rs's x86_64 fixed words become promoted constants in place of a static. x86_64 only; the aarch64 code the capture timed is unchanged." },
 ]
 
 [[constant]]
 name = "hash_cpu_nanos"
 defined_in = "rust/shekyl-daemon-rpc/src/hash_budget.rs"
-needle = "pub const HASH_CPU_NANOS: u64 = 1_290_885_199;"
+needle = "pub const HASH_CPU_NANOS: u64 = 1_526_655_460;"
 measured_by = ["BA-T40"]
 status = "current"
-capture = "docs/benchmarks/rt_w10_request_cost_20261102.md"
-capture_rev = "3d0bf6844c06d116e3601ea62e5953dc721be202"
-rev_source = "the record's results name the build: git revision 3d0bf6844c on the floor device (docs/benchmarks/rt_w10_request_cost_20261102.md, Results). The header series' thread-CPU 99th percentile, which the hash budget charges once per hash."
+capture = "docs/benchmarks/rt_w10_hash_series_20261128.md"
+capture_rev = "2d5f7e1367792ed44497767e6b59bc9e5b7bfdc2"
+rev_source = "capture header"
 path_set = "rpc-hash-budget"
 
 # --- gated rows: the daemon's block path ------------------------------
