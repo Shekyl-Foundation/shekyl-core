@@ -1,4 +1,4 @@
 upstream_repo=https://github.com/Shekyl-Foundation/monero-oxide
-upstream_branch=chore/crypto-resync-from-tip
-upstream_commit=c753b3475fc98c3eb32f7036e2c392a6242585bc
-sync_date=2026-11-23
+upstream_branch=chore/oxide-upstream-2026-11-26
+upstream_commit=6b73e4d5df6059a8df9a55e1c0c70e766b8729dd
+sync_date=2026-11-28
