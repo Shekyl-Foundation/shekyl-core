@@ -143,24 +143,24 @@ impl F128 {
     // RandomX's five floating-point operations, each rounded by `mode`
     // (the `fprc` CFROUND last set) through `fp`'s blocks.
 
-    fn add_unrestricted(self, rhs: Self, fp: &FpEnv, mode: u32) -> Self {
-        Self(fp.add(self.0, rhs.0, mode))
+    fn add_unrestricted<const PLAIN: bool>(self, rhs: Self, fp: &FpEnv, mode: u32) -> Self {
+        Self(fp.add::<PLAIN>(self.0, rhs.0, mode))
     }
 
-    fn sub_unrestricted(self, rhs: Self, fp: &FpEnv, mode: u32) -> Self {
-        Self(fp.sub(self.0, rhs.0, mode))
+    fn sub_unrestricted<const PLAIN: bool>(self, rhs: Self, fp: &FpEnv, mode: u32) -> Self {
+        Self(fp.sub::<PLAIN>(self.0, rhs.0, mode))
     }
 
-    fn mul_unrestricted(self, rhs: Self, fp: &FpEnv, mode: u32) -> Self {
-        Self(fp.mul(self.0, rhs.0, mode))
+    fn mul_unrestricted<const PLAIN: bool>(self, rhs: Self, fp: &FpEnv, mode: u32) -> Self {
+        Self(fp.mul::<PLAIN>(self.0, rhs.0, mode))
     }
 
-    fn div_masked(self, rhs: Self, fp: &FpEnv, mode: u32) -> Self {
-        Self(fp.div(self.0, rhs.0, mode))
+    fn div_masked<const PLAIN: bool>(self, rhs: Self, fp: &FpEnv, mode: u32) -> Self {
+        Self(fp.div::<PLAIN>(self.0, rhs.0, mode))
     }
 
-    fn sqrt_unrestricted(self, fp: &FpEnv, mode: u32) -> Self {
-        Self(fp.sqrt(self.0, mode))
+    fn sqrt_unrestricted<const PLAIN: bool>(self, fp: &FpEnv, mode: u32) -> Self {
+        Self(fp.sqrt::<PLAIN>(self.0, mode))
     }
 
     fn swap_lanes(self) -> Self {
@@ -1674,6 +1674,50 @@ impl VmState {
         }
     }
 
+    /// Spec §4.6.4: the 384 parsed instructions, once, under the
+    /// branch targets CBRANCH sets. `PLAIN` is
+    /// [`FpEnv::plain_nearest`] for this run: nearest-mode
+    /// floating-point instructions run as plain Rust only when it
+    /// holds ([`Self::execute_iteration`] picks the loop).
+    fn run_instructions<const PLAIN: bool>(&mut self) {
+        // Test-only: how often each instruction runs this iteration,
+        // for the subnormal test's census (the CBRANCH bound).
+        #[cfg(test)]
+        let mut runs = [0u16; PROGRAM_SIZE];
+        let mut instr_idx = 0usize;
+        while instr_idx < PROGRAM_SIZE {
+            self.exec_pc = u16::try_from(instr_idx).expect("PROGRAM_SIZE fits in u16");
+            self.branch_pc = u16::MAX;
+            let instr = self.program.instructions[instr_idx];
+            #[cfg(test)]
+            {
+                panic_hook::tick(self.fprc);
+                runs[instr_idx] += 1;
+            }
+            dispatch_instruction::<PLAIN>(&instr, self);
+            if self.branch_pc == u16::MAX {
+                instr_idx += 1;
+            } else {
+                instr_idx = usize::from(self.branch_pc);
+            }
+        }
+        self.exec_pc = u16::MAX;
+        self.branch_pc = u16::MAX;
+        #[cfg(test)]
+        {
+            let mut fdiv_m = [0u32; REGISTER_COUNT_FLT];
+            for ins in &self.program.instructions {
+                if matches!(decode_instruction_type(ins.opcode), InstructionType::FDivM) {
+                    fdiv_m[fp_reg(ins.dst)] += 1;
+                }
+            }
+            crate::fpu_rounding::fp_census::note_iteration(
+                runs.iter().copied().max().unwrap_or(0),
+                fdiv_m.iter().copied().max().unwrap_or(0),
+            );
+        }
+    }
+
     /// Run **one** iteration of the spec §4.6 loop body.
     ///
     /// Factored out of [`Self::execute_program`] so the per-iteration
@@ -1766,41 +1810,13 @@ impl VmState {
         // In Phase 2c the body is NOP per §5.1.1 frozen surface 1;
         // Phase 2d replaces dispatch_instruction's body with the
         // 28 opcode-handler dispatch table.
-        // Test-only: how often each instruction runs this iteration,
-        // for the subnormal test's census (the CBRANCH bound).
-        #[cfg(test)]
-        let mut runs = [0u16; PROGRAM_SIZE];
-        let mut instr_idx = 0usize;
-        while instr_idx < PROGRAM_SIZE {
-            self.exec_pc = u16::try_from(instr_idx).expect("PROGRAM_SIZE fits in u16");
-            self.branch_pc = u16::MAX;
-            let instr = self.program.instructions[instr_idx];
-            #[cfg(test)]
-            {
-                panic_hook::tick(self.fprc);
-                runs[instr_idx] += 1;
-            }
-            dispatch_instruction(&instr, self);
-            if self.branch_pc == u16::MAX {
-                instr_idx += 1;
-            } else {
-                instr_idx = usize::from(self.branch_pc);
-            }
-        }
-        self.exec_pc = u16::MAX;
-        self.branch_pc = u16::MAX;
-        #[cfg(test)]
-        {
-            let mut fdiv_m = [0u32; REGISTER_COUNT_FLT];
-            for ins in &self.program.instructions {
-                if matches!(decode_instruction_type(ins.opcode), InstructionType::FDivM) {
-                    fdiv_m[fp_reg(ins.dst)] += 1;
-                }
-            }
-            crate::fpu_rounding::fp_census::note_iteration(
-                runs.iter().copied().max().unwrap_or(0),
-                fdiv_m.iter().copied().max().unwrap_or(0),
-            );
+        // The caller's word is fixed for the run, so whether nearest
+        // mode may run as plain Rust is decided here, per iteration,
+        // and each instruction tests only its mode.
+        if self.fp.plain_nearest() {
+            self.run_instructions::<true>();
+        } else {
+            self.run_instructions::<false>();
         }
 
         // Spec §4.6.5: dataset read prep — capture read_ptr from
@@ -1986,7 +2002,7 @@ impl Drop for VmState {
 /// Pure NOP function. No-ops on every input. Phase 2d's body
 /// inherits the constant-time-or-explicit-rejection discipline per
 /// `30-cryptography.mdc` for per-opcode timing equivalence.
-fn dispatch_instruction(instr: &Instruction, state: &mut VmState) {
+fn dispatch_instruction<const PLAIN: bool>(instr: &Instruction, state: &mut VmState) {
     let dst = int_reg(instr.dst);
     let src = int_reg(instr.src);
     let imm = sign_extend_i32_to_i64(instr.imm32);
@@ -2122,7 +2138,8 @@ fn dispatch_instruction(instr: &Instruction, state: &mut VmState) {
         InstructionType::FAddR => {
             let dst = fp_reg(instr.dst);
             let src = fp_reg(instr.src);
-            state.f[dst] = state.f[dst].add_unrestricted(state.a[src], &state.fp, state.fprc);
+            state.f[dst] =
+                state.f[dst].add_unrestricted::<PLAIN>(state.a[src], &state.fp, state.fprc);
         }
         InstructionType::FAddM => {
             let dst = fp_reg(instr.dst);
@@ -2133,12 +2150,13 @@ fn dispatch_instruction(instr: &Instruction, state: &mut VmState) {
                 SCRATCHPAD_L2_MASK
             };
             let value = load_scratchpad_f128(state, state.r[src], imm, mask);
-            state.f[dst] = state.f[dst].add_unrestricted(value, &state.fp, state.fprc);
+            state.f[dst] = state.f[dst].add_unrestricted::<PLAIN>(value, &state.fp, state.fprc);
         }
         InstructionType::FSubR => {
             let dst = fp_reg(instr.dst);
             let src = fp_reg(instr.src);
-            state.f[dst] = state.f[dst].sub_unrestricted(state.a[src], &state.fp, state.fprc);
+            state.f[dst] =
+                state.f[dst].sub_unrestricted::<PLAIN>(state.a[src], &state.fp, state.fprc);
         }
         InstructionType::FSubM => {
             let dst = fp_reg(instr.dst);
@@ -2149,7 +2167,7 @@ fn dispatch_instruction(instr: &Instruction, state: &mut VmState) {
                 SCRATCHPAD_L2_MASK
             };
             let value = load_scratchpad_f128(state, state.r[src], imm, mask);
-            state.f[dst] = state.f[dst].sub_unrestricted(value, &state.fp, state.fprc);
+            state.f[dst] = state.f[dst].sub_unrestricted::<PLAIN>(value, &state.fp, state.fprc);
         }
         InstructionType::FScalR => {
             let dst = fp_reg(instr.dst);
@@ -2158,7 +2176,8 @@ fn dispatch_instruction(instr: &Instruction, state: &mut VmState) {
         InstructionType::FMulR => {
             let dst = fp_reg(instr.dst);
             let src = fp_reg(instr.src);
-            state.e[dst] = state.e[dst].mul_unrestricted(state.a[src], &state.fp, state.fprc);
+            state.e[dst] =
+                state.e[dst].mul_unrestricted::<PLAIN>(state.a[src], &state.fp, state.fprc);
         }
         InstructionType::FDivM => {
             let dst = fp_reg(instr.dst);
@@ -2170,11 +2189,11 @@ fn dispatch_instruction(instr: &Instruction, state: &mut VmState) {
             };
             let value = load_scratchpad_f128(state, state.r[src], imm, mask);
             let value = mask_register_exponent_mantissa(value, state.e_mask);
-            state.e[dst] = state.e[dst].div_masked(value, &state.fp, state.fprc);
+            state.e[dst] = state.e[dst].div_masked::<PLAIN>(value, &state.fp, state.fprc);
         }
         InstructionType::FSqrtR => {
             let dst = fp_reg(instr.dst);
-            state.e[dst] = state.e[dst].sqrt_unrestricted(&state.fp, state.fprc);
+            state.e[dst] = state.e[dst].sqrt_unrestricted::<PLAIN>(&state.fp, state.fprc);
         }
     }
 }
@@ -3685,7 +3704,7 @@ mod tests {
         let mut state = canonical_phase2d_state();
         state.fprc = fprc;
         let i = instr(opcode, dst, src, mod_, imm32);
-        dispatch_instruction(&i, &mut state);
+        dispatch_instruction::<true>(&i, &mut state);
         register_file_snapshot(&state)
     }
 
@@ -3850,7 +3869,7 @@ mod tests {
             let mut state = canonical_phase2d_state();
             state.r[1] = src_value;
             let i = instr(239, 0, 1, 0, 0);
-            dispatch_instruction(&i, &mut state);
+            dispatch_instruction::<true>(&i, &mut state);
             let snap = register_file_snapshot(&state);
             let mode = state.fprc;
 

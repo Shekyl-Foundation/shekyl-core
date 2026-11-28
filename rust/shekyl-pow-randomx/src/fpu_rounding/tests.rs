@@ -15,21 +15,15 @@
 use super::oracle::{self, Impl, Op, OPS};
 use super::*;
 
-/// Every packed operation through a block, nearest included.
-fn blocks_only() -> FpEnv {
-    FpEnv {
-        plain_nearest: false,
-        ..FpEnv::capture()
-    }
-}
-
+/// One packed operation through a block, nearest included
+/// (`PLAIN = false`).
 fn block(env: &FpEnv, op: Op, a: [f64; 2], b: [f64; 2], mode: u32) -> [f64; 2] {
     match op {
-        Op::Add => env.add(a, b, mode),
-        Op::Sub => env.sub(a, b, mode),
-        Op::Mul => env.mul(a, b, mode),
-        Op::Div => env.div(a, b, mode),
-        Op::Sqrt => env.sqrt(a, mode),
+        Op::Add => env.add::<false>(a, b, mode),
+        Op::Sub => env.sub::<false>(a, b, mode),
+        Op::Mul => env.mul::<false>(a, b, mode),
+        Op::Div => env.div::<false>(a, b, mode),
+        Op::Sqrt => env.sqrt::<false>(a, mode),
     }
 }
 
@@ -161,7 +155,7 @@ fn pairs(seed: u64, n_random: u64, mut each: impl FnMut(f64, f64)) {
 }
 
 fn cross_check(n_random: u64) {
-    let env = blocks_only();
+    let env = FpEnv::capture();
     let mut cases = 0u64;
     pairs(0x5EED_0B10, n_random, |a, b| {
         for &op in &OPS {
@@ -233,7 +227,7 @@ fn blocks_ignore_the_callers_flush_to_zero() {
     let (got, word_after) = with_caller_word(FLUSH_TO_ZERO_WORD, || {
         let env = FpEnv::capture();
         assert!(
-            !env.plain_nearest,
+            !env.plain_nearest(),
             "a flush-to-zero caller must send nearest through the blocks too"
         );
         let got: Vec<[f64; 2]> = cases
@@ -266,7 +260,7 @@ fn blocks_ignore_the_callers_flush_to_zero() {
 fn blocks_restore_the_callers_word() {
     for word in [FIXED_WORDS[0], FLUSH_TO_ZERO_WORD] {
         with_caller_word(word, || {
-            let env = blocks_only();
+            let env = FpEnv::capture();
             for mode in 0..4 {
                 for &op in &OPS {
                     let _ = block(&env, op, [1.0, 3.0], [3.0, 7.0], mode);

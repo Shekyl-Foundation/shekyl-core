@@ -26,7 +26,10 @@
 //! The caller's word is read once per program run
 //! ([`FpEnv::capture`], from `VmState::execute_program`), not per
 //! instruction. While the mode is nearest and the caller's word is
-//! already the fixed nearest word, an instruction is plain Rust.
+//! already the fixed nearest word, an instruction is plain Rust. That
+//! fact is fixed for the run, so the VM decides it once per iteration
+//! and runs one of two instruction loops (the `PLAIN` parameter of the
+//! operations); an instruction tests only its mode.
 //!
 //! This module is the crate's only reader and writer of MXCSR / FPCR;
 //! `scripts/ci/check_randomx_fpu_rounding.sh` holds it to a fixed
@@ -135,9 +138,23 @@ impl FpEnv {
         }
     }
 
+    /// The caller's control bits are the fixed nearest word: the VM
+    /// runs its instruction loop with `PLAIN = true`.
     #[inline(always)]
-    fn plain(&self, mode: u32) -> bool {
-        mode == NEAREST && self.plain_nearest
+    pub(crate) fn plain_nearest(&self) -> bool {
+        self.plain_nearest
+    }
+
+    /// Plain Rust for this instruction: nearest mode, in a loop the VM
+    /// runs only when [`Self::plain_nearest`] holds. With `PLAIN =
+    /// false` every instruction goes through a block.
+    #[inline(always)]
+    fn plain<const PLAIN: bool>(&self, mode: u32) -> bool {
+        debug_assert!(
+            !PLAIN || self.plain_nearest,
+            "PLAIN loop under a caller whose word is not the fixed nearest word"
+        );
+        PLAIN && mode == NEAREST
     }
 
     #[inline(always)]
@@ -147,8 +164,8 @@ impl FpEnv {
 
     /// `a + b` per lane, rounded by `mode`.
     #[inline(always)]
-    pub(crate) fn add(&self, a: [f64; 2], b: [f64; 2], mode: u32) -> [f64; 2] {
-        let r = if self.plain(mode) {
+    pub(crate) fn add<const PLAIN: bool>(&self, a: [f64; 2], b: [f64; 2], mode: u32) -> [f64; 2] {
+        let r = if self.plain::<PLAIN>(mode) {
             [a[0] + b[0], a[1] + b[1]]
         } else {
             hw::add(self.fixed(mode), &self.caller, a, b)
@@ -160,8 +177,8 @@ impl FpEnv {
 
     /// `a - b` per lane, rounded by `mode`.
     #[inline(always)]
-    pub(crate) fn sub(&self, a: [f64; 2], b: [f64; 2], mode: u32) -> [f64; 2] {
-        let r = if self.plain(mode) {
+    pub(crate) fn sub<const PLAIN: bool>(&self, a: [f64; 2], b: [f64; 2], mode: u32) -> [f64; 2] {
+        let r = if self.plain::<PLAIN>(mode) {
             [a[0] - b[0], a[1] - b[1]]
         } else {
             hw::sub(self.fixed(mode), &self.caller, a, b)
@@ -173,8 +190,8 @@ impl FpEnv {
 
     /// `a * b` per lane, rounded by `mode`.
     #[inline(always)]
-    pub(crate) fn mul(&self, a: [f64; 2], b: [f64; 2], mode: u32) -> [f64; 2] {
-        let r = if self.plain(mode) {
+    pub(crate) fn mul<const PLAIN: bool>(&self, a: [f64; 2], b: [f64; 2], mode: u32) -> [f64; 2] {
+        let r = if self.plain::<PLAIN>(mode) {
             [a[0] * b[0], a[1] * b[1]]
         } else {
             hw::mul(self.fixed(mode), &self.caller, a, b)
@@ -186,8 +203,8 @@ impl FpEnv {
 
     /// `a / b` per lane, rounded by `mode`.
     #[inline(always)]
-    pub(crate) fn div(&self, a: [f64; 2], b: [f64; 2], mode: u32) -> [f64; 2] {
-        let r = if self.plain(mode) {
+    pub(crate) fn div<const PLAIN: bool>(&self, a: [f64; 2], b: [f64; 2], mode: u32) -> [f64; 2] {
+        let r = if self.plain::<PLAIN>(mode) {
             [a[0] / b[0], a[1] / b[1]]
         } else {
             hw::div(self.fixed(mode), &self.caller, a, b)
@@ -199,8 +216,8 @@ impl FpEnv {
 
     /// `sqrt(a)` per lane, rounded by `mode`.
     #[inline(always)]
-    pub(crate) fn sqrt(&self, a: [f64; 2], mode: u32) -> [f64; 2] {
-        let r = if self.plain(mode) {
+    pub(crate) fn sqrt<const PLAIN: bool>(&self, a: [f64; 2], mode: u32) -> [f64; 2] {
+        let r = if self.plain::<PLAIN>(mode) {
             [a[0].sqrt(), a[1].sqrt()]
         } else {
             hw::sqrt(self.fixed(mode), &self.caller, a)
