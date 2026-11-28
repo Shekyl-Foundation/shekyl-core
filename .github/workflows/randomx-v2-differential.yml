@@ -414,7 +414,8 @@ jobs:
         # operation and mode, at 20 million rounds per operand class
         # (docs/design/RANDOMX_ROUNDING_DECISION.md §2, §4); the quick tier
         # runs in every cargo test of the crate. Scheduled runs only, keyed
-        # on the event rather than a cron string. <!--MIN-X86-->
+        # on the event rather than a cron string. Measured 2026-11-28 on a
+        # shared x86 build VM: 374 s for this step, 550 s for the census below.
         if: github.event_name == 'schedule'
         working-directory: rust
         env:
@@ -1119,7 +1120,9 @@ jobs:
         # operation and mode, at 20 million rounds per operand class
         # (docs/design/RANDOMX_ROUNDING_DECISION.md §2, §4); the quick tier
         # runs in every cargo test of the crate. Scheduled runs only, keyed
-        # on the event rather than a cron string. <!--MIN-ARM-->
+        # on the event rather than a cron string. The release build is the
+        # step above's; this adds the run alone (minutes on the floor device;
+        # see the decision record §7).
         if: github.event_name == 'schedule'
         working-directory: rust
         env:
