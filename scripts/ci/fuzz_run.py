@@ -49,19 +49,25 @@
 #      have fuzzed anything (a green job with zero executions is the
 #      failure this run exists to remove).
 #   5. an empty corpus directory after the run.
-#   6. no coverage floor recorded for the target, or a final coverage under
-#      its tolerance, a percentage of the floor: 90 (ruled 2026-11-16), or
-#      wider for a target whose two floor runs differ by more than 5
-#      percent (`check_fuzz_inventory.tolerance`). The floor is the
-#      target's row in `scripts/ci/fuzz_coverage_floors.tsv`, the final
-#      `cov:` of a seeded nightly run; it moves only in a reviewed commit
-#      that names the run that measured it (`check_fuzz_inventory.py
-#      --floors`). A harness
-#      that stops at a length check, a constant that is not a point, a
-#      parser rewritten to refuse earlier, runs millions of inputs over a
-#      handful of edges: rules 4 and 5 pass it, and this one does not. A
-#      target with no row is red with its coverage reported, which is how
-#      its first floor is measured.
+#   6. no coverage floor recorded for the target, or a final coverage that
+#      misses its floor (`scripts/ci/fuzz_coverage.py`). The floor is the
+#      target's row in `scripts/ci/fuzz_coverage_floors.tsv`: the final
+#      `cov:` of a seeded nightly run, and the tolerance the two runs that
+#      measured it give (90, or wider when they differ by more than 5
+#      percent). That row records what one binary reached. Whether this
+#      binary stopped reaching its own code is a second question. Under
+#      the tolerance, the run is still green only when the crate's own
+#      sources are unchanged since the floor's commit and coverage meets
+#      the codegen allowance (the default tolerance minus one spread-limit);
+#      the verdict names the fuzz-lock packages that moved. A deeper drop,
+#      any drop after those sources changed, or a subject that cannot be
+#      read, is red. A harness that stops at a length check runs millions
+#      of inputs over a handful of edges: rules 4 and 5 pass it, and this
+#      one does not, because that drop is past the allowance. A target
+#      with no row is red with its coverage reported, which is how its
+#      first floor is measured. The floor itself moves only in a reviewed
+#      commit that names the run that measured it
+#      (`check_fuzz_inventory.py --floors`).
 #
 # The stats line also carries the run's final coverage (the `cov:` of
 # libFuzzer's `DONE` line) and how many corpus inputs the run started from
@@ -96,6 +102,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import check_fuzz_inventory  # noqa: E402
+import fuzz_coverage  # noqa: E402
 
 from check_fuzz_inventory import NIGHTLY_SECONDS, WEEKLY_SECONDS  # noqa: E402
 
@@ -156,10 +163,18 @@ def restored(log: str, corpus: Path) -> int | None:
     return None
 
 
-def judge(outcome: Outcome, cov_floor: tuple[int, int] | None, floor: int = FLOOR) -> Verdict:
+def judge(
+    outcome: Outcome,
+    cov_floor: tuple[int, int] | None,
+    floor: int = FLOOR,
+    *,
+    subject: fuzz_coverage.SubjectDelta | None = None,
+    commit: str | None = None,
+) -> Verdict:
     """The run's verdict (the header's order). `cov_floor` is the target's
     recorded coverage floor and its tolerance (a percentage), or None when
-    it has none."""
+    it has none. `subject` is the crate since `commit`; omitted, a miss
+    under the tolerance has no codegen allowance."""
     done = DONE_RE.findall(outcome.log)
     executions = int(done[-1][0]) if done else None
     cov = final_cov(outcome.log)
@@ -189,20 +204,23 @@ def judge(outcome: Outcome, cov_floor: tuple[int, int] | None, floor: int = FLOO
             cov,
         )
     edges, percent = cov_floor
-    if cov * 100 < edges * percent:
+    decision = fuzz_coverage.decide(cov, edges, percent, subject)
+    if isinstance(decision, fuzz_coverage.Held):
         return Verdict(
-            False,
-            f"cov {cov}, under {percent}% of its floor of {edges}: the harness no longer "
-            "reaches code it reached",
+            True,
+            f"{executions} executions, cov {cov} (floor {edges} at {percent}%), {outcome.corpus_files} corpus inputs",
             executions,
             cov,
         )
-    return Verdict(
-        True,
-        f"{executions} executions, cov {cov} (floor {edges} at {percent}%), {outcome.corpus_files} corpus inputs",
-        executions,
-        cov,
-    )
+    if isinstance(decision, fuzz_coverage.CodegenDrift):
+        return Verdict(
+            True,
+            f"{executions} executions, cov {cov} (floor {edges} at {percent}%), {outcome.corpus_files} corpus inputs: "
+            + fuzz_coverage.drift_says(decision, commit),
+            executions,
+            cov,
+        )
+    return Verdict(False, fuzz_coverage.shortfall_says(decision, commit), executions, cov)
 
 
 def slash_as_underscore(part: str) -> str:
@@ -305,6 +323,7 @@ def run(name: str, seconds: int, corpus: Path, stats: Path, binary: Path) -> int
         print(f"FAIL: the coverage floors cannot be read: {exc}")
         return 2
     cov_floor = (row.cov, row.tolerance) if row else None
+    floor_commit = row.commit if row else None
     # An artifact download does not keep the executable bit.
     binary.chmod(binary.stat().st_mode | 0o111)
     corpus = corpus.resolve()
@@ -329,7 +348,21 @@ def run(name: str, seconds: int, corpus: Path, stats: Path, binary: Path) -> int
         crash_inputs=failure_inputs([str(p.relative_to(ROOT)) for p in artifacts.glob("*") if p.is_file()]),
         corpus_files=sum(1 for p in corpus.iterdir() if p.is_file()),
     )
-    verdict = judge(outcome, cov_floor)
+    # After the run. Only a miss under the spread line asks what the crate
+    # did: a run that meets its tolerance does not need the floor commit,
+    # and a shallow checkout does not fetch it. A git failure is an unknown
+    # subject, which takes no codegen allowance, and it must not discard a
+    # run that already fuzzed.
+    reached_cov = final_cov(log_text)
+    subject = None
+    if (
+        floor_commit
+        and reached_cov is not None
+        and cov_floor is not None
+        and not fuzz_coverage.meets(reached_cov, cov_floor[0], cov_floor[1])
+    ):
+        subject = fuzz_coverage.subject_delta(ROOT, floor_commit, crate)
+    verdict = judge(outcome, cov_floor, subject=subject, commit=floor_commit)
     record = {
         "target": name,
         "seconds": seconds,
@@ -465,6 +498,78 @@ def selftest() -> int:
         verdict = judge(outcome, cov_floor)
         if verdict.green != green or says not in verdict.says:
             failures.append(f"{why}: wanted green={green} saying {says!r}, got {verdict}")
+    # The coverage decision, through the verdict a nightly log actually prints.
+    # Dropping `subject` here grants no allowance, which the unknown-subject
+    # case holds; granting it whenever the crate is unchanged greens the
+    # length-check case.
+    unchanged = fuzz_coverage.SubjectDelta(False, ("zeroize 1.8.2 -> 1.9.2",))
+    changed_sources = fuzz_coverage.SubjectDelta(True, ())
+    quiet_lock = fuzz_coverage.SubjectDelta(False, ())
+    floor_commit = "298205388b5baf413b15e5cc056f67ef5de48ce4"
+    reached = lambda cov: Outcome(0, at(cov), (), 9)  # noqa: E731
+    coverage_cases = [
+        (
+            "an unchanged crate inside the codegen allowance",
+            reached(880),
+            (1000, 90),
+            unchanged,
+            True,
+            ("codegen drift", "zeroize 1.8.2 -> 1.9.2"),
+        ),
+        (
+            "an unchanged crate past the codegen allowance",
+            reached(700),
+            (1000, 90),
+            unchanged,
+            False,
+            ("past the codegen allowance", "cov 700, under 90% of its floor of 1000"),
+        ),
+        (
+            "sources changed, inside the codegen band",
+            reached(880),
+            (1000, 90),
+            changed_sources,
+            False,
+            ("sources changed", "cov 880, under 90% of its floor of 1000"),
+        ),
+        (
+            "a subject that was not read",
+            reached(880),
+            (1000, 90),
+            None,
+            False,
+            ("not shown unchanged", "cov 880, under 90% of its floor of 1000"),
+        ),
+        (
+            "the length-check harness, sources unchanged",
+            Outcome(0, length_check, (), 1),
+            (182, 90),
+            unchanged,
+            False,
+            ("cov 137, under 90% of its floor of 182", "past the codegen allowance"),
+        ),
+        (
+            "a wider tolerance is not widened again",
+            reached(1199),
+            (1500, 80),
+            unchanged,
+            False,
+            ("cov 1199, under 80%", "past the codegen allowance"),
+        ),
+        (
+            "an unchanged crate whose lock did not move",
+            reached(880),
+            (1000, 90),
+            quiet_lock,
+            True,
+            ("codegen drift", "no fuzz-lock package version changed"),
+        ),
+    ]
+    for why, outcome, cov_floor, subject, green, says in coverage_cases:
+        verdict = judge(outcome, cov_floor, subject=subject, commit=floor_commit)
+        missing = [needle for needle in says if needle not in verdict.says]
+        if verdict.green != green or missing:
+            failures.append(f"{why}: wanted green={green} saying {says!r}, got {verdict}")
     # A slow unit is not a failing input; every other artifact is.
     for why, names, want in [
         ("a slow unit alone", ["a/slow-unit-3f"], ()),
@@ -537,7 +642,7 @@ def selftest() -> int:
         for failure in failures:
             print("  " + failure)
         return 1
-    print(f"fuzz run selftest: {len(cases) + 4 + 4 + 3 + len(tables) + 2} cases pass")
+    print(f"fuzz run selftest: {len(cases) + len(coverage_cases) + 4 + 4 + 3 + len(tables) + 2} cases pass")
     return 0
 
 

@@ -37,17 +37,14 @@ fn a_running_wallet_rpc_is_hardened() {
     }
     from_outside::assert_the_control_shows_the_subject(NAME);
 
-    // Owner-only: the wallet RPC binds its socket only in a directory this
-    // account alone can enter, and tempfile's default mode is the umask's.
-    let dir = {
-        use std::os::unix::fs::PermissionsExt;
-        tempfile::Builder::new()
-            .permissions(std::fs::Permissions::from_mode(0o700))
-            .tempdir()
-            .expect("tempdir")
-    };
+    // Owner-only, under the account's home: the wallet RPC binds its socket
+    // only in a directory this account alone can enter, and it refuses a
+    // configuration file below a directory another account can write.
+    let dir = shekyl_os_account::test_fixture::tempdir().expect("fixture");
     let wallets = dir.path().join("wallets");
     std::fs::create_dir(&wallets).expect("wallet dir");
+    let config = dir.path().join("config.toml");
+    shekyl_os_account::private_file::write_private(&config, b"").expect("config file");
     // A short name: a socket path must fit `sun_path` (104 bytes on macOS
     // and FreeBSD), and the temp directory's own path is long on macOS.
     let socket = dir.path().join("s");
@@ -55,8 +52,10 @@ fn a_running_wallet_rpc_is_hardened() {
     let stderr_of = || std::fs::read_to_string(&stderr_path).unwrap_or_default();
     let mut child = from_outside::Started::new(
         from_outside::raised(env!("CARGO_BIN_EXE_shekyl-wallet-rpc"))
-            .args(["--network", "stagenet", "--disable-rpc-login"])
-            .arg(format!("--rpc-bind=uds://{}", socket.display()))
+            .args(["--network", "stagenet", "--config-file"])
+            .arg(&config)
+            .arg("--rpc-socket-file")
+            .arg(&socket)
             .arg("--wallet-dir")
             .arg(&wallets)
             .stdin(Stdio::null())

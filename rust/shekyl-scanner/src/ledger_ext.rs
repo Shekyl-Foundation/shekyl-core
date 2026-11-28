@@ -30,12 +30,16 @@
 
 use std::ops::Range;
 
+use shekyl_crypto_pq::multisig_receive::GroupReceived;
 use shekyl_engine_state::{
-    transfer::eligible_height, LedgerBlock, LedgerIndexes, ReceiveAttribution, TransferDetails,
+    transfer::eligible_height, ChainPlace, GroupCoin, GroupLedgerBlock, GroupOutput, LedgerBlock,
+    LedgerIndexes, ReceiveAttribution, RefusedGroupOutput, TransferDetails,
 };
 use shekyl_types::{BlockHash, BlockHeight};
 
-use crate::{balance::BalanceSummary, output::WalletOutput, scan::Timelocked};
+use crate::{
+    balance::BalanceSummary, multisig_scan::GroupScanned, output::WalletOutput, scan::Timelocked,
+};
 
 /// Extension methods for [`TransferDetails`] that depend on scanner-only types.
 pub trait TransferDetailsExt {
@@ -176,6 +180,55 @@ impl LedgerIndexesExt for LedgerIndexes {
         }
 
         self.ingest_block(ledger, block_height, block_hash, batch)
+    }
+}
+
+/// Group-ledger ingest that depends on the scanner's output types (R-30).
+pub trait GroupLedgerBlockExt {
+    /// Append a member's scan of one block to a group ledger, building each
+    /// record from what the receive check returned and the output's place
+    /// on the chain, and advance the scan pointer to the block. The
+    /// output's spendable height is the solo rule's
+    /// ([`eligible_height`]): the curve tree inserts a group output when it
+    /// inserts any other. Returns the range of `outputs` the block
+    /// appended.
+    fn process_group_scan(
+        &mut self,
+        block_height: BlockHeight,
+        block_hash: BlockHash,
+        scanned: GroupScanned,
+    ) -> Range<usize>;
+}
+
+impl GroupLedgerBlockExt for GroupLedgerBlock {
+    fn process_group_scan(
+        &mut self,
+        block_height: BlockHeight,
+        block_hash: BlockHash,
+        scanned: GroupScanned,
+    ) -> Range<usize> {
+        let outputs = scanned
+            .into_inner()
+            .into_iter()
+            .map(|output| {
+                let (received, tx_hash, global_index, timelock) = output.into_parts();
+                let place = ChainPlace {
+                    tx_hash,
+                    global_output_index: shekyl_types::GlobalOutputIndex::from_raw(global_index),
+                    block_height,
+                    eligible_height: eligible_height(block_height, timelock),
+                };
+                match received {
+                    GroupReceived::Coin(receipt) => {
+                        GroupOutput::Coin(GroupCoin::received(&receipt, place))
+                    }
+                    GroupReceived::Refused(refusal) => {
+                        GroupOutput::Refused(RefusedGroupOutput::refused(&refusal, place))
+                    }
+                }
+            })
+            .collect();
+        self.ingest_block(block_height, block_hash, outputs)
     }
 }
 

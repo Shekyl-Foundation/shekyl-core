@@ -11,8 +11,8 @@
 //! A small facade over [`tracing_subscriber`] and [`tracing_appender`] that
 //! centralizes the discipline every Shekyl Rust binary needs:
 //!
-//! - One env var — `SHEKYL_LOG` — controls filter directives. `RUST_LOG` is
-//!   intentionally not honored in release builds (see [`filter`]).
+//! - The filter is each binary's `log-level` and `log-category` rows. No
+//!   environment variable sets it (`INPUT_GRAMMAR.md` IG-13; see [`filter`]).
 //! - Stderr is coloured only when it is a terminal and `NO_COLOR` is unset
 //!   or empty. The file sink is never coloured. `NO_COLOR` changes
 //!   rendering, which is the environment read IG-13 permits.
@@ -27,9 +27,9 @@
 //!
 //! - **Not a PII scrubber.** Whatever your call sites log, `shekyl-logging`
 //!   will faithfully emit. PII discipline lives at the `tracing::debug!` /
-//!   `tracing::trace!` call site, not here. If `SHEKYL_LOG=debug` is set
-//!   against a wallet-rpc binary, the logger will surface everything any
-//!   module chose to log at that level.
+//!   `tracing::trace!` call site, not here. If `log-level` is `debug` on a
+//!   wallet binary, the logger will surface everything any module chose to
+//!   log at that level.
 //! - **Not `no_std`.** Requires `std`, a filesystem, and (on POSIX) `libc`.
 //! - **Not async-safe beyond `tracing`'s own guarantees.** The non-blocking
 //!   writer buffers in-memory; if the binary exits before the returned
@@ -102,7 +102,6 @@ pub use queue::{announce, flush, Flushed, FLUSH_WITHIN, SINK_QUEUE_LINES};
 #[doc(hidden)]
 pub use colour::LineColour;
 pub use config::{Config, FileSink, Rotation};
-pub use filter::SHEKYL_LOG_ENV;
 
 use std::io::IsTerminal;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -267,13 +266,10 @@ fn install_subscriber_with_stderr<W: std::io::Write + Send + 'static>(
     lines: usize,
     colour: LineColour,
 ) -> Result<(LoggerGuard, reload::FilterReloadHandle), InitError> {
-    let filter = match &config.directive {
-        Some(directive) => directive
-            .to_env_filter()
-            .map_err(|e| InitError::FilterParse(e.to_string())),
-        None => filter::resolve_env_filter(config.fallback_default)
-            .map_err(|e| InitError::FilterParse(e.to_string())),
-    }?;
+    let filter = config
+        .directive
+        .to_env_filter()
+        .map_err(|e| InitError::FilterParse(e.to_string()))?;
 
     // Wrap the resolved `EnvFilter` in a reload layer so a runtime
     // `log-level` / `log-category` change ([`subsystem::apply`]) swaps

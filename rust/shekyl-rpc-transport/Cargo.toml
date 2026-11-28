@@ -27,13 +27,17 @@ workspace = true
 test-override = []
 
 [dependencies]
+# Publish complete owner-only client keys without replacing another wallet's key.
+tempfile = "3"
 hex = { version = "0.4", default-features = false, features = ["alloc"] }
 zeroize = { version = "^1.5", default-features = false, features = ["alloc", "std"] }
 digest_auth = { version = "0.3", default-features = false }
 # sync = Mutex (auth serialization), time = request timeout, net = the TCP
 # stream the SOCKS connector dials. Previously pulled in transitively via
 # simple-request; made explicit now that it is gone.
-tokio = { version = "1", default-features = false, features = ["sync", "time", "net", "io-util", "rt"] }
+# macros: `select!` in the channel session, which ends a request when its
+# connection does.
+tokio = { version = "1", default-features = false, features = ["sync", "time", "net", "io-util", "rt", "macros"] }
 
 # Small hyper client owned in `http_client` (re-absorbed from simple-request so
 # a SOCKS5h connector can be added). Feature flags mirror what simple-request's
@@ -59,6 +63,9 @@ serde_json = { workspace = true }
 # network whose id the name hashes.
 shekyl-rpc-rendezvous = { path = "../shekyl-rpc-rendezvous" }
 shekyl-network = { path = "../shekyl-network" }
+# A grammar peer (`PeerEndpoint`) is the route a client dials. The plaintext
+# HTTP base and the channel leg are both that route (`channel::PeerRoute`).
+shekyl-options = { path = "../shekyl-options" }
 
 # The account's root and, on Unix, the peer's account for the owner's leg's
 # check (`SO_PEERCRED`, `getpeereid`): the leaf with no network stack that
@@ -75,6 +82,19 @@ shekyl-rpc-grants = { path = "../shekyl-rpc-grants" }
 rand_core = { version = "0.6", features = ["getrandom"] }
 tracing = "0.1"
 
+[target.'cfg(unix)'.dependencies]
+# The shared socket bind (`listen::bind_owner_only_socket`): bind, narrow to
+# 0600, then listen, which tokio's and std's one-call bind cannot order, and
+# the replace decision's bounded probe, without unsafe code. Close-on-exec
+# before the bind (atomic at creation on Linux and FreeBSD, just after it on
+# macOS). Already in the workspace lockfile (through tokio), and a
+# direct dependency of shekyl-levin.
+socket2 = "0.6"
+# The bind holds the socket directory and works from that descriptor:
+# `statat` and `unlinkat` for the replace decision, `fchmod` for the mode.
+# Already in the workspace lockfile (through shekyl-daemon-config).
+rustix = { version = "1", features = ["fs"] }
+
 [target.'cfg(windows)'.dependencies]
 # The logon session, and the pipe's open with its peer check
 # (`open_verified`).
@@ -83,7 +103,6 @@ shekyl-win-sec = { path = "../shekyl-win-sec" }
 [dev-dependencies]
 # This crate's own integration tests name a test node's directory.
 shekyl-rpc-transport = { path = ".", features = ["test-override"] }
-tempfile = "3"
 # rt for #[tokio::test]; io-util for the in-test SOCKS5 acceptor's
 # read_exact/write_all (the ATYP=DOMAIN wire pin in `http_client`).
 tokio = { version = "1", default-features = false, features = ["macros", "rt", "io-util"] }

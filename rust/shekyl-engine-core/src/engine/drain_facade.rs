@@ -177,6 +177,13 @@ pub enum DrainToPrincipalError {
         /// The violated bound (atomic units per weight).
         bound: u64,
     },
+    /// The wallet's signer refused the drain: `-29119`, or the code of the
+    /// fault the user can act on. Nothing was sent.
+    #[error("the signer refused the drain: {0}")]
+    Signer(shekyl_tx_builder::SignFault),
+    /// The node named its own remedy. The fault is the sentence.
+    #[error("{0}")]
+    Daemon(shekyl_rpc_client::DaemonFault),
     /// A non-transient engine fault: a sealed-state read, a corrupted
     /// resident key, the curve-tree actor, or the assembly itself. Fail
     /// closed; not retryable by waiting.
@@ -204,6 +211,9 @@ pub enum DrainToPrincipalError {
 
 impl From<DrainRequestError> for DrainToPrincipalError {
     fn from(e: DrainRequestError) -> Self {
+        if let Some(fault) = e.sign_fault() {
+            return Self::Signer(fault);
+        }
         match e {
             DrainRequestError::NotStaker => Self::NotStaker,
             DrainRequestError::Stake(e) => Self::State {
@@ -220,6 +230,10 @@ impl From<DrainRequestError> for DrainToPrincipalError {
             // prior disposition (the failure was `State` before) — retyping
             // `drain_to_principal`'s daemon-outage remedy is its own concern,
             // not the exit lane's.
+            DrainRequestError::Target(fault) => Self::Daemon(fault),
+            // A plain miss keeps the prior disposition (it was `State`
+            // before the tip read grew its own arm). A channel fault does
+            // not: its sentence is the remedy.
             DrainRequestError::DaemonUnreachable { context, detail } => {
                 Self::State { context, detail }
             }

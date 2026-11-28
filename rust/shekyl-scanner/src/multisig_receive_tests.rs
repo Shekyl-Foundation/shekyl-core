@@ -9,70 +9,25 @@
 //! member's scanner and is spendable; a solo wallet does not see it; and a
 //! damaged or missing `0x0D` entry leaves it received but unspendable.
 
-use curve25519_dalek::constants::ED25519_BASEPOINT_POINT;
-use curve25519_dalek::edwards::EdwardsPoint;
-use curve25519_dalek::scalar::Scalar;
-use shekyl_address::multisig_address::MultisigAddressPayload;
 use shekyl_address::Network;
-use shekyl_crypto_pq::kem::{
-    HybridKemPublicKey, HybridKemSecretKey, HybridX25519MlKem, KeyEncapsulation,
-};
 use shekyl_crypto_pq::multisig_output::{construct_multisig_output, MultisigOutputData};
 use shekyl_crypto_pq::TxKey;
-use shekyl_curve_generators::T;
 use shekyl_engine_state::UnspendableReason;
 use shekyl_wire::tx_extra::{self, KemCiphertext, MultisigEntry};
 use shekyl_wire::Ct;
-use zeroize::Zeroizing;
 
 use crate::bench_fixtures::{make_bench_wallet, scannable_block_for_recipient};
 use crate::extra::{Extra, ExtraField};
-use crate::scan::{MultisigMemberScan, ScannableBlock};
-use crate::{Scanner, ViewPair};
+use crate::group_fixtures::{test_group, TestGroup as Group};
+use crate::scan::ScannableBlock;
+use crate::Scanner;
+use shekyl_crypto_pq::multisig_receive::GroupReceived;
+use shekyl_engine_state::group_ledger::unspendable_reason;
 
-const NET: [u8; 16] = [0x4E; 16];
 const AMOUNT: u64 = 7_000_000;
 
-struct Group {
-    address: MultisigAddressPayload,
-    b: Scalar,
-    spend: EdwardsPoint,
-    group_sk: HybridKemSecretKey,
-    member_sks: Vec<HybridKemSecretKey>,
-}
-
-fn kem_bytes(pk: &HybridKemPublicKey) -> Vec<u8> {
-    let mut out = pk.x25519.to_vec();
-    out.extend_from_slice(&pk.ml_kem);
-    out
-}
-
 fn group(n: u8, m: u8) -> Group {
-    let kem = HybridX25519MlKem;
-    let b = Scalar::from_bytes_mod_order([0x21; 32]);
-    let y = Scalar::from_bytes_mod_order([0x23; 32]);
-    let b_point = ED25519_BASEPOINT_POINT * b;
-    let y_point = *T * y;
-    let (group_pk, group_sk) = kem.keypair_generate().unwrap();
-    let (member_pks, member_sks): (Vec<_>, Vec<_>) =
-        (0..n).map(|_| kem.keypair_generate().unwrap()).unzip();
-    let address = MultisigAddressPayload::new(
-        Network::Testnet,
-        n,
-        m,
-        b_point.compress().to_bytes(),
-        y_point.compress().to_bytes(),
-        kem_bytes(&group_pk),
-        member_pks.iter().map(kem_bytes).collect(),
-    )
-    .unwrap();
-    Group {
-        address,
-        b,
-        spend: b_point + y_point,
-        group_sk,
-        member_sks,
-    }
+    test_group(Network::Testnet, n, m)
 }
 
 fn entry(out: &MultisigOutputData) -> MultisigEntry {
@@ -92,7 +47,13 @@ fn entry(out: &MultisigOutputData) -> MultisigEntry {
 /// sees the `0x0D` entry list before it is written.
 fn group_block(g: &Group, edit: impl FnOnce(&mut Vec<MultisigEntry>)) -> ScannableBlock {
     let tx_key = TxKey::random().expect("the OS draws a key");
-    let out = construct_multisig_output(&tx_key, &g.address, AMOUNT, 0, &NET).unwrap();
+    let out = construct_multisig_output(
+        tx_key.output_positions(1).at(0).unwrap(),
+        &g.address,
+        AMOUNT,
+        &g.network_id(),
+    )
+    .unwrap();
     let mut entries = vec![entry(&out)];
     edit(&mut entries);
 
@@ -121,33 +82,21 @@ fn group_block(g: &Group, edit: impl FnOnce(&mut Vec<MultisigEntry>)) -> Scannab
     block
 }
 
-fn member_scanner(g: &Group, i: u8) -> Scanner {
-    let pair = ViewPair::new(
-        g.spend,
-        Zeroizing::new(Scalar::from_bytes_mod_order([0x07; 32])),
-        Zeroizing::new(g.group_sk.x25519),
-        Zeroizing::new(g.group_sk.ml_kem.clone()),
-    )
-    .unwrap();
-    let member = &g.member_sks[usize::from(i)];
-    Scanner::new_multisig_member(
-        pair,
-        Zeroizing::new(g.b.to_bytes()),
-        MultisigMemberScan::new(
-            i,
-            g.address.n_total(),
-            g.address.m_required(),
-            member.clone(),
-            NET,
-        ),
-    )
-}
-
+/// Scan `block` as member `i`: the one output it finds, as the reason the
+/// member's receive refused it, or `None` for a coin.
 fn scan_one(g: &Group, i: u8, block: ScannableBlock) -> Option<UnspendableReason> {
-    let found = member_scanner(g, i).scan(block).unwrap().into_inner();
+    let found = g.member_scanner(i).scan(block).unwrap().into_inner();
     assert_eq!(found.len(), 1, "member {i} finds the group's output");
-    assert_eq!(found[0].amount().to_raw(), AMOUNT);
-    found[0].unspendable()
+    match found[0].received() {
+        GroupReceived::Coin(receipt) => {
+            assert_eq!(receipt.amount(), AMOUNT);
+            None
+        }
+        GroupReceived::Refused(refusal) => {
+            assert_eq!(refusal.amount(), AMOUNT);
+            Some(unspendable_reason(refusal.reason()))
+        }
+    }
 }
 
 /// The slice's receive gate: the extra passes CEN-I19 (with its `0x0D`

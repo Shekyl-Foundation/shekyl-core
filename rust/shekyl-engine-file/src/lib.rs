@@ -61,7 +61,10 @@ pub mod secrets_transitional;
 pub use atomic::{Durability, Unconfirmed};
 pub use capability::Capability;
 pub use error::WalletFileError;
-pub use handle::{CreateParams, OpenOutcome, SealedKeysEnvelope, WalletFile};
+pub use handle::{
+    CreateParams, GroupCreateParams, GroupOpenOutcome, GroupWalletFile, OpenOutcome,
+    SealedKeysEnvelope, WalletFile,
+};
 pub use overrides::SafetyOverrides;
 pub use payload::{
     decode_payload, encode_payload, DecodedPayload, PayloadError, PayloadKind,

@@ -1,0 +1,13 @@
+functions base=1059 variant=1083 instructions base=152297 variant=154049
+code_identical=False only_in_base=7 only_in_variant=31
+  differs: ca3_pq_sign_timing::main
+  differs: ca3_pq_sign_timing::usage
+  differs: <core::num::error::TryFromIntError as core::fmt::Debug>::fmt
+  differs: fips204::encodings::sig_encode
+  differs: fips204::hashing::rej_ntt_poly
+  differs: fips204::hashing::sample_in_ball
+  differs: fips205::xmss::xmss_pk_from_sig
+fips204 functions=78 moved=78
+keccak functions=2 moved=2
+rodata_identical=False
+verdict=NOT-LAYOUT-ONLY

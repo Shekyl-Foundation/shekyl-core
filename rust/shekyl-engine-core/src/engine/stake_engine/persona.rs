@@ -381,12 +381,7 @@ impl Message<PlanBondPost> for StakeEngine {
         // `gf7-hooks` observer seam the prologue emits to
         // (`ARCHIVAL_BOND_2C_GF7_HOOKS.md`), evaluated in `shekyl-staking-sim`.
         //
-        // TODO(2d) — the write-side *seam* the plan will drive is built:
-        // `PTransactionSubmitter` (per-`P` CX-2) + `BroadcastPosture`
-        // (no-③-by-type) in `transaction_submitter.rs` / `posture.rs` (SP-T4a).
-        // The remaining CONSUMER wiring is the 2c-2a assemble / 2d dispatch path
-        // (see `AssembleBond`); this handler plans + constructs the vin, it does not
-        // broadcast.
+        // Assembly and submission happen after this handler returns the plan and input.
         let (handle_slot, bond_post_offset_blocks) =
             self.validate_and_draw_bond_offset(&msg.handle, msg.ticket.p_slot())?;
 

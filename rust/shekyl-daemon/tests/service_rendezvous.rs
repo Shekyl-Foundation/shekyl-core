@@ -82,9 +82,9 @@ fn run_child_if_requested() {
 
 /// The test's directory, laid out as an installer lays out a service's:
 /// the data home 0700, the rendezvous directory 0755.
-fn workdir() -> tempfile::TempDir {
+fn workdir() -> shekyl_os_account::test_fixture::FixtureDir {
     use std::os::unix::fs::DirBuilderExt;
-    let dir = tempfile::tempdir().expect("a directory");
+    let dir = shekyl_os_account::test_fixture::tempdir().expect("a directory");
     std::fs::DirBuilder::new()
         .mode(0o700)
         .create(dir.path().join("shekyl"))
@@ -241,7 +241,12 @@ fn call_over_the_channel(
         StaticKeypair::from_key_file(&std::fs::read(console_file).expect("the console key"))
             .expect("a key");
     let target = ChannelTarget::new(Network::Regtest.network_id(), daemon.clone(), console, leg);
-    let channel = ChannelDaemon::connect(&target, GrantSet::ALL).expect("admitted");
+    let channel = ChannelDaemon::connect(
+        &target,
+        GrantSet::ALL,
+        shekyl_rpc_transport::local::CALL_WITHIN,
+    )
+    .expect("admitted");
     let body = serde_json::to_vec(
         &serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": {}}),
     )

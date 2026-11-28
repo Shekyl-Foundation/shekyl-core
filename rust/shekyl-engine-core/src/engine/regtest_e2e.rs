@@ -7,7 +7,7 @@
 //!
 //! These tests spawn a real `shekyld --network regtest` daemon and drive the production
 //! [`Engine`] against it over the real RPC transport ([`DaemonClient`] /
-//! [`HttpRpc`]). Unlike the rest of the engine test suite (which uses
+//! [`DaemonTransport`]). Unlike the rest of the engine test suite (which uses
 //! the in-memory `TestDaemon` mock), the point here is the **submit/verify
 //! direction**: a wallet-built FCMP++ proof, serialized into a tx and sent over
 //! the wire, must be accepted by the daemon's consensus `shekyl_fcmp_verify`
@@ -53,13 +53,16 @@ fn regtest_expectation() -> super::DaemonExpectation {
 
 use serde_json::json;
 use shekyl_rpc_client::{wire, Rpc};
-use shekyl_rpc_transport::HttpRpc;
+use shekyl_rpc_transport::{
+    local::{LocalRpc, LocalTarget},
+    DaemonTransport, HttpRpc,
+};
 use shekyl_rpc_types::hash::HashHex;
 use shekyl_rpc_types::kinds::{Count, NoParams};
 use shekyl_rpc_types::wire::block::{BlockSelect, BlockShowSelect, HeaderSelect};
 use shekyl_rpc_types::wire::daemon::DaemonStatus;
 use shekyl_rpc_types::wire::shared::Selector;
-use shekyl_types::{BlockCount, ShardId, TxHash};
+use shekyl_types::{BlockCount, BlockHeight, ShardId, TxHash};
 use tokio::sync::{Mutex, OwnedMutexGuard, RwLock};
 
 /// `cargo test` runs tests in parallel; spawning multiple daemons concurrently
@@ -210,7 +213,9 @@ pub(super) struct RegtestDaemon {
     /// file (`private_config_dir`). Removed with the daemon.
     config_dir: PathBuf,
     rpc_port: u16,
-    rpc: HttpRpc,
+    channel_port: Option<u16>,
+    rpc: DaemonTransport,
+    owner: LocalTarget,
     /// Base URL of the second, restricted listener, when one was
     /// asked for. `None` for the ordinary spawn, so no existing test grows a
     /// listener it did not ask for.
@@ -431,6 +436,7 @@ struct RegtestSpawn {
     serial: Option<OwnedMutexGuard<()>>,
     network: SpawnNetwork,
     schedule: Option<RegtestSchedule>,
+    measure_http: bool,
     restricted_listener: bool,
     peering: Peering,
     mine_address: Option<String>,
@@ -465,6 +471,7 @@ impl RegtestSpawn {
             serial,
             network: SpawnNetwork::Regtest,
             schedule: None,
+            measure_http: false,
             restricted_listener: false,
             peering: Peering::Offline,
             mine_address: None,
@@ -799,10 +806,14 @@ fn config_base() -> Result<PathBuf, Vec<PathBuf>> {
 }
 
 impl RegtestDaemon {
-    /// This daemon as the wallet's daemon target: its RPC listener on
-    /// loopback, the address the persona's loopback transport accepts.
+    /// A fresh wallet client with the normal request deadline and its own refusal state.
+    pub(super) fn wallet_rpc(&self) -> DaemonTransport {
+        LocalRpc::new(self.owner.clone()).into()
+    }
+
+    /// This instance’s owner rendezvous, including for staking chain operations.
     fn target(&self) -> shekyl_rpc_transport::DaemonTarget {
-        shekyl_rpc_transport::DaemonTarget::address(format!("http://127.0.0.1:{}", self.rpc_port))
+        shekyl_rpc_transport::DaemonTarget::Owner(self.owner.clone())
     }
 
     /// Resolve the daemon binary from `SHEKYLD_BIN`. Panics with a clear message
@@ -812,7 +823,7 @@ impl RegtestDaemon {
         match std::env::var_os("SHEKYLD_BIN") {
             Some(p) => PathBuf::from(p),
             None => panic!(
-                "SHEKYLD_BIN not set. Build the daemon (cmake --build build --target shekyl_rust_bins) \
+                "SHEKYLD_BIN not set. Build the daemon (`cargo xtask build` in rust/) \
                  and run e.g. SHEKYLD_BIN=/abs/path/build/bin/shekyld cargo test ... -- --ignored"
             ),
         }
@@ -848,6 +859,17 @@ impl RegtestDaemon {
     /// `dev_block_generate` request's address.
     pub(super) async fn start() -> RegtestDaemon {
         Self::start_with_regtest_schedule(None).await
+    }
+
+    /// The measurement proxy and socket census explicitly observe TCP.
+    pub(super) async fn start_for_http_measurement(
+        seed: Option<&[u8; shekyl_crypto_pq::account::SEED_BYTES]>,
+    ) -> RegtestDaemon {
+        let mut spec = RegtestSpawn::new(Some(serial_lock().lock_owned().await));
+        spec.measure_http = true;
+        spec.mine_address =
+            seed.map(|seed| mine_address_from_seed(seed, shekyl_address::Network::Regtest));
+        Self::spawn(spec).await
     }
 
     /// Spawn mining coinbase to `seed`'s primary address.
@@ -951,6 +973,7 @@ impl RegtestDaemon {
             serial,
             network,
             schedule,
+            measure_http,
             restricted_listener,
             peering,
             mine_address,
@@ -995,9 +1018,16 @@ impl RegtestDaemon {
         }
         let closed_peer = unanswered.as_ref().map(UnansweredPort::peer);
         let rpc_port = Self::free_port_excluding(&reserved);
-        let data_dir = std::env::temp_dir().join(format!("shekyl-regtest-{rpc_port}"));
+        reserved.push(rpc_port);
+        let channel_port = (!released).then(|| Self::free_port_excluding(&reserved));
+        reserved.extend(channel_port);
+
+        let data_dir = shekyl_os_account::test_fixture::path(&format!("regtest-{rpc_port}"))
+            .expect("a fixture path");
         drop(std::fs::remove_dir_all(&data_dir));
-        std::fs::create_dir_all(&data_dir).expect("create data dir");
+        // Made as the daemon makes a data directory: it refuses an existing
+        // one other accounts can enter (`config.data-dir.exposed`).
+        shekyl_os_account::create_account_dir_all(&data_dir).expect("create data dir");
         // The daemon reads `/etc/shekyl/shekyld-<network>.toml` by default,
         // and a fleet host's own testnet file (its `p2p-peer` rows against
         // the `clearnet off` below) is not a test daemon's: a test's result
@@ -1015,7 +1045,8 @@ impl RegtestDaemon {
         // The chain's directory is the daemon's `data-dir`. The logs stay
         // in `data_dir` either way.
         let chain_dir = chain_dir.unwrap_or_else(|| data_dir.clone());
-        std::fs::create_dir_all(&chain_dir).expect("create the chain's directory");
+        shekyl_os_account::create_account_dir_all(&chain_dir)
+            .expect("create the chain's directory");
         let mut cmd = Command::new(&bin);
         // The grammar's spellings (INPUT_GRAMMAR.md §5). Tor is off unless
         // the spawn names the pinned binary: regtest's default is the
@@ -1048,9 +1079,14 @@ impl RegtestDaemon {
             ]),
             None => cmd.args(["--tor", "off"]),
         };
+        let admin = if released || measure_http {
+            format!("127.0.0.1:{rpc_port}")
+        } else {
+            "none".to_owned()
+        };
         cmd.args([
             "--rpc-admin-listen",
-            &format!("127.0.0.1:{rpc_port}"),
+            &admin,
             "--data-dir",
             chain_dir.to_str().expect("utf8 data dir"),
             "--config-file",
@@ -1066,6 +1102,9 @@ impl RegtestDaemon {
             "--log-level",
             "info",
         ]);
+        if let Some(port) = channel_port {
+            cmd.args(["--rpc-listen", &format!("127.0.0.1:{port}")]);
+        }
         // The owner's socket goes in the same private directory: this
         // account's, mode 0700, one per spawn. A harness names it, so a test
         // daemon never meets another's at the default rendezvous and needs no
@@ -1150,15 +1189,27 @@ impl RegtestDaemon {
         let child = shekyl_spawn::spawn_lock::spawn(&mut cmd)
             .unwrap_or_else(|e| panic!("spawn {}: {e}", bin.display()));
 
-        // Base URL only — `Rpc::call` appends the `json_rpc` route itself.
-        // Long timeout: `generate_blocks` late in a deep-tree mine takes well over
-        // the 30s default (each block ~2.5s; the depth-3 mine is ~750 blocks).
-        let rpc = HttpRpc::with_custom_timeout(
-            format!("http://127.0.0.1:{rpc_port}"),
-            Duration::from_secs(180),
-        )
-        .await
-        .expect("construct rpc client");
+        // Deep-tree mining batches can take longer than the usual request deadline.
+        let within = Duration::from_secs(180);
+        let owner_network = match network {
+            SpawnNetwork::Regtest => shekyl_network::Network::Regtest,
+            SpawnNetwork::Testnet => shekyl_network::Network::Testnet,
+        };
+        let owner = LocalTarget::test_override(
+            owner_network,
+            &shekyl_rpc_rendezvous::Instance::Default,
+            Some(&config_dir),
+            None,
+        );
+        let rpc = if released {
+            // The mixed-version peer predates the owner rendezvous.
+            HttpRpc::with_custom_timeout(format!("http://127.0.0.1:{rpc_port}"), within)
+                .await
+                .expect("released daemon client")
+                .into()
+        } else {
+            LocalRpc::within(owner.clone(), within).into()
+        };
 
         let mut daemon = RegtestDaemon {
             child,
@@ -1166,13 +1217,12 @@ impl RegtestDaemon {
             data_dir,
             config_dir,
             rpc_port,
+            channel_port,
             rpc,
+            owner,
             restricted_url: restricted_port.map(|p| format!("http://127.0.0.1:{p}")),
             schedule,
-            cli_network: match network {
-                SpawnNetwork::Regtest => "regtest",
-                SpawnNetwork::Testnet => "testnet",
-            },
+            cli_network: owner_network.name(),
             armed: matches!(network, SpawnNetwork::Regtest),
             offline,
             posts_at_open,
@@ -1257,10 +1307,7 @@ impl RegtestDaemon {
             tokio::time::sleep(Duration::from_millis(250)).await;
         }
         let tail = log_tail(&log_path);
-        panic!(
-            "daemon RPC never became ready (port {}) after 60s: {last_err}; log tail:\n{tail}",
-            self.rpc_port,
-        );
+        panic!("daemon RPC never became ready after 60s: {last_err}; log tail:\n{tail}");
     }
 
     /// The daemon's state, as the harness's listener is told it.
@@ -1477,6 +1524,54 @@ impl RegtestDaemon {
         panic!("{context}: {err}; daemon log tail:\n{}", self.log_tail());
     }
 
+    /// Create a private client identity and enroll it through this instance's owner leg.
+    fn enrolled_client(
+        &self,
+        dir: &Path,
+        ceiling: shekyl_rpc_types::wire::rpc::CeilingWord,
+    ) -> (std::net::SocketAddr, std::path::PathBuf, std::path::PathBuf) {
+        use shekyl_rpc_client::wire::{RpcBundleShow, RpcClientAdd};
+        use shekyl_rpc_transport::channel::{bundle_text, create_client_key};
+        use shekyl_rpc_types::{hash::HashHex, kinds::NoParams, wire::rpc::ClientCeiling};
+        let port = self.channel_port.expect("current daemon channel");
+        let bundle = self
+            .owner
+            .call::<RpcBundleShow>(&NoParams, shekyl_rpc_transport::local::CALL_WITHIN)
+            .expect("owner exports the bundle");
+        let bundle_file = dir.join("daemon.bundle");
+        std::fs::write(&bundle_file, bundle_text(&bundle.bundle.0)).unwrap();
+        let key_file = dir.join("client.key");
+        let key = create_client_key(&key_file).unwrap();
+        self.owner
+            .call::<RpcClientAdd>(
+                &ClientCeiling {
+                    fingerprint: HashHex::from_bytes(*key.public().fingerprint().as_bytes()),
+                    ceiling: vec![ceiling],
+                },
+                shekyl_rpc_transport::local::CALL_WITHIN,
+            )
+            .expect("owner enrolls the subprocess");
+        (
+            std::net::SocketAddr::from(([127, 0, 0, 1], port)),
+            bundle_file,
+            key_file,
+        )
+    }
+
+    pub(super) fn configure_channel(
+        &self,
+        cmd: &mut Command,
+        dir: &Path,
+        ceiling: shekyl_rpc_types::wire::rpc::CeilingWord,
+    ) {
+        let (endpoint, bundle_file, key_file) = self.enrolled_client(dir, ceiling);
+        cmd.args(["--daemon-endpoint", &endpoint.to_string()])
+            .arg("--daemon-bundle-file")
+            .arg(bundle_file)
+            .arg("--rpc-key-file")
+            .arg(key_file);
+    }
+
     /// Run one §13 word through `shekyl-cli` against this daemon.
     ///
     /// The C++ console is gone, so the harness spawns the binary. The
@@ -1490,17 +1585,25 @@ impl RegtestDaemon {
                  beside SHEKYLD_BIN"
             );
         });
+        // Named and empty, so a file in the account's real root never
+        // reaches the run. It sits in the fixture, below no directory another
+        // account can write, as the load requires.
+        let config_dir = shekyl_os_account::test_fixture::tempdir().expect("a fixture directory");
+        let config = config_dir.path().join("cli.toml");
+        shekyl_os_account::private_file::write_private(&config, b"").expect("the config file");
         let mut cmd = std::process::Command::new(bin);
-        cmd.args([
-            "--daemon-address",
-            &format!("http://127.0.0.1:{}", self.rpc_port),
-            "--network",
-            network,
-        ])
-        .args(command.split_whitespace())
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
+        self.configure_channel(
+            &mut cmd,
+            config_dir.path(),
+            shekyl_rpc_types::wire::rpc::CeilingWord::Admin,
+        );
+        cmd.arg("--config-file")
+            .arg(&config)
+            .args(["--network", network])
+            .args(command.split_whitespace())
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
         let child = shekyl_spawn::spawn_lock::spawn(&mut cmd).expect("spawn shekyl-cli");
         let output = child.wait_with_output().expect("wait for shekyl-cli");
         let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
@@ -2099,7 +2202,7 @@ fn job_is_full(
 /// Mine `n` blocks (`dev_block_generate`, an armed lever). The daemon pays
 /// its configured `mine-address` (N2); the request names no address.
 pub(super) async fn try_generate_blocks(
-    rpc: &HttpRpc,
+    rpc: &impl Rpc,
     n: u64,
 ) -> Result<GenerateBlocksResp, shekyl_rpc_client::RpcError> {
     let generated = rpc
@@ -2242,7 +2345,7 @@ impl MidScan {
         use super::refresh::{RefreshOptions, RefreshPhase};
         let seed = [seed_byte; shekyl_crypto_pq::account::SEED_BYTES];
         let daemon = RegtestDaemon::start_for_seed(&seed).await;
-        let (wallet, tmp) = create_wallet(daemon.rpc_port, &seed, password).await;
+        let (wallet, tmp) = create_wallet(daemon.wallet_rpc(), &seed, password);
         let before = wallet.ledger().ledger.synced_count();
         let mined = daemon.generate_blocks(Self::CHAIN).await;
         assert!(
@@ -2288,13 +2391,10 @@ impl MidScan {
     async fn reopen_where_it_was(
         tmp: &tempfile::TempDir,
         password: &[u8],
-        rpc_port: u16,
+        rpc: DaemonTransport,
         before: Option<shekyl_types::ChainCount>,
     ) {
         let creds = super::lifecycle::Credentials::password_only(password);
-        let rpc = HttpRpc::new(format!("http://127.0.0.1:{rpc_port}"))
-            .await
-            .expect("wallet rpc (reopen)");
         let reopened = super::Engine::<super::SoloSigner>::open_full(
             &tmp.path().join("wallet"),
             &creds,
@@ -2362,7 +2462,7 @@ async fn a_close_during_a_scan_keeps_the_wallet_and_the_daemon_stops() {
         "the close must come mid-scan, so the scan ends Cancelled: {joined:?}"
     );
     closed.expect("a wallet closed mid-scan closes");
-    MidScan::reopen_where_it_was(&tmp, password, daemon.rpc_port, before).await;
+    MidScan::reopen_where_it_was(&tmp, password, daemon.wallet_rpc(), before).await;
 
     let asked = Instant::now();
     let status = terminate(&mut daemon).await;
@@ -2432,7 +2532,7 @@ async fn a_daemon_stopped_mid_scan_exits_and_the_wallet_keeps_its_place() {
             )
         })
         .expect("the wallet closes after its daemon stopped");
-    MidScan::reopen_where_it_was(&tmp, password, daemon.rpc_port, before).await;
+    MidScan::reopen_where_it_was(&tmp, password, daemon.wallet_rpc(), before).await;
 }
 
 /// The daemon's own last line of a stop, from its log file.
@@ -2465,9 +2565,7 @@ async fn regtest_daemon_spawns_and_mines_to_wallet_address() {
     let serial = serial_lock().lock_owned().await;
     let daemon =
         RegtestDaemon::spawn(RegtestSpawn::new(Some(serial)).with_mine_address(mine_address)).await;
-    let rpc = HttpRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port))
-        .await
-        .expect("wallet rpc");
+    let rpc = daemon.wallet_rpc();
     let daemon_client = DaemonClient::verifying(rpc, regtest_expectation());
 
     let tmp = tempfile::tempdir().expect("wallet tempdir");
@@ -2571,7 +2669,7 @@ async fn the_armed_switch_serves_two_levers_and_knows_no_third() {
 /// One JSON-RPC request by a name this build's table does not hold — an
 /// old or deleted name a test probes — returning the reply envelope whole.
 pub(super) async fn raw_call(
-    rpc: &HttpRpc,
+    rpc: &impl Rpc,
     method: &str,
     params: serde_json::Value,
 ) -> serde_json::Value {
@@ -2610,9 +2708,7 @@ async fn e2e_refresh_scans_coinbase_balance() {
     let daemon = RegtestDaemon::start_for_seed(&seed).await;
 
     // Create the wallet (FAKECHAIN = mainnet address format; see the get_curve_tree test).
-    let rpc = HttpRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port))
-        .await
-        .expect("wallet rpc");
+    let rpc = daemon.wallet_rpc();
     let tmp = tempfile::tempdir().expect("wallet tempdir");
     let wallet_path = tmp.path().join("wallet");
     let creds = super::lifecycle::Credentials::password_only(b"track2-refresh");
@@ -2710,13 +2806,11 @@ async fn e2e_fcmp_spend_accepted_by_daemon() {
     // the still-in-memory created engine would skip the open path (envelope decrypt,
     // ledger load, scan-state restore) that every production spend session starts from.
     let creds = super::lifecycle::Credentials::password_only(b"track2-spend");
-    let (created, tmp) = create_wallet(daemon.rpc_port, &seed, b"track2-spend").await;
+    let (created, tmp) = create_wallet(daemon.wallet_rpc(), &seed, b"track2-spend");
     let wallet_path = tmp.path().join("wallet");
     created.close(&creds).await.expect("close created wallet");
 
-    let rpc = HttpRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port))
-        .await
-        .expect("wallet rpc (reopen)");
+    let rpc = daemon.wallet_rpc();
     let wallet = Engine::<SoloSigner>::open_full(
         &wallet_path,
         &creds,
@@ -2876,13 +2970,11 @@ async fn e2e_fcmp_spend_reorg_restores_pool_and_fee() {
     let seed = [0x35u8; shekyl_crypto_pq::account::SEED_BYTES];
     let daemon = RegtestDaemon::start_for_seed(&seed).await;
     let creds = super::lifecycle::Credentials::password_only(b"track2-spend-reorg");
-    let (created, tmp) = create_wallet(daemon.rpc_port, &seed, b"track2-spend-reorg").await;
+    let (created, tmp) = create_wallet(daemon.wallet_rpc(), &seed, b"track2-spend-reorg");
     let wallet_path = tmp.path().join("wallet");
     created.close(&creds).await.expect("close created wallet");
 
-    let rpc = HttpRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port))
-        .await
-        .expect("wallet rpc (reopen)");
+    let rpc = daemon.wallet_rpc();
     let wallet = Engine::<SoloSigner>::open_full(
         &wallet_path,
         &creds,
@@ -3075,29 +3167,34 @@ fn regtest_params<'a>(
 /// Create a Mainnet wallet (FAKECHAIN uses the mainnet address format) pointed at
 /// the daemon RPC. Returns the engine, its tempdir (caller keeps it alive — it owns
 /// the wallet files), and the encoded primary address.
-async fn mainnet_wallet(
-    rpc_port: u16,
+fn mainnet_wallet(
+    rpc: DaemonTransport,
     seed_byte: u8,
 ) -> (super::Engine<super::SoloSigner>, tempfile::TempDir, String) {
     let seed = [seed_byte; shekyl_crypto_pq::account::SEED_BYTES];
-    let (wallet, tmp) = create_wallet(rpc_port, &seed, b"track2").await;
+    let (wallet, tmp) = create_wallet(rpc, &seed, b"track2");
     let address = wallet.primary_address().encode().expect("encode address");
     (wallet, tmp, address)
 }
 
+/// The measurement proxy and external benchmark driver supply a TCP port.
+async fn loopback_rpc(port: u16) -> DaemonTransport {
+    HttpRpc::new(format!("http://127.0.0.1:{port}"))
+        .await
+        .expect("measurement RPC")
+        .into()
+}
+
 /// The shared create step behind [`mainnet_wallet`] and [`staker_wallet`]:
-/// tempdir, credentials, wallet RPC against the daemon port, and
+/// tempdir, credentials, the supplied daemon transport, and
 /// `Engine::create` over [`regtest_params`]. Callers layer their own
 /// follow-ons (address derivation; the staker's persist → close → reopen).
 /// The wallet base path is `tmp.path().join("wallet")`.
-async fn create_wallet(
-    rpc_port: u16,
+fn create_wallet(
+    rpc: DaemonTransport,
     seed: &[u8; shekyl_crypto_pq::account::SEED_BYTES],
     password: &'static [u8],
 ) -> (super::Engine<super::SoloSigner>, tempfile::TempDir) {
-    let rpc = HttpRpc::new(format!("http://127.0.0.1:{rpc_port}"))
-        .await
-        .expect("wallet rpc");
     let tmp = tempfile::tempdir().expect("wallet tempdir");
     let wallet_path = tmp.path().join("wallet");
     let creds = super::lifecycle::Credentials::password_only(password);
@@ -3153,7 +3250,7 @@ async fn e2e_fcmp_spend_over_depth3_tree() {
 
     let daemon =
         RegtestDaemon::start_for_seed(&[0x44u8; shekyl_crypto_pq::account::SEED_BYTES]).await;
-    let (wallet, _tmp, address) = mainnet_wallet(daemon.rpc_port, 0x44).await;
+    let (wallet, _tmp, address) = mainnet_wallet(daemon.wallet_rpc(), 0x44);
 
     // Mine (no refresh needed — depth is the daemon's, not the wallet's) until the
     // tree reaches the target depth, then one more batch so the REFERENCE block
@@ -3456,7 +3553,7 @@ async fn e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx() {
 
     let daemon =
         RegtestDaemon::start_for_seed(&[0x79u8; shekyl_crypto_pq::account::SEED_BYTES]).await;
-    let (wallet, _tmp, address) = mainnet_wallet(daemon.rpc_port, 0x79).await;
+    let (wallet, _tmp, address) = mainnet_wallet(daemon.wallet_rpc(), 0x79);
     let arc = Arc::new(RwLock::new(wallet));
     let Overfilled {
         median,
@@ -3739,7 +3836,7 @@ async fn e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx() {
 async fn e2e_cxx_template_fills_to_its_median() {
     let daemon =
         RegtestDaemon::start_for_seed(&[0x77u8; shekyl_crypto_pq::account::SEED_BYTES]).await;
-    let (wallet, _tmp, address) = mainnet_wallet(daemon.rpc_port, 0x77).await;
+    let (wallet, _tmp, address) = mainnet_wallet(daemon.wallet_rpc(), 0x77);
     let arc = Arc::new(RwLock::new(wallet));
     let Overfilled {
         median,
@@ -3967,10 +4064,10 @@ async fn generate_ct2_tier_b_fixture() {
 
     let daemon =
         RegtestDaemon::start_for_seed(&[0x44u8; shekyl_crypto_pq::account::SEED_BYTES]).await;
-    let (wallet, _tmp, _) = mainnet_wallet(daemon.rpc_port, 0x44).await;
+    let (wallet, _tmp, _) = mainnet_wallet(daemon.wallet_rpc(), 0x44);
     // A second wallet for its address only — the spend recipient (a real
     // non-change regular output, distinct from the self-send change).
-    let (_recipient_wallet, _tmp2, recipient) = mainnet_wallet(daemon.rpc_port, 0x55).await;
+    let (_recipient_wallet, _tmp2, recipient) = mainnet_wallet(daemon.wallet_rpc(), 0x55);
     let arc = Arc::new(RwLock::new(wallet));
 
     // --- fund + spend (main chain): a transfer to `recipient` yields a multi-tx
@@ -4246,21 +4343,18 @@ type StakerWallet = (
 /// (caller keeps it alive — it owns the wallet files), and the principal's
 /// encoded primary address.
 pub(super) async fn staker_wallet(
-    rpc_port: u16,
+    rpc: DaemonTransport,
     seed: &[u8; shekyl_crypto_pq::account::SEED_BYTES],
     slot: super::stake_engine::PSlot,
 ) -> StakerWallet {
     let creds = super::lifecycle::Credentials::password_only(b"pr4-staker");
-    let (engine, tmp) = create_wallet(rpc_port, seed, b"pr4-staker").await;
+    let (engine, tmp) = create_wallet(rpc.clone(), seed, b"pr4-staker");
     let base_path = tmp.path().join("wallet");
     engine
         .persist_bond_record(slot)
         .expect("persist bond record");
     engine.close(&creds).await.expect("close created wallet");
 
-    let rpc = HttpRpc::new(format!("http://127.0.0.1:{rpc_port}"))
-        .await
-        .expect("wallet rpc (reopen)");
     let opened = super::Engine::<super::SoloSigner>::open_full(
         &base_path,
         &creds,
@@ -4294,31 +4388,177 @@ pub(super) fn persona_destination(
     super::pending::TxDestination::OwnPersona(keys.payment_destination())
 }
 
+/// Blocks in one harness seal. The sweep persists only at a batch
+/// boundary, and [`PSCAN_STALL_LIMIT`] is read from those seals: one
+/// batch slower than the stall limit fails the wait.
+const PSCAN_SEAL_BATCH: u64 = 16;
+
+/// How long a P-scan wait may go without a strictly higher sealed height.
+///
+/// This bound is one seal, not the backlog. A scan that keeps sealing a
+/// higher height runs until the predicate holds. A scan that stops, or
+/// that has caught up without satisfying the predicate, fails here.
+const PSCAN_STALL_LIMIT: Duration = Duration::from_secs(300);
+
+/// How often the wait re-reads the seal file.
+const PSCAN_POLL: Duration = Duration::from_millis(200);
+
+/// How often a wait that has not finished prints its sealed height.
+const PSCAN_PROGRESS_LOG: Duration = Duration::from_secs(2);
+
+/// One decimal place of blocks per second.
+const RATE_TENTHS_PER_BLOCK: u128 = 10;
+/// The rate's seconds, in the same unit as [`Duration::as_millis`].
+const RATE_MILLIS_PER_SECOND: u128 = 1_000;
+
+/// The first sealed height a wait has read, and the highest since.
+/// `best` is never below `first`: a lower re-seal does not move it.
+#[derive(Clone, Copy, Debug)]
+struct SealedHeights {
+    first: BlockHeight,
+    best: BlockHeight,
+}
+
+/// What one P-scan wait has seen: the sealed heights and when the highest
+/// one landed. Its report is that span over the wait, in blocks per second.
+#[derive(Debug)]
+struct ScanProgress {
+    started: Instant,
+    /// When `sealed.best` last moved, or `started` when nothing has sealed.
+    advanced: Instant,
+    sealed: Option<SealedHeights>,
+}
+
+/// Truncated tenths of a block per second.
+///
+/// `tenths = span * RATE_TENTHS_PER_BLOCK * RATE_MILLIS_PER_SECOND / milliseconds`.
+/// A zero duration is zero: the span has not been observed over time yet.
+fn blocks_per_second_tenths(span: BlockCount, elapsed: Duration) -> u128 {
+    let millis = elapsed.as_millis();
+    if millis == 0 {
+        0
+    } else {
+        u128::from(span.to_raw()) * RATE_TENTHS_PER_BLOCK * RATE_MILLIS_PER_SECOND / millis
+    }
+}
+
+fn format_blocks_per_second(span: BlockCount, elapsed: Duration) -> String {
+    let tenths = blocks_per_second_tenths(span, elapsed);
+    format!(
+        "{}.{}",
+        tenths / RATE_TENTHS_PER_BLOCK,
+        tenths % RATE_TENTHS_PER_BLOCK
+    )
+}
+
+impl ScanProgress {
+    fn new(now: Instant) -> Self {
+        Self {
+            started: now,
+            advanced: now,
+            sealed: None,
+        }
+    }
+
+    /// Record a sealed height. Only a height above the best counts as
+    /// progress. A re-seal at the same height, or lower after a reorg,
+    /// is not new work, so a scan that has caught up without satisfying
+    /// the predicate still fails.
+    fn observe(&mut self, synced: BlockHeight, now: Instant) {
+        match &mut self.sealed {
+            None => {
+                self.sealed = Some(SealedHeights {
+                    first: synced,
+                    best: synced,
+                });
+                self.advanced = now;
+            }
+            Some(sealed) if synced > sealed.best => {
+                sealed.best = synced;
+                self.advanced = now;
+            }
+            Some(_) => {}
+        }
+    }
+
+    fn stalled(&self, now: Instant) -> bool {
+        now.duration_since(self.advanced) >= PSCAN_STALL_LIMIT
+    }
+
+    /// `synced <first> → <best> in <secs> s (<rate> blocks/s)`.
+    ///
+    /// `secs` is the truncated whole seconds. The rate is
+    /// [`blocks_per_second_tenths`] over the same elapsed duration.
+    fn report(&self, now: Instant) -> String {
+        let elapsed = now.duration_since(self.started);
+        let secs = elapsed.as_secs();
+        match self.sealed {
+            None => format!("no seal in {secs} s"),
+            Some(sealed) => {
+                let first = sealed.first;
+                let best = sealed.best;
+                let span = best.saturating_sub(first);
+                let rate = format_blocks_per_second(span, elapsed);
+                format!("synced {first} → {best} in {secs} s ({rate} blocks/s)")
+            }
+        }
+    }
+}
+
+#[test]
+fn a_scan_wait_is_bounded_by_progress_not_by_its_length() {
+    let start = Instant::now();
+    let at = |secs: u64| start + Duration::from_secs(secs);
+    let limit = PSCAN_STALL_LIMIT.as_secs();
+    let first = BlockHeight::from_raw(4_000);
+    let next = BlockHeight::from_raw(4_001);
+
+    // No seal at all stalls at the limit.
+    let progress = ScanProgress::new(start);
+    assert!(!progress.stalled(at(limit - 1)));
+    assert!(progress.stalled(at(limit)));
+
+    // A higher seal at the old deadline opens a fresh stall window, so
+    // the wait runs past that deadline.
+    let mut progress = ScanProgress::new(start);
+    progress.observe(first, at(0));
+    progress.observe(next, at(limit));
+    assert!(!progress.stalled(at(2 * limit - 1)));
+
+    // A re-seal at the same height, or a lower one, does not move that
+    // window. `2 * limit` is one stall after the last real advance
+    // (`limit`). A same-height refresh at `limit + 1` would leave the
+    // clock `limit - 1` short of a stall; a lower refresh at `limit + 2`
+    // would leave it `limit - 2` short. Either bug fails this assert.
+    progress.observe(next, at(limit + 1));
+    progress.observe(first, at(limit + 2));
+    assert!(progress.stalled(at(2 * limit)));
+
+    // 4,896 blocks in 300 s is 16.32 blocks/s, truncated to a tenth.
+    let mut progress = ScanProgress::new(start);
+    progress.observe(BlockHeight::from_raw(4_067), at(0));
+    progress.observe(BlockHeight::from_raw(8_963), at(300));
+    assert_eq!(
+        progress.report(at(300)),
+        "synced 4067 → 8963 in 300 s (16.3 blocks/s)"
+    );
+    assert_eq!(ScanProgress::new(start).report(at(5)), "no seal in 5 s");
+}
+
 /// Run the production P-scan (tight cadence + the shallow
 /// [`PSCAN_TEST_REORG_DEPTH`] horizon, via the injectable
 /// [`Engine::start_pscan_with`](super::Engine::start_pscan_with) seam) until
 /// the sealed `.wallet.pscan` state satisfies `pred`, then shut the task down
 /// and return that state. The caller mines the finality horizon past the
 /// blocks under test *before* calling; the scan then only has to catch up to
-/// `tip − horizon`. Panics if no satisfying seal appears within the deadline.
+/// `tip − horizon`. Panics after [`PSCAN_STALL_LIMIT`] with no strictly
+/// higher height sealed. Prints the scan's rate either way
+/// ([`ScanProgress`]), timed at the satisfying seal, before shutdown.
 async fn pscan_until(
     arc: &Arc<RwLock<super::Engine<super::SoloSigner>>>,
     pscan_seal: &std::path::Path,
     what: &str,
     pred: impl Fn(&shekyl_engine_state::pscan_state::PScanState) -> bool,
-) -> shekyl_engine_state::pscan_state::PScanState {
-    pscan_until_within(arc, pscan_seal, what, pred, Duration::from_secs(300)).await
-}
-
-/// [`pscan_until`] under the caller's deadline: a scan over a long stretch
-/// of full-bodied blocks (the shard fill, some three hundred spends) is a
-/// debug-build cost the default does not fit.
-async fn pscan_until_within(
-    arc: &Arc<RwLock<super::Engine<super::SoloSigner>>>,
-    pscan_seal: &std::path::Path,
-    what: &str,
-    pred: impl Fn(&shekyl_engine_state::pscan_state::PScanState) -> bool,
-    within: Duration,
 ) -> shekyl_engine_state::pscan_state::PScanState {
     use super::pscan::start::load_pscan_state_for_engine;
     use super::pscan::task::PScanConfig;
@@ -4327,49 +4567,50 @@ async fn pscan_until_within(
         arc.clone(),
         PScanConfig {
             reorg_depth: BlockCount::from_raw(PSCAN_TEST_REORG_DEPTH),
-            // Small batches so each seal lands quickly: the sweep persists state
-            // only at batch boundaries, and a debug-build scan-step is slow
-            // enough that a whole-backlog batch could outlive the deadline
-            // without ever sealing.
-            batch_blocks: 16,
+            batch_blocks: PSCAN_SEAL_BATCH,
         },
         Duration::from_millis(150),
     )
     .await
     .expect("start pscan");
 
-    let deadline = Instant::now() + within;
+    let mut progress = ScanProgress::new(Instant::now());
     let mut last_report = Instant::now();
     let mut last_seal_mtime: Option<std::time::SystemTime> = None;
     loop {
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        tokio::time::sleep(PSCAN_POLL).await;
         // Cheap change gate: the seal lands by atomic rename, so a changed
         // mtime is exactly "a new batch sealed" — only then pay the full
-        // decrypt + decode of the sealed state (up to 1 500 polls fit in
-        // the deadline; re-loading an unchanged seal every 200 ms is pure
-        // waste). An absent/unreadable file falls through to the loader,
-        // which reports the no-seal-yet state.
+        // decrypt + decode of the sealed state. Re-loading an unchanged
+        // seal on every poll is pure waste. An absent or unreadable file
+        // falls through to the loader, which reports the no-seal-yet state.
+        // The gate stays here. [`ScanProgress`] records heights only.
         let seal_mtime = std::fs::metadata(pscan_seal)
             .ok()
             .and_then(|m| m.modified().ok());
-        if seal_mtime.is_some() && seal_mtime == last_seal_mtime {
-            assert!(
-                Instant::now() < deadline,
-                "pscan did not observe {what} within the deadline"
-            );
-            continue;
-        }
-        last_seal_mtime = seal_mtime;
-        if let Some(state) = load_pscan_state_for_engine(arc.clone())
-            .await
-            .expect("load pscan state")
-        {
+        let changed = seal_mtime.is_none() || seal_mtime != last_seal_mtime;
+        let loaded = if changed {
+            last_seal_mtime = seal_mtime;
+            load_pscan_state_for_engine(arc.clone())
+                .await
+                .expect("load pscan state")
+        } else {
+            None
+        };
+        // One instant for the observation, the rate, and the stall check.
+        // Shutdown runs after the report is taken, so teardown is outside
+        // the measured span.
+        let now = Instant::now();
+        if let Some(state) = loaded {
+            progress.observe(state.synced_height(), now);
             if pred(&state) {
+                let report = progress.report(now);
                 handle.shutdown().await;
+                eprintln!("pscan: {what}: {report}");
                 return state;
             }
-            if last_report.elapsed() > Duration::from_secs(2) {
-                last_report = Instant::now();
+            if now.duration_since(last_report) > PSCAN_PROGRESS_LOG {
+                last_report = now;
                 eprintln!(
                     "pscan progress: synced={:?}, funding={}, matches={}",
                     state.synced_height(),
@@ -4377,13 +4618,14 @@ async fn pscan_until_within(
                     state.bond_post_matches().len(),
                 );
             }
-        } else if last_report.elapsed() > Duration::from_secs(2) {
-            last_report = Instant::now();
+        } else if changed && now.duration_since(last_report) > PSCAN_PROGRESS_LOG {
+            last_report = now;
             eprintln!("pscan progress: no seal yet");
         }
         assert!(
-            Instant::now() < deadline,
-            "pscan did not observe {what} within the deadline"
+            !progress.stalled(now),
+            "pscan did not observe {what}: no new height sealed for {PSCAN_STALL_LIMIT:?} ({})",
+            progress.report(now),
         );
     }
 }
@@ -4644,7 +4886,7 @@ async fn stake_persona_and_submit_bond(
     let slot = PSlot::from_raw(slot_raw);
     let (arc, tmp, principal) = match wallet {
         Some(opened) => opened,
-        None => staker_wallet(daemon.rpc_port, seed, slot).await,
+        None => staker_wallet(daemon.wallet_rpc(), seed, slot).await,
     };
 
     // The bond fee is caller-chosen at this seam (the RPC stake entry's
@@ -4912,7 +5154,7 @@ async fn stake_persona_and_submit_bond(
     let persona_id = *bound.persona();
     let swept_gindexes: Vec<u64> = post.funding_gindexes.iter().map(|g| g.to_raw()).collect();
     let daemon_client = { arc.read().await.daemon().clone() };
-    let submitter = BroadcastSubmitter::local(persona_id, Arc::new(daemon_client));
+    let submitter = BroadcastSubmitter::for_wallet(persona_id, Arc::new(daemon_client));
     let verdict = submitter
         .submit_bound(super::transaction_submitter::BoundForSend::Loaded(bound))
         .await;
@@ -5094,7 +5336,7 @@ async fn e2e_emission_claim_accepted_and_applied() {
     use super::claim_dispatch::EmissionClaimRequestError;
     use super::claim_orchestrator::ClaimOrchestrationError;
     use super::emission_source::fetch_emission_claim_source;
-    use super::prpc::LocalNodeRpc;
+    use super::prpc::open_chain_reader;
     use super::stake_engine::PSlot;
     use super::traits::DaemonEngine;
     use shekyl_curve_tree::reference::REF_ANCHOR_AGE;
@@ -5198,7 +5440,7 @@ async fn e2e_emission_claim_accepted_and_applied() {
     // retention prune that discards their bodies two epochs after the
     // shard closes; a wallet opened after that prune cannot scan them from
     // this node (the helper's docs).
-    let wallet = staker_wallet(daemon.rpc_port, &seed, slot).await;
+    let wallet = staker_wallet(daemon.wallet_rpc(), &seed, slot).await;
     let pscan_seal =
         shekyl_engine_file::paths::pscan_state_path_from(&wallet.1.path().join("wallet"));
     // The persona's serving host runs its own tor, whose notice log is in
@@ -5541,7 +5783,7 @@ async fn e2e_emission_claim_accepted_and_applied() {
             .economy
             .calculate_fee_from_weight(EMISSION_NON_CLAIMS_RESERVE_BYTES + 2048)
     };
-    let claim_rpc = LocalNodeRpc::new(&daemon.target(), Duration::from_secs(10))
+    let claim_rpc = open_chain_reader(&daemon.target(), Duration::from_secs(10))
         .await
         .expect("loopback claim transport");
     let pruning_landed = SpentRecordsDurablyPruned::for_test();
@@ -6021,7 +6263,7 @@ async fn e2e_drain_wire_shape_matches_a_real_transfer() {
 async fn e2e_release_accepted_and_connected() {
     use super::bond_assembly::{BondAssemblyError, SpentRecordsDurablyPruned};
     use super::emission_source::fetch_claim_source_for;
-    use super::prpc::LocalNodeRpc;
+    use super::prpc::open_chain_reader;
     use super::release_dispatch::ReleaseRequestError;
     use super::stake_engine::{PSlot, StakeEngineError};
     use shekyl_archival_retention::bond_floor;
@@ -6061,7 +6303,7 @@ async fn e2e_release_accepted_and_connected() {
     // retention prune that discards their bodies two epochs after the
     // shard closes; a wallet opened after that prune cannot scan them from
     // this node (the helper's docs).
-    let wallet = staker_wallet(daemon.rpc_port, &seed, slot).await;
+    let wallet = staker_wallet(daemon.wallet_rpc(), &seed, slot).await;
     let pscan_seal =
         shekyl_engine_file::paths::pscan_state_path_from(&wallet.1.path().join("wallet"));
     let closed = shard::close_shard_through_the_daemon(
@@ -6109,7 +6351,7 @@ async fn e2e_release_accepted_and_connected() {
     // transport — the SAME fetch the seam rides. The positive balance here
     // is what makes the post-connect zero an observed *transition* rather
     // than a state that could have held all along.
-    let release_rpc = LocalNodeRpc::new(&daemon.target(), Duration::from_secs(10))
+    let release_rpc = open_chain_reader(&daemon.target(), Duration::from_secs(10))
         .await
         .expect("loopback exit transport");
     let before = fetch_claim_source_for(&release_rpc, fixture.persona_id)
@@ -6246,7 +6488,7 @@ async fn e2e_release_accepted_and_connected() {
 #[ignore = "slow lane (run_live_daemon_gates.sh ARMED_SLOW): requires SHEKYLD_BIN; a market-bond walk (close and price the shard, fund, stake, unstake, collect, retire)"]
 async fn e2e_unstake_collect_retire_composed_arc() {
     use super::emission_source::fetch_claim_source_for;
-    use super::prpc::LocalNodeRpc;
+    use super::prpc::open_chain_reader;
     use super::stake_engine::PSlot;
     use super::unstake_facade::{
         CollectOutcome, CollectUnstakedError, UnstakeError, UnstakeOutcome,
@@ -6285,7 +6527,7 @@ async fn e2e_unstake_collect_retire_composed_arc() {
     // retention prune that discards their bodies two epochs after the
     // shard closes; a wallet opened after that prune cannot scan them from
     // this node (the helper's docs).
-    let wallet = staker_wallet(daemon.rpc_port, &seed, slot).await;
+    let wallet = staker_wallet(daemon.wallet_rpc(), &seed, slot).await;
     let pscan_seal =
         shekyl_engine_file::paths::pscan_state_path_from(&wallet.1.path().join("wallet"));
     let closed = shard::close_shard_through_the_daemon(
@@ -6328,7 +6570,7 @@ async fn e2e_unstake_collect_retire_composed_arc() {
 
     // Pre-read: the positive balance that makes the post-connect zero a
     // transition (the PR-B walk's discipline).
-    let record_rpc = LocalNodeRpc::new(&daemon_address, Duration::from_secs(10))
+    let record_rpc = open_chain_reader(&daemon_address, Duration::from_secs(10))
         .await
         .expect("loopback record transport");
     let before = fetch_claim_source_for(&record_rpc, fixture.persona_id)
@@ -6576,7 +6818,7 @@ async fn e2e_arm3_phantom_slot_collected_at_open() {
     // `staker_wallet` IS the crash fixture: it persists the bond record (the
     // durable point) and reopens — no assemble, no pending post, no
     // broadcast ever happens. The reopened wallet is the W2 phantom staker.
-    let (arc, tmp, _) = staker_wallet(daemon.rpc_port, &seed, slot).await;
+    let (arc, tmp, _) = staker_wallet(daemon.wallet_rpc(), &seed, slot).await;
     {
         let g = arc.read().await;
         assert!(g.ledger().staking.staking_enabled);
@@ -6620,9 +6862,7 @@ async fn e2e_arm3_phantom_slot_collected_at_open() {
         .close(&creds)
         .await
         .expect("close phantom staker");
-    let rpc = HttpRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port))
-        .await
-        .expect("wallet rpc (reopen)");
+    let rpc = daemon.wallet_rpc();
     let reopened = super::Engine::<super::SoloSigner>::open_full(
         &tmp.path().join("wallet"),
         &creds,
@@ -6651,7 +6891,7 @@ async fn e2e_arm3_phantom_slot_collected_at_open() {
 ///
 /// The checkout's `HEAD` alone says nothing about the binary in
 /// `SHEKYLD_BIN`: a daemon built from another tree, or from this tree before
-/// its change was committed (cmake fixes the version tag at configure time),
+/// its change was committed (the version tag is fixed when it is built),
 /// would stamp a corpus with a commit that did not mine it. The daemon
 /// reports `<version>-<sha9>`; that SHA is the build. A capture refuses
 /// unless it is the checkout's `HEAD` and the checkout is clean outside the
@@ -6677,8 +6917,8 @@ fn capture_build_identity(daemon_version: &str) -> String {
     let head = git(&["rev-parse", "--short=9", "HEAD"]);
     assert_eq!(
         built, head,
-        "SHEKYLD_BIN was built at {built} but the checkout is at {head}: re-run cmake \
-         (the version tag is fixed at configure time) and rebuild the daemon at HEAD \
+        "SHEKYLD_BIN was built at {built} but the checkout is at {head}: rebuild \
+         the daemon at HEAD (`cargo xtask build`: the version tag is fixed when it builds) \
          before capturing, so the vector names the code that mined it"
     );
     let dirty = git(&[
@@ -7187,12 +7427,11 @@ async fn get_output_histogram_stays_unrouted() {
     const DELETED_METHOD: &str = "get_output_histogram";
 
     let daemon = RegtestDaemon::start_with_restricted_listener().await;
-    let restricted = HttpRpc::new(daemon.restricted_url().to_owned())
+    let restricted: DaemonTransport = HttpRpc::new(daemon.restricted_url().to_owned())
         .await
-        .expect("restricted rpc client");
-    let admin = HttpRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port()))
-        .await
-        .expect("admin rpc client");
+        .expect("restricted rpc client")
+        .into();
+    let admin = daemon.wallet_rpc();
 
     for (name, listener) in [("restricted", &restricted), ("admin", &admin)] {
         let gone = raw_call(listener, DELETED_METHOD, json!({ "amounts": [] })).await;
@@ -7221,9 +7460,7 @@ async fn handlers_apply_their_own_request_caps() {
     let restricted = HttpRpc::new(daemon.restricted_url().to_owned())
         .await
         .expect("restricted rpc client");
-    let unrestricted = HttpRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port()))
-        .await
-        .expect("unrestricted rpc client");
+    let unrestricted = daemon.wallet_rpc();
 
     // Ids that resolve to nothing: the cap is a request-shape refusal and
     // fires before any lookup, so the chain's contents are irrelevant.
@@ -7266,6 +7503,40 @@ async fn handlers_apply_their_own_request_caps() {
         .expect_err("a bounded caller over the cap is refused");
     assert_eq!(ki_over.class, ErrorClass::OverResourceBound, "{ki_over:?}");
     assert_eq!(ki_over.diagnostic.code, "bound.key-image", "{ki_over:?}");
+
+    // The production wallet must handle a reserve larger than a single bounded
+    // request. Exercise its real reader on an enrolled wallet channel.
+    let dir = shekyl_os_account::test_fixture::tempdir().unwrap();
+    let (endpoint, bundle_file, key_file) =
+        daemon.enrolled_client(dir.path(), wire::rpc::CeilingWord::Wallet);
+    let wallet = shekyl_rpc_transport::DaemonTarget::Channel {
+        network: shekyl_network::Network::Regtest,
+        node: shekyl_rpc_transport::channel::RemoteNode {
+            leg: shekyl_rpc_transport::channel::Leg::ip(endpoint, None),
+            bundle_file,
+        },
+        key_file: Some(key_file),
+    }
+    .connect(None)
+    .await
+    .unwrap();
+    let over = wallet
+        .call_or_refusal::<wire::ChainSpent>(wire::chain::SpentQuery {
+            key_image: ids(KI_CAP + 1),
+        })
+        .await
+        .unwrap()
+        .expect_err("the enrolled wallet has bounded resources");
+    assert_eq!(over.diagnostic.code, "bound.key-image");
+    let view = super::proofs_chain_facts::ProofChainView::open(&wallet)
+        .await
+        .unwrap();
+    let spent = view
+        .key_image_status(&wallet, ids(KI_CAP + 1))
+        .await
+        .unwrap();
+    assert_eq!(spent, vec![wire::chain::Spent::Unspent; KI_CAP + 1]);
+    view.seal(&wallet).await.unwrap();
 
     // Blast radius: the same over-cap request from the host is served; the
     // caps bound a caller, not the node.

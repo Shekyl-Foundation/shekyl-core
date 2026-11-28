@@ -51,7 +51,12 @@ shekyl-types = { path = "../shekyl-types" }
 shekyl-rpc-types = { path = "../shekyl-rpc-types" }
 thiserror.workspace = true
 serde = { workspace = true }
-serde_json = "1"
+# `raw_value`: the summary's f64s decode from the decimal text serde_json
+# wrote (`exact_f64`), so a recorded summary reads back bit for bit. The
+# feature adds that API. It does not change f64 parsing. `float_roundtrip`
+# would, and Cargo would unify it into every workspace build that includes
+# this binary (ECONOMICS_SIM_PRODUCTION_REBASE.md §5.37.1).
+serde_json = { version = "1", features = ["raw_value"] }
 # Standard traffic's draw (`rng::block_interval`, `rng::rung_arrivals`;
 # ECONOMICS_SIM_PRODUCTION_REBASE.md §5.35): `exp` and `log` in pure Rust,
 # the same bits on every host, where std's call the platform's C runtime.
@@ -59,7 +64,16 @@ serde_json = "1"
 # `arch` feature only reaches x87 on 32-bit x86 without SSE.
 libm = { version = "0.2.16", default-features = false }
 
+# The heartbeat's UTC date and time (`utc_clock`). The workspace's pin as
+# shekyl-logging declares it, same features: already in the tree.
+time = { version = "0.3", default-features = false, features = ["std", "formatting", "macros"] }
+
 [dev-dependencies]
+# The full table's on-demand pin compares its narration and JSON summary
+# with their recorded SHA-256 (ECONOMICS_SIM_PRODUCTION_REBASE.md §5.37.1);
+# neither file is committed. Workspace pin, already in the tree through the
+# chain forge's digest pins.
+sha2 = { workspace = true }
 # The armed regeneration guard (rule 50): a committed narration moves only
 # under a cited decision. Already in the tree through the chain crates.
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }

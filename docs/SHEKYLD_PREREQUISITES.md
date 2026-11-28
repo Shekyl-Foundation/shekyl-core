@@ -99,12 +99,14 @@ shekyld \
   --network regtest \
   --clearnet off --tor off \
   --dev-difficulty 1 \
-  --data-dir /tmp/shekyl-regtest-XXXX \
-  --log-file /tmp/shekyl-regtest-XXXX/shekyld.log \
+  --data-dir ~/shekyl-regtest \
+  --log-file ~/shekyl-regtest/shekyld.log \
   --rpc-admin-listen 127.0.0.1:28081
 ```
 
-The chain persists across daemon restarts in the data directory.
+The chain persists across daemon restarts in the data directory. It
+cannot sit under a directory another account can write, `/tmp` included:
+the daemon refuses it (`config.data-dir.ancestor-writable`).
 
 ### V3-specific caveats
 
@@ -177,8 +179,7 @@ per [`ELECTRUM_WORDS_REMOVAL_PLAN.md`](./completed/ELECTRUM_WORDS_REMOVAL_PLAN.m
 Phase 2 work item 9 (reassessed). The harness invoked binaries
 named `monerod` and `monero-wallet-rpc` (which do not exist in the
 Shekyl tree — the renamed binaries are `shekyld` and
-`shekyl-wallet-rpc` per `src/daemon/CMakeLists.txt:74` and
-`src/wallet/CMakeLists.txt:98`), embedded Monero-format addresses
+`shekyl-wallet-rpc`), embedded Monero-format addresses
 (`42ey...`), and was already silently skipped in CI for the
 lifetime of the Shekyl tree. The Shekyl-native end-to-end harness
 (proposed placement `tests/integration/wallet_e2e/` per the

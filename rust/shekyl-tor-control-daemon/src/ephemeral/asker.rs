@@ -28,6 +28,7 @@ use shekyl_tor_control_client::control::{
     DiskWrites, OnionFlags, OnionPort, OnionPow, ServiceId, TorControlClient,
 };
 use shekyl_tor_control_client::onion_identity::OnionIdentity;
+use shekyl_tor_control_client::vanguard_rotation::VanguardsActive;
 
 use super::{
     pow_refusal, DaemonTorPublishError, DaemonTorStartError, DEL_ONION_REMOVED, DEL_ONION_UNKNOWN,
@@ -50,6 +51,21 @@ enum Unanswered {
 impl ControlAsker {
     pub(super) fn new(actor: ActorRef<TorControlClient>) -> Self {
         Self { actor }
+    }
+
+    /// The asker on the actor `pinned` was confirmed on: the only asker a
+    /// publish of an onion that keeps its guards is sent through (`TSR-W1`).
+    /// It cannot target an incarnation whose guards were never pinned.
+    #[must_use]
+    pub fn pinned(pinned: &VanguardsActive) -> Self {
+        Self::new(pinned.actor().clone())
+    }
+
+    /// The control actor this asker sends on, for a pipeline that asks it
+    /// directly (the guard manager's).
+    #[must_use]
+    pub fn actor(&self) -> &ActorRef<TorControlClient> {
+        &self.actor
     }
 
     async fn send(&self, command: Command) -> Result<ControlReply, Unanswered> {

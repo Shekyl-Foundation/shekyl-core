@@ -4,9 +4,9 @@
 // BSD-3-Clause
 
 //! Generate the shard-partition constant from the JSON authority at
-//! `config/consensus_constants.json`, the same file the C++ header
-//! generator (`cmake/generate_consensus_constants.py`) and the other
-//! per-crate build scripts read, so the two languages cannot drift.
+//! `config/consensus_constants.json`, the same file the other
+//! per-crate build scripts read, so no two crates
+//! can drift.
 //!
 //! Three keys are emitted here. `archival_shard_length_bytes` is the `W` of the
 //! archival shard partition (`shekyl_types::SHARD_LENGTH`; `SHT-Q2`, RULED

@@ -62,7 +62,7 @@ jobs:
           # mismatch there is not this job's subject (ripgrep + PyYAML)
           # and has already failed the gate before any script ran
           # (2026-09-09, PR #671 — same class as the 2026-08-18 apt-get
-          # update stalls recorded in cmake-gate-test.yml). Naming
+          # update stalls). Naming
           # google-chrome.list and .list.save left .sources / google.list
           # live; the drop script deletes every chrome source and asserts
           # the URI is gone.
@@ -156,12 +156,7 @@ jobs:
             python3 scripts/ci/check_dev_red_reporter.py --selftest
           run_one "The dev-red reporter needs every job" \
             python3 scripts/ci/check_dev_red_reporter.py
-          # The dev-red reporter and the merge-ready re-test name failing
-          # tests from a job's log; the re-test decides which labelled pull
-          # requests a merge reaches and keeps the `merge-ready` status.
-          # Each script's selftest: the log formats, the shared-test rules,
-          # the label check, the status grammar and who may post, and the
-          # names the scripts read from the merge-ready workflows (rule 47).
+          # The dev-red reporter names failing tests from a job's log.
           run_one "Failing tests are named from a job's log (selftest)" \
             python3 scripts/ci/failed_tests.py --selftest
           # The nightly workflows' reporters run on every run not cancelled
@@ -180,9 +175,9 @@ jobs:
             python3 scripts/ci/nightly_skip.py --selftest
           run_one "Every nightly job is planned or never skipped, with why" \
             python3 scripts/ci/nightly_skip.py --check
-          run_one "A merge re-tests the labelled pull requests it reaches (selftest)" \
-            python3 scripts/ci/merge_ready_overlap.py --selftest
-          run_one "merge-ready: an early label refused, a push clears it, the newest dev's re-test stands (selftest)" \
+          # The label check keeps the `merge-ready` status: its judgment
+          # and the names it reads from merge-ready.yml (rule 47).
+          run_one "merge-ready: an early label refused, a push clears it, a replaced run leaves no red (selftest)" \
             python3 scripts/ci/merge_ready.py --selftest
           run_one "A depth-changing fetch runs only under GitHub Actions (selftest)" \
             python3 scripts/ci/check_workflow_fetch_guard.py --selftest
@@ -254,9 +249,9 @@ jobs:
             scripts/ci/check_debit_auth_single_source.sh
           # SF-D4: the shard-fetch client is cut from the serving/wallet side,
           # the SOCKS dial is out of consensus/store/server, and p-serve's
-          # `test-signer` resolves off in every graph BuildRust.cmake ships.
+          # `test-signer` resolves off in every graph the release ships.
           # Read from manifests (this job has no toolchain): shipped roots
-          # are parsed out of BuildRust.cmake itself, and features are
+          # are read from rust/xtask/matrix.toml itself, and features are
           # unified Cargo-style (aliases, defaults, optional and weak deps),
           # not grepped. The selftest first: it plants each forwarding path
           # on synthetic manifests and proves the resolver sees it (rule 47).
@@ -289,6 +284,13 @@ jobs:
           # each allowed path to still use it, and refuses CacheStore anywhere.
           run_one "One owner of every RandomX cache (HA-R1)" \
             scripts/ci/check_randomx_cache_owner.sh
+          # R-34: a wallet's output positions come from its transaction
+          # key's order; only the block producers name a fixed position.
+          # The selftest first, so a scan that reads nothing cannot pass.
+          run_one "R-34: fixed output positions are the block producers' (selftest)" \
+            python3 scripts/ci/check_fixed_output_position_callers.py --selftest
+          run_one "R-34: fixed output positions are the block producers'" \
+            python3 scripts/ci/check_fixed_output_position_callers.py
           # DX-Q3 Q4: the node's template draws its coinbase secret and its
           # draw commitment from the OS (the commitment through the witness
           # ring); the scenario's reproducible values stay in test code.
@@ -370,6 +372,13 @@ jobs:
           # request, not first at a cut.
           run_one "Staging-deadline gate reads the table" \
             python3 scripts/release/check_staging_deadlines.py v0.0.1
+          # One release-tag grammar: the xtask's is canonical, and the
+          # promotion doc, the staging gate, the genesis gate and the gitian
+          # workflow carry it verbatim.
+          run_one "Release-tag grammar gate" \
+            python3 scripts/ci/check_release_tag_grammar.py
+          run_one "Release-tag grammar gate self-test" \
+            python3 scripts/ci/check_release_tag_grammar.py --selftest
           # The domain-binding ratchet must be empty at v3.1.0 (the signing
           # envelope §2.5, ruled 2026-11-05); the release-time gate refuses
           # a cut at or past it with rows left. Its rule and its read of
@@ -426,12 +435,16 @@ jobs:
             python3 scripts/ci/check_sim_integer_seams.py
 
           # The end state of the C++ removal (Rick, 2026-11-06): no
-          # first-party C or C++ is tracked outside external/, and no CMake
-          # target compiles any. The tree half here; the build job adds the
+          # first-party C or C++ is tracked outside external/, and no
+          # workspace build script compiles any. The tree half here; the build job adds the
           # half that reads the linked daemon. Selftest first (rule 47).
           run_one "No first-party C or C++ (selftest)" \
             python3 scripts/ci/check_no_first_party_c.py --selftest
-          run_one "No first-party C or C++ tracked, and no CMake target compiling any" \
+          run_one "No first-party C or C++ tracked, and no build script compiling any" \
             python3 scripts/ci/check_no_first_party_c.py --tree
+          # depends refuses an Android host at parse time: Shekyl ships
+          # nothing on Android. Make only, no build.
+          run_one "depends refuses an Android triple" \
+            ./tests/build-target-refusal/run.sh
 
           exit "${failed}"

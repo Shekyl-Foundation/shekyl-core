@@ -590,7 +590,30 @@ info:
   # one, as its own fault beside no-outputs. The wallet's send paths always
   # carry at least two outputs, so the keyword names a bug, as every
   # builder invariant does. api_version stays 1.
-  version: 0.23.0
+  # 0.24.0: -29119 SIGNER_FAILED's data.fault gains membership-self-check
+  # (Rick, 2026-11-22). The builder verifies the FCMP++ membership proof it
+  # has just made, under the consensus verifier and the operands the daemon
+  # will use, before the spend leaves the wallet; a proof that does not
+  # verify is refused as its own fault beside balance-self-check. It names a
+  # prover fault, a tree path that does not reach the wallet's root, or a
+  # transaction assembled with key images or spend-slot keys other than those
+  # the proof verified against: a bug, as every builder invariant is. Every
+  # path that signs answers a signer fault the same way, so stake, drain,
+  # unstake and collect_unstaked now return -29119 (or the code of a fault the
+  # user can act on) where they returned -32603. One failure has one name:
+  # wire-encode is retired, and a final encoding refused on any path is the
+  # builder's wire. api_version stays 1.
+  # 0.25.0: create, restore and open gain -29018
+  # DERIVATION_SELF_CHECK_FAILED (Rick, 2026-11-23). The wallet checks its
+  # own address-derivation corpus before it derives anything, and refuses
+  # when the check fails, naming the build's platform in data.platform.
+  # api_version stays 1.
+  # 0.26.0: authenticated channel failures have distinct codes. Enrollment
+  # and revocation carry data.fingerprint and the node operator's command.
+  # A call that exceeds its own bound is -29225 CHANNEL_BUDGET, distinct
+  # from a connection the node closed (-29223) and from a revocation
+  # (-29226 CHANNEL_REVOKED).
+  version: 0.26.0
   description: >
     JSON-RPC 2.0 interface served by `shekyl-wallet-rpc` (Phase 4 of the
     wallet rewrite; replaces the C++ `wallet_rpc_server`). One wallet-bearing
@@ -887,6 +910,7 @@ components:
         - -29015   # CURVE_TREE_UNAVAILABLE
         - -29016   # CURVE_TREE_STORE_UNUSABLE
         - -29017   # RANDOM_SOURCE_CHECK_FAILED
+        - -29018   # DERIVATION_SELF_CHECK_FAILED
         - -29100   # INVALID_RECIPIENT
         - -29101   # INSUFFICIENT_FUNDS
         - -29102   # FEE_ESTIMATION_FAILED
@@ -940,6 +964,18 @@ components:
         - -29212   # DAEMON_GRANT_REFUSED
         - -29213   # DAEMON_PEER_CHECK_FAILED
         - -29214   # DAEMON_IS_A_SERVICE
+        - -29215   # CHANNEL_NOT_ENROLLED
+        - -29216   # CHANNEL_NOT_THE_DAEMON
+        - -29217   # CHANNEL_NOT_RECOGNISED
+        - -29218   # CHANNEL_UNREACHABLE
+        - -29219   # CHANNEL_TIMED_OUT
+        - -29220   # CHANNEL_BUSY
+        - -29221   # CHANNEL_POOL_FULL
+        - -29222   # CHANNEL_SESSION_CAP
+        - -29223   # CHANNEL_CLOSED
+        - -29224   # CHANNEL_LOCAL
+        - -29225   # CHANNEL_BUDGET
+        - -29226   # CHANNEL_REVOKED
         - -29300   # PROOF_MALFORMED
         - -29301   # PROOF_TX_SECRET_UNAVAILABLE
         - -29302   # PROOF_NO_PROVABLE_OUTPUTS
@@ -1088,6 +1124,13 @@ components:
                                           means this computer — open the
                                           wallet on another. The grade stays
                                           in the server log
+          -29018 DERIVATION_SELF_CHECK_FAILED create, restore, open: this
+                                          binary failed its address-derivation
+                                          self-check, so it derived no keys
+                                          and changed no file. The wallet and
+                                          its seed are not at fault: install
+                                          the release for data.platform
+                                          (<os> <arch>) again
 
           -29100 INVALID_RECIPIENT        build/proofs: the address is not
                                           one this wallet can pay
@@ -1179,8 +1222,10 @@ components:
                                           wallet could not read. Distinct from
                                           -29102 (no answer) and -29109 (an
                                           answer refused as unreasonable)
-          -29119 SIGNER_FAILED            build: the wallet's own signer hit
-                                          an internal fault — a bug, never
+          -29119 SIGNER_FAILED            build (a send, stake, drain,
+                                          unstake or collect_unstaked): the
+                                          wallet's own signer hit an
+                                          internal fault — a bug, never
                                           the request's doing (data:
                                           {"fault"}, one keyword: a builder
                                           invariant — no-inputs, no-outputs,
@@ -1198,17 +1243,20 @@ components:
                                           branch-layer-mismatch,
                                           invalid-combined-ss-length,
                                           bulletproof, fcmp-prove, pqc-sign,
-                                          wire, balance-self-check — or the
+                                          wire, balance-self-check,
+                                          membership-self-check — or the
                                           wallet's random source and the
                                           state signing reads —
                                           primitive, handle-mismatch,
                                           missing-key-image,
                                           source-decapsulation,
                                           rid-not-encodable, proof,
-                                          bulletproof-parse, wire-encode,
+                                          bulletproof-parse,
                                           randomness).
                                           Report it; the wallet log has the
-                                          detail (A16)
+                                          detail (A16). A stake refused here
+                                          keeps its durable slot, and calling
+                                          stake again resumes it
           -29120 SAVE_NOT_WRITABLE        submit: the send's record (its
                                           signed bytes, tx secret and input
                                           locks) could not be saved because
@@ -1472,6 +1520,18 @@ components:
                                           rendezvous. A security failure:
                                           the wallet did not connect and
                                           does not retry
+          -29215 CHANNEL_NOT_ENROLLED  Enroll this wallet on your node with: shekyl-cli rpc client add <fingerprint> wallet
+          -29216 CHANNEL_NOT_THE_DAEMON  The daemon proof does not match daemon-bundle-file. Check the endpoint and obtain the bundle from your node.
+          -29217 CHANNEL_NOT_RECOGNISED  The node closed before sending its proof. Check daemon-bundle-file, the network and the channel version against your node.
+          -29218 CHANNEL_UNREACHABLE  The channel endpoint did not answer. Check the node, daemon-endpoint and daemon-socks.
+          -29219 CHANNEL_TIMED_OUT  The channel handshake timed out. Check the connection to your node.
+          -29220 CHANNEL_BUSY  The node is busy. Try again shortly.
+          -29221 CHANNEL_POOL_FULL  All this wallet's channel connections are busy. Wait for an outstanding call to finish.
+          -29222 CHANNEL_SESSION_CAP  This account has reached the node's channel session limit. Close an unused client session.
+          -29223 CHANNEL_CLOSED  The node closed the connection during the call. Check its status before repeating a submission.
+          -29224 CHANNEL_LOCAL  The wallet could not open the channel. Check its key and daemon bundle files and the local log.
+          -29225 CHANNEL_BUDGET  The call exceeded its time limit. The node may still be working. Check its status before repeating a submission.
+          -29226 CHANNEL_REVOKED  The node revoked this client's enrollment. Enroll it again with: shekyl-cli rpc client add <fingerprint> wallet. data: {"fingerprint"}
           -29214 DAEMON_IS_A_SERVICE      any daemon operation: this
                                           computer's node runs as a
                                           service. data: {"view": address

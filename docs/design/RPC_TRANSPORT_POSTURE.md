@@ -58,7 +58,10 @@ HTTP Basic until the channel's client slice lands
 1. **Unix — UDS.** Socket `0600`, inside a `0700` pid-scoped parent
    directory. Both halves matter: the `0600` is who may connect, the `0700`
    parent is containment — nobody else can place an object at the name
-   we're about to dial. That containment is why `AuthConfig::Disabled` is
+   we're about to dial, and BSD-derived systems may not enforce a socket's
+   mode on connect. The socket is `0600` from before it listens: every
+   socket listener binds, narrows, then listens through one function
+   (`listen::bind_owner_only_socket`; Rick, 2026-11-22). That containment is why `AuthConfig::Disabled` is
    sound here; auth rides the transport.
 2. **Windows — named pipe.** Per-user SID-derived random name, owner-only
    DACL set atomically at `CreateNamedPipe`, NETWORK (`S-1-5-2`) denied,

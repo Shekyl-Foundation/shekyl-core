@@ -1,0 +1,31 @@
+workspace: fips204-tag
+cargo-checkct: shekyl-checkct:85271e5   options: --timeout 600
+toolchain: nightly-2025-12-04
+profile.release: panic = "abort" overflow-checks = true 
+targets + rustflags: target = ["x86_64-unknown-linux-gnu"] rustflags = ["-C", "linker=rust-lld", "-C", "linker-flavor=ld.lld", "-C", "relocation-model=static"] 
+run window (UTC): Tue Nov 24 03:11:55 AM UTC 2026 -> Tue Nov 24 03:12:41 AM UTC 2026
+
+Summary:
+  driver     target                    entrypoint                                status
+  fips204ct  x86_64-unknown-linux-gnu  fips204ct::driver::fips204_decompose_44   insecure
+      0x201fe8 has control flow leak (0.222s)
+  fips204ct  x86_64-unknown-linux-gnu  fips204ct::driver::fips204_decompose_65   insecure
+      0x201fe8 has control flow leak (0.222s)
+  fips204ct  x86_64-unknown-linux-gnu  fips204ct::driver::fips204_infinity_norm  insecure
+      0x201f78 has control flow leak (0.241s)
+  fips204ct  x86_64-unknown-linux-gnu  fips204ct::driver::fips204_make_hint_44   insecure
+      0x201fe8 has control flow leak (0.255s)
+  fips204ct  x86_64-unknown-linux-gnu  fips204ct::driver::fips204_make_hint_65   insecure
+      0x201fe8 has control flow leak (0.259s)
+INSECURE
+Tue Nov 24 03:12:41 AM UTC 2026
+  [checkct:result] Instruction 0x201fe8 has control flow leak (0.222s)
+  [checkct:result] Instruction 0x201fe8 has control flow leak (0.222s)
+  [checkct:result] Instruction 0x201fe8 has control flow leak (0.255s)
+  [checkct:result] Instruction 0x201fe8 has control flow leak (0.259s)
+  [checkct:result] Instruction 0x201f78 has control flow leak (0.241s)
+      0x201fe8 has control flow leak (0.222s)
+      0x201fe8 has control flow leak (0.222s)
+      0x201f78 has control flow leak (0.241s)
+      0x201fe8 has control flow leak (0.255s)
+      0x201fe8 has control flow leak (0.259s)

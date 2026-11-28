@@ -20,7 +20,7 @@
 use std::time::{Duration, Instant};
 
 #[cfg(target_os = "linux")]
-use super::{log_tail, try_generate_blocks, HttpRpc, PathBuf, RegtestDaemon, RegtestSpawn};
+use super::{log_tail, try_generate_blocks, DaemonTransport, PathBuf, RegtestDaemon, RegtestSpawn};
 #[cfg(target_os = "linux")]
 use std::process::{Child, ExitStatus};
 
@@ -185,7 +185,7 @@ async fn child_exited(child: &mut Child) -> ExitStatus {
 /// during the last poll gap is the process ending, and that verdict
 /// comes first.
 #[cfg(target_os = "linux")]
-async fn wait_for_mine(child: &mut Child, rpc: &HttpRpc, budget: CallBudget) -> MineWait {
+async fn wait_for_mine(child: &mut Child, rpc: &DaemonTransport, budget: CallBudget) -> MineWait {
     let (CallBudget::Disk(limit) | CallBudget::Refusal(limit)) = budget;
     if limit.is_zero() {
         return match child.try_wait().expect("wait for the daemon") {

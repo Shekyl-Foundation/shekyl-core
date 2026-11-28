@@ -23,7 +23,7 @@ AND nothing the skipped jobs compile or run reads it. "Reads it" is computed fro
   one does the gate fails instead of narrowing silently) in the consumer files
   (below) that contains a `docs/` path names that path, or the directory under it, as an input:
   `include_str!("../../../docs/test_vectors/X.json")`, a runtime
-  `join("../../docs/test_vectors")`, a CMake define pointing at a vector;
+  `join("../../docs/test_vectors")`;
 - a prose file outside `docs/` is an input when a consumer literal resolves
   to it, relative to the consumer's own directory or to its crate's root
   (`CARGO_MANIFEST_DIR`): a crate's `#![doc = include_str!("../README.md")]`
@@ -35,7 +35,7 @@ AND nothing the skipped jobs compile or run reads it. "Reads it" is computed fro
   records beside the crate.
 
 Consumers are the files the skipped jobs build or run: everything under
-`rust/`, `src/`, `tests/`, `cmake/` and `contrib/`, every `CMakeLists.txt`,
+`rust/`, `src/`, `tests/` and `contrib/`,
 each `scripts/` file the consuming workflows invoke by path, and every
 non-prose file of a consumer tree under `docs/`, a directory a consuming
 workflow builds in (a step's `working-directory:` there); both read from
@@ -95,7 +95,7 @@ dependency, not by topic:
 
 - `build_jobs`: `run` or `skip`, for build.yml's OS builds (`BUILD_JOBS`,
   the jobs its `work` output gates). They compile every crate through
-  CMake, so the Rust job's own placement decides it with their jobs and
+  `cargo xtask`, so the Rust job's own placement decides it with their jobs and
   workflow in place of the Rust job's: they run when a change reaches a
   package, is an input every crate shares or one nothing claims, is
   build.yml, or is a script or action one of them runs. A change owned by
@@ -117,6 +117,12 @@ dependency, not by topic:
   and not the block path's; the push to `dev` captures every row whatever
   this says.
 
+A pull request is scoped from its merge commit's first parent, the `dev`
+the commit under test was built on (`--pr-base`). The event's
+`pull_request.base.sha` can be an older or a newer `dev`, and its diff then
+counts what `dev` gained in between as the pull request's own: docs-only
+#1528 read 64 files and ran every suite.
+
 The ownership table is the truth for `scripts/ci/**` and `.github/**`
 outside the workflow files, which own the jobs they define; the selftest
 holds the table to the tree (every tracked path claimed, no missing path or
@@ -132,6 +138,10 @@ Usage:
                                               # bench_rows=…
                                               # to $GITHUB_OUTPUT
   change_scope.py --files a b c               # classify the given paths
+  change_scope.py --pr-base MERGE PR_HEAD     # prints the `dev` a pull request's
+                                              # merge commit was built on, its
+                                              # first parent; nothing, exit 0,
+                                              # for any other commit shape
   change_scope.py --selftest                  # pinned cases against this tree
 """
 
@@ -197,7 +207,7 @@ ALL_PREFIXES = ("rust/.cargo/", "rust/.config/", "config/")
 # list follows.
 NEXTEST_EXCLUDED = ("shekyl-randomx-differential",)
 JOB_HEADER = re.compile(r"^  ([A-Za-z0-9_-]+):\s*$")
-CONSUMER_DIRS = ("rust/", "src/", "tests/", "cmake/", "contrib/")
+CONSUMER_DIRS = ("rust/", "src/", "tests/", "contrib/")
 # A step that builds in a directory under docs/ makes it a consumer tree.
 DOCS_WORKING_DIRECTORY = re.compile(r"working-directory:\s*(docs/[A-Za-z0-9_./-]+)")
 CONSUMING_WORKFLOWS = (
@@ -255,7 +265,7 @@ def consumer_files():
             continue
         if p == SELF:
             continue
-        if p.startswith(CONSUMER_DIRS + trees) or p == "CMakeLists.txt" or p.endswith("/CMakeLists.txt") or p in scripts:
+        if p.startswith(CONSUMER_DIRS + trees) or p in scripts:
             out.append(p)
     if not out:
         raise RuntimeError("no consumer files found; refusing to classify")
@@ -273,7 +283,7 @@ RUST_COMMENT = re.compile(r"^\s*//(?![/!])")
 C_LIKE = re.compile(r"^\s*(?://|/\*|\*)")
 HASH = re.compile(r"^\s*#")
 C_LIKE_SUFFIXES = (".c", ".cc", ".cpp", ".h", ".hpp", ".inl", ".ipp")
-HASH_SUFFIXES = (".cmake", ".txt", ".sh", ".py", ".ps1", ".yml", ".yaml", ".toml", ".mk")
+HASH_SUFFIXES = (".txt", ".sh", ".py", ".ps1", ".yml", ".yaml", ".toml", ".mk")
 
 
 def code_text(path):
@@ -281,7 +291,7 @@ def code_text(path):
         comment = RUST_COMMENT
     elif path.endswith(C_LIKE_SUFFIXES):
         comment = C_LIKE
-    elif path.endswith(HASH_SUFFIXES) or os.path.basename(path) in ("Makefile", "CMakeLists.txt"):
+    elif path.endswith(HASH_SUFFIXES) or os.path.basename(path) == "Makefile":
         comment = HASH
     else:
         return read_text(path)
@@ -392,6 +402,25 @@ def classify(files, inputs, trees):
             reasons.append(f"{f}: {why}")
             return False, reasons
     return True, [f"{len(files)} file(s), all prose and read by no consumer"]
+
+
+def pr_merge_parent(commit_text, pr_head):
+    """The `dev` a pull request's merge commit was built on: the first parent
+    of a two-parent commit whose second parent is the pull request's head,
+    read from `git cat-file -p` (a shallow checkout has the header too).
+    Anything else answers "", which every caller treats as no base."""
+    header = commit_text.split("\n\n", 1)[0]
+    parents = [line.split()[1] for line in header.splitlines() if line.startswith("parent ")]
+    return parents[0] if len(parents) == 2 and pr_head and parents[1] == pr_head else ""
+
+
+def pr_base(merge, pr_head):
+    """`pr_merge_parent` of the commit `merge`; "" when it cannot be read."""
+    try:
+        return pr_merge_parent(git("cat-file", "-p", merge), pr_head)
+    except Exception as e:
+        print(f"scope: cannot read {merge!r} ({e})", file=sys.stderr)
+        return ""
 
 
 def changed_files(base, head):
@@ -710,7 +739,7 @@ def rust_scope(files, inputs, trees, workspace, owners, workflows, jobs=frozense
 
 def build_scope(files, inputs, trees, workspace, owners, workflows):
     """(build_jobs, reason): `run` when the OS builds read a changed file,
-    else `skip`. They compile every workspace crate through CMake and run
+    else `skip`. They compile every workspace crate through `cargo xtask` and run
     their own scripts and actions, so a change runs them when it reaches a
     package, is an input every crate shares or one nothing claims, is
     build.yml itself, or is a file one of BUILD_JOBS runs. A change owned
@@ -818,9 +847,9 @@ SELFTEST = [
     ("rust/shekyl-bulletproofs/README.md", False),        # #![doc = include_str!("../README.md")]
     ("rust/shekyl-scanner/README.md", True),              # a README no code reads
     ("tests/README.md", True),
-    ("README.md", True),                                  # quoted only in a cmake comment
+    ("README.md", True),                                  # no consumer reads it
     ("rust/shekyl-tor/src/lib.rs", False),                # any .rs, doc comment or not
-    ("CMakeLists.txt", False),
+    ("rust/xtask/matrix.toml", False),
     ("src/cryptonote_basic/account.cpp", False),
     (".github/workflows/build.yml", False),
     ("scripts/ci/change_scope.py", False),
@@ -855,8 +884,8 @@ def selftest():
     if spaced:
         print(f"WRONG: prose paths contain whitespace, so a read of one would be missed: {spaced[:5]}")
         bad += 1
-    # A sentence that mentions a document reads nothing (external/CMakeLists.txt
-    # and the staking sim name docs/FOLLOWUPS.md in messages).
+    # A sentence that mentions a document reads nothing (the staking
+    # sim names docs/FOLLOWUPS.md in messages).
     if inputs.reads("docs/FOLLOWUPS.md"):
         print("WRONG: a prose mention of docs/FOLLOWUPS.md counted as a read")
         bad += 1
@@ -890,6 +919,7 @@ def selftest():
     bad += rust_selftest(inputs, trees)
     bad += build_selftest(inputs, trees)
     bad += fuzz_selftest()
+    bad += pr_base_selftest()
     print(f"selftest: {'FAILED' if bad else 'ok'} ({bad} wrong)")
     return 1 if bad else 0
 
@@ -902,15 +932,15 @@ BUILD_SELFTEST = [
     ("docs/test_vectors/PQC_HYBRID_V2_KAT.json", "run"),        # read by crates' tests
     ("rust/Cargo.lock", "run"),
     ("config/anything.h", "run"),
-    ("CMakeLists.txt", "run"),                                  # claimed by nothing
-    ("cmake/BuildRust.cmake", "run"),
+    ("contrib/brew/Brewfile", "run"),                           # claimed by nothing
+    ("rust/xtask/matrix.toml", "run"),
     ("external/randomx-v2/src/x.c", "run"),
     (SELF, "run"),
     (JOB_OWNERS, "run"),
     (BUILD_WORKFLOW, "run"),                                    # their own workflow
     ("scripts/ci/check_binary_hardening.sh", "run"),            # a step of theirs runs it
     ("scripts/ci/run_live_daemon_gates.sh", "run"),             # the Ubuntu build's live-daemon gates
-    (".github/actions/set-make-job-count/action.yml", "run"),   # an action they use
+    (".github/actions/install-rust/action.yml", "run"),         # an action they use
     (".github/actions/install-rust/action.yml", "run"),
     (".github/workflows/merge-ready.yml", "skip"),              # owns its own jobs
     (".github/workflows/docs-gates.yml", "skip"),
@@ -959,6 +989,47 @@ def build_selftest(inputs, trees):
     return bad
 
 
+# The workflows whose scope reads a pull request's base: from `--pr-base`,
+# never the event's `pull_request.base.sha`.
+PR_BASE_WORKFLOWS = tuple(f".github/workflows/{w}.yml" for w in (
+    "benchmarks", "build", "chain-forge", "codeql", "depends", "doc-claims", "fuzz-harness", "rust-audit-test"))
+
+
+def pr_base_selftest():
+    bad = 0
+    dev, head, other = "d" * 40, "e" * 40, "f" * 40
+    commit = lambda *parents: "tree 1\n" + "".join(f"parent {p}\n" for p in parents) + "author a\n\nparent " + other
+    for label, text, pr_head, want in [
+        ("a pull request's merge commit", commit(dev, head), head, dev),
+        # Negative controls: each is no base, which runs everything.
+        ("another pull request's merge", commit(dev, other), head, ""),
+        ("parents the wrong way round", commit(head, dev), head, ""),
+        ("a commit with one parent", commit(dev), head, ""),
+        ("a root commit", commit(), head, ""),
+        ("an octopus merge", commit(dev, head, other), head, ""),
+        ("no pull request head", commit(dev, head), "", ""),
+    ]:
+        got = pr_merge_parent(text, pr_head)
+        if got != want:
+            print(f"WRONG: pr_merge_parent, {label}: {got!r}, want {want!r}")
+            bad += 1
+    for path in PR_BASE_WORKFLOWS:
+        text = read_text(path)
+        if "change_scope.py --pr-base" not in text or "pull_request.base.sha" in text:
+            print(f"WRONG: {path} does not take a pull request's base from --pr-base alone")
+            bad += 1
+    # The audit reads the step output. A local run exits at the fetch guard,
+    # so the base has to be published before that exit.
+    claims = read_text(".github/workflows/doc-claims.yml")
+    published = claims.find('echo "base=$base" >> "$GITHUB_OUTPUT"')
+    guard = claims.find('if [ "${GITHUB_ACTIONS:-}" != "true" ]; then')
+    fetch = claims.find("git fetch --no-tags --depth=1 origin")
+    if not (0 <= published < guard < fetch):
+        print("WRONG: doc-claims.yml publishes the base after its fetch guard or its fetch")
+        bad += 1
+    return bad
+
+
 def fuzz_selftest():
     """The subjects the fuzz placement reads exist (rule 47): the fuzz
     workflows, a fuzz crate, and the crypto closure script among the
@@ -992,7 +1063,7 @@ RUST_SELFTEST = [
     ("rust/.config/nextest.toml", "run", "all"),
     ("rust/.cargo/config.toml", "run", "all"),
     ("config/anything.h", "run", "all"),                                   # read by build scripts
-    ("CMakeLists.txt", "run", "all"),                                      # claimed by nothing
+    ("contrib/brew/Brewfile", "run", "all"),                               # claimed by nothing
     ("external/randomx-v2/src/x.c", "run", "all"),
     (SELF, "run", "all"),
     (JOB_OWNERS, "run", "all"),
@@ -1275,10 +1346,17 @@ def main():
     ap.add_argument("--base")
     ap.add_argument("--head")
     ap.add_argument("--files", nargs="+")
+    ap.add_argument("--pr-base", nargs=2, metavar=("MERGE", "PR_HEAD"))
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args()
     if args.selftest:
         return selftest()
+    if args.pr_base:
+        base = pr_base(*args.pr_base)
+        if not base:
+            print(f"scope: {args.pr_base[0]} is not this pull request's merge commit", file=sys.stderr)
+        print(base)
+        return 0
     try:
         files = args.files or changed_files(args.base, args.head)
         trees = docs_consumer_trees(consuming_workflow_text())

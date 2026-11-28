@@ -44,6 +44,9 @@ use shekyl_tor_control_client::control::{
 use shekyl_tor_control_client::supervisor::{
     Action, DirectoryAnswer, DirectoryFetch, DirectoryPlan, Input, Launch, REPLY_BOUND,
 };
+use shekyl_tor_control_client::vanguard_rotation::{
+    VanguardManager, VanguardsAbort, VanguardsActive,
+};
 use shekyl_tor_control_daemon::{
     ControlAsker, DaemonTorConfig, DaemonTorControl, DaemonTorPublishError, DaemonTorStartError,
     KeptDataDir, OnionPow, SpawnError,
@@ -82,6 +85,12 @@ pub(super) enum Answer {
         forward: SocketAddr,
         outcome: Result<ServiceId, DaemonTorPublishError>,
     },
+    /// A guard pin's outcome, and the manager it took, coming home. A
+    /// managed pin is a witness or a fault.
+    Guards {
+        manager: Box<VanguardManager>,
+        outcome: Result<VanguardsActive, VanguardsAbort>,
+    },
 }
 
 impl std::fmt::Debug for Answer {
@@ -94,6 +103,7 @@ impl std::fmt::Debug for Answer {
             Self::Launched(Err(_)) => "LaunchFailed",
             Self::Sampled { .. } => "Sampled",
             Self::Added { .. } => "Added",
+            Self::Guards { .. } => "Guards",
         })
     }
 }
@@ -136,27 +146,29 @@ impl Answer {
 impl Drive {
     /// Send the request `action` names: the core has just put it in flight.
     /// Returns what the loop answers at once, `Replied` last; empty when a
-    /// task answers.
-    pub(super) fn send(&mut self, action: Action) -> Vec<Input> {
+    /// task answers. `Err` when the action needs a managed Tor and this
+    /// supervisor runs none; that return changes nothing.
+    pub(super) fn send(&mut self, action: Action) -> Result<Vec<Input>, super::SupervisorEnd> {
         // A fault folded between the core sending this request and the loop
         // reaching it has cleared it: there is nothing to send.
         let Some(number) = self.core.in_flight() else {
-            return Vec::new();
+            return Ok(Vec::new());
         };
         let answered = match action {
             Action::Reap => self.send_reap(number),
-            Action::Spawn(launch) => self.send_launch(number, launch),
+            Action::Spawn(launch) => self.send_launch(number, launch)?,
             Action::SubscribeEvents => self.send_subscribe(number),
             Action::Sample => self.send_sample(number),
             Action::SetConfAvoidDiskWrites => self.send_defer(number),
-            Action::RepublishOnion => self.send_delete(number),
-            Action::AddOnion => self.send_add(number),
+            Action::RepublishOnion => self.send_delete(number)?,
+            Action::AddOnion => self.send_add(number)?,
             Action::RefetchDescriptor => self.send_refetch(number),
             Action::CheckDirectories => self.send_check(number),
             Action::FetchFromDirectory { hsdir } => self.send_fetch(number, hsdir),
+            Action::PinGuards => self.send_pin(number)?,
             other => unreachable!("{other:?} is not a request"),
         };
-        match answered {
+        Ok(match answered {
             Some(mut inputs) => {
                 inputs.push(Input::Replied { number });
                 // The answer's own decisions lead the tail that was waiting
@@ -166,11 +178,15 @@ impl Drive {
                 inputs
             }
             None => Vec::new(),
-        }
+        })
     }
 
     /// Run `ask` off the loop and post its answer for `number`.
-    fn answer_later(&self, number: u64, ask: impl Future<Output = Answer> + Send + 'static) {
+    pub(super) fn answer_later(
+        &self,
+        number: u64,
+        ask: impl Future<Output = Answer> + Send + 'static,
+    ) {
         let poster = self.poster.clone();
         tokio::spawn(async move {
             let answer = Box::new(ask.await);
@@ -223,7 +239,7 @@ impl Drive {
         }
     }
 
-    fn asker(&self) -> Option<ControlAsker> {
+    pub(super) fn asker(&self) -> Option<ControlAsker> {
         self.control.as_ref().map(DaemonTorControl::asker)
     }
 
@@ -233,6 +249,8 @@ impl Drive {
     /// comes back in the answer, kept for the launch that follows.
     fn send_reap(&mut self, number: u64) -> Option<Vec<Input>> {
         self.cancel_probe();
+        // The pin confirmed on this Tor goes with it.
+        self.witness = None;
         let Some(control) = self.control.take() else {
             return Some(Vec::new());
         };
@@ -254,8 +272,16 @@ impl Drive {
     /// driver abandons the launch, and the task then stops that Tor and
     /// retires its directory itself, so the next launch, which waits for
     /// this task, finds nothing of it.
-    fn send_launch(&mut self, number: u64, launch: Launch) -> Option<Vec<Input>> {
+    fn send_launch(
+        &mut self,
+        number: u64,
+        launch: Launch,
+    ) -> Result<Option<Vec<Input>>, super::SupervisorEnd> {
         let Launch { binary, directory } = launch;
+        // The guards are this boot's, read before anything a launch changes:
+        // a missing boot returns here, and the control and the kept directory
+        // stay where they are.
+        let guard_state = self.boot_for(super::TorAsk::Launch)?.guard_state.clone();
         // The core reaps an incarnation before the next launch, so none is
         // held here; one that is would be lost by the launch, so it is
         // stopped first, in the same order.
@@ -273,7 +299,6 @@ impl Drive {
         let plan = directory.plan(self.kept.take());
         let events = self.events.clone();
         let data_dir = self.data_dir.clone();
-        let guard_state = self.guard_state.clone();
         let (abandon, abandoned) = watch::channel(false);
         self.launch = Some((number, abandon));
         self.hold_later(number, async move {
@@ -342,7 +367,7 @@ impl Drive {
             }
             answer
         });
-        None
+        Ok(None)
     }
 
     fn send_subscribe(&self, number: u64) -> Option<Vec<Input>> {
@@ -406,15 +431,15 @@ impl Drive {
 
     /// `DEL_ONION`, the first half of a (re)publish. No forward listener
     /// means nothing to publish to: the core sends no `ADD_ONION` after it.
-    fn send_delete(&self, number: u64) -> Option<Vec<Input>> {
+    fn send_delete(&mut self, number: u64) -> Result<Option<Vec<Input>>, super::SupervisorEnd> {
+        let onion = Arc::clone(&self.boot_for(super::TorAsk::Publish)?.onion);
         let Some(asker) = self.asker() else {
-            return Some(vec![Input::ControlEnded]);
+            return Ok(Some(vec![Input::ControlEnded]));
         };
         if self.forward.is_none() {
-            return Some(vec![Input::ForwardAbsent]);
+            return Ok(Some(vec![Input::ForwardAbsent]));
         }
         tracing::info!(target: "tor", "publishing this node's onion again");
-        let onion = Arc::clone(&self.onion);
         self.answer_later(number, async move {
             Answer::Inputs(match asker.delete_onion(&onion).await {
                 Ok(()) => Vec::new(),
@@ -424,7 +449,7 @@ impl Drive {
                 }
             })
         });
-        None
+        Ok(None)
     }
 
     /// `ADD_ONION`, the second half. The service and a fresh round
@@ -433,20 +458,35 @@ impl Drive {
     /// before the reply does. A publish starts the rounds afresh, since a
     /// round left open by the deleted service is not this one's. A refused
     /// add publishes nothing, so no event reaches the new tracker.
-    pub(super) fn send_add(&mut self, number: u64) -> Option<Vec<Input>> {
-        let Some(asker) = self.asker() else {
-            return Some(vec![Input::ControlEnded]);
+    pub(super) fn send_add(
+        &mut self,
+        number: u64,
+    ) -> Result<Option<Vec<Input>>, super::SupervisorEnd> {
+        let boot = self.boot_for(super::TorAsk::Publish)?;
+        let onion = Arc::clone(&boot.onion);
+        // An onion that keeps its guards is published only through the pin
+        // confirmed on this Tor (`TSR-W1`); a per-boot onion's Tor keeps its
+        // own, and publishes on its control.
+        let asker = if boot.guards.is_some() {
+            let Some(witness) = &self.witness else {
+                return Err(super::SupervisorEnd::UnpinnedPublish);
+            };
+            self.control.as_ref().map(|_| ControlAsker::pinned(witness))
+        } else {
+            self.asker()
+        };
+        let Some(asker) = asker else {
+            return Ok(Some(vec![Input::ControlEnded]));
         };
         let Some(forward) = self.forward else {
-            return Some(vec![Input::ForwardAbsent]);
+            return Ok(Some(vec![Input::ForwardAbsent]));
         };
-        let service = self.onion.service_id().clone();
+        let service = onion.service_id().clone();
         self.rounds = Some(match &self.rounds {
             Some(previous) => previous.next_publication(service.clone()),
             None => UploadRounds::new(service.clone()),
         });
         self.service = Some(service);
-        let onion = Arc::clone(&self.onion);
         let virtual_port = self.virtual_port;
         self.answer_later(number, async move {
             let outcome = asker
@@ -460,7 +500,7 @@ impl Drive {
                 .await;
             Answer::Added { forward, outcome }
         });
-        None
+        Ok(None)
     }
 
     /// `HSFETCH` this node's own onion after a first probe miss: Tor refreshes
@@ -603,6 +643,13 @@ impl Drive {
     /// when the core still waits on that number; otherwise dropped, and a
     /// Tor launched for it is stopped so it does not outlive the request.
     pub(super) fn answered(&mut self, number: u64, answer: Answer) -> Vec<Input> {
+        // A pin's manager comes home whatever the core still waits on.
+        let answer = match answer {
+            Answer::Guards { manager, outcome } => {
+                return self.guards_answered(number, *manager, outcome);
+            }
+            other => other,
+        };
         if self.core.in_flight() != Some(number) {
             // A request the core gave up on: whatever it holds is ended off
             // the loop, before the next launch's directory work, so no Tor
@@ -631,6 +678,8 @@ impl Drive {
                 consensus,
             } => self.sampled(reads_network, sample, consensus),
             Answer::Added { forward, outcome } => vec![self.added(forward, outcome)],
+            // Answered above.
+            Answer::Guards { .. } => Vec::new(),
         };
         inputs.push(Input::Replied { number });
         inputs
@@ -650,6 +699,9 @@ impl Drive {
                     self.poster.clone(),
                 ));
                 self.control = Some(up);
+                // A pin confirmed on the Tor before this one is not this
+                // one's.
+                self.witness = None;
                 Input::Spawned
             }
             Err((error, directory)) => {

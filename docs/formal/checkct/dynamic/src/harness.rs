@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Times one row: builds its schedule, runs the timed loop, reports.
+//! Times one row: retains its inputs, runs the timed loop, reports.
 //!
 //! The timed loop is part of the experiment, not plumbing: what the timer
 //! sees depends on how consecutive operations overlap in the pipeline
@@ -16,7 +16,7 @@
 use core::hint::black_box;
 use std::time::{Instant, SystemTime};
 
-use crate::classes::{Class, Contrast, Schedule, BATCH};
+use crate::classes::{visit_batches, BatchRole, Class, Contrast, Retention, BATCH};
 use crate::cli::{ClassSelection, Config};
 use crate::rng::Rng;
 use crate::stats::{Comparison, DUDECT_T_THRESHOLD, TAIL_CROP_PERCENT};
@@ -80,25 +80,40 @@ impl Bench for Harness {
             return;
         }
         let samples = config.samples.get();
-        let schedule = Schedule::build(&contrast, &draw, samples, &mut Rng::from_os());
+        if Retention::for_operand(size_of::<I>()) == Retention::Windowed {
+            println!("-- {name}: windowed inputs (profiling span includes input rebuilds)");
+        }
         let mut fixed = Vec::with_capacity(samples);
         let mut random = Vec::with_capacity(samples);
         let mut sink = 0u64;
-        let window_start = SystemTime::now();
-        for (class, batch) in &schedule.batches {
-            if !config.classes.times(*class) {
-                continue;
+        let mut rng = Rng::from_os();
+        // Set on the first timed batch, so the complete schedule's
+        // construction stays outside the span. A windowed schedule rebuilds
+        // between blocks; those gaps sit inside the span.
+        let mut window_start = None;
+        visit_batches(&contrast, &draw, samples, &mut rng, |class, batch, role| {
+            // A warmup is timed even when its class is not selected, so the
+            // following recorded batch is preceded by the timing loop.
+            if role != BatchRole::Warmup && !config.classes.times(class) {
+                return;
+            }
+            if window_start.is_none() {
+                window_start = Some(SystemTime::now());
             }
             let start = Instant::now();
             for input in batch {
                 sink = sink.wrapping_add(op(black_box(input)));
             }
             let ns = start.elapsed().as_nanos() as f64;
+            if role == BatchRole::Warmup {
+                return;
+            }
             match class {
                 Class::Fixed => fixed.push(ns),
                 Class::Random => random.push(ns),
             }
-        }
+        });
+        let window_start = window_start.unwrap_or_else(SystemTime::now);
         black_box(sink);
         let window = TimingWindow {
             start: window_start,
@@ -110,8 +125,8 @@ impl Bench for Harness {
 
 /// When a row's timed batches ran, on the wall clock: the span a profiler
 /// sampling the same core (turbostat's `Time_Of_Day_Seconds`) is joined on.
-/// Both ends lie outside the timed loop; the input generation before it is
-/// excluded.
+/// The complete schedule is built before the span starts. A windowed schedule's
+/// later rebuilds fall between timed blocks, inside the span.
 struct TimingWindow {
     start: SystemTime,
     end: SystemTime,

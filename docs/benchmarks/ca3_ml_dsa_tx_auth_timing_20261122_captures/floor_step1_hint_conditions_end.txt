@@ -1,0 +1,35 @@
+== conditions hint-end at 2026-11-23T14:52:58Z
+model: Raspberry Pi 4 Model B Rev 1.2
+revision: c03112
+os: Ubuntu 26.04.1 LTS
+kernel: 7.0.0-1023-raspi
+governor: ondemand
+ntp: yes
+load: 1.11 1.21 1.50
+clock_khz: 1500000
+soc_temp_millic: 57939
+throttled: throttled=0x0
+undervoltage_alarm: 0
+total_trans: 211400
+time_in_state:
+  600000 7728713
+  700000 76972
+  800000 11015
+  900000 5613
+  1000000 9078
+  1100000 10611
+  1200000 7668
+  1300000 8711
+  1400000 6870
+  1500000 7567791
+mem_available_kb: 3301056
+top processes by cpu:
+      PID USER     %CPU     ELAPSED COMMAND
+    69541 <agent>  100       00:00 ps
+    69528 root     45.8       00:00 systemd-timedat
+    69518 <agent>  3.1       00:00 bash
+    63129 root      0.1       30:11 kworker/0:3-events
+    62789 root      0.0       32:40 kworker/1:3-events
+    69104 root      0.0       05:08 kworker/2:0-events
+    69107 root      0.0       04:28 kworker/1:0-events
+tmux: ca3hint: 1 windows (created Mon Nov 23 09:22:42 2026);

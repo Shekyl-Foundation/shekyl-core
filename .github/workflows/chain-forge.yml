@@ -114,7 +114,8 @@ jobs:
         run: |
           crypto=false
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            if ! files=$(git diff --name-only "${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}"); then
+            base=$(python3 scripts/ci/change_scope.py --pr-base "${{ github.sha }}" "${{ github.event.pull_request.head.sha }}")
+            if [ -z "$base" ] || ! files=$(git diff --name-only "$base...${{ github.event.pull_request.head.sha }}"); then
               crypto=true
             elif printf '%s\n' "$files" | grep -qE '^rust/shekyl-(crypto-pq|fcmp|tx-builder)/'; then
               crypto=true

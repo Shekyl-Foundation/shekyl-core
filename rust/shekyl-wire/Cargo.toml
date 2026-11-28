@@ -64,7 +64,7 @@ shekyl-tx-builder = { path = "../shekyl-tx-builder" }
 shekyl-curve-tree = { path = "../shekyl-curve-tree" }
 # `seeded-rng` (TEST_ONLY): the fixtures' transaction keys come from the
 # seeded stream (`TxKey::seeded`, R-21).
-shekyl-crypto-pq = { path = "../shekyl-crypto-pq", features = ["seeded-rng"] }
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq", features = ["seeded-rng", "test-utils"] }
 # Live empty-section section_root for block-header KATs (no hand-copied pin).
 shekyl-archival-retention = { path = "../shekyl-archival-retention" }
 # Regtest mining-address emitter (`tests/emit_regtest_addr.rs`).

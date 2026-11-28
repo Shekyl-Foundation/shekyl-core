@@ -568,15 +568,13 @@ pub enum SignerFault {
     Proof,
     /// The signed bulletproof bytes do not parse.
     BulletproofParse,
-    /// Encoding the signed transaction failed.
-    WireEncode,
     /// The OS random source failed while drawing the transaction key.
     Randomness,
 }
 
 impl SignerFault {
     /// Every wallet-side fault, in declaration order.
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 8] = [
         Self::Primitive,
         Self::HandleMismatch,
         Self::MissingKeyImage,
@@ -584,7 +582,6 @@ impl SignerFault {
         Self::RidNotEncodable,
         Self::Proof,
         Self::BulletproofParse,
-        Self::WireEncode,
         Self::Randomness,
     ];
 
@@ -599,7 +596,6 @@ impl SignerFault {
             Self::RidNotEncodable => "rid-not-encodable",
             Self::Proof => "proof",
             Self::BulletproofParse => "bulletproof-parse",
-            Self::WireEncode => "wire-encode",
             Self::Randomness => "randomness",
         }
     }
@@ -633,8 +629,8 @@ pub enum SignerError {
     #[error("signing failed: {0}")]
     Sign(shekyl_tx_builder::SignFault),
 
-    /// The wallet's own state did not hold what signing needs, or encoding
-    /// the signed transaction failed: a bug, named by [`SignerFault`].
+    /// The wallet's own state did not hold what signing needs: a bug, named
+    /// by [`SignerFault`].
     #[error("signer internal fault ({fault})")]
     Internal {
         /// The fault.

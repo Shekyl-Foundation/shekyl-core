@@ -9,7 +9,7 @@
 //! library can own the harness the other calls. A copied SOCKS5 accept
 //! loop had already drifted (different body timeouts, two parsers). This
 //! crate is the one copy. It is a dev-dependency of both ends and of the
-//! wallet's proving test. Nothing in `cmake/BuildRust.cmake` builds it.
+//! wallet's proving test. Nothing in `rust/xtask/matrix.toml` builds it.
 //!
 //! The shim accepts the username/password greeting
 //! `shekyl_socks::Isolation::Persona` sends and tunnels the CONNECT to the

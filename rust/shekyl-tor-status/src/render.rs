@@ -374,6 +374,14 @@ fn onion_sentence(tor: &ManagedTor, unknown: &mut bool) -> Option<String> {
             "Another computer is using this node's Tor address and key, so peers may reach it instead of this node. Stop the other one, or give this node its own key."
                 .to_owned(),
         ),
+        (OnionState::Unreachable, Some(OnionCause::GuardsRefused)) => Some(
+            "Tor refused this node's guard settings, so its address is not published and peers cannot reach it through Tor. This is a fault in this release; please report it. The node keeps trying."
+                .to_owned(),
+        ),
+        (OnionState::Unreachable, Some(OnionCause::GuardsUnfilled)) => Some(
+            "Tor does not yet know enough of the network to choose this node's guards, so its address is not published yet and peers cannot reach it through Tor. It is published once Tor's view of the network is complete."
+                .to_owned(),
+        ),
         (OnionState::Unknown { .. }, _) | (_, Some(OnionCause::Unknown { .. })) => {
             *unknown = true;
             None

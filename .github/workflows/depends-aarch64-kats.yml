@@ -4,7 +4,7 @@ name: ci/gh-actions/depends-aarch64-kats
 # (reward-arithmetic, standoff integer golden vector, archival_p derive,
 # the FN-DSA hybrid signature).
 # Extracted from depends.yml so a wallet-only PR does not stand up the
-# six-target `make depends` matrix (~124 billed minutes) to run these.
+# six-target depends matrix (~124 billed minutes) to run these.
 #
 # The full cross-compile matrix is `.github/workflows/depends.yml`
 # (contrib/depends path-filtered on PR; nightly otherwise).
@@ -64,7 +64,7 @@ jobs:
     - name: set apt conf
       run: ${{env.APT_SET_CONF}}
     - name: install dependencies
-      run: apt update; apt -y install build-essential cmake pkg-config python3 g++-aarch64-linux-gnu qemu-user-static git curl ca-certificates
+      run: apt update; apt -y install build-essential pkg-config python3 g++-aarch64-linux-gnu qemu-user-static git curl ca-certificates
     - name: configure git
       run: git config --global --add safe.directory '*'
     - uses: actions/checkout@v5

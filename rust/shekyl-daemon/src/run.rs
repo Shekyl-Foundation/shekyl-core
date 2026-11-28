@@ -482,6 +482,11 @@ enum RunWait {
     /// the daemon would stay up and never sync, or never connect a block,
     /// so it stops and exits failed.
     NodeEnded(shekyl_node::NodeEnd),
+    /// The Tor supervisor ended on its own ([`tor::Supervisor::ended`]): the
+    /// daemon would stay up with no managed Tor, and with clearnet off no
+    /// network, answering every status ask "not ready". It stops and exits
+    /// failed.
+    TorEnded(tor::SupervisorEnd),
 }
 
 /// The run: the RPC's start, the notify driver, the managed Tor's start,
@@ -539,7 +544,7 @@ fn supervise(
     // managed Tor starts with it, and the node does not wait for it:
     // clearnet, the listeners and the dialer are up already, and the
     // managed connector is parked until the supervisor publishes a route.
-    let supervisor = tor::begin(
+    let mut supervisor = tor::begin(
         tor_inbox,
         &config.tor,
         config.clearnet_on(),
@@ -554,7 +559,7 @@ fn supervise(
     let mut preserve_status = rpc.is_some();
     if rpc.is_some() {
         let mut ended = node.ended();
-        let wait = pool.block_on(run_or_stop(&mut ended));
+        let wait = pool.block_on(run_or_stop(&mut ended, &mut supervisor));
         note_run(&mut preserve_status, wait);
     }
     notify_driver.abort();
@@ -611,17 +616,24 @@ fn finish(
     }
 }
 
-/// A stop request, or a task the node owns ending on its own.
+/// A stop request, a task the node owns ending on its own, or the Tor
+/// supervisor ending on its own.
 ///
-/// Only this wait reads the node's end watch. Teardown asks chain sync's
-/// owner to stop before the network closes, and a task that was asked to
-/// stop does not report, so this wait is not polled while the node is
-/// dropped. A reported end is read before a stop request: the node's
-/// tasks are stopped only in the teardown, so a stop cannot cause one.
-async fn run_or_stop(ended: &mut watch::Receiver<Option<shekyl_node::NodeEnd>>) -> RunWait {
+/// Only this wait reads the node's end watch and the supervisor's end.
+/// Teardown asks chain sync's owner to stop before the network closes, and
+/// a task that was asked to stop does not report, so this wait is not
+/// polled while the node is dropped; the supervisor is stopped after it, so
+/// its stop is never read as an end. A reported end is read before a stop
+/// request: the node's tasks and the supervisor are stopped only in the
+/// teardown, so a stop cannot cause one.
+async fn run_or_stop(
+    ended: &mut watch::Receiver<Option<shekyl_node::NodeEnd>>,
+    supervisor: &mut tor::Supervisor,
+) -> RunWait {
     tokio::select! {
         biased;
         end = node_ended(ended) => RunWait::NodeEnded(end),
+        end = supervisor.ended() => RunWait::TorEnded(end),
         cause = stop::stop_requested() => RunWait::StopRequested(cause),
     }
 }
@@ -643,13 +655,13 @@ async fn node_ended(
     }
 }
 
-/// Record what the wait returned: a stop, or a node task's own end, which
-/// stops the daemon through the one stop owner and makes its exit a
-/// failure.
+/// Record what the wait returned: a stop, or a node task's or the Tor
+/// supervisor's own end, which stops the daemon through the one stop owner
+/// and makes its exit a failure.
 fn note_run(preserve_status: &mut bool, wait: RunWait) {
     match wait {
         RunWait::StopRequested(cause) => {
-            if matches!(cause, stop::StopCause::Fatal(_)) {
+            if cause.fails_the_exit() {
                 *preserve_status = false;
             }
             deliver(stop_report(cause));
@@ -657,6 +669,11 @@ fn note_run(preserve_status: &mut bool, wait: RunWait) {
         RunWait::NodeEnded(end) => {
             deliver(stop_report(stop::StopCause::Fatal(end.clone())));
             stop::fatal(end);
+            *preserve_status = false;
+        }
+        RunWait::TorEnded(end) => {
+            deliver(stop_report(stop::StopCause::TorEnded(end.clone())));
+            stop::tor_ended(end);
             *preserve_status = false;
         }
     }
@@ -684,6 +701,9 @@ fn stop_report(cause: stop::StopCause) -> StopReport {
             "the process that started this daemon closed its owning connection".to_owned(),
         ),
         stop::StopCause::Fatal(end) => StopReport::Error(format!("{end}; the daemon stops")),
+        stop::StopCause::TorEnded(end) => {
+            StopReport::Error(format!("{end}; the daemon stops. {}", end.remedy()))
+        }
     }
 }
 

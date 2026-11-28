@@ -208,6 +208,22 @@ fn engine_failure_detail(e: &StakeEngineError) -> String {
     }
 }
 
+/// A post-persist assembly failure on the first-stake surface: an unsaved
+/// seal and the signer's own fault keep their types, and anything else
+/// renders through the amount-free sanitizer.
+pub(super) fn post_assembly_failure(e: StakeEngineError) -> FirstStakeError {
+    match e {
+        StakeEngineError::Daemon(fault) => FirstStakeError::Daemon(fault),
+        StakeEngineError::Assembly(BondAssemblyError::SealNotSaved(error)) => {
+            FirstStakeError::SealNotSaved(error)
+        }
+        e => match e.sign_fault() {
+            Some(fault) => FirstStakeError::Signer(fault),
+            None => FirstStakeError::Engine(engine_failure_detail(&e)),
+        },
+    }
+}
+
 /// Map a W1 preflight [`BondAssemblyError`] onto the first-stake taxonomy
 /// (rule 82): only genuine wait-and-retry states become the
 /// [`FirstStakeError::Funding`] refusal (the RPC's `-29500` "fund and retry
@@ -362,6 +378,10 @@ pub enum FirstStakeError {
     /// `-29500` "fund and retry" remedy (rule 82's misdiagnosis guard).
     #[error("staking state unavailable: {0}")]
     State(String),
+    /// The node named its own remedy while the bond was being read.
+    /// Nothing durable was written. The fault is the sentence.
+    #[error("{0}")]
+    Daemon(shekyl_rpc_client::DaemonFault),
     /// The daemon fee-estimate query failed — check the daemon connection
     /// and retry; nothing durable was written (W1-clean).
     #[error("bond fee estimate failed: {0}")]
@@ -387,6 +407,11 @@ pub enum FirstStakeError {
     /// point it is the W2 window — re-invoke `stake` to resume.
     #[error("stake engine failed: {0}")]
     Engine(String),
+    /// The wallet's signer refused the bond post: `-29119`, or the code of
+    /// the fault the user can act on. Nothing was sent, and the durable slot
+    /// stands, so a later `stake` resumes it (the W2 window).
+    #[error("the signer refused the bond post: {0}")]
+    Signer(shekyl_tx_builder::SignFault),
     /// [`StakePosture::Market`] was requested and **no shard assignment
     /// exists yet** (`COMPLETETREE_ACTIVATION.md` §10 item 1): market
     /// staking bonds over an assigned subset of the corpus, and the
@@ -567,9 +592,15 @@ where
         }
 
         // (i) Named daemon-claimed-tip clock for anchor_t0 (never synced/ingested).
-        let anchor_t0 = daemon_claimed_tip(&daemon)
-            .await
-            .map_err(|e| BondAssemblyError::build("daemon claimed tip", e))?;
+        let anchor_t0 = match daemon_claimed_tip(&daemon).await {
+            Ok(tip) => tip,
+            Err(error) => {
+                return Err(match error.own_remedy() {
+                    Some(fault) => StakeEngineError::Daemon(fault),
+                    None => BondAssemblyError::build("daemon claimed tip", error).into(),
+                });
+            }
+        };
 
         // (ii) The authoritative funding sweep — the SAME body the W1
         // preflight ran (`sweep_bond_funding`), re-run at this path's own
@@ -1041,12 +1072,7 @@ where
         let assembled =
             Self::assemble_bond_post(self_arc.clone(), handle, ticket, filled, fee, &witness)
                 .await
-                .map_err(|e| match e {
-                    StakeEngineError::Assembly(BondAssemblyError::SealNotSaved(error)) => {
-                        FirstStakeError::SealNotSaved(error)
-                    }
-                    e => FirstStakeError::Engine(engine_failure_detail(&e)),
-                })?;
+                .map_err(post_assembly_failure)?;
 
         Ok(FirstStakeOutcome {
             p_slot: slot.to_raw(),

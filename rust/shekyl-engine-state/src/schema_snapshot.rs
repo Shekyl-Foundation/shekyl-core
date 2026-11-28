@@ -36,6 +36,9 @@
 //! - `pscan_cursor.snap`           ↔  [`PSCAN_CURSOR_VERSION`]
 //! - `pscan_state.snap`            ↔  [`PSCAN_STATE_VERSION`]
 //! - `pending_post_block.snap`     ↔  [`PENDING_POST_VERSION`]
+//! - `group_wallet_ledger.snap`    ↔  [`GROUP_WALLET_LEDGER_FORMAT_VERSION`]
+//! - `group_ledger_block.snap`     ↔  [`GROUP_LEDGER_BLOCK_VERSION`]
+//! - `multisig_state.snap`         ↔  [`MULTISIG_STATE_VERSION`]
 //!
 //! The pairing is enforced in CI by
 //! `.github/workflows/schema-snapshot.yml` — any PR that touches a `.snap`
@@ -74,6 +77,9 @@
 //! [`PSCAN_CURSOR_VERSION`]: crate::pscan_cursor::PSCAN_CURSOR_VERSION
 //! [`PSCAN_STATE_VERSION`]: crate::pscan_state::PSCAN_STATE_VERSION
 //! [`PENDING_POST_VERSION`]: crate::pending_post_block::PENDING_POST_VERSION
+//! [`GROUP_WALLET_LEDGER_FORMAT_VERSION`]: crate::group_ledger::GROUP_WALLET_LEDGER_FORMAT_VERSION
+//! [`GROUP_LEDGER_BLOCK_VERSION`]: crate::group_ledger::GROUP_LEDGER_BLOCK_VERSION
+//! [`MULTISIG_STATE_VERSION`]: crate::multisig_state::MULTISIG_STATE_VERSION
 //! [`WalletLedger`]: crate::wallet_ledger::WalletLedger
 //! [`LedgerBlock`]: crate::ledger_block::LedgerBlock
 //! [`BookkeepingBlock`]: crate::bookkeeping_block::BookkeepingBlock
@@ -98,10 +104,18 @@ mod tests {
     };
 
     use crate::{
-        bookkeeping_block::BookkeepingBlock, ledger_block::LedgerBlock,
-        pending_post_block::PendingPostBlock, pscan_cursor::PScanCursor, pscan_state::PScanState,
-        send_journal_block::SendJournalBlock, staking_block::StakingBlock,
-        sync_state_block::SyncStateBlock, tx_meta_block::TxMetaBlock, wallet_ledger::WalletLedger,
+        bookkeeping_block::BookkeepingBlock,
+        group_ledger::{GroupLedgerBlock, GroupWalletLedger},
+        ledger_block::LedgerBlock,
+        multisig_state::MultisigState,
+        pending_post_block::PendingPostBlock,
+        pscan_cursor::PScanCursor,
+        pscan_state::PScanState,
+        send_journal_block::SendJournalBlock,
+        staking_block::StakingBlock,
+        sync_state_block::SyncStateBlock,
+        tx_meta_block::TxMetaBlock,
+        wallet_ledger::WalletLedger,
     };
 
     /// Snapshot directory, relative to the `shekyl-engine-state` crate root.
@@ -217,6 +231,21 @@ mod tests {
     #[test]
     fn wallet_ledger_schema_matches_snapshot() {
         check_or_update_snapshot("wallet_ledger", <WalletLedger as Schema>::SCHEMA);
+    }
+
+    #[test]
+    fn group_wallet_ledger_schema_matches_snapshot() {
+        check_or_update_snapshot("group_wallet_ledger", <GroupWalletLedger as Schema>::SCHEMA);
+    }
+
+    #[test]
+    fn group_ledger_block_schema_matches_snapshot() {
+        check_or_update_snapshot("group_ledger_block", <GroupLedgerBlock as Schema>::SCHEMA);
+    }
+
+    #[test]
+    fn multisig_state_schema_matches_snapshot() {
+        check_or_update_snapshot("multisig_state", <MultisigState as Schema>::SCHEMA);
     }
 
     #[test]

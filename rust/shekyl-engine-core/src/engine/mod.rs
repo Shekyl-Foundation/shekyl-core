@@ -280,13 +280,7 @@ pub(crate) mod drain_read;
 pub(crate) mod drain_select;
 pub mod held_sends;
 pub(crate) mod holdings_fill;
-// SP-T2 (DQ-T2.3): daemon-posture selection — the no-silent-③ invariant (a
-// posture is named, never defaulted; no-choice + local-unreachable *refuses*,
-// never falls back to a remote/third-party node). §2b build invariant 3.
-pub(crate) mod posture;
-// SP-T2 (DQ-T2.2): the per-`P` RPC-over-Tor transport (`PRpc`) — an `Rpc` impl
-// over `shekyl-p-transport`'s `PTorClient`. Confines the async/sync bridge; all
-// `ureq`/agent construction stays in `shekyl-p-transport` (§2b invariant 1).
+// Chain reads on the configured wallet daemon.
 pub(crate) mod prpc;
 // C4 engine-vs-sim `EconomicsEngine` differential (§5.4 / §7.1); replays
 // the sim-recorded `RecordedChainFixture` through the real
@@ -329,6 +323,9 @@ pub(crate) mod fee_variant;
 /// design (§19.8.2 wall-clock budget).
 #[cfg(all(test, feature = "gf7-hooks"))]
 mod gf7_sealing_run;
+pub(crate) mod group_destination;
+#[cfg(feature = "multisig")]
+mod group_wallet;
 pub(crate) mod key_actor;
 /// §5.3 B9 dispatch-overhead bench support. Gated behind
 /// `bench-internals`; re-exported through [`crate::__bench_internals`]
@@ -483,9 +480,9 @@ pub use output_selector::{
     OutputCandidate, OutputSelector, SelectedInputs, SelectedOutputs, WalletGreedyOutputSelector,
 };
 pub use pending::{
-    FeePriority, PendingTx, ReservationExtension, ReservationId, ReservationTTLConfig, SnapshotId,
-    SubmitOutcome, TxDestination, TxHash, TxRecipient, TxRecipientSummary, TxRequest,
-    DEFAULT_RESERVATION_TTL,
+    FeePriority, GroupDestination, PendingTx, ReservationExtension, ReservationId,
+    ReservationTTLConfig, SnapshotId, SubmitOutcome, TxDestination, TxHash, TxRecipient,
+    TxRecipientSummary, TxRequest, DEFAULT_RESERVATION_TTL,
 };
 pub use submit::SubmitReceipt;
 // The P-scan lifecycle surface (WI-1): handle + start error + cadence default,
@@ -505,6 +502,10 @@ pub use drain_read::DrainBalanceReadError;
 // drain façade's outcome/error pair and the `stake_in` error the handler
 // matches on for its refusal codes.
 pub use drain_facade::{DrainOutcome, DrainToPrincipalError};
+/// A group wallet's files and member file (R-30) — only under
+/// `--features multisig`.
+#[cfg(feature = "multisig")]
+pub use group_wallet::{GroupWallet, GroupWalletCreate, GroupWalletError};
 pub use principal_stake::StakeInError;
 pub use pscan::start::{PScanHandle, PScanStartError, DEFAULT_PSCAN_CADENCE};
 pub use refresh::{

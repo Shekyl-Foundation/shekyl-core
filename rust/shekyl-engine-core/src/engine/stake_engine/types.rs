@@ -688,6 +688,11 @@ pub(crate) enum StakeEngineError {
     )]
     RngDegeneracy,
 
+    /// The daemon named its own remedy while the bond was being read.
+    /// Nothing was persisted.
+    #[error("{0}")]
+    Daemon(shekyl_rpc_client::DaemonFault),
+
     /// The [`PersonaHandle`] and [`PersistedBondTicket`](crate::engine::stake_persist::PersistedBondTicket) passed to [`PlanBondPost`](crate::engine::stake_engine::persona::PlanBondPost)
     /// name different persona slots. A ticket witnesses the durable persist for a
     /// *specific* slot; it cannot authorize a bond operation for any other slot.
@@ -808,6 +813,19 @@ pub(crate) enum StakeEngineError {
          its identity key and its other keys are unaffected"
     )]
     ReceiptKeyUndecodable,
+}
+
+impl StakeEngineError {
+    /// The signer's own fault, when the signer is what refused an assembly.
+    /// Each public staking error carries it unflattened, so the wallet RPC
+    /// answers it as it answers a transfer's.
+    pub(crate) const fn sign_fault(&self) -> Option<shekyl_tx_builder::SignFault> {
+        match self {
+            Self::Assembly(BondAssemblyError::Signer(fault))
+            | Self::DrainAssembly(DrainAssemblyError::Signer(fault)) => Some(*fault),
+            _ => None,
+        }
+    }
 }
 
 /// The bonded union's transient scan inputs (SP-3 dual extractor): one

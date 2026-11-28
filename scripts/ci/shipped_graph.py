@@ -11,9 +11,12 @@ needs it.
 crates the shipped binaries build. Two release builds link shekyl-core
 crates:
 
-  1. **This repository's release.** `cmake/BuildRust.cmake` builds its roots
-     (`shekyld`, `shekyl-cli`, `shekyl-wallet-rpc`) in one cargo invocation,
-     with the features that file passes outside the measurement build.
+  1. **This repository's release.** `cargo xtask` builds its roots (every
+     host's `binaries` in `rust/xtask/matrix.toml`: `shekyld`, `shekyl-cli`,
+     `shekyl-wallet-rpc`, `shekyl-rpc-tunnel`) in one cargo invocation per
+     host, with the features its arguments pass. The measurement build's
+     features sit in the file's `[measurement]` table, apart from every
+     invocation, and are never a release's.
   2. **The GUI wallet's release.** `shekyl-gui-wallet` links shekyl-core
      crates by path. Its manifest lives in another repository, so the
      shekyl-core crates it names, with each edge's features, are pinned in
@@ -54,10 +57,10 @@ the change that links it, and a crate that starts to ship leaves
 
 # Failing closed
 
-A `set(_shekyl_rust_bin_features ...)` this reading cannot place (inside
-the measurement block or outside every conditional) is an error, as is a
-release feature naming a package neither the roots nor their graph reach.
-A guess there would quietly drop or add a crate.
+A matrix the strict reading refuses (`release_matrix.py`) is an error, as
+is a `--features` with no value or a release feature naming a package
+neither the roots nor their graph reach. A guess there would quietly drop or
+add a crate.
 """
 
 from __future__ import annotations
@@ -87,10 +90,7 @@ GUI_ROOT = "shekyl-gui-wallet"
 CORE_RELEASE = "<core release>"
 GUI_RELEASE = "<gui release>"
 
-# The CMake option whose block holds the measurement build's features
-# (BuildRust.cmake), never a release's.
-MEASUREMENT_OPTION = "SHEKYL_MEASUREMENT_SPANS"
-FEATURES_VAR = "_shekyl_rust_bin_features"
+import release_matrix  # noqa: E402
 
 
 class GraphError(ValueError):
@@ -114,10 +114,15 @@ NOT_SHIPPED: dict[str, str] = {
     "production economics crates",
     "shekyl-harness-spender": "test support: the wallet-side spender (CHAIN_FORGE.md §11.1)",
     "shekyl-harness-wallet": "test support: the fixture miner wallet (CHAIN_FORGE.md §11.1)",
+    "shekyl-p-transport": "per-persona SOCKS client for a daemon read. RT-W12 carries "
+    "chain reads on the operator's channel, so no shipped binary links it; the "
+    "circuit-isolation measurement still uses it",
     "shekyl-p-loopback": "dev-only loopback between the P serve endpoint and fetch client; "
     "SF-D4 keeps it out of both shipped graphs",
     "shekyl-p2p-harness": "the P2P conformance harness: scripted peer, seam host, comparator",
     "shekyl-randomx-differential": "the Rust/C RandomX differential test harness",
+    "xtask": "the release build (`cargo xtask`): builds the shipped binaries from "
+    "rust/xtask/matrix.toml and is never one of them",
     "shekyl-rpc-channel-xcheck": "a test-only cross-check of the RPC channel's handshake "
     "against clatter",
     "shekyl-shard-source": "the GUI's fixture-only shard preview source; live shards come "
@@ -179,78 +184,30 @@ def member_dirs() -> dict[str, Path]:
 
 
 def release_features(text: str) -> list[str]:
-    """The `--features` BuildRust.cmake passes in a release build.
+    """The `--features` `[build] cargo_args` passes.
 
-    Every `set(_shekyl_rust_bin_features ...)` is placed by the `if()`
-    blocks around it. One inside an `if(SHEKYL_MEASUREMENT_SPANS)` block is
-    the measurement build's and is skipped (`check_measurement_spans.py`
-    refuses that option on a release path). One under no conditional, or
-    only under `if(NOT IOS)` (no release targets iOS, so every release takes
-    that branch), is the release's. One under any other conditional is
-    refused: this reading cannot say whether a release takes that branch.
-    A `set` in an `else()` or `elseif()` arm is refused the same way. Treating
-    that arm as the `if` it hangs off would drop the release's features and
-    report success with an empty list.
+    `--target` and `-p` are `PlanFlag`, not data in the file, and the
+    measurement build's features are `[measurement]`'s. Neither is a
+    release's, so neither is read here.
     """
+    try:
+        matrix = release_matrix.parse(text)
+    except release_matrix.MatrixError as why:
+        raise GraphError(f"{BUILD_RUST.name}: {why}") from None
+    cargo_args = matrix.raw["build"]["cargo_args"]
+    if not isinstance(cargo_args, list) or not all(isinstance(arg, str) for arg in cargo_args):
+        raise GraphError(f"{BUILD_RUST.name}: cargo_args is not a list of strings")
     found: list[str] = []
-    placed = 0
-    # (condition, whether this frame is the else/elseif arm). An else arm is
-    # not a condition this reader evaluates, so a set inside one is refused
-    # rather than dropped: dropping it would report a release with no features.
-    stack: list[tuple[str, bool]] = []
-    for line in text.splitlines():
-        code = line.split("#", 1)[0].strip()
-        opener = re.match(r"(?i)if\s*\((.*)\)\s*$", code)
-        if opener:
-            stack.append((opener.group(1), False))
-            continue
-        if re.match(r"(?i)else(?:if)?\s*\(", code):
-            if not stack:
-                raise GraphError(
-                    f"BuildRust.cmake has `{code}` outside an if: the release's features "
-                    "cannot be placed"
-                )
-            cond, _ = stack[-1]
-            stack[-1] = (cond, True)
-            continue
-        if re.match(r"(?i)endif\s*\(", code):
-            if stack:
-                stack.pop()
-            continue
-        setter = re.match(rf"set\(\s*{FEATURES_VAR}\b(.*)\)\s*$", code)
-        if not setter:
-            continue
-        placed += 1
-        if any(in_else for _, in_else in stack):
-            raise GraphError(
-                f"BuildRust.cmake sets {FEATURES_VAR} in an else or elseif branch: "
-                "whether a release takes that branch is not read here, so the release's "
-                "features cannot be known"
-            )
-        if any(MEASUREMENT_OPTION in cond for cond, _ in stack):
-            continue
-        conditions = [c for c, _ in stack if not re.fullmatch(r"\s*NOT\s+IOS\s*", c)]
-        if conditions:
-            raise GraphError(
-                f"BuildRust.cmake sets {FEATURES_VAR} under `if({conditions[-1]})`: "
-                "whether a release takes that branch is not read here, so the release's "
-                "features cannot be known"
-            )
-        args = setter.group(1).replace('"', " ").split()
-        it = iter(args)
-        for arg in it:
-            if arg == "--features":
-                found += next(it, "").split(",")
-            elif arg.startswith("--features="):
-                found += arg.split("=", 1)[1].split(",")
-            elif arg:
-                raise GraphError(f"BuildRust.cmake: {FEATURES_VAR} carries {arg!r}, not read here")
-    if placed == 0:
-        raise GraphError(
-            f"BuildRust.cmake sets no {FEATURES_VAR}: the release's features were not read "
-            "from the file meant (rule 47)"
-        )
-    return [f for f in found if f]
+    arguments = iter(cargo_args)
+    for arg in arguments:
+        if arg == "--features":
+            value = next(arguments, "")
+            if not value or value.startswith("-"):
+                raise GraphError(f"{BUILD_RUST.name}: cargo_args passes --features with no value")
+            found += value.split(",")
+        elif arg.startswith("--features="):
+            found += arg.split("=", 1)[1].split(",")
+    return sorted({feature for feature in found if feature})
 
 
 def load_gui_pin(path: Path = GUI_PIN) -> dict:

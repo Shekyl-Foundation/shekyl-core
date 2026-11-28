@@ -103,9 +103,12 @@ use std::time::{Duration, Instant};
 use shekyl_address::{AddressError, Network, PaymentAddress};
 use shekyl_crypto_pq::archival_p::PersonaDestination;
 use shekyl_encoding::EncodingError;
+use shekyl_engine_state::{JournalPayee, JournalRecipient, PaymentRequestId, SendDestination};
 #[cfg(test)]
 use shekyl_engine_state::{LedgerBlock, SendJournalBlock, WalletSafetyConstants};
-use shekyl_engine_state::{PaymentRequestId, SendDestination};
+use shekyl_tx_weight::GroupSize;
+
+pub use super::group_destination::GroupDestination;
 use shekyl_units::AtomicUnits;
 
 use crate::engine::{
@@ -336,16 +339,23 @@ pub enum TxDestination {
     /// keys the stake engine hands over. A persona has no address, so
     /// nothing here is encoded or parsed.
     OwnPersona(PersonaDestination),
+    /// A multisig group, its address read from the group's address file
+    /// (rule 65; R-37). [`TxRequest::check_recipients`] refuses a group on
+    /// another network before any selection.
+    Group(GroupDestination),
 }
 
 impl TxDestination {
     /// What the reservation summary and the send journal record for this
-    /// destination: the address, or for a persona only the kind.
+    /// destination: the address, for a persona only the kind, and for a
+    /// group its address's fingerprint (the journal stores the address
+    /// once beside it, R-37).
     #[must_use]
     pub fn recorded(&self) -> SendDestination {
         match self {
             Self::Address(address) => SendDestination::Address(address.clone()),
             Self::OwnPersona(_) => SendDestination::OwnPersonaFunding,
+            Self::Group(group) => SendDestination::Group(group.fingerprint()),
         }
     }
 }
@@ -378,6 +388,38 @@ pub struct TxRequest {
 }
 
 impl TxRequest {
+    /// The recipients as dispatch hands them to the journal, in request
+    /// order. A group keeps its address; the journal stores it and writes
+    /// the fingerprint.
+    #[must_use]
+    pub fn journal_recipients(&self) -> Vec<JournalRecipient> {
+        self.recipients
+            .iter()
+            .map(|recipient| JournalRecipient {
+                payee: match &recipient.destination {
+                    TxDestination::Address(address) => JournalPayee::Address(address.clone()),
+                    TxDestination::OwnPersona(_) => JournalPayee::OwnPersonaFunding,
+                    TxDestination::Group(group) => JournalPayee::Group(group.address().clone()),
+                },
+                amount: recipient.amount_atomic_units.to_raw(),
+                rid: recipient.rid,
+            })
+            .collect()
+    }
+
+    /// The size of each group the request pays, in recipient order: the
+    /// fee is priced with them (R-37).
+    #[must_use]
+    pub fn group_payee_sizes(&self) -> Vec<GroupSize> {
+        self.recipients
+            .iter()
+            .filter_map(|recipient| match &recipient.destination {
+                TxDestination::Group(group) => Some(group.size()),
+                TxDestination::Address(_) | TxDestination::OwnPersona(_) => None,
+            })
+            .collect()
+    }
+
     /// The refusals that need no ledger, no daemon and no permit, run
     /// first on every build path. `network` is the wallet's own, not a
     /// daemon query. An empty recipient list, more recipients than a
@@ -404,13 +446,36 @@ impl TxRequest {
             ));
         }
         for recipient in &self.recipients {
-            if let TxDestination::Address(address) = &recipient.destination {
-                if let Err(err) = PaymentAddress::decode(address, network) {
-                    return Err(SendError::InvalidRecipient {
-                        reason: recipient_reason(&err),
-                    });
+            match &recipient.destination {
+                TxDestination::Address(address) => {
+                    if let Err(err) = PaymentAddress::decode(address, network) {
+                        return Err(SendError::InvalidRecipient {
+                            reason: recipient_reason(&err),
+                        });
+                    }
                 }
+                TxDestination::Group(group) => {
+                    if group.address().network() != network {
+                        return Err(SendError::InvalidRecipient {
+                            reason: "recipient group address is for another network",
+                        });
+                    }
+                }
+                TxDestination::OwnPersona(_) => {}
             }
+        }
+        // A group output's label is always the sentinel
+        // (`construct_multisig_output`), so a payment request it answers
+        // could not be echoed; refused rather than dropped, as the check
+        // below refuses a `rid` that does not fit.
+        if self
+            .recipients
+            .iter()
+            .any(|r| r.rid.is_some() && matches!(r.destination, TxDestination::Group(_)))
+        {
+            return Err(SendError::InvalidRecipient {
+                reason: "a payment to a group cannot answer a payment request",
+            });
         }
         if self.recipients.iter().any(|r| {
             r.rid

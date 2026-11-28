@@ -1,51 +1,20 @@
 # Proxy usage in the Shekyl ecosystem
-The CLI/RPC wallets and daemon both support proxies and use the same parameters
-to configure them. Currently socks 4, 4a, and 5 are supported and can be
-selected with command-line options.
+The CLI/RPC wallets and the daemon both support proxies, each with its own
+options.
 
 ## Wallet
-The CLI and RPC wallets support proxies via the `--proxy` option. The format
-for usage is `[socks5://[user:pass]]host:port`. The square brackets indicate
-an optional portion. This option can only be specified once. Examples:
+`shekyl-cli` and `shekyl-wallet-rpc` take a proxy with `--daemon-socks`, an IP
+address and a port. It is SOCKS5, and the proxy resolves names, so the wallet
+sends no DNS query of its own. The option can only be given once:
 
 ```
---proxy 192.168.0.10:1050
---proxy socks5://192.168.0.10:1050
---proxy socks5://username:password@192.168.0.10:1050
---proxy [::1]:1050
---proxy socks5://[::1]:1050
---proxy socks5://username:password@[::1]:1050
+--daemon-socks 127.0.0.1:9050
+--daemon-socks [::1]:1050
 ```
 
-The first connects to `192.168.0.10` on port `1050` using socks 4a. The second
-connects to the same location using socks 5. The third uses socks 5 at the same
-location and sends user authentication if prompted by the proxy server. The
-last three are identical to the first 3, except an IPv6 address is used
-instead. While IPv6 connections are invalid for Socks 4 and 4a, the proxy
-server itself can be connected using IPv6.
-
-The username and password fields both support "percent-encoding" for special
-character support. As an example, `%40` gets converted to `@`, such that
-`username:p%40ssword` gets converted to `username:p@ssword`. This allows that
-specific character to be used; specifying the character directly will
-incorrectly change the specification of the hostname.
-
-> NOTE: The username+password will show up in the process list and can be read
-> by other programs. It is recommended that `--config-file` be used to store
-> username+password options. The format for a config file is `option=value`,
-> so in this example the file would contain:
-> `proxy=socks5://username:password@192.168.0.10:1080`.
-
-The CLI and RPC wallets currently reject hosts that do **NOT** end in `.onion`
-**unless** `--daemon-ssl-ca-certificates`,
-`--daemon-ssl-allow-any-cert`, or `--daemon-ssl-allowed-fingerprints` is used.
-If an onion address is used, the hostname contains the certificate
-verification, providing decent security against man-in-the-middle (MitM)
-attacks. The two `--daemon-ssl-*` options support specifying exact
-certificates, also preventing MitM attacks.
-
-> Perhaps the wallets should be relaxed to allow system-CA checks, but for now
-> certificates must be strictly provided.
+The value holds no user name or password, and SOCKS 4 is not offered. A proxy
+that needs a login is not reachable from the wallet. An onion
+`--daemon-endpoint` requires this option.
 
 ## Daemon
 

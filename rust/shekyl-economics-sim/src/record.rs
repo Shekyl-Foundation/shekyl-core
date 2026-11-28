@@ -258,7 +258,7 @@ pub fn record_baseline_fixture() -> RecordedChainFixture {
             });
         }
 
-        already_generated += u128::from(priced.paid_reward());
+        already_generated += u128::from(priced.minted());
         total_burned += u128::from(priced.paid.burned().to_raw());
     }
 

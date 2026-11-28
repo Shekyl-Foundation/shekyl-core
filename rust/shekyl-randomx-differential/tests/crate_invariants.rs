@@ -184,9 +184,8 @@ fn t14_randomx_v2_sys_sole_consumer() {
 fn dir_is_populated(path: &Path) -> bool {
     // Fail closed on I/O: a directory we cannot read is not a pin we
     // can attest. Ignore `.git` — a gitfile/gitdir leftover from an
-    // interrupted `submodule update` is not RandomX source. CMake
-    // `file(GLOB … /*)` *includes* dotfiles; both CMake populate
-    // checks filter `.git` the same way (`dir_populated_ignoring_git`).
+    // interrupted `submodule update` is not RandomX source, so a
+    // directory holding only `.git` counts as empty.
     let entries = std::fs::read_dir(path).unwrap_or_else(|e| {
         panic!(
             "read_dir {}: {e} (fail closed — cannot attest population)",
@@ -257,7 +256,7 @@ fn t15_randomx_v2_sys_signature_audit_pin() {
          `git submodule update --init external/randomx-v2`. Never pass \
          `--exclude` for this crate. Worktrees inherit gitlinks but not \
          submodule working trees; re-run the same init in the worktree. \
-         Default daemon CMake does not need this tree; the differential \
+         The release build does not need this tree; the differential \
          harness and T15 do. See CLAUDE.md checkout hygiene.",
     );
 

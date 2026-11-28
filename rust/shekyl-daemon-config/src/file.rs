@@ -86,6 +86,15 @@ const READ_PERMITTED: &str = "root, the daemon's account and the daemon's group 
 #[cfg(windows)]
 const READ_PERMITTED: &str = PERMITTED;
 
+/// Who outside the permitted set can read an open secret file, by the rule
+/// a configuration file holding a secret is judged by. The wallet binaries
+/// hold their password and recovery-words files to it (`INPUT_GRAMMAR.md`
+/// §12.1, §12.2).
+#[must_use]
+pub fn secret_file_reader(file: &File, path: &Path) -> Option<String> {
+    reader_outside_permitted(file, path)
+}
+
 /// Opens and checks the file at `path`.
 ///
 /// A missing file at the default path is `Ok(None)`: the defaults apply,
@@ -134,6 +143,8 @@ pub fn open(path: &Path, named: bool) -> Result<Option<ConfigFile>, Diagnostic> 
 }
 
 /// Every directory from the file's parent to the root, nearest first.
+/// Windows only: Unix resolves through [`directories_through`].
+#[cfg(windows)]
 fn ancestors(path: &Path) -> Vec<PathBuf> {
     let absolute = if path.is_absolute() {
         path.to_path_buf()
@@ -282,6 +293,19 @@ pub(crate) mod unix {
         if let Some(who) = file.writer(me) {
             return Some((file_shown.display().to_string(), who));
         }
+        directory_writer_outside_permitted(me, dirs, probe)
+    }
+
+    /// The first of `dirs` (each as `probe` reports it, nearest first) a
+    /// principal outside the permitted set can write, with who: the rule for
+    /// the directories above the configuration file and above the data
+    /// directory alike. A directory the probe cannot read is refused as
+    /// unknown.
+    pub fn directory_writer_outside_permitted(
+        me: u32,
+        dirs: &[std::path::PathBuf],
+        probe: &dyn Fn(&Path) -> Option<Entry>,
+    ) -> Option<(String, String)> {
         for dir in dirs {
             let Some(entry) = probe(dir) else {
                 return Some((dir.display().to_string(), UNREADABLE.to_owned()));
@@ -310,9 +334,66 @@ fn writer_outside_permitted(file: &File, path: &Path) -> Option<(String, String)
     let Ok(meta) = file.metadata() else {
         return Some((path.display().to_string(), unix::UNREADABLE.to_owned()));
     };
-    unix::writer_outside_permitted(me, unix::entry_of(&meta), path, &ancestors(path), &|dir| {
+    let dirs = match directories_through(path) {
+        Ok(dirs) => dirs,
+        Err(at) => return Some((at.display().to_string(), unix::UNREADABLE.to_owned())),
+    };
+    unix::writer_outside_permitted(me, unix::entry_of(&meta), path, &dirs, &|dir| {
         std::fs::metadata(dir).ok().as_ref().map(unix::entry_of)
     })
+}
+
+/// The directories [`shekyl_os_account::directory::directories_entered`]
+/// reports for `path`, nearest first. A resolution that cannot be opened
+/// (a cycle, or a component that cannot be read) is the path it stopped at,
+/// which the caller refuses as unreadable.
+#[cfg(unix)]
+pub(crate) fn directories_through(path: &Path) -> Result<Vec<PathBuf>, PathBuf> {
+    shekyl_os_account::directory::directories_entered(path)
+        .map_err(|fault| fault.at().to_path_buf())
+}
+
+/// Refuses a data directory with a directory above it that an account other
+/// than root and the daemon's can write (`config.data-dir.ancestor-writable`;
+/// Rick, 2026-11-23): the configuration file's own rule, on the same function
+/// and with no exception for a sticky directory. Whoever can write one could
+/// swap it for a link and redirect the keys kept below it. The directories
+/// are the ones one open of the path searches, both legs of a symbolic link
+/// included. A directory not made yet has nothing to judge; a path through
+/// a non-directory is [`crate::probe`]'s to refuse, as
+/// `config.data-dir.unusable`.
+///
+/// # Errors
+/// `config.data-dir.ancestor-writable`, naming the directory and who can write it.
+#[cfg(unix)]
+pub(crate) fn refuse_writable_ancestor(data_dir: &Path) -> Result<(), Diagnostic> {
+    let me = rustix::process::geteuid().as_raw();
+    let dirs = match directories_through(data_dir) {
+        Ok(dirs) => dirs,
+        Err(at) => {
+            return Err(ancestor_writable(
+                at.display().to_string(),
+                unix::UNREADABLE.to_owned(),
+            ));
+        }
+    };
+    let found = unix::directory_writer_outside_permitted(me, &dirs, &|dir| {
+        std::fs::metadata(dir).ok().as_ref().map(unix::entry_of)
+    });
+    match found {
+        None => Ok(()),
+        Some((where_, principal)) => Err(ancestor_writable(where_, principal)),
+    }
+}
+
+/// `config.data-dir.ancestor-writable` for `where_` and `principal`.
+#[cfg(unix)]
+fn ancestor_writable(where_: String, principal: String) -> Diagnostic {
+    Diagnostic::new(Code::DataDirAncestorWritable, Source::Machine)
+        .option("data-dir")
+        .param("path", where_)
+        .param("principal", principal)
+        .param("permitted", PERMITTED)
 }
 
 #[cfg(unix)]

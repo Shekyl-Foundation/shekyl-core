@@ -6,7 +6,7 @@ rust-version.workspace = true
 license = "BSD-3-Clause"
 description = "Shekyl engine core: orchestrator and transaction builders for stake, unstake, and claim operations"
 # Build script reads `config/consensus_constants.json` (the same JSON
-# the C++ generator at `cmake/generate_consensus_constants.py` reads)
+# every crate's generated constants come from)
 # and emits a Rust constants module. Closes the C++/Rust drift class
 # that produced Bug 3 of the 2026-05-05 FFI constant-drift audit;
 # see `docs/audit_trail/2026-05-ffi-constant-drift-audit.md`.
@@ -78,10 +78,6 @@ shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 shekyl-proofs = { path = "../shekyl-proofs" }
 shekyl-encoding = { path = "../shekyl-encoding" }
 shekyl-rpc-transport = { path = "../shekyl-rpc-transport" }
-# SP-T2: the per-P Tor transport primitive (PTorClient). engine-core wraps it in
-# `PRpc` (an `Rpc` impl); it does NOT depend on `ureq` — all agent construction
-# and use is confined to shekyl-p-transport (§2b invariant 1).
-shekyl-p-transport = { path = "../shekyl-p-transport" }
 # `WalletTorControl` (P's Tor instance) and `OnionIdentity` (expanded in the
 # wallet context, §7.2(iii) / SH-2b-1). The identity type is re-exported from
 # the wallet crate so this crate does not take the control-protocol client —
@@ -259,6 +255,9 @@ kameo = { workspace = true }
 shekyl-win-sec = { path = "../shekyl-win-sec" }
 
 [dev-dependencies]
+# Live regtest nodes publish their owner socket or pipe in a private fixture directory.
+shekyl-rpc-transport = { path = "../shekyl-rpc-transport", features = ["test-override"] }
+shekyl-rpc-rendezvous = { path = "../shekyl-rpc-rendezvous" }
 # `test-tamper` compiles `CurveTreeClient::test_tamper_poison`, which the
 # curve-tree actor's in-place recovery tests poison a client with;
 # `test-paths` compiles `AssembledPaths::from_parts_unchecked`, the
@@ -278,6 +277,10 @@ shekyl-noise = { path = "../shekyl-noise" }
 # network id derivation. Both are workspace crates already in the graph.
 shekyl-levin = { path = "../shekyl-levin" }
 shekyl-p2p-transport = { path = "../shekyl-p2p-transport" }
+# The regtest harness makes a spawned daemon's data directory the way the
+# daemon does (owner-only on Unix), which the daemon requires of an existing
+# one (`config.data-dir.exposed`).
+shekyl-os-account = { path = "../shekyl-os-account", features = ["test-fixture"] }
 # Self dev-dep (the scanner crate's own bench idiom): enables `test-helpers`
 # for this crate's integration tests, so `tests/sp_r0_arm1_fire.rs` compiles
 # the DQ-F fire harness into the lib-under-test on a plain `cargo test`

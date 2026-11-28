@@ -36,12 +36,5 @@ trybuild = "1"
 [target.'cfg(unix)'.dev-dependencies]
 libc = "0.2"
 
-[features]
-# Off by default. Opting in re-enables RUST_LOG as a secondary env var
-# fallback for `SHEKYL_LOG` at init time. Intended strictly for developer
-# ergonomics in local non-release builds; release binaries never honor
-# RUST_LOG because it has no wallet-privacy-aware discipline around it.
-dev-env-fallback = []
-
 [lints]
 workspace = true

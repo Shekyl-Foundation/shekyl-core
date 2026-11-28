@@ -100,9 +100,9 @@ fn socket_dir(dir: &Path) -> PathBuf {
 }
 
 /// The test's directory and its socket directory, each 0700.
-fn workdir() -> tempfile::TempDir {
+fn workdir() -> shekyl_os_account::test_fixture::FixtureDir {
     use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
-    let dir = tempfile::tempdir().expect("a directory");
+    let dir = shekyl_os_account::test_fixture::tempdir().expect("a directory");
     std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700))
         .expect("the test's directory");
     std::fs::DirBuilder::new()
@@ -160,7 +160,9 @@ fn wait_for_owner(daemon: &mut Running, dir: &Path) -> (LocalTarget, String) {
         if let Some(status) = daemon.child.try_wait().expect("the child") {
             panic!("the {} ended: {status}\n{}", daemon.what, daemon.stderr());
         }
-        if let Ok(bundle) = owner.call::<wire::RpcBundleShow>(&NoParams) {
+        if let Ok(bundle) =
+            owner.call::<wire::RpcBundleShow>(&NoParams, shekyl_rpc_transport::local::CALL_WITHIN)
+        {
             let text = shekyl_rpc_transport::channel::bundle_text(&bundle.bundle.0);
             return (owner, text);
         }
@@ -300,10 +302,13 @@ fn enroll_dial_call_revoke_and_a_refused_call_after() {
     };
     let admin = enroll::run(&cli, &Enroll::KeyCreate).expect("rpc key create");
     owner
-        .call::<wire::RpcClientAdd>(&ClientCeiling {
-            fingerprint: HashHex::from_hex(&admin).expect("a fingerprint"),
-            ceiling: vec![CeilingWord::Enroll, CeilingWord::View],
-        })
+        .call::<wire::RpcClientAdd>(
+            &ClientCeiling {
+                fingerprint: HashHex::from_hex(&admin).expect("a fingerprint"),
+                ceiling: vec![CeilingWord::Enroll, CeilingWord::View],
+            },
+            shekyl_rpc_transport::local::CALL_WITHIN,
+        )
         .expect("the owner enrolls the administrator");
 
     // The tunnel's key.
@@ -523,7 +528,13 @@ fn enroll_dial_call_revoke_and_a_refused_call_after() {
         std::thread::sleep(POLL);
     };
     if let Some(refused) = refused {
-        assert_eq!(refused, "The node revoked this client's enrollment.");
+        assert!(
+            refused.starts_with("The node revoked this client's enrollment.")
+                && refused.contains(&fingerprint)
+                && refused.contains("rpc client add")
+                && refused.contains("wallet"),
+            "{refused}"
+        );
     }
     let deadline = Instant::now() + Duration::from_secs(30);
     let ended = loop {

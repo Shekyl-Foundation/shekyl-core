@@ -28,13 +28,13 @@ use shekyl_p2p::{
 };
 use shekyl_tor_control_client::binary::VerifiedTorBinary;
 use shekyl_tor_control_client::control::{ReplyFramer, SocksTimeout};
-use shekyl_tor_control_client::supervisor::Input;
+use shekyl_tor_control_client::supervisor::{Action, Input, Launch, LaunchDirectory, TorSetting};
 use shekyl_tor_control_daemon::{DaemonTorConfig, DaemonTorControl};
 use shekyl_tor_status::{ManagedTor, TorCause, TorState, TorStatus};
 use tokio::sync::watch;
 
 use super::inbox::inbox;
-use super::{drive, Drive, PinSource, Supervises, Supervisor};
+use super::{drive, Drive, PinSource, Supervises, Supervisor, SupervisorEnd, TorAsk};
 
 struct NoSync;
 
@@ -59,7 +59,7 @@ impl PoolDoor for EmptyPool {
 }
 
 /// An offline network whose Tor link the supervisor feeds.
-fn network(dir: &std::path::Path, feeds: SupervisorFeeds) -> Network {
+pub(super) fn network(dir: &std::path::Path, feeds: SupervisorFeeds) -> Network {
     let (_, node_sync) = watch::channel(NodeSync::Unsynchronised);
     let (_, tip) = watch::channel(CoreSyncData {
         current_height: 1,
@@ -288,10 +288,10 @@ fn nothing_outlives(dir: &Path, after: &str) {
 
 /// The directory a loop test works in, by path. The directory itself is
 /// [`on_the_loops_runtime`]'s, which removes it only once the runtime is gone.
-struct Dir(PathBuf);
+pub(super) struct Dir(PathBuf);
 
 impl Dir {
-    fn path(&self) -> &Path {
+    pub(super) fn path(&self) -> &Path {
         &self.0
     }
 }
@@ -303,7 +303,9 @@ impl Dir {
 /// directory was the test's own and went first, while that task still
 /// launched into it; the removal could stop part-way and leave the stand-in
 /// behind.
-fn on_the_loops_runtime<F: std::future::Future<Output = ()>>(test: impl FnOnce(Dir) -> F) {
+pub(super) fn on_the_loops_runtime<F: std::future::Future<Output = ()>>(
+    test: impl FnOnce(Dir) -> F,
+) {
     let dir = tempfile::tempdir().expect("tempdir");
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
@@ -333,7 +335,7 @@ fn supervise(dir: &Path, tor: VerifiedTorBinary, policy: super::Policy) -> Super
     ));
     Supervisor {
         owner,
-        task,
+        task: Some(task),
         managed: true,
     }
 }
@@ -557,8 +559,15 @@ fn an_upload_before_the_add_onion_reply_is_read() {
         .unwrap_or_else(|_| panic!("the launch"));
         drive.control = Some(up);
         drive.forward = Some(std::net::SocketAddr::from(([127, 0, 0, 1], 18_022)));
-        assert_eq!(drive.send_add(1), None, "the add is sent off the loop");
-        let onion = drive.onion.service_id().as_str().to_owned();
+        assert_eq!(drive.send_add(1), Ok(None), "the add is sent off the loop");
+        let onion = drive
+            .managed
+            .as_ref()
+            .expect("a managed driver")
+            .onion
+            .service_id()
+            .as_str()
+            .to_owned();
         let upload = event(&format!(
             "HS_DESC UPLOAD {onion} UNKNOWN $9E67E885D46AE284534EBA3B71A2DFE13A0E4783~Torr4Tor GOkbpjFN0/2R6w08BkOWd3Zj62ZDCvu7bVmkseOLvcY"
         ));
@@ -578,4 +587,171 @@ fn an_upload_before_the_add_onion_reply_is_read() {
             .expect("the driver drops");
         nothing_outlives(dir.path(), "the shutdown");
     });
+}
+
+/// **A supervisor that runs no Tor holds none of a managed Tor's secrets.**
+/// Under `off` and an operator's Tor the driver starts with no onion key, no
+/// probe isolation and no binary; under `managed` it holds them. A failed
+/// mint is the supervisor's end, so a setting that does not use them must
+/// not mint them. The mints are read through what the driver holds: a count
+/// would need a hook in the mint itself. Red edit: mint the boot's secrets
+/// before the setting is matched.
+#[test]
+fn an_unmanaged_setting_mints_no_secret() {
+    on_the_loops_runtime(|dir| async move {
+        for (supervises, managed) in [
+            (Supervises::Unmanaged(TorSetting::Off), false),
+            (Supervises::Unmanaged(TorSetting::Operator), false),
+            (
+                Supervises::Managed {
+                    pin: PinSource::Discover(None),
+                    onion: super::OnionSource::PerBoot,
+                },
+                true,
+            ),
+        ] {
+            let data_dir = dir.path().join("data");
+            std::fs::create_dir_all(&data_dir).expect("the data directory");
+            let (_owner, inbox, feeds) = inbox();
+            let network = network(dir.path(), feeds);
+            let drive = Drive::start(
+                supervises,
+                super::policy(),
+                true,
+                18_021,
+                data_dir,
+                inbox,
+                network,
+            )
+            .expect("the driver");
+            assert_eq!(drive.managed.is_some(), managed, "a managed Tor's secrets");
+            // The network owns a runtime, which is not dropped on an async thread.
+            tokio::task::spawn_blocking(move || drop(drive))
+                .await
+                .expect("the driver drops");
+        }
+    });
+}
+
+/// **Under `tor = off` the supervisor answers the status and does not end
+/// until its stop.** Its status ask is answered; its end does not resolve
+/// while it runs; its stop is taken. Red edit: end the loop of a supervisor
+/// that runs no Tor, or answer no status without one.
+#[test]
+fn an_off_supervisor_answers_and_runs_until_its_stop() {
+    on_the_loops_runtime(|dir| async move {
+        let data_dir = dir.path().join("data");
+        std::fs::create_dir_all(&data_dir).expect("the data directory");
+        let (owner, inbox, feeds) = inbox();
+        let network = network(dir.path(), feeds);
+        let task = tokio::spawn(drive(
+            Supervises::Unmanaged(TorSetting::Off),
+            super::policy(),
+            true,
+            18_021,
+            data_dir,
+            inbox,
+            network,
+        ));
+        let mut supervisor = Supervisor {
+            owner,
+            task: Some(task),
+            managed: false,
+        };
+        let status = tokio::time::timeout(Duration::from_secs(1), supervisor.status())
+            .await
+            .expect("the status ask was held")
+            .expect("the loop runs");
+        assert!(
+            status.tor.is_none(),
+            "an off supervisor reported a managed Tor: {status:?}"
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(200), supervisor.ended())
+                .await
+                .is_err(),
+            "a running supervisor reported an end"
+        );
+        tokio::time::timeout(Duration::from_secs(5), supervisor.shutdown())
+            .await
+            .expect("the stop was taken");
+    });
+}
+
+/// **A Tor action asked of a supervisor that runs no Tor ends it with that
+/// ask, never a panic.** The core asks for a pin, a launch, a publish or a
+/// probe only while it runs this node's Tor. Each of those, put in front of
+/// a `tor = off` driver, ends the loop with `NoTorToRun` of that ask. The
+/// launch and the publish are not in flight: answering them as "nothing to
+/// send" would leave the loop running. A shipped build aborts on a panic,
+/// with no teardown and no log line. Red edit: fold on past the ask in
+/// `perform`, so the loop never ends.
+#[test]
+fn a_tor_action_without_a_managed_tor_ends_the_supervisor() {
+    on_the_loops_runtime(|dir| async move {
+        let witness = VerifiedTorBinary::unchecked_for_test(dir.path().join("tor-witness"));
+        let cases = [
+            (Action::CheckPin, TorAsk::Pin),
+            (
+                Action::Spawn(Launch {
+                    binary: witness,
+                    directory: LaunchDirectory::Kept,
+                }),
+                TorAsk::Launch,
+            ),
+            (Action::RepublishOnion, TorAsk::Publish),
+            (Action::AddOnion, TorAsk::Publish),
+            (Action::Probe, TorAsk::Probe),
+        ];
+        for (action, ask) in cases {
+            let data_dir = dir.path().join("data");
+            std::fs::create_dir_all(&data_dir).expect("the data directory");
+            let (_owner, inbox, feeds) = inbox();
+            let network = network(dir.path(), feeds);
+            let kept = network.clone();
+            let mut drive = Drive::start(
+                Supervises::Unmanaged(TorSetting::Off),
+                super::policy(),
+                true,
+                18_021,
+                data_dir,
+                inbox,
+                network,
+            )
+            .expect("the driver");
+            drive.step.actions.push(action);
+            let end = tokio::time::timeout(Duration::from_secs(5), drive.run())
+                .await
+                .unwrap_or_else(|_| panic!("{ask:?}: the loop ran on past the ask"));
+            assert_eq!(end, Err(SupervisorEnd::NoTorToRun(ask)), "{ask:?}");
+            // The network owns a runtime, which is not dropped on an async thread.
+            tokio::task::spawn_blocking(move || drop(kept))
+                .await
+                .expect("the network drops");
+        }
+    });
+}
+
+/// A driver for a persistent onion: its guard manager is loaded from the
+/// onion's own guard directory under `dir`.
+pub(super) fn persistent(dir: &Path) -> Drive {
+    let data_dir = dir.join("data");
+    std::fs::create_dir_all(&data_dir).expect("the data directory");
+    let (_owner, inbox, feeds) = inbox();
+    let network = network(dir, feeds);
+    Drive::start(
+        Supervises::Managed {
+            pin: PinSource::Discover(None),
+            onion: super::OnionSource::Persistent(
+                DaemonTorControl::mint_identity().expect("an onion identity"),
+            ),
+        },
+        super::policy(),
+        true,
+        18_021,
+        data_dir,
+        inbox,
+        network,
+    )
+    .expect("the driver")
 }

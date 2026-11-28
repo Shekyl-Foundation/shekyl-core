@@ -1,0 +1,31 @@
+ct-dynamic: 1000000 samples/class x 32 ops; dudect threshold |t| > 4.5; target x86_64
+-- null control (both classes fresh; must show no difference)
+null: fe25519 mul                  t=    0.37  t(crop 1%)=   -0.24  mean ns fixed/random      1156/     1154  no difference seen
+null: fe25519 mul (direct)         t=    0.39  t(crop 1%)=   -0.53  mean ns fixed/random      1149/     1147  no difference seen
+null: fe25519 square               t=   -0.35  t(crop 1%)=    0.67  mean ns fixed/random      1048/     1048  no difference seen
+null: fe25519 square (direct)      t=   -0.65  t(crop 1%)=    0.69  mean ns fixed/random      1045/     1048  no difference seen
+null: helio mul                    t=    1.19  t(crop 1%)=   -0.05  mean ns fixed/random       530/      525  no difference seen
+null: helio mul (direct)           t=   -0.12  t(crop 1%)=    1.60  mean ns fixed/random       514/      514  no difference seen
+null: helio square                 t=   -0.38  t(crop 1%)=   -1.90  mean ns fixed/random       424/      425  no difference seen
+null: helio square (direct)        t=    0.14  t(crop 1%)=   -0.56  mean ns fixed/random       416/      416  no difference seen
+-- helioselene::Field25519 (dalek_ff_group::FieldElement)
+-- helioselene::HelioseleneField
+-- constant-value control (class 0: one value, allocated fresh per batch; class 1: fresh values)
+-- operand property (class 0: structured values, regenerated per batch; class 1: random) — which property moves the time?
+-- the two halves of a square (crypto-bigint 0.5.5 U256::square_wide is shared by both fields; the reduction is not)
+half: U256::square_wide            t=   -1.28  t(crop 1%)=    1.37  mean ns fixed/random       167/      169  no difference seen
+half: U256::square_wide [fixed-pair] t=   -1.70  t(crop 1%)=    1.30  mean ns fixed/random       167/      172  no difference seen
+half: U256::mul_wide               t=   -0.40  t(crop 1%)=   -2.50  mean ns fixed/random       256/      256  no difference seen
+half: U256::mul_wide [fixed-pair]  t=   -0.81  t(crop 1%)=   -0.42  mean ns fixed/random       254/      255  no difference seen
+half: helio wide_reduce (red512)   t=    0.55  t(crop 1%)=   -0.71  mean ns fixed/random       507/      505  no difference seen
+half: helio wide_reduce (red512) [fixed-pair] t=    0.21  t(crop 1%)=    1.65  mean ns fixed/random       507/      507  no difference seen
+half: red512 of a square_wide      t=   -0.71  t(crop 1%)=    1.70  mean ns fixed/random       904/      907  no difference seen
+half: red512 of a square_wide [fixed-pair] t=   -0.65  t(crop 1%)=    0.66  mean ns fixed/random       898/      902  no difference seen
+-- CA-2: Field25519 with sparse Montgomery residues (class 0: the residue crypto-bigint holds is sparse; class 1: random) — does the multiplier path or red512 carry the effect?
+property: Field25519 Montgomery-sparse square (direct) t=    0.42  t(crop 1%)=   -3.16  mean ns fixed/random      1050/     1048  no difference seen
+property: Field25519 Montgomery-sparse mul (direct) t=   -0.19  t(crop 1%)=    1.18  mean ns fixed/random      1153/     1153  no difference seen
+-- crypto-bigint 0.5.5 Residue::pow with a secret exponent (BINSEC found a branch; unreached by our code)
+-- CA-2: ML-KEM-768 decapsulation's ciphertext compare (subtle 2.6.1 `[u8]::ct_ne` over 1,088 bytes, as fips203 0.5.0 `ml_kem.rs:144` resolves it); class 0: equal pairs, class 1 as named
+-- positive controls (must show a class difference)
+control: branch on a byte          t=  -19.73  t(crop 1%)=-3038.83  mean ns fixed/random       950/     1133  CLASS DIFFERENCE
+control: data-dependent loop       t= -400.59  t(crop 1%)=-5370.92  mean ns fixed/random        47/     2335  CLASS DIFFERENCE

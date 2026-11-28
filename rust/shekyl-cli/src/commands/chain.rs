@@ -399,7 +399,7 @@ mod tests {
                 shekyl_rpc_transport::json_rpc_result_body(&served),
             )]);
             let daemon = crate::daemon::DaemonClient::new(
-                shekyl_rpc_transport::DaemonTarget::address(format!("http://{address}")),
+                shekyl_rpc_transport::DaemonTarget::fixture_address(format!("http://{address}")),
                 None,
                 Network::Mainnet,
             )

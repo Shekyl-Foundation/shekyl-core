@@ -37,7 +37,7 @@
 # block's fold, so the floor's Bp+ figures come from the `rust` phase.
 #
 # RUSTFLAGS: leave UNSET — the shipping configuration is generic aarch64
-# (no repo target-cpu; BuildRust.cmake passes linker args only), and the
+# (no repo target-cpu; rust/xtask/matrix.toml passes linker args only), and the
 # FA-6 §8.2 convention's '-C target-cpu=cortex-a72' must NOT be used here:
 # LLVM's cortex-a72 definition includes +aes, the BCM2711 ships without the
 # ARMv8 crypto extensions, and the flags SIGILL RandomX mid-capture (the

@@ -425,6 +425,22 @@ pub fn check_private(path: &Path) -> Result<(), PrivateFileError> {
         .map_err(|e| PrivateFileError::Exposed(path.to_path_buf(), e.to_string()))
 }
 
+/// Whether the open file `file` is one only this account can read. The same
+/// rule as [`check_private`], read from the handle, so the judgment is of
+/// the object the handle holds.
+///
+/// `path` is the name the caller opened. It is named in a refusal and is
+/// not read again.
+///
+/// # Errors
+///
+/// [`PrivateFileError::Exposed`] when it is not.
+#[cfg(windows)]
+pub fn check_private_file(path: &Path, file: &File) -> Result<(), PrivateFileError> {
+    shekyl_win_sec::rendezvous::check_owner_only_labelled_file(file)
+        .map_err(|error| PrivateFileError::Exposed(path.to_path_buf(), error.to_string()))
+}
+
 /// Whether `path` is a service's console file: protected, no-read-up, and
 /// readable by its owner and by administrators of this machine.
 ///
@@ -1208,10 +1224,17 @@ mod tests {
     /// reads only a regular file. Red edit: compare through a plain
     /// `std::fs::read`, and the replace blocks on the FIFO until this
     /// test's deadline (Copilot, #1439, a FIFO at a rebaseline output).
+    ///
+    /// The deadline covers getting past the FIFO, and nothing after it: the
+    /// comparison is the only step that opens the destination, and the
+    /// staged file appears after it, before the replace's three disk syncs,
+    /// so a slow disk is not read as a hang.
     #[test]
     fn a_fifo_at_the_destination_is_replaced_without_blocking() {
         use std::os::unix::fs::FileTypeExt;
-        const WITHIN: std::time::Duration = std::time::Duration::from_secs(10);
+        use std::sync::mpsc::RecvTimeoutError;
+        const WITHIN: Duration = Duration::from_secs(60);
+        const POLL: Duration = Duration::from_millis(50);
         let dir = tempfile::tempdir().unwrap();
         let live = dir.path().join("trace.bin");
         let live_c = std::ffi::CString::new(live.to_str().unwrap()).unwrap();
@@ -1224,10 +1247,25 @@ mod tests {
         std::thread::spawn(move || {
             drop(done.send(replace(&target, b"trace", Access::Default)));
         });
-        let replaced = finished
-            .recv_timeout(WITHIN)
-            .expect("the replace hung on the FIFO")
-            .expect("the replace");
+        let staged = staged_path(&live);
+        let deadline = Instant::now() + WITHIN;
+        let replaced = loop {
+            match finished.recv_timeout(POLL) {
+                Ok(result) => break result.expect("the replace"),
+                Err(RecvTimeoutError::Disconnected) => panic!("the replace's thread ended"),
+                Err(RecvTimeoutError::Timeout) => {
+                    // The staged file first: the rename takes it away and
+                    // makes the destination regular in one step, so a
+                    // replace past the FIFO always reads as past it.
+                    let past = staged.exists()
+                        || !std::fs::symlink_metadata(&live).is_ok_and(|m| m.file_type().is_fifo());
+                    assert!(
+                        past || Instant::now() < deadline,
+                        "the replace hung on the FIFO"
+                    );
+                }
+            }
+        };
         assert!(matches!(replaced, Replaced::Written(_)), "{replaced:?}");
         assert!(!std::fs::symlink_metadata(&live)
             .unwrap()

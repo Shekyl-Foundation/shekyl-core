@@ -15,7 +15,7 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use shekyl_rpc_client::{wire, Rpc, RpcMethod};
-use shekyl_rpc_transport::HttpRpc;
+use shekyl_rpc_transport::local::{LocalRpc, LocalTarget};
 use shekyl_rpc_types::kinds::{Count, Height, NoParams};
 use shekyl_rpc_types::wire::block::{BlockSelect, GenerateCount, HeaderSelect};
 use shekyl_rpc_types::wire::shared::{Selector, Slot};
@@ -93,7 +93,7 @@ fn tx_show_reads_the_wallet_or_the_daemon() {
     );
     let printed = body_line(&body).expect("a base64 body line");
     let decoded = decode_body(printed);
-    let wire = daemon_body_bytes(&daemon.url, &found.held);
+    let wire = daemon_body_bytes(&daemon.owner, &found.held);
     assert_eq!(
         decoded, wire,
         "--body's base64 is the bytes the daemon returned"
@@ -117,9 +117,7 @@ fn a_failed_wallet_read_does_not_ask_the_daemon() {
         .build()
         .expect("runtime");
     runtime.block_on(async {
-        let rpc = HttpRpc::with_custom_timeout(daemon.url.clone(), Duration::from_secs(30))
-            .await
-            .expect("rpc client");
+        let rpc = LocalRpc::within(daemon.owner.clone(), Duration::from_secs(30));
         await_ready(&rpc, &daemon.logs).await;
     });
     drop(runtime);
@@ -132,7 +130,7 @@ fn a_failed_wallet_read_does_not_ask_the_daemon() {
             .expect("the dead socket still constructs a session");
     session.set_open("wallet");
     let client = crate::daemon::DaemonClient::new(
-        shekyl_rpc_transport::DaemonTarget::address(daemon.url.as_str()),
+        shekyl_rpc_transport::DaemonTarget::Owner(daemon.owner.clone()),
         None,
         Network::Regtest,
     )
@@ -171,9 +169,7 @@ fn section_13_words_answer_a_regtest_daemon() {
         .build()
         .expect("runtime");
     runtime.block_on(async {
-        let rpc = HttpRpc::with_custom_timeout(daemon.url.clone(), Duration::from_secs(30))
-            .await
-            .expect("rpc client");
+        let rpc = LocalRpc::within(daemon.owner.clone(), Duration::from_secs(30));
         await_ready(&rpc, &daemon.logs).await;
         await_template(&rpc).await;
     });
@@ -358,7 +354,7 @@ fn section_13_words_answer_a_regtest_daemon() {
 
     let marks = daemon.marks();
     let wrong = crate::daemon::DaemonClient::new(
-        shekyl_rpc_transport::DaemonTarget::address(daemon.url.as_str()),
+        shekyl_rpc_transport::DaemonTarget::Owner(daemon.owner.clone()),
         None,
         Network::Mainnet,
     )
@@ -405,15 +401,15 @@ fn decode_body_ok(line: &str) -> bool {
         .is_ok_and(|bytes| !bytes.is_empty())
 }
 
-fn daemon_body_bytes(url: &str, id: &str) -> Vec<u8> {
-    let rpc =
-        shekyl_rpc_transport::SyncDaemon::connect(url.to_owned(), None, Duration::from_secs(30))
-            .expect("daemon client");
+fn daemon_body_bytes(rpc: &LocalTarget, id: &str) -> Vec<u8> {
     let reply = rpc
-        .call::<wire::TxList>(&wire::tx::TxListQuery {
-            id: vec![shekyl_rpc_types::hash::HashHex::from_hex(id).expect("an id")],
-            prune: false,
-        })
+        .call::<wire::TxList>(
+            &wire::tx::TxListQuery {
+                id: vec![shekyl_rpc_types::hash::HashHex::from_hex(id).expect("an id")],
+                prune: false,
+            },
+            shekyl_rpc_transport::local::CALL_WITHIN,
+        )
         .expect("tx_list");
     match reply.into_iter().next() {
         Some(Slot::Item(entry)) => entry.body.0,
@@ -430,7 +426,7 @@ struct Regtest {
     child: Child,
     data_dir: PathBuf,
     config_dir: PathBuf,
-    url: String,
+    owner: LocalTarget,
     view_url: String,
     logs: Vec<PathBuf>,
 }
@@ -453,9 +449,12 @@ impl Regtest {
             .local_addr()
             .expect("addr")
             .port();
-        let data_dir = std::env::temp_dir().join(format!("shekyl-tx-show-{rpc_port}"));
+        let data_dir = shekyl_os_account::test_fixture::path(&format!("tx-show-{rpc_port}"))
+            .expect("a fixture path");
         drop(std::fs::remove_dir_all(&data_dir));
-        std::fs::create_dir_all(&data_dir).expect("data dir");
+        // Made as the daemon makes a data directory: it refuses an existing
+        // one other accounts can enter (`config.data-dir.exposed`).
+        shekyl_os_account::create_account_dir_all(&data_dir).expect("data dir");
         let config_dir = private_config_dir(rpc_port);
         let stdout = std::fs::File::create(data_dir.join("daemon.log")).expect("stdout log");
         let stderr = stdout.try_clone().expect("stderr log");
@@ -472,7 +471,7 @@ impl Regtest {
             "--clearnet",
             "off",
             "--rpc-admin-listen",
-            &format!("127.0.0.1:{rpc_port}"),
+            "none",
             "--rpc-view-listen",
             &format!("127.0.0.1:{view_port}"),
             "--data-dir",
@@ -505,15 +504,20 @@ impl Regtest {
             child,
             logs: vec![data_dir.join("shekyld.log"), data_dir.join("daemon.log")],
             data_dir,
+            owner: LocalTarget::test_override(
+                Network::Regtest,
+                &shekyl_rpc_rendezvous::Instance::Default,
+                Some(&config_dir),
+                None,
+            ),
             config_dir,
-            url: format!("http://127.0.0.1:{rpc_port}"),
             view_url: format!("http://127.0.0.1:{view_port}"),
         }
     }
 
     fn client(&self) -> crate::daemon::DaemonClient {
         crate::daemon::DaemonClient::new(
-            shekyl_rpc_transport::DaemonTarget::address(self.url.as_str()),
+            shekyl_rpc_transport::DaemonTarget::Owner(self.owner.clone()),
             None,
             Network::Regtest,
         )
@@ -522,7 +526,7 @@ impl Regtest {
 
     fn view_client(&self) -> crate::daemon::DaemonClient {
         crate::daemon::DaemonClient::new(
-            shekyl_rpc_transport::DaemonTarget::address(self.view_url.as_str()),
+            shekyl_rpc_transport::DaemonTarget::fixture_address(self.view_url.as_str()),
             None,
             Network::Regtest,
         )
@@ -581,9 +585,7 @@ impl Regtest {
     }
 
     async fn wallet_and_genesis(&self) -> Found {
-        let rpc = HttpRpc::with_custom_timeout(self.url.clone(), Duration::from_secs(180))
-            .await
-            .expect("rpc client");
+        let rpc = LocalRpc::within(self.owner.clone(), Duration::from_secs(180));
         await_ready(&rpc, &self.logs).await;
         await_template(&rpc).await;
 
@@ -706,7 +708,7 @@ fn this_spawn_announced(logs: &[PathBuf]) -> bool {
     })
 }
 
-async fn await_ready(rpc: &HttpRpc, logs: &[PathBuf]) {
+async fn await_ready(rpc: &LocalRpc, logs: &[PathBuf]) {
     let deadline = Instant::now() + Duration::from_secs(60);
     let mut last = String::new();
     while Instant::now() < deadline {
@@ -733,7 +735,7 @@ async fn await_ready(rpc: &HttpRpc, logs: &[PathBuf]) {
     panic!("daemon RPC never became ready: {last}\n{tail}");
 }
 
-async fn await_template(rpc: &HttpRpc) {
+async fn await_template(rpc: &LocalRpc) {
     let deadline = Instant::now() + Duration::from_secs(60);
     let mut last = String::new();
     while Instant::now() < deadline {

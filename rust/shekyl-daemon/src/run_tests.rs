@@ -15,6 +15,12 @@ use std::sync::Mutex;
 /// this module.
 pub(super) static SERIAL: Mutex<()> = Mutex::new(());
 
+/// A supervisor whose loop runs until its stop and never ends on its own:
+/// the wait's other arms are the subject.
+fn quiet_supervisor(rt: &tokio::runtime::Runtime) -> tor::Supervisor {
+    tor::Supervisor::over_task(rt.spawn(std::future::pending()))
+}
+
 /// A logged-in account: its home, and a private session directory
 /// for the owner's socket (`RPC_CHANNEL.md` §7.1), one per test.
 fn platform(home: &Path) -> Platform {
@@ -45,7 +51,7 @@ fn args(list: &[&str]) -> Vec<OsString> {
 
 #[test]
 fn a_refusal_exits_with_two_and_help_and_version_with_zero() {
-    let d = tempfile::tempdir().unwrap();
+    let d = shekyl_os_account::test_fixture::tempdir().unwrap();
     assert_eq!(
         start(&args(&["--bogus"]), &platform(d.path())),
         EXIT_REFUSED
@@ -69,7 +75,7 @@ fn a_refusal_exits_with_two_and_help_and_version_with_zero() {
 /// let either reach the node.
 #[test]
 fn mine_on_without_an_address_and_too_many_threads_both_exit_two() {
-    let d = tempfile::tempdir().unwrap();
+    let d = shekyl_os_account::test_fixture::tempdir().unwrap();
     assert_eq!(
         start(
             &args(&["--network", "regtest", "--mine", "on"]),
@@ -101,7 +107,7 @@ fn mine_on_without_an_address_and_too_many_threads_both_exit_two() {
 /// A bare word is refused before the load, the lock, or any socket.
 #[test]
 fn a_bare_word_is_refused_before_the_daemon_starts() {
-    let d = tempfile::tempdir().unwrap();
+    let d = shekyl_os_account::test_fixture::tempdir().unwrap();
     assert_eq!(start(&args(&["status"]), &platform(d.path())), EXIT_REFUSED);
     assert!(!d.path().join(".shekyl").exists(), "nothing was created");
 }
@@ -148,7 +154,7 @@ fn a_stop_request_runs_the_one_stop_path() {
     let _serial = SERIAL
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let d = tempfile::tempdir().unwrap();
+    let d = shekyl_os_account::test_fixture::tempdir().unwrap();
     let data = d.path().join("data");
     let log = d.path().join("shekyld.log");
     let (config, node) = offline_node(d.path(), &data, &log);
@@ -191,7 +197,7 @@ fn a_daemon_start_locks_marks_logs_announces_runs_and_stops_on_request() {
     let _serial = SERIAL
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let d = tempfile::tempdir().unwrap();
+    let d = shekyl_os_account::test_fixture::tempdir().unwrap();
     let data = d.path().join("data");
     let log = d.path().join("logs").join("shekyld-regtest.log");
     // Offline: the subject is the lock, the marker, the log and the
@@ -273,16 +279,17 @@ fn a_reported_end_stops_the_daemon(end: shekyl_node::NodeEnd) {
     // Clears a stop an earlier test latched.
     stop::own(rt.handle(), shekyl_process::stop::Inherited::none()).expect("own");
     let (ended_tx, mut ended) = watch::channel(None);
+    let mut supervisor = quiet_supervisor(&rt);
     let waited = rt.block_on(async {
         tokio::time::timeout(
             std::time::Duration::from_millis(50),
-            run_or_stop(&mut ended),
+            run_or_stop(&mut ended, &mut supervisor),
         )
         .await
     });
     assert!(waited.is_err(), "a watch with no end ended the wait");
     ended_tx.send_replace(Some(end.clone()));
-    let wait = rt.block_on(run_or_stop(&mut ended));
+    let wait = rt.block_on(run_or_stop(&mut ended, &mut supervisor));
     assert_eq!(wait, RunWait::NodeEnded(end.clone()));
     let mut preserve_status = true;
     note_run(&mut preserve_status, wait);
@@ -291,6 +298,141 @@ fn a_reported_end_stops_the_daemon(end: shekyl_node::NodeEnd) {
         rt.block_on(stop::stop_requested()),
         stop::StopCause::Fatal(end)
     );
+}
+
+/// **A Tor supervisor whose start the scheduler refuses stops the daemon,
+/// and the exit is a failure.** The node's timing engine is closed before
+/// the run, so the supervisor's registration is refused (`tor = off`: the
+/// supervisor starts under every setting). The run's wait reads the
+/// supervisor's end, the cause reaches the one stop owner, and the status is
+/// [`EXIT_FAILED`]. A stop requested 10 s in is the backstop: without the
+/// supervisor's arm the run ends on it with 0. Red edit: drop the
+/// supervisor's arm from `run_or_stop`, or keep `preserve_status` on it.
+#[test]
+fn a_tor_supervisor_the_scheduler_refuses_stops_the_daemon_failed() {
+    let _serial = SERIAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let d = shekyl_os_account::test_fixture::tempdir().unwrap();
+    let data = d.path().join("data");
+    let log = d.path().join("shekyld.log");
+    let (config, node) = offline_node(d.path(), &data, &log);
+    // Chain sync is asked to stop first, so the network's stop is not its
+    // fault; then the network's stop closes the timing engine.
+    node.request_sync_stop();
+    node.network().stop();
+    let budget = RuntimeBudget {
+        workers: NonZeroUsize::MIN,
+        blocking: NonZeroUsize::MIN,
+    };
+    let pool = shekyl_runtime::runtime(budget, &ThreadName::new("test-tor-end").unwrap()).unwrap();
+    // Clears a stop an earlier test latched.
+    stop::own(pool.handle(), shekyl_process::stop::Inherited::none()).expect("own");
+    let (finished, backstop) = std::sync::mpsc::channel::<()>();
+    let requester = std::thread::spawn(move || {
+        if backstop
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .is_err()
+        {
+            crate::stop::request_stop();
+        }
+    });
+    let status = supervise(
+        &config,
+        &pool,
+        Arc::new(shekyl_daemon_rpc::options::OptionsAbsent),
+        node,
+        crate::tor::prepare(None).0,
+        shekyl_daemon_rpc::run::prepare(None, None).expect("the RPC's runtime"),
+        None,
+    );
+    // A backstop that already fired has gone; the status says so below.
+    let _sent = finished.send(());
+    requester.join().unwrap();
+    assert_eq!(
+        pool.block_on(stop::stop_requested()),
+        stop::StopCause::TorEnded(tor::SupervisorEnd::NoScheduler(
+            shekyl_timing_engine::EngineError::Closed
+        ))
+    );
+    assert_eq!(status, EXIT_FAILED, "the supervisor's end kept the exit");
+    pool.shutdown_background();
+}
+
+/// **Every way the supervisor's loop ends on its own stops the daemon with
+/// its end.** A start that fails returns its end; a loop that returns while
+/// its queue is open is [`tor::SupervisorEnd::Returned`]; a panic is
+/// [`tor::SupervisorEnd::Panicked`], in the panic's words. Each reaches the
+/// one stop owner and fails the exit. Red edit: read a joined `Ok` or a
+/// panic as no end, or drop the latch in `note_run`'s arm.
+#[test]
+fn a_tor_supervisor_that_ends_on_its_own_stops_the_daemon_with_its_end() {
+    let _serial = SERIAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    type Loop =
+        std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), tor::SupervisorEnd>> + Send>>;
+    let cases: Vec<(Loop, tor::SupervisorEnd)> = vec![
+        (
+            Box::pin(async { Err(tor::SupervisorEnd::NoOnionKey) }),
+            tor::SupervisorEnd::NoOnionKey,
+        ),
+        (Box::pin(async { Ok(()) }), tor::SupervisorEnd::Returned),
+        (
+            Box::pin(async { panic!("the drive loop broke") }),
+            tor::SupervisorEnd::Panicked("the drive loop broke".to_owned()),
+        ),
+    ];
+    for (task, end) in cases {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        stop::own(rt.handle(), shekyl_process::stop::Inherited::none()).expect("own");
+        let (_ended_tx, mut ended) = watch::channel(None);
+        let mut supervisor = tor::Supervisor::over_task(rt.spawn(task));
+        let wait = rt
+            .block_on(async {
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    run_or_stop(&mut ended, &mut supervisor),
+                )
+                .await
+            })
+            .unwrap_or_else(|_| panic!("{end:?}: the wait did not read the supervisor's end"));
+        assert_eq!(wait, RunWait::TorEnded(end.clone()));
+        let mut preserve_status = true;
+        note_run(&mut preserve_status, wait);
+        assert!(!preserve_status, "{end:?}: the exit was not made a failure");
+        assert_eq!(
+            rt.block_on(stop::stop_requested()),
+            stop::StopCause::TorEnded(end)
+        );
+    }
+}
+
+/// **An asked-for stop is not the supervisor's end.** The supervisor runs;
+/// the stop is requested; the wait returns the request and the exit is kept.
+/// Red edit: read the supervisor before the stop and report a stop as its
+/// end, or poll it so that a running loop resolves.
+#[test]
+fn an_asked_for_stop_is_not_the_supervisors_end() {
+    let _serial = SERIAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    stop::own(rt.handle(), shekyl_process::stop::Inherited::none()).expect("own");
+    let (_ended_tx, mut ended) = watch::channel(None);
+    let mut supervisor = quiet_supervisor(&rt);
+    stop::request_stop();
+    let wait = rt.block_on(run_or_stop(&mut ended, &mut supervisor));
+    assert_eq!(wait, RunWait::StopRequested(stop::StopCause::Requested));
+    let mut preserve_status = true;
+    note_run(&mut preserve_status, wait);
+    assert!(preserve_status, "an asked-for stop failed the exit");
 }
 
 /// **A fatal cause on the stop arm fails the exit.** The owner's
@@ -309,7 +451,8 @@ fn a_latched_fatal_cause_fails_the_exit() {
     let end = shekyl_node::NodeEnd::Sync(shekyl_node::EndCause::EngineClosed);
     stop::fatal(end.clone());
     let (_ended_tx, mut ended) = watch::channel(None);
-    let wait = rt.block_on(run_or_stop(&mut ended));
+    let mut supervisor = quiet_supervisor(&rt);
+    let wait = rt.block_on(run_or_stop(&mut ended, &mut supervisor));
     assert_eq!(wait, RunWait::StopRequested(stop::StopCause::Fatal(end)));
     let mut preserve_status = true;
     note_run(&mut preserve_status, wait);
@@ -351,6 +494,15 @@ fn an_asked_for_stop_is_announced_and_a_forced_one_is_an_error() {
         ))),
         StopReport::Error(
             "the ingest service stopped: connector unreachable; the daemon stops".to_owned()
+        )
+    );
+    assert_eq!(
+        stop_report(StopCause::TorEnded(crate::tor::SupervisorEnd::NoOnionKey)),
+        StopReport::Error(
+            "the Tor supervisor did not start: the system's random source refused this node's \
+             onion key; the daemon stops. Check that the system's random source works, then \
+             start the daemon again"
+                .to_owned()
         )
     );
 }

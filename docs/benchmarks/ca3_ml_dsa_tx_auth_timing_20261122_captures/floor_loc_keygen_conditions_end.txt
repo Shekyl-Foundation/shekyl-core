@@ -1,0 +1,35 @@
+== conditions loc-keygen-end at 2026-11-22T19:30:35Z
+model: Raspberry Pi 4 Model B Rev 1.2
+revision: c03112
+os: Ubuntu 26.04.1 LTS
+kernel: 7.0.0-1023-raspi
+governor: ondemand
+ntp: yes
+load: 0.94 0.87 1.20
+clock_khz: 1500000
+soc_temp_millic: 55504
+throttled: throttled=0x0
+undervoltage_alarm: 0
+total_trans: 155893
+time_in_state:
+  600000 1860468
+  700000 25844
+  800000 4596
+  900000 4445
+  1000000 7949
+  1100000 8900
+  1200000 5757
+  1300000 6164
+  1400000 4443
+  1500000 6530081
+mem_available_kb: 3313072
+top processes by cpu:
+      PID USER     %CPU     ELAPSED COMMAND
+    39201 <agent>  100       00:00 ps
+    39188 root     45.8       00:00 systemd-timedat
+    39178 <agent>  3.1       00:00 bash
+    39021 <agent>  0.2       02:29 systemd
+    32571 root      0.1       34:27 kworker/0:3-events
+    36880 root      0.0       18:54 kworker/0:0-events
+    37946 root      0.0       08:08 kworker/1:0-events
+tmux: ca3loc: 1 windows (created Sun Nov 22 14:28:09 2026);

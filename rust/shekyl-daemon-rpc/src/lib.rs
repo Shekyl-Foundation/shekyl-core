@@ -42,8 +42,8 @@ pub mod channel;
 
 /// The consensus constants this crate reads, generated from the JSON
 /// authority (`config/consensus_constants.json`) by `build.rs` — the same
-/// source that emits the C++ `shekyl/consensus_constants_generated.h`
-/// through `cmake/generate_consensus_constants.py`.
+/// source every other crate's generated constants come from, so no two
+/// crates can disagree on one.
 ///
 /// **At the crate root rather than under `submit`,** because the submit
 /// engine is no longer the only reader: the daemon console renders block

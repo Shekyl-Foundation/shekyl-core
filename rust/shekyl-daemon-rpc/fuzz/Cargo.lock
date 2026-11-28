@@ -582,6 +582,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "fastrand"
+version = "2.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "da7c62ceae207dd37ea5b845da6a0696c799f85e97da1ab5b7910be3c1c80223"
+
+[[package]]
 name = "ff"
 version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -619,8 +625,7 @@ dependencies = [
 [[package]]
 name = "fips204"
 version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a823e139c2d539b1b735d31cdce8b0b356671585eac3d54dec79d1d15052093b"
+source = "git+https://github.com/Shekyl-Foundation/fips204?rev=54b76cf71430a406f3c96ab9c80c42b0d74ce2fd#54b76cf71430a406f3c96ab9c80c42b0d74ce2fd"
 dependencies = [
  "rand_core",
  "sha3",
@@ -2203,6 +2208,7 @@ version = "3.1.0"
 dependencies = [
  "libc",
  "shekyl-win-sec",
+ "windows-sys 0.61.2",
  "zeroize",
 ]
 
@@ -2320,9 +2326,11 @@ dependencies = [
  "hyper-rustls",
  "hyper-util",
  "rand_core",
+ "rustix",
  "serde",
  "serde_json",
  "shekyl-network",
+ "shekyl-options",
  "shekyl-os-account",
  "shekyl-rpc-channel",
  "shekyl-rpc-client",
@@ -2332,6 +2340,8 @@ dependencies = [
  "shekyl-rpc-types",
  "shekyl-socks",
  "shekyl-win-sec",
+ "socket2",
+ "tempfile",
  "tokio",
  "tower-service",
  "tracing",
@@ -2573,6 +2583,19 @@ name = "tap"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "55937e1799185b12863d447f42597ed69d9928686b8d88a1df17376a097d8369"
+
+[[package]]
+name = "tempfile"
+version = "3.27.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
+dependencies = [
+ "fastrand",
+ "getrandom 0.4.3",
+ "once_cell",
+ "rustix",
+ "windows-sys 0.61.2",
+]
 
 [[package]]
 name = "thiserror"

@@ -69,6 +69,16 @@ def rpc(url, method, params=None):
     return res["result"]
 
 
+def account_home():
+    """The account's home from the operating system where it has one: in a CI
+    container `$HOME` is a directory another account owns."""
+    if os.name == "posix":
+        import pwd
+
+        return pwd.getpwuid(os.geteuid()).pw_dir
+    return os.path.expanduser("~")
+
+
 def start_daemon(workdir, addr, attempts=5):
     """Launch shekyld, retrying on a fresh port if it dies before its RPC is ready.
 
@@ -153,7 +163,11 @@ def await_posted(url, timeout_s=60):
 def main():
     with open(MINING_RECIPIENTS_PATH) as f:
         addr = json.load(f)["recipients"][0]["address"]
-    workdir = tempfile.mkdtemp(prefix="cbcap_")
+    # Under the account's home: the daemon refuses a data directory under a
+    # directory another account can write, /tmp included.
+    root = os.path.join(account_home(), ".shekyl-test")
+    os.makedirs(root, mode=0o700, exist_ok=True)
+    workdir = tempfile.mkdtemp(prefix=f"{os.getpid()}-cbcap_", dir=root)
     daemon, url, log = start_daemon(workdir, addr)
     try:
         await_posted(url)

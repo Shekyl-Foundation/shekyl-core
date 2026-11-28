@@ -186,8 +186,8 @@ fn raw_number(file: &File) -> u64 {
 
 /// A working directory with the private socket directory, as a harness
 /// makes it. On Windows the daemon makes the directory itself, labelled.
-fn workdir() -> tempfile::TempDir {
-    let dir = tempfile::tempdir().expect("a directory");
+fn workdir() -> shekyl_os_account::test_fixture::FixtureDir {
+    let dir = shekyl_os_account::test_fixture::tempdir().expect("a directory");
     owner_only(dir.path());
     // Unix: the socket directory, which the daemon checks (this account's,
     // mode 0700, local). On Windows the daemon creates the rendezvous
@@ -377,7 +377,10 @@ fn ready_then_owner_calls_and_the_close_stops_it() {
         target.path().expect("a named directory").display()
     );
     let status = target
-        .call::<shekyl_rpc_client::wire::MineStatus>(&shekyl_rpc_types::kinds::NoParams)
+        .call::<shekyl_rpc_client::wire::MineStatus>(
+            &shekyl_rpc_types::kinds::NoParams,
+            shekyl_rpc_transport::local::CALL_WITHIN,
+        )
         .unwrap_or_else(|e| {
             panic!(
                 "mine_status over the owner's leg: {e}\n{}",
@@ -614,7 +617,10 @@ fn a_second_start_refuses_with_no_ready_line() {
         evidence(dir.path(), "second")
     );
     target(dir.path())
-        .call::<shekyl_rpc_client::wire::MineStatus>(&shekyl_rpc_types::kinds::NoParams)
+        .call::<shekyl_rpc_client::wire::MineStatus>(
+            &shekyl_rpc_types::kinds::NoParams,
+            shekyl_rpc_transport::local::CALL_WITHIN,
+        )
         .expect("the first daemon still answers");
 
     drop(ours);

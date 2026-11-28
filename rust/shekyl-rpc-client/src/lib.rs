@@ -27,9 +27,96 @@ use shekyl_types::{BlockHash, ChainCount};
 
 pub mod tx_fee;
 
+/// The operator command that enrolls `fingerprint` on its node.
+///
+/// One spelling: the wallet wire, the channel's own sentence, and a
+/// revocation all name this command.
+#[must_use]
+pub fn enrollment_command(fingerprint: &[u8; 32]) -> String {
+    format!(
+        "shekyl-cli rpc client add {} wallet",
+        hex::encode(fingerprint)
+    )
+}
+
+/// What the operator is told when a call exceeds the bound it was opened under.
+///
+/// Distinct from a handshake timeout and from a connection the node closed.
+/// The request is not sent again. A submission may already have been received.
+pub const CALL_BUDGET_EXCEEDED: &str = "The call exceeded its time limit. The node may still be \
+    working. Check its status before repeating a submission.";
+
+/// A wallet-visible channel failure, safe to carry across engine boundaries.
+#[derive(Clone, Copy, Debug, thiserror::Error, PartialEq, Eq, Hash)]
+pub enum WalletChannelFault {
+    /// This client key needs enrollment on the wallet’s node.
+    #[error("Enroll this wallet on your node with: {}", enrollment_command(.0))]
+    NotEnrolled([u8; 32]),
+    /// The daemon proof does not match daemon-bundle-file. Check the endpoint and obtain the bundle from your node.
+    #[error("The daemon proof does not match daemon-bundle-file. Check the endpoint and obtain the bundle from your node.")]
+    NotTheDaemon,
+    /// The node closed before sending its proof. Check daemon-bundle-file, the network and the channel version against your node.
+    #[error("The node closed before sending its proof. Check daemon-bundle-file, the network and the channel version against your node.")]
+    NotRecognised,
+    /// The channel endpoint did not answer. Check the node, daemon-endpoint and daemon-socks.
+    #[error(
+        "The channel endpoint did not answer. Check the node, daemon-endpoint and daemon-socks."
+    )]
+    Unreachable,
+    /// The channel handshake timed out. Check the connection to your node.
+    #[error("The channel handshake timed out. Check the connection to your node.")]
+    TimedOut,
+    /// The node is busy. Try again shortly.
+    #[error("The node is busy. Try again shortly.")]
+    Busy,
+    /// All this wallet's channel connections are busy. Wait for an outstanding call to finish.
+    #[error(
+        "All this wallet's channel connections are busy. Wait for an outstanding call to finish."
+    )]
+    PoolFull,
+    /// This account has reached the node's channel session limit. Close an unused client session.
+    #[error("This account has reached the node's channel session limit. Close an unused client session.")]
+    SessionCap,
+    /// The node closed the connection during the call. Check its status before repeating a submission.
+    #[error("The node closed the connection during the call. Check its status before repeating a submission.")]
+    Closed,
+    /// The node revoked this client's enrollment. Enroll it again with the command.
+    #[error(
+        "The node revoked this client's enrollment. Enroll it again with: {}",
+        enrollment_command(.0)
+    )]
+    Revoked([u8; 32]),
+    /// The call exceeded the bound it was opened under. The request was not sent again.
+    #[error("{CALL_BUDGET_EXCEEDED}")]
+    Budget,
+    /// The wallet could not open the channel. Check its key and daemon bundle files and the local log.
+    #[error("The wallet could not open the channel. Check its key and daemon bundle files and the local log.")]
+    Local,
+}
+
+impl WalletChannelFault {
+    /// Whether the same configuration is refused on every attempt.
+    #[must_use]
+    pub const fn terminal(self) -> bool {
+        matches!(
+            self,
+            Self::NotEnrolled(_)
+                | Self::Revoked(_)
+                | Self::NotTheDaemon
+                | Self::NotRecognised
+                | Self::Local
+        )
+    }
+}
+
 /// An error from the RPC.
 #[derive(Clone, PartialEq, Eq, Debug, thiserror::Error)]
 pub enum RpcError {
+    /// The authenticated channel failed. The sentence is the fault. The string
+    /// is the leg or the local cause, for a log, and is empty when the
+    /// sentence already says everything.
+    #[error("{0}")]
+    Channel(WalletChannelFault, String),
     /// An internal error.
     #[error("internal error ({0})")]
     InternalError(String),
@@ -83,11 +170,9 @@ pub enum RpcError {
          connecting ({0})"
     )]
     PeerCheck(String),
-    /// "This computer"'s node runs as a service (RT-16), which a wallet
-    /// reaches only over the channel from RT-W12. Until then the wallet names
-    /// the service's view listener as its `daemon-address`: `Some` is that
-    /// listener, as the service's rendezvous record names it, `None` a
-    /// service with no view listener. Nothing was dialled.
+    /// "This computer"'s node runs as a service (RT-16). A wallet reaches it
+    /// on the enrolled channel. `Some` is the view listener the record names,
+    /// `None` a service that published no view listener. Nothing was dialled.
     #[error("{}", service_refusal(*.0))]
     Service(Option<core::net::SocketAddr>),
 }
@@ -96,16 +181,14 @@ pub enum RpcError {
 /// 2026-11-17): the one wording, which every layer that reports it uses.
 #[must_use]
 pub fn service_refusal(view: Option<core::net::SocketAddr>) -> String {
+    let channel = "The node on this computer runs as a service. Leave the daemon endpoint unset \
+         to use its channel, and enroll this account if the node asks.";
     match view {
-        Some(view) => format!(
-            "The node on this computer runs as a service. Until wallets reach a service over \
-             the channel, set daemon-address = {view}"
+        Some(_) => channel.to_owned(),
+        None => format!(
+            "{channel} If it has not published a channel, set rpc-listen to a loopback address \
+             on the node."
         ),
-        None => "The node on this computer runs as a service and serves no wallet leg: it has \
-                 no view listener. Until wallets reach a service over the channel, its \
-                 operator sets rpc-view-listen, and this wallet sets daemon-address to that \
-                 listener."
-            .to_string(),
     }
 }
 
@@ -121,6 +204,8 @@ pub use shekyl_rpc_types::errors::{Diagnostic, ErrorClass, RpcError as Refusal};
 /// producer's error, `STAGE_1_PR_4_REFRESH_ENGINE.md` §5.4.7 R6).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DaemonFault {
+    /// The wallet's authenticated connection to its node.
+    Channel(WalletChannelFault),
     /// The daemon could not be reached, or did not answer. Retry, or check
     /// the daemon address.
     Unreachable,
@@ -151,6 +236,7 @@ pub enum DaemonFault {
 impl core::fmt::Display for DaemonFault {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            Self::Channel(fault) => core::fmt::Display::fmt(fault, f),
             Self::Unreachable => f.write_str("the daemon did not answer"),
             Self::Identity(mismatch) => {
                 write!(f, "the daemon was refused on its {}", mismatch.axis())
@@ -174,6 +260,9 @@ impl DaemonFault {
     /// refusal is cached by the client and repeats on every request.
     #[must_use]
     pub const fn is_retryable(self) -> bool {
+        if let Self::Channel(fault) = self {
+            return !fault.terminal();
+        }
         !matches!(
             self,
             Self::Identity(_) | Self::NotPermitted | Self::PeerCheck | Self::Service(_)
@@ -184,14 +273,54 @@ impl DaemonFault {
     /// "this computer". The same target answers the same way, so a caller
     /// keeps the fault and does not dial again. Narrower than
     /// [`Self::is_retryable`]: an identity refusal and a grant refusal are
-    /// also not retried, and they are not this.
+    /// also not retried, and they are not this. A channel fault that can
+    /// clear on retry is not this; it still keeps its sentence
+    /// ([`Self::has_own_remedy`]).
     #[must_use]
     pub const fn is_target_refusal(self) -> bool {
+        if let Self::Channel(fault) = self {
+            return fault.terminal();
+        }
         matches!(self, Self::PeerCheck | Self::Service(_))
+    }
+
+    /// The operator's remedy is this fault's own sentence.
+    ///
+    /// Every channel fault is this, including one [`Self::is_retryable`]
+    /// says may clear: busy, closed, and over budget are channel facts, and
+    /// folding them into "the daemon did not answer" names the wrong action.
+    /// A peer check and a service at this computer are this, and they are
+    /// not retried.
+    #[must_use]
+    pub const fn has_own_remedy(self) -> bool {
+        matches!(self, Self::Channel(_) | Self::PeerCheck | Self::Service(_))
     }
 }
 
 impl RpcError {
+    /// The leg or local cause carried beside a channel sentence. Empty for
+    /// every other failure, whose sentence already includes what a log needs.
+    #[must_use]
+    pub fn detail(&self) -> &str {
+        match self {
+            Self::Channel(_, detail) => detail,
+            _ => "",
+        }
+    }
+
+    /// The sentence a log records. A channel fault keeps its leg or local
+    /// cause beside the sentence; every other failure's sentence already
+    /// includes what the log needs.
+    #[must_use]
+    pub fn log_line(&self) -> String {
+        let place = self.detail();
+        if place.is_empty() {
+            self.to_string()
+        } else {
+            format!("{self} ({place})")
+        }
+    }
+
     /// What this failure means for the remedy. Exhaustive: a new variant
     /// does not compile until its remedy is named.
     #[must_use]
@@ -207,6 +336,7 @@ impl RpcError {
             Self::InvalidFee => DaemonFault::FeeResponse,
             Self::InternalError(_) | Self::InvalidPriority => DaemonFault::Internal,
             Self::NoSuchMethod(_) => DaemonFault::Protocol,
+            Self::Channel(fault, _) => DaemonFault::Channel(*fault),
             Self::PeerCheck(_) => DaemonFault::PeerCheck,
             Self::Service(view) => DaemonFault::Service(*view),
             Self::Refused(refusal) => match refusal.class {
