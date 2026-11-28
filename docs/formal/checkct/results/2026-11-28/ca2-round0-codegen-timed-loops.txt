@@ -1,0 +1,228 @@
+====================================================================================================
+_ZN10ct_dynamic7classes18visit_batches_with17hf595a02301c80d19E
+  function: 771 instructions, 0x14000c4d0..0x14000d29f
+  timed span 0x14000cd1f..0x14000cd81: 19 instructions, 1 calls
+    call        _ZN13crypto_bigint4uint3mul52_$LT$impl$u20$crypto_bigint..uint..Uint$LT$_$GT$$GT$8mul_wide17hddfda4c6f3d0245eE
+    back-edge 0x14000cd77 -> 0x14000cd50: loop body 10 instructions
+  timed span 0x14000ce17..0x14000ce71: 18 instructions, 1 calls
+    call        _ZN13crypto_bigint4uint3mul52_$LT$impl$u20$crypto_bigint..uint..Uint$LT$_$GT$$GT$8mul_wide17hddfda4c6f3d0245eE
+    back-edge 0x14000ce67 -> 0x14000ce40: loop body 10 instructions
+  timed span 0x14000d062..0x14000d0c1: 18 instructions, 1 calls
+    call        _ZN13crypto_bigint4uint3mul52_$LT$impl$u20$crypto_bigint..uint..Uint$LT$_$GT$$GT$8mul_wide17hddfda4c6f3d0245eE
+    back-edge 0x14000d0b7 -> 0x14000d090: loop body 10 instructions
+====================================================================================================
+_ZN75_$LT$ct_dynamic..harness..Harness$u20$as$u20$ct_dynamic..harness..Bench$GT$3row28_$u7b$$u7b$closure$u7d$$u7d$17h0166b990d0fa03dbE.llvm.2489380375382521583
+  function: 99 instructions, 0x14000d2a0..0x14000d3ff
+  timed span 0x14000d304..0x14000d370: 25 instructions, 2 calls
+    call        _ZN77_$LT$dalek_ff_group..field..FieldElement$u20$as$u20$core..ops..arith..Mul$GT$3mul17h58c6d6c73eb9fdeaE
+    call        _ZN70_$LT$dalek_ff_group..field..FieldElement$u20$as$u20$ff..PrimeField$GT$7to_repr17hf3a931356721f4f9E
+    back-edge 0x14000d369 -> 0x14000d330: loop body 14 instructions
+====================================================================================================
+_ZN75_$LT$ct_dynamic..harness..Harness$u20$as$u20$ct_dynamic..harness..Bench$GT$3row28_$u7b$$u7b$closure$u7d$$u7d$17h09908d86cab65a74E.llvm.2489380375382521583
+  function: 108 instructions, 0x14000d400..0x14000d593
+  timed span 0x14000d462..0x14000d500: 33 instructions, 3 calls
+    call        _ZN65_$LT$dalek_ff_group..field..FieldElement$u20$as$u20$ff..Field$GT$4sqrt17h6a0b40b8aa0e24f5E
+    call        _ZN87_$LT$dalek_ff_group..field..FieldElement$u20$as$u20$subtle..ConditionallySelectable$GT$18conditional_select17h8ba1bb2a6d231d89E
+    call        _ZN70_$LT$dalek_ff_group..field..FieldElement$u20$as$u20$ff..PrimeField$GT$7to_repr17hf3a931356721f4f9E
+    back-edge 0x14000d4f9 -> 0x14000d4a0: loop body 20 instructions
+====================================================================================================
+_ZN75_$LT$ct_dynamic..harness..Harness$u20$as$u20$ct_dynamic..harness..Bench$GT$3row28_$u7b$$u7b$closure$u7d$$u7d$17h0bbc2cf51d11cff0E.llvm.2489380375382521583
+  function: 99 instructions, 0x14000d5a0..0x14000d6ff
+  timed span 0x14000d604..0x14000d670: 25 instructions, 2 calls
+    call        _ZN10ct_dynamic5field12op_helio_mul17h12b06d3ae021804eE.llvm.512434274318700467
+    call        _ZN71_$LT$helioselene..field..HelioseleneField$u20$as$u20$ff..PrimeField$GT$7to_repr17hc426e5b1896eb0f1E
+    back-edge 0x14000d669 -> 0x14000d630: loop body 14 instructions
+====================================================================================================
+_ZN75_$LT$ct_dynamic..harness..Harness$u20$as$u20$ct_dynamic..harness..Bench$GT$3row28_$u7b$$u7b$closure$u7d$$u7d$17h11b7ca5f8c292ee2E.llvm.2489380375382521583
+  function: 149 instructions, 0x14000d700..0x14000d93b
+  timed span 0x14000d766..0x14000d89e: 72 instructions, 1 calls
+    call        _ZN71_$LT$helioselene..field..HelioseleneField$u20$as$u20$ff..PrimeField$GT$7to_repr17hc426e5b1896eb0f1E
+    back-edge 0x14000d893 -> 0x14000d7a0: loop body 60 instructions
+====================================================================================================
+_ZN75_$LT$ct_dynamic..harness..Harness$u20$as$u20$ct_dynamic..harness..Bench$GT$3row28_$u7b$$u7b$closure$u7d$$u7d$17h154c36ef8d93e844E.llvm.2489380375382521583
+  function: 108 instructions, 0x14000d940..0x14000dad3
+  timed span 0x14000d9a2..0x14000da40: 33 instructions, 3 calls
+    call        _ZN65_$LT$dalek_ff_group..field..FieldElement$u20$as$u20$ff..Field$GT$6invert17h3693ff3e470e5ff8E
+    call        _ZN87_$LT$dalek_ff_group..field..FieldElement$u20$as$u20$subtle..ConditionallySelectable$GT$18conditional_select17h8ba1bb2a6d231d89E
+    call        _ZN70_$LT$dalek_ff_group..field..FieldElement$u20$as$u20$ff..PrimeField$GT$7to_repr17hf3a931356721f4f9E
+    back-edge 0x14000da39 -> 0x14000d9e0: loop body 20 instructions
+====================================================================================================
+_ZN75_$LT$ct_dynamic..harness..Harness$u20$as$u20$ct_dynamic..harness..Bench$GT$3row28_$u7b$$u7b$closure$u7d$$u7d$17h17408e8d033f4bb1E.llvm.2489380375382521583
+  function: 104 instructions, 0x14000dae0..0x14000dc51
+  timed span 0x14000db44..0x14000dbc1: 29 instructions, 2 calls
+    call        _ZN11helioselene5field16HelioseleneField3pow17h2c4e980f0db9af29E
+    call        _ZN71_$LT$helioselene..field..HelioseleneField$u20$as$u20$ff..PrimeField$GT$7to_repr17hc426e5b1896eb0f1E
+    back-edge 0x14000dbba -> 0x14000db70: loop body 18 instructions
+====================================================================================================
+_ZN75_$LT$ct_dynamic..harness..Harness$u20$as$u20$ct_dynamic..harness..Bench$GT$3row28_$u7b$$u7b$closure$u7d$$u7d$17h1e219c579ec9d51bE.llvm.2489380375382521583
+  function: 107 instructions, 0x14000dc60..0x14000dde2
+  timed span 0x14000dcc4..0x14000dd52: 32 instructions, 2 calls
+    call        _ZN14dalek_ff_group5field12FieldElement11wide_reduce17h7c1f9778818830c9E
+    call        _ZN70_$LT$dalek_ff_group..field..FieldElement$u20$as$u20$ff..PrimeField$GT$7to_repr17hf3a931356721f4f9E
+    back-edge 0x14000dd4b -> 0x14000dcf0: loop body 22 instructions
+====================================================================================================
+_ZN75_$LT$ct_dynamic..harness..Harness$u20$as$u20$ct_dynamic..harness..Bench$GT$3row28_$u7b$$u7b$closure$u7d$$u7d$17h20a44e1cc996f4e4E.llvm.2489380375382521583
+  function: 125 instructions, 0x14000ddf0..0x14000dff8
+  timed span 0x14000de56..0x14000df5b: 48 instructions, 3 calls
+    call        _ZN13crypto_bigint4uint3mul52_$LT$impl$u20$crypto_bigint..uint..Uint$LT$_$GT$$GT$11square_wide17h4516a8677c3da0e3E
+    call        _ZN11helioselene5field16HelioseleneField11wide_reduce17hd8bdd5297c90f361E
+    call        _ZN71_$LT$helioselene..field..HelioseleneField$u20$as$u20$ff..PrimeField$GT$7to_repr17hc426e5b1896eb0f1E
+    back-edge 0x14000df4d -> 0x14000dea0: loop body 34 instructions
+====================================================================================================
+_ZN75_$LT$ct_dynamic..harness..Harness$u20$as$u20$ct_dynamic..harness..Bench$GT$3row28_$u7b$$u7b$closure$u7d$$u7d$17h251c1b7367a28de7E.llvm.2489380375382521583
+  function: 114 instructions, 0x14000e000..0x14000e1c3
+  timed span 0x14000e063..0x14000e12e: 39 instructions, 2 calls
+    call        _ZN71_$LT$helioselene..field..HelioseleneField$u20$as$u20$ff..PrimeField$GT$9from_repr17h6a18640c2b975314E
+    call        _ZN71_$LT$helioselene..field..HelioseleneField$u20$as$u20$ff..PrimeField$GT$7to_repr17hc426e5b1896eb0f1E
+    back-edge 0x14000e123 -> 0x14000e0a0: loop body 27 instructions
+====================================================================================================
+_ZN75_$LT$ct_dynamic..harness..Harness$u20$as$u20$ct_dynamic..harness..Bench$GT$3row28_$u7b$$u7b$closure$u7d$$u7d$17h2c2017b717bf4914E.llvm.2489380375382521583
+  function: 246 instructions, 0x14000e1d0..0x14000e57d
+  timed span 0x14000e22d..0x14000e2e0: 42 instructions, 0 calls
+    back-edge 0x14000e2a4 -> 0x14000e260: loop body 18 instructions
+    back-edge 0x14000e2b8 -> 0x14000e290: loop body 10 instructions
+    back-edge 0x14000e2d7 -> 0x14000e2a6: loop body 12 instructions
+    back-edge 0x14000e2d9 -> 0x14000e260: loop body 31 instructions
+  timed span 0x14000e3d6..0x14000e4e0: 52 instructions, 2 calls
+    call        _ZN13crypto_bigint4uint7modular3pow40multi_exponentiate_montgomery_form_array17hf10f01d1139f403eE
+    call        _ZN13crypto_bigint4uint7modular9reduction20montgomery_reduction17ha328603a26683a3eE
+    back-edge 0x14000e4d5 -> 0x14000e430: loop body 35 instructions
+====================================================================================================
+_ZN75_$LT$ct_dynamic..harness..Harness$u20$as$u20$ct_dynamic..harness..Bench$GT$3row28_$u7b$$u7b$closure$u7d$$u7d$17h5f4ba91bb72da405E.llvm.2489380375382521583
+  function: 117 instructions, 0x14000e580..0x14000e746
+  timed span 0x14000e5e6..0x14000e6a9: 40 instructions, 3 calls
+    call        _ZN70_$LT$dalek_ff_group..field..FieldElement$u20$as$u20$ff..PrimeField$GT$9from_repr17h1090a016439928cbE
+    call        _ZN87_$LT$dalek_ff_group..field..FieldElement$u20$as$u20$subtle..ConditionallySelectable$GT$18conditional_select17h8ba1bb2a6d231d89E
+    call        _ZN70_$LT$dalek_ff_group..field..FieldElement$u20$as$u20$ff..PrimeField$GT$7to_repr17hf3a931356721f4f9E
+    back-edge 0x14000e6a2 -> 0x14000e630: loop body 25 instructions
+====================================================================================================
+_ZN75_$LT$ct_dynamic..harness..Harness$u20$as$u20$ct_dynamic..harness..Bench$GT$3row28_$u7b$$u7b$closure$u7d$$u7d$17h618d9ec8367e624fE.llvm.2489380375382521583
+  function: 113 instructions, 0x14000e750..0x14000e8f3
+  timed span 0x14000e7b0..0x14000e85c: 36 instructions, 3 calls
+    call        _ZN6subtle9black_box17he99af35b9732e19dE
+    call        _ZN6subtle9black_box17he99af35b9732e19dE
+    call        _ZN6subtle9black_box17he99af35b9732e19dE
+    back-edge 0x14000e82d -> 0x14000e810: loop body 7 instructions
+    back-edge 0x14000e855 -> 0x14000e7f0: loop body 24 instructions
+====================================================================================================
+_ZN75_$LT$ct_dynamic..harness..Harness$u20$as$u20$ct_dynamic..harness..Bench$GT$3row28_$u7b$$u7b$closure$u7d$$u7d$17h6442ddb33003dbbfE.llvm.2489380375382521583
+  function: 99 instructions, 0x14000e900..0x14000ea5f
+  timed span 0x14000e964..0x14000e9d0: 25 instructions, 2 calls
+    call        _ZN77_$LT$dalek_ff_group..field..FieldElement$u20$as$u20$core..ops..arith..Sub$GT$3sub17h18c20b6c30e54abeE
+    call        _ZN70_$LT$dalek_ff_group..field..FieldElement$u20$as$u20$ff..PrimeField$GT$7to_repr17hf3a931356721f4f9E
+    back-edge 0x14000e9c9 -> 0x14000e990: loop body 14 instructions
+====================================================================================================
+_ZN75_$LT$ct_dynamic..harness..Harness$u20$as$u20$ct_dynamic..harness..Bench$GT$3row28_$u7b$$u7b$closure$u7d$$u7d$17h76fd023e34970d88E.llvm.2489380375382521583
+  function: 99 instructions, 0x14000ea60..0x14000ebbc
+  timed span 0x14000eac4..0x14000eb2c: 24 instructions, 2 calls
+    call        _ZN10ct_dynamic5field17op_fe25519_square17hf68ea14417565d4bE
+    call        _ZN70_$LT$dalek_ff_group..field..FieldElement$u20$as$u20$ff..PrimeField$GT$7to_repr17hf3a931356721f4f9E
+    back-edge 0x14000eb25 -> 0x14000eaf0: loop body 13 instructions
+====================================================================================================
+_ZN75_$LT$ct_dynamic..harness..Harness$u20$as$u20$ct_dynamic..harness..Bench$GT$3row28_$u7b$$u7b$closure$u7d$$u7d$17h8b966c829ea8b030E.llvm.2489380375382521583
+  function: 616 instructions, 0x14000ebc0..0x14000f666
+  timed span 0x14000ec29..0x14000f5ba: 539 instructions, 3 calls
+    call        _ZN6subtle9black_box17he99af35b9732e19dE
+    call        _ZN6subtle9black_box17he99af35b9732e19dE
+    call        _ZN71_$LT$helioselene..field..HelioseleneField$u20$as$u20$ff..PrimeField$GT$7to_repr17hc426e5b1896eb0f1E
+    back-edge 0x14000f027 -> 0x14000ed90: loop body 170 instructions
+    back-edge 0x14000f05e -> 0x14000ed60: loop body 190 instructions
+    back-edge 0x14000f34d -> 0x14000f0a0: loop body 175 instructions
+    back-edge 0x14000f5ac -> 0x14000ec90: loop body 523 instructions
+====================================================================================================
+_ZN75_$LT$ct_dynamic..harness..Harness$u20$as$u20$ct_dynamic..harness..Bench$GT$3row28_$u7b$$u7b$closure$u7d$$u7d$17h8cee1cbe1a172548E.llvm.2489380375382521583
+  function: 95 instructions, 0x14000f670..0x14000f7b5
+  timed span 0x14000f6d7..0x14000f72a: 19 instructions, 1 calls
+    call        _ZN13crypto_bigint4uint3mul52_$LT$impl$u20$crypto_bigint..uint..Uint$LT$_$GT$$GT$11square_wide17h4516a8677c3da0e3E
+    back-edge 0x14000f723 -> 0x14000f700: loop body 9 instructions
+====================================================================================================
+_ZN75_$LT$ct_dynamic..harness..Harness$u20$as$u20$ct_dynamic..harness..Bench$GT$3row28_$u7b$$u7b$closure$u7d$$u7d$17h915c614dfc625ee4E.llvm.2489380375382521583
+  function: 107 instructions, 0x14000f7c0..0x14000f942
+  timed span 0x14000f824..0x14000f8b2: 32 instructions, 2 calls
+    call        _ZN11helioselene5field16HelioseleneField11wide_reduce17hd8bdd5297c90f361E
+    call        _ZN71_$LT$helioselene..field..HelioseleneField$u20$as$u20$ff..PrimeField$GT$7to_repr17hc426e5b1896eb0f1E
+    back-edge 0x14000f8ab -> 0x14000f850: loop body 22 instructions
+====================================================================================================
+_ZN75_$LT$ct_dynamic..harness..Harness$u20$as$u20$ct_dynamic..harness..Bench$GT$3row28_$u7b$$u7b$closure$u7d$$u7d$17h978c628752a86b45E.llvm.2489380375382521583
+  function: 104 instructions, 0x14000f950..0x14000fac1
+  timed span 0x14000f9b4..0x14000fa31: 29 instructions, 2 calls
+    call        _ZN14dalek_ff_group5field12FieldElement3pow17he3e439e358d8a31bE
+    call        _ZN70_$LT$dalek_ff_group..field..FieldElement$u20$as$u20$ff..PrimeField$GT$7to_repr17hf3a931356721f4f9E
+    back-edge 0x14000fa2a -> 0x14000f9e0: loop body 18 instructions
+====================================================================================================
+_ZN75_$LT$ct_dynamic..harness..Harness$u20$as$u20$ct_dynamic..harness..Bench$GT$3row28_$u7b$$u7b$closure$u7d$$u7d$17h9bd08f25c7f8bfa4E.llvm.2489380375382521583
+  function: 153 instructions, 0x14000fad0..0x14000fd17
+  timed span 0x14000fb36..0x14000fc7a: 76 instructions, 1 calls
+    call        _ZN71_$LT$helioselene..field..HelioseleneField$u20$as$u20$ff..PrimeField$GT$7to_repr17hc426e5b1896eb0f1E
+    back-edge 0x14000fc6f -> 0x14000fb70: loop body 64 instructions
+====================================================================================================
+_ZN75_$LT$ct_dynamic..harness..Harness$u20$as$u20$ct_dynamic..harness..Bench$GT$3row28_$u7b$$u7b$closure$u7d$$u7d$17hab52598b8f898f0cE.llvm.2489380375382521583
+  function: 99 instructions, 0x14000fd20..0x14000fe7f
+  timed span 0x14000fd84..0x14000fdf0: 25 instructions, 2 calls
+    call        _ZN10ct_dynamic5field14op_fe25519_mul17hf8ac6118972830a5E
+    call        _ZN70_$LT$dalek_ff_group..field..FieldElement$u20$as$u20$ff..PrimeField$GT$7to_repr17hf3a931356721f4f9E
+    back-edge 0x14000fde9 -> 0x14000fdb0: loop body 14 instructions
+====================================================================================================
+_ZN75_$LT$ct_dynamic..harness..Harness$u20$as$u20$ct_dynamic..harness..Bench$GT$3row28_$u7b$$u7b$closure$u7d$$u7d$17hae1fa9b9ccaefed7E.llvm.2489380375382521583
+  function: 99 instructions, 0x14000fe80..0x14000ffdc
+  timed span 0x14000fee4..0x14000ff4c: 24 instructions, 2 calls
+    call        _ZN65_$LT$dalek_ff_group..field..FieldElement$u20$as$u20$ff..Field$GT$6square17h35e26054b0728429E
+    call        _ZN70_$LT$dalek_ff_group..field..FieldElement$u20$as$u20$ff..PrimeField$GT$7to_repr17hf3a931356721f4f9E
+    back-edge 0x14000ff45 -> 0x14000ff10: loop body 13 instructions
+====================================================================================================
+_ZN75_$LT$ct_dynamic..harness..Harness$u20$as$u20$ct_dynamic..harness..Bench$GT$3row28_$u7b$$u7b$closure$u7d$$u7d$17hb34d1fb3ef23614bE.llvm.2489380375382521583
+  function: 105 instructions, 0x14000ffe0..0x140010143
+  timed span 0x14001003d..0x1400100c2: 33 instructions, 0 calls
+    back-edge 0x14001009b -> 0x140010070: loop body 12 instructions
+    back-edge 0x1400100b4 -> 0x1400100a0: loop body 6 instructions
+    back-edge 0x1400100bb -> 0x140010073: loop body 20 instructions
+====================================================================================================
+_ZN75_$LT$ct_dynamic..harness..Harness$u20$as$u20$ct_dynamic..harness..Bench$GT$3row28_$u7b$$u7b$closure$u7d$$u7d$17hcc19d243a9607481E.llvm.2489380375382521583
+  function: 99 instructions, 0x140010150..0x1400102af
+  timed span 0x1400101b4..0x140010220: 25 instructions, 2 calls
+    call        _ZN77_$LT$dalek_ff_group..field..FieldElement$u20$as$u20$core..ops..arith..Add$GT$3add17h607e816e45829f16E
+    call        _ZN70_$LT$dalek_ff_group..field..FieldElement$u20$as$u20$ff..PrimeField$GT$7to_repr17hf3a931356721f4f9E
+    back-edge 0x140010219 -> 0x1400101e0: loop body 14 instructions
+====================================================================================================
+_ZN75_$LT$ct_dynamic..harness..Harness$u20$as$u20$ct_dynamic..harness..Bench$GT$3row28_$u7b$$u7b$closure$u7d$$u7d$17hd871e2b7d2fd6d64E.llvm.2489380375382521583
+  function: 99 instructions, 0x1400102b0..0x14001040c
+  timed span 0x140010314..0x14001037c: 24 instructions, 2 calls
+    call        _ZN10ct_dynamic5field15op_helio_square17h54c71455d6bead79E.llvm.512434274318700467
+    call        _ZN71_$LT$helioselene..field..HelioseleneField$u20$as$u20$ff..PrimeField$GT$7to_repr17hc426e5b1896eb0f1E
+    back-edge 0x140010375 -> 0x140010340: loop body 13 instructions
+====================================================================================================
+_ZN75_$LT$ct_dynamic..harness..Harness$u20$as$u20$ct_dynamic..harness..Bench$GT$3row28_$u7b$$u7b$closure$u7d$$u7d$17hdbbec22517aa6192E.llvm.2489380375382521583
+  function: 259 instructions, 0x140010410..0x140010836
+  timed span 0x140010476..0x140010790: 182 instructions, 2 calls
+    call        _ZN71_$LT$helioselene..field..HelioseleneField$u20$as$u20$ff..PrimeField$GT$7to_repr17hc426e5b1896eb0f1E
+    call        _ZN13crypto_bigint4uint3mul52_$LT$impl$u20$crypto_bigint..uint..Uint$LT$_$GT$$GT$8mul_wide17hddfda4c6f3d0245eE
+    back-edge 0x140010777 -> 0x1400104c0: loop body 166 instructions
+    back-edge 0x140010783 -> 0x1400104c0: loop body 169 instructions
+====================================================================================================
+_ZN75_$LT$ct_dynamic..harness..Harness$u20$as$u20$ct_dynamic..harness..Bench$GT$3row28_$u7b$$u7b$closure$u7d$$u7d$17he8988a79bdffc6d5E.llvm.2489380375382521583
+  function: 108 instructions, 0x140010840..0x1400109df
+  timed span 0x1400108a5..0x14001094d: 33 instructions, 2 calls
+    call        _ZN66_$LT$helioselene..field..HelioseleneField$u20$as$u20$ff..Field$GT$4sqrt17h054b272effab7f35E
+    call        _ZN71_$LT$helioselene..field..HelioseleneField$u20$as$u20$ff..PrimeField$GT$7to_repr17hc426e5b1896eb0f1E
+    back-edge 0x140010946 -> 0x1400108e0: loop body 22 instructions
+====================================================================================================
+_ZN75_$LT$ct_dynamic..harness..Harness$u20$as$u20$ct_dynamic..harness..Bench$GT$3row28_$u7b$$u7b$closure$u7d$$u7d$17hedd65e6929d1f3cfE.llvm.2489380375382521583
+  function: 250 instructions, 0x1400109e0..0x140010db9
+  timed span 0x140010a46..0x140010d13: 173 instructions, 2 calls
+    call        _ZN71_$LT$helioselene..field..HelioseleneField$u20$as$u20$ff..PrimeField$GT$7to_repr17hc426e5b1896eb0f1E
+    call        _ZN13crypto_bigint4uint3mul52_$LT$impl$u20$crypto_bigint..uint..Uint$LT$_$GT$$GT$11square_wide17h4516a8677c3da0e3E
+    back-edge 0x140010cfa -> 0x140010a90: loop body 156 instructions
+    back-edge 0x140010d06 -> 0x140010a90: loop body 159 instructions
+====================================================================================================
+helper functions (whole function)
+  _ZN10ct_dynamic5field15op_helio_square17h54c71455d6bead79E.llvm.512434274318700467: 156 instructions, 1 calls
+    call        _ZN13crypto_bigint4uint3mul52_$LT$impl$u20$crypto_bigint..uint..Uint$LT$_$GT$$GT$11square_wide17h4516a8677c3da0e3E
+  _ZN10ct_dynamic5field12op_helio_mul17h12b06d3ae021804eE.llvm.512434274318700467: 166 instructions, 1 calls
+    call        _ZN13crypto_bigint4uint3mul52_$LT$impl$u20$crypto_bigint..uint..Uint$LT$_$GT$$GT$8mul_wide17hddfda4c6f3d0245eE
+  _ZN10ct_dynamic5field17op_fe25519_square17hf68ea14417565d4bE: 9 instructions, 1 calls
+    call        _ZN65_$LT$dalek_ff_group..field..FieldElement$u20$as$u20$ff..Field$GT$6square17h35e26054b0728429E
+  _ZN10ct_dynamic5field14op_fe25519_mul17hf8ac6118972830a5E: 9 instructions, 1 calls
+    call        _ZN77_$LT$dalek_ff_group..field..FieldElement$u20$as$u20$core..ops..arith..Mul$GT$3mul17h58c6d6c73eb9fdeaE
+  _ZN13crypto_bigint4uint3mul52_$LT$impl$u20$crypto_bigint..uint..Uint$LT$_$GT$$GT$11square_wide17h4516a8677c3da0e3E: 101 instructions, 0 calls
+  _ZN13crypto_bigint4uint3mul52_$LT$impl$u20$crypto_bigint..uint..Uint$LT$_$GT$$GT$8mul_wide17hddfda4c6f3d0245eE: 157 instructions, 0 calls
+  _ZN11helioselene5field16HelioseleneField11wide_reduce17hd8bdd5297c90f361E: 219 instructions, 0 calls

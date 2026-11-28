@@ -1,0 +1,39 @@
+ct-dynamic: 20000 samples/class x 32 ops; dudect threshold |t| > 4.5; target x86_64
+-- null control (both classes fresh; must show no difference)
+null: fe25519 mul                  t=    0.93  t(crop 1%)=    1.96  mean ns fixed/random      1891/     1872  no difference seen
+null: fe25519 mul (direct)         t=    1.57  t(crop 1%)=    1.75  mean ns fixed/random      1596/     1590  no difference seen
+null: fe25519 square               t=   -0.35  t(crop 1%)=    0.67  mean ns fixed/random      1437/     1438  no difference seen
+null: fe25519 square (direct)      t=    0.04  t(crop 1%)=    0.00  mean ns fixed/random      1411/     1411  no difference seen
+null: helio mul                    t=    0.19  t(crop 1%)=    0.18  mean ns fixed/random       806/      806  no difference seen
+null: helio mul (direct)           t=   -0.42  t(crop 1%)=   -0.14  mean ns fixed/random       765/      766  no difference seen
+null: helio square                 t=   -0.04  t(crop 1%)=   -0.95  mean ns fixed/random       612/      612  no difference seen
+null: helio square (direct)        t=    0.75  t(crop 1%)=    0.10  mean ns fixed/random       576/      575  no difference seen
+-- helioselene::Field25519 (dalek_ff_group::FieldElement)
+fe25519 mul (direct)               t=    0.53  t(crop 1%)=   -1.03  mean ns fixed/random      1553/     1551  no difference seen
+fe25519 mul (direct) [fixed-pair]  t=    0.89  t(crop 1%)=    1.44  mean ns fixed/random      1549/     1546  no difference seen
+fe25519 square (direct)            t=   -1.20  t(crop 1%)=   -0.37  mean ns fixed/random      1409/     1413  no difference seen
+fe25519 square (direct) [fixed-pair] t=    0.63  t(crop 1%)=    0.72  mean ns fixed/random      1414/     1412  no difference seen
+-- helioselene::HelioseleneField
+helio mul (direct)                 t=   -2.13  t(crop 1%)=   -6.08  mean ns fixed/random       758/      766  CLASS DIFFERENCE
+helio mul (direct) [fixed-pair]    t=   -0.20  t(crop 1%)=    1.02  mean ns fixed/random       765/      766  no difference seen
+helio square (direct)              t=   -6.66  t(crop 1%)=  -10.34  mean ns fixed/random       569/      580  CLASS DIFFERENCE
+helio square (direct) [fixed-pair] t=    0.12  t(crop 1%)=   -0.40  mean ns fixed/random       568/      568  no difference seen
+-- constant-value control (class 0: one value, allocated fresh per batch; class 1: fresh values)
+constant: fe25519 square (direct)  t=    0.62  t(crop 1%)=   -0.46  mean ns fixed/random      1414/     1412  no difference seen
+constant: fe25519 mul (direct)     t=    0.64  t(crop 1%)=    1.91  mean ns fixed/random      1553/     1550  no difference seen
+constant: helio square (direct)    t=   -4.52  t(crop 1%)=   -8.60  mean ns fixed/random       569/      577  CLASS DIFFERENCE
+constant: helio mul (direct)       t=   -4.02  t(crop 1%)=   -5.31  mean ns fixed/random       755/      769  CLASS DIFFERENCE
+-- operand property (class 0: structured values, regenerated per batch; class 1: random) — which property moves the time?
+property: fe25519 square (direct) sparse t=    1.64  t(crop 1%)=    1.00  mean ns fixed/random      1421/     1415  no difference seen
+property: fe25519 square (direct) small t=    0.01  t(crop 1%)=   -0.77  mean ns fixed/random      1410/     1410  no difference seen
+property: fe25519 square (direct) dense t=    1.19  t(crop 1%)=   -0.25  mean ns fixed/random      1412/     1407  no difference seen
+property: helio square (direct) sparse t=   -2.42  t(crop 1%)=   -7.92  mean ns fixed/random       571/      578  CLASS DIFFERENCE
+property: helio square (direct) small t=   -4.98  t(crop 1%)=   -8.46  mean ns fixed/random       564/      573  CLASS DIFFERENCE
+property: helio square (direct) dense t=   -4.72  t(crop 1%)=  -10.56  mean ns fixed/random       566/      577  CLASS DIFFERENCE
+-- the two halves of a square (crypto-bigint 0.5.5 U256::square_wide is shared by both fields; the reduction is not)
+-- CA-2: fe25519 with a sparse Montgomery residue (class 0: sparse residue; class 1: random)
+-- crypto-bigint 0.5.5 Residue::pow with a secret exponent (BINSEC found a branch; unreached by our code)
+-- CA-2: ML-KEM-768 ciphertext compare (subtle 2.6.1 [u8]::ct_ne, as fips203 0.5.0 ml_kem.rs:144). Class 0 is equal; class 1 is named by the row.
+-- positive controls (must show a class difference)
+control: branch on a byte          t= -231.86  t(crop 1%)= -494.47  mean ns fixed/random      1200/     1548  CLASS DIFFERENCE
+control: data-dependent loop       t=-1036.88  t(crop 1%)=-1198.96  mean ns fixed/random        64/     6133  CLASS DIFFERENCE

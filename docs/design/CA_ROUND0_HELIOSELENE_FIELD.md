@@ -154,7 +154,25 @@ timed.** The MSVC binary calls the wide multiply out of line. So does
 every `CA-2` record, so amendment 1 restates the criterion as "red512
 inlined, no wrapper", and the binary meets it.
 
-*Results: pending.*
+**The result: the baseline crosses**
+([record](../formal/checkct/results/2026-11-28/ca2-round0-baseline-record.md),
+2026-11-28). The run was not void: the worst null read 2.91, and both
+controls were detected.
+- Every operand-evidence row of the current field crosses on the direct
+  path:
+  - `constant` square 51.16 and mul 27.06;
+  - `property` square sparse 38.26, small 50.32 and dense 45.01.
+- `Field25519`, under the identical protocol, is flat on every row, at
+  most 2.73.
+- The `[fixed-pair]` companions are flat (0.37 and 1.25). The crossing
+  stands on the constant and property rows.
+
+This is the before-figure, and the acceptance in §7 is read on this host.
+
+**`CA-4` in the same session.** RT-P4 passes its own lines. Its
+`valid-vs-invalid` comparison reads 75.51, 39.2 ns at the maximising
+cut-off, against the accepted 45.41, 35.6 ns. That meets `CA-4`'s second
+reopen criterion, and goes to Rick (§9).
 
 ## 4. Candidate shapes
 
@@ -403,8 +421,8 @@ already predate it. That timing is Rick's call (§9).
 
 ## 9. Questions for Rick
 
-The measurements still owed before these can be answered on numbers:
-- the laptop baseline (§3);
+The laptop baseline crosses (§3). The measurements still owed before
+these can be answered on numbers:
 - each surviving shape's direct rows on that host;
 - the field and one-proof costs on the floor device and x86_64.
 
@@ -449,6 +467,24 @@ run.
    touches.
    - Does the resync go first?
    - Does a field port wait for it, or go into the same fork round?
+6. **`CA-4`'s second reopen criterion is met (§3).**
+   - The problem: on the laptop, `valid-vs-invalid` read 39.2 ns at
+     `|t|` 75.51. The accepted figure is 35.6 ns at 45.41.
+   - What weighs against reading it as growth:
+     - The decapsulation closure is unchanged since the accepted build.
+     - The harness binary changed.
+     - An earlier change of build moved this gap from 13 to 35.6 ns.
+     - The `valid-vs-valid` null differs by 41.6 ns raw, so only the
+       cropped figures compare.
+   - What weighs for it: `|t|` rose by two thirds at a similar sample
+     count.
+   - The options:
+     - Keep the acceptance under `RPC_CHANNEL.md` §4.3's bounds, and
+       restate the criterion's figure so it accounts for build-to-build
+       movement.
+     - Reopen `CA-4`.
+     - Accept anew at 39.2 ns.
+   - Which?
 
 **The shipped prover has the direct path's shape on Linux x86_64.** §2's
 threat frame takes the harness's direct path as the closer analogue of the
