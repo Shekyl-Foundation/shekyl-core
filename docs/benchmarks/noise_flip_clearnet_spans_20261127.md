@@ -17,7 +17,7 @@ that derivation already ran with the record layer on
 (`--clearnet-transport-encrypt`). The flip removes the option to run without
 it; it does not change the handshake or the framing. So the question for
 this proof is whether the node-local terms have moved since, on the device
-the deadlines are provisioned at (rule 76).
+the deadlines are provisioned at (rule 176).
 
 ## Conditions
 
