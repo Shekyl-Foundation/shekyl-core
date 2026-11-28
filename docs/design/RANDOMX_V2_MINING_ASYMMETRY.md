@@ -354,3 +354,18 @@ Structured adversarial passes on the measurement design (2026-07-05). All findin
 | Artifact | `tests/randomx_v2_parity/xmrig_ceiling/` at `ac3836de90` (`build.sh`, `xmrig_parity.cpp`, `support.cpp`, `README.md`). |
 
 *This is a correctness result (hash equality), not a timing/ratio number — those are Phase 1 and require the two-machine plan (§2).*
+
+### B.1 The floor, verification path, on the floor device (2026-11-28)
+
+The floor-low end of §5.1: the portable release build of Shekyl's own verifier on the floor device of rule 176. It is one end of the range, not an asymmetry ratio: no ceiling has been measured yet (Phases 1–3 pending).
+
+| Field | Value |
+|-------|-------|
+| Result | Single-thread latency, median of three interleaved rounds (three passes over eight inputs each): **1,531.8 ms per hash** with the RandomX rounding fix (`RANDOMX_ROUNDING_DECISION.md`), 1,477.5 ms before it. Full-machine aggregate (4 threads, 30 s): **2.67 hashes per second**, 2.80 before it. |
+| Hardware | Raspberry Pi 4 Model B Rev 1.2 (the second floor device): Broadcom BCM2711, 4 × Cortex-A72, no SMT, 1.5 GHz top clock, governor `ondemand`; 4 GB LPDDR4. No huge pages (light mode holds a 256 MiB cache and no dataset). No MSR or prefetcher writes (none exist on this core). |
+| Build | rustc 1.94.0; the workspace release profile (opt-level 3, no LTO, `panic = "abort"`, overflow checks on); target `aarch64-unknown-linux-gnu` with no `target-cpu`, the portable baseline. Cross-built on a build VM, SHA-256 checked on the device. No C leg. Revisions: `2d5f7e1367` (with the fix), `0b94b657cc` (before). |
+| Mode | Light (cache only, no dataset); interpreter, no JIT; v2 programs (384 instructions; the verifier is v2 only). Threads: 1 for latency, 4 for the aggregate. No memory-subsystem tuning. |
+| Corpus | One `PreparedCache`, seedhash 32 × `0xB7`, shared by every thread; the production path, `compute_hash` over it. Latency: eight inputs, input *i* = `i` as 4 little-endian bytes then 4 × `0x42`, after four warm-up hashes. Aggregate: thread *t* hashes `i` as 4 little-endian bytes then 4 × `0x43`, for *i* = *t*, *t* + 4, *t* + 8, … until 30 s pass. |
+| Interpretation | The aggregate rate is the floor-low numerator's full-machine figure for a future ratio. The single-thread latency is the verification latency (one block, one thread), not a mining figure. The four-core rate is a verifier running on every core, not a miner: a miner would use the dataset (full mode), which this row does not measure. |
+
+x86_64's floor-low row (bare metal, not the shared build VM) is owed: `RANDOMX_ROUNDING_DECISION.md` §7.

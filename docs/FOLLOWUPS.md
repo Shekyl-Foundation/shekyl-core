@@ -705,6 +705,10 @@ Default. Lands before genesis if it should exist at launch.
 - **RandomX v2 mining floor-vs-ceiling asymmetry — Phases 1–3 parked after Phase 0.** Falsify parked status by Appendix B from a source-verified run. The never-link claim is the §7.1 10-symbol C-ABI list (isolation check 1), not “any miner code under any name.” [`RANDOMX_V2_MINING_ASYMMETRY.md`](./design/RANDOMX_V2_MINING_ASYMMETRY.md)
   - Target: pre-genesis
 
+- **Running one iteration's RandomX floating-point instructions as one `asm!` block per mode is not measured.** The rounding fix runs each instruction in its own block and writes the control register twice per instruction ([`RANDOMX_ROUNDING_DECISION.md`](design/RANDOMX_ROUNDING_DECISION.md) §1). A block per run of same-mode instructions would write it once per run. First confirm from the v2 loop (`vm.rs` `execute_iteration`, and the C reference's interpreter) that no integer instruction reads a float register mid-iteration. Then time it on the floor device against the per-instruction blocks. Falsify by: the decision record's §8 carrying that measurement and a ruling on it.
+  - Owner: the RandomX rounding decision — [`RANDOMX_ROUNDING_DECISION.md`](design/RANDOMX_ROUNDING_DECISION.md) (§8)
+  - Target: pre-genesis (trigger: the rounding fix merges)
+
 - **Miner template conformance vector (bless the interface, not a miner).** Publish a versioned `get_block_template` → blob framing → `submitblock` + seed-epoch vector before genesis seal. Falsify by a third-party miner passing it against `dev`. [`RANDOMX_V2_MINING_ASYMMETRY.md`](./design/RANDOMX_V2_MINING_ASYMMETRY.md) §6.3
   - Target: pre-genesis
 

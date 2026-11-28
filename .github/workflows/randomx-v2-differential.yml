@@ -409,6 +409,32 @@ jobs:
         # production code path branches on `test-internals`, per
         # §5.6 + R1-D10 (b) close).
         run: cargo test --locked -p shekyl-pow-randomx --features test-internals
+      - name: 'nightly: rounding blocks against both oracles, long tier (x86_64)'
+        # fpu_rounding's asm! blocks against the test-only oracles, per
+        # operation and mode, at 20 million rounds per operand class
+        # (docs/design/RANDOMX_ROUNDING_DECISION.md §2, §4); the quick tier
+        # runs in every cargo test of the crate. Scheduled runs only, keyed
+        # on the event rather than a cron string. Measured 2026-11-28 on a
+        # shared x86 build VM: 374 s for this step, 550 s for the census below.
+        if: github.event_name == 'schedule'
+        working-directory: rust
+        env:
+          RANDOMX_FP_FUZZ_N: "20000000"
+        run: |
+          cargo test --release --locked -p shekyl-pow-randomx --lib -- \
+            --ignored --exact fpu_rounding::tests::blocks_match_both_oracles_long --nocapture
+      - name: 'nightly: subnormal census, long tier (x86_64)'
+        # No subnormal or NaN reaches or leaves a floating-point
+        # instruction over 8 seedhashes x 64 hashes, and the two program
+        # shapes the proof rests on hold (decision record §5; spec anchor
+        # in RANDOMX_V2_SPEC_ANCHORS.md Tier 4). Scheduled runs only.
+        if: github.event_name == 'schedule'
+        working-directory: rust
+        env:
+          RANDOMX_FP_CENSUS_SEEDHASHES: "8"
+        run: |
+          cargo test --release --locked -p shekyl-pow-randomx --lib -- \
+            --ignored --exact vm::subnormal_tests::no_subnormal_reaches_or_leaves_an_instruction_long --nocapture
       - name: extended crate-invariant script
         # Per §5.5.4 + R1-D13 + the C10 script extension: assert
         # the workspace-wide crate-isolation invariants extend to
@@ -1089,6 +1115,33 @@ jobs:
       - name: cargo test --release verifier crate (native arm)
         working-directory: rust
         run: cargo test --release --locked -p shekyl-pow-randomx
+      - name: 'nightly: rounding blocks against both oracles, long tier (native arm)'
+        # fpu_rounding's asm! blocks against the test-only oracles, per
+        # operation and mode, at 20 million rounds per operand class
+        # (docs/design/RANDOMX_ROUNDING_DECISION.md §2, §4); the quick tier
+        # runs in every cargo test of the crate. Scheduled runs only, keyed
+        # on the event rather than a cron string. The release build is the
+        # step above's; this adds the run alone (minutes on the floor device;
+        # see the decision record §7).
+        if: github.event_name == 'schedule'
+        working-directory: rust
+        env:
+          RANDOMX_FP_FUZZ_N: "20000000"
+        run: |
+          cargo test --release --locked -p shekyl-pow-randomx --lib -- \
+            --ignored --exact fpu_rounding::tests::blocks_match_both_oracles_long --nocapture
+      - name: 'nightly: subnormal census, long tier (native arm)'
+        # No subnormal or NaN reaches or leaves a floating-point
+        # instruction over 8 seedhashes x 64 hashes, and the two program
+        # shapes the proof rests on hold (decision record §5; spec anchor
+        # in RANDOMX_V2_SPEC_ANCHORS.md Tier 4). Scheduled runs only.
+        if: github.event_name == 'schedule'
+        working-directory: rust
+        env:
+          RANDOMX_FP_CENSUS_SEEDHASHES: "8"
+        run: |
+          cargo test --release --locked -p shekyl-pow-randomx --lib -- \
+            --ignored --exact vm::subnormal_tests::no_subnormal_reaches_or_leaves_an_instruction_long --nocapture
       - name: cargo test --release T2 adversarial_corpus_byte_equality (native arm)
         working-directory: rust
         run: |
