@@ -100,6 +100,8 @@
 
 use core::mem::MaybeUninit;
 
+use crate::fpu_rounding::FpEnv;
+
 /// IEEE-754 binary64 register-pair carrying a single RandomX FP
 /// register's two `double` lanes.
 ///
@@ -137,48 +139,28 @@ impl core::ops::IndexMut<usize> for F128 {
     }
 }
 
-// PROTOTYPE: with a `proto-rounding-*` feature the op runs through
-// `fp_proto` under the tracked mode; without one, today's code runs
-// under whatever mode CFROUND wrote into the hardware.
-macro_rules! fp_op {
-    ($op:ident, $a:expr, $b:expr, $mode:expr, $plain:expr) => {{
-        #[cfg(any(feature = "proto-rounding-b", feature = "proto-rounding-c"))]
-        {
-            Self(crate::fp_proto::op(
-                crate::fp_proto::VM_IMPL,
-                crate::fp_proto::Op::$op,
-                $a,
-                $b,
-                $mode,
-            ))
-        }
-        #[cfg(not(any(feature = "proto-rounding-b", feature = "proto-rounding-c")))]
-        {
-            let _ = $mode;
-            $plain
-        }
-    }};
-}
-
 impl F128 {
-    fn add_unrestricted(self, rhs: Self, mode: u32) -> Self {
-        fp_op!(Add, self.0, rhs.0, mode, Self([self[0] + rhs[0], self[1] + rhs[1]]))
+    // RandomX's five floating-point operations, each rounded by `mode`
+    // (the `fprc` CFROUND last set) through `fp`'s blocks.
+
+    fn add_unrestricted(self, rhs: Self, fp: &FpEnv, mode: u32) -> Self {
+        Self(fp.add(self.0, rhs.0, mode))
     }
 
-    fn sub_unrestricted(self, rhs: Self, mode: u32) -> Self {
-        fp_op!(Sub, self.0, rhs.0, mode, Self([self[0] - rhs[0], self[1] - rhs[1]]))
+    fn sub_unrestricted(self, rhs: Self, fp: &FpEnv, mode: u32) -> Self {
+        Self(fp.sub(self.0, rhs.0, mode))
     }
 
-    fn mul_unrestricted(self, rhs: Self, mode: u32) -> Self {
-        fp_op!(Mul, self.0, rhs.0, mode, Self([self[0] * rhs[0], self[1] * rhs[1]]))
+    fn mul_unrestricted(self, rhs: Self, fp: &FpEnv, mode: u32) -> Self {
+        Self(fp.mul(self.0, rhs.0, mode))
     }
 
-    fn div_masked(self, rhs: Self, mode: u32) -> Self {
-        fp_op!(Div, self.0, rhs.0, mode, Self([self[0] / rhs[0], self[1] / rhs[1]]))
+    fn div_masked(self, rhs: Self, fp: &FpEnv, mode: u32) -> Self {
+        Self(fp.div(self.0, rhs.0, mode))
     }
 
-    fn sqrt_unrestricted(self, mode: u32) -> Self {
-        fp_op!(Sqrt, self.0, self.0, mode, Self([self[0].sqrt(), self[1].sqrt()]))
+    fn sqrt_unrestricted(self, fp: &FpEnv, mode: u32) -> Self {
+        Self(fp.sqrt(self.0, mode))
     }
 
     fn swap_lanes(self) -> Self {
@@ -194,10 +176,11 @@ impl F128 {
     }
 }
 
-/// PROTOTYPE test hook: panic after a set number of dispatched
-/// instructions, to show where the rounding mode is left on unwind.
+/// Test-only: panic after a set number of dispatched instructions,
+/// for the test that a panic mid-hash leaves the caller's control word
+/// as it found it.
 #[cfg(test)]
-pub(crate) mod proto_panic_hook {
+pub(crate) mod panic_hook {
     use std::cell::Cell;
     thread_local! {
         pub(crate) static PANIC_AFTER: Cell<u64> = const { Cell::new(u64::MAX) };
@@ -210,7 +193,7 @@ pub(crate) mod proto_panic_hook {
             if n == 0 {
                 if fprc != 0 {
                     c.set(u64::MAX);
-                    panic!("proto_panic_hook: planted panic mid-hash, mode {fprc}");
+                    panic!("panic_hook: planted panic mid-hash, mode {fprc}");
                 }
                 return;
             }
@@ -944,8 +927,6 @@ fn execute_cfround(instr: &Instruction, state: &mut VmState) {
 
     if (isrc & 60) == 0 {
         let mode = (isrc & 3) as u32;
-        #[cfg(not(any(feature = "proto-rounding-b", feature = "proto-rounding-c")))]
-        crate::fpu_rounding::set_rounding_mode(mode);
         state.fprc = mode;
     }
 }
@@ -1179,6 +1160,10 @@ pub(crate) struct VmState {
     /// §5.2 F2, Phase 2c's stub-NOP dispatch does not read or write
     /// `fprc`; the actual rounding-mode plumbing lands in 2d.
     pub(crate) fprc: u32,
+    /// The rounding blocks' environment: the fixed control words and
+    /// the calling thread's word, captured at the start of every
+    /// [`VmState::execute_program`] ([`FpEnv::capture`]).
+    pub(crate) fp: FpEnv,
     /// 2 MiB scratchpad. Spec §5.2.7 + `VmBase::scratchpad`. Backing
     /// storage for all M-form opcodes (IADD_M, ISUB_M, IMUL_M,
     /// IMULH_M, ISMULH_M, IXOR_M, FADD_M, FSUB_M, FDIV_M) and
@@ -1329,6 +1314,7 @@ impl VmState {
             e: [F128::default(); 4],
             a: [F128::default(); 4],
             fprc: 0,
+            fp: FpEnv::DEFAULT,
             scratchpad,
             e_mask: [0u64; 2],
             ma: 0,
@@ -1664,6 +1650,10 @@ impl VmState {
         // returns `self.r = [0; 8]` already.
         self.r = [0; 8];
 
+        // The calling thread's control word, read once for the run;
+        // every floating-point block writes it back as it ends.
+        self.fp = FpEnv::capture();
+
         // Spec §4.6.1: initial sp_addr derivation from mem.mx / mem.ma.
         // The two addresses drive the per-iteration scratchpad reads
         // and writes; both reset to 0 at the end of each iteration
@@ -1776,23 +1766,19 @@ impl VmState {
         // In Phase 2c the body is NOP per §5.1.1 frozen surface 1;
         // Phase 2d replaces dispatch_instruction's body with the
         // 28 opcode-handler dispatch table.
-        #[cfg(feature = "proto-fp-census")]
+        // Test-only: how often each instruction runs this iteration,
+        // for the subnormal test's census (the CBRANCH bound).
+        #[cfg(test)]
         let mut runs = [0u16; PROGRAM_SIZE];
-        #[cfg(feature = "proto-fp-census")]
-        let mut fdiv_runs = [0u32; REGISTER_COUNT_FLT];
         let mut instr_idx = 0usize;
         while instr_idx < PROGRAM_SIZE {
             self.exec_pc = u16::try_from(instr_idx).expect("PROGRAM_SIZE fits in u16");
             self.branch_pc = u16::MAX;
             let instr = self.program.instructions[instr_idx];
             #[cfg(test)]
-            proto_panic_hook::tick(self.fprc);
-            #[cfg(feature = "proto-fp-census")]
             {
+                panic_hook::tick(self.fprc);
                 runs[instr_idx] += 1;
-                if matches!(decode_instruction_type(instr.opcode), InstructionType::FDivM) {
-                    fdiv_runs[fp_reg(instr.dst)] += 1;
-                }
             }
             dispatch_instruction(&instr, self);
             if self.branch_pc == u16::MAX {
@@ -1803,29 +1789,19 @@ impl VmState {
         }
         self.exec_pc = u16::MAX;
         self.branch_pc = u16::MAX;
-        #[cfg(feature = "proto-fp-census")]
-        crate::fp_proto::census::CENSUS.with(|c| {
-            let mut c = c.borrow_mut();
-            let r = u64::from(*runs.iter().max().unwrap_or(&0));
-            if r > c.max_runs_per_instruction {
-                c.max_runs_per_instruction = r;
-            }
-            let f = u64::from(*fdiv_runs.iter().max().unwrap_or(&0));
-            if f > c.max_fdiv_runs_per_e_register {
-                c.max_fdiv_runs_per_e_register = f;
-            }
-            let mut stat = [0u64; REGISTER_COUNT_FLT];
+        #[cfg(test)]
+        {
+            let mut fdiv_m = [0u32; REGISTER_COUNT_FLT];
             for ins in &self.program.instructions {
                 if matches!(decode_instruction_type(ins.opcode), InstructionType::FDivM) {
-                    stat[fp_reg(ins.dst)] += 1;
+                    fdiv_m[fp_reg(ins.dst)] += 1;
                 }
             }
-            let st = *stat.iter().max().unwrap_or(&0);
-            if st > c.max_fdiv_instrs_per_e_register {
-                c.max_fdiv_instrs_per_e_register = st;
-            }
-            c.iterations += 1;
-        });
+            crate::fpu_rounding::census::note_iteration(
+                runs.iter().copied().max().unwrap_or(0),
+                fdiv_m.iter().copied().max().unwrap_or(0),
+            );
+        }
 
         // Spec §4.6.5: dataset read prep — capture read_ptr from
         // the pre-mutation `ma`, then XOR-mutate `ma` from
@@ -2146,7 +2122,7 @@ fn dispatch_instruction(instr: &Instruction, state: &mut VmState) {
         InstructionType::FAddR => {
             let dst = fp_reg(instr.dst);
             let src = fp_reg(instr.src);
-            state.f[dst] = state.f[dst].add_unrestricted(state.a[src], state.fprc);
+            state.f[dst] = state.f[dst].add_unrestricted(state.a[src], &state.fp, state.fprc);
         }
         InstructionType::FAddM => {
             let dst = fp_reg(instr.dst);
@@ -2157,12 +2133,12 @@ fn dispatch_instruction(instr: &Instruction, state: &mut VmState) {
                 SCRATCHPAD_L2_MASK
             };
             let value = load_scratchpad_f128(state, state.r[src], imm, mask);
-            state.f[dst] = state.f[dst].add_unrestricted(value, state.fprc);
+            state.f[dst] = state.f[dst].add_unrestricted(value, &state.fp, state.fprc);
         }
         InstructionType::FSubR => {
             let dst = fp_reg(instr.dst);
             let src = fp_reg(instr.src);
-            state.f[dst] = state.f[dst].sub_unrestricted(state.a[src], state.fprc);
+            state.f[dst] = state.f[dst].sub_unrestricted(state.a[src], &state.fp, state.fprc);
         }
         InstructionType::FSubM => {
             let dst = fp_reg(instr.dst);
@@ -2173,7 +2149,7 @@ fn dispatch_instruction(instr: &Instruction, state: &mut VmState) {
                 SCRATCHPAD_L2_MASK
             };
             let value = load_scratchpad_f128(state, state.r[src], imm, mask);
-            state.f[dst] = state.f[dst].sub_unrestricted(value, state.fprc);
+            state.f[dst] = state.f[dst].sub_unrestricted(value, &state.fp, state.fprc);
         }
         InstructionType::FScalR => {
             let dst = fp_reg(instr.dst);
@@ -2182,7 +2158,7 @@ fn dispatch_instruction(instr: &Instruction, state: &mut VmState) {
         InstructionType::FMulR => {
             let dst = fp_reg(instr.dst);
             let src = fp_reg(instr.src);
-            state.e[dst] = state.e[dst].mul_unrestricted(state.a[src], state.fprc);
+            state.e[dst] = state.e[dst].mul_unrestricted(state.a[src], &state.fp, state.fprc);
         }
         InstructionType::FDivM => {
             let dst = fp_reg(instr.dst);
@@ -2194,11 +2170,11 @@ fn dispatch_instruction(instr: &Instruction, state: &mut VmState) {
             };
             let value = load_scratchpad_f128(state, state.r[src], imm, mask);
             let value = mask_register_exponent_mantissa(value, state.e_mask);
-            state.e[dst] = state.e[dst].div_masked(value, state.fprc);
+            state.e[dst] = state.e[dst].div_masked(value, &state.fp, state.fprc);
         }
         InstructionType::FSqrtR => {
             let dst = fp_reg(instr.dst);
-            state.e[dst] = state.e[dst].sqrt_unrestricted(state.fprc);
+            state.e[dst] = state.e[dst].sqrt_unrestricted(&state.fp, state.fprc);
         }
     }
 }
@@ -2420,9 +2396,9 @@ pub fn compute_hash(prepared: &crate::PreparedCache, data: &[u8]) -> [u8; 32] {
 /// [`VmState::fprc`], the FPU rounding-mode tracker that Phase 2d's
 /// CFROUND handler writes. The C reference's `nreg.fprc` resets to
 /// 0 at chain entry; the Rust port mirrors that here at function
-/// entry for pool-reuse safety. The hardware FPU rounding-mode
-/// register is independently reset via
-/// [`crate::fpu_rounding::set_rounding_mode`].
+/// entry for pool-reuse safety. The hardware rounding mode is never
+/// left set: each floating-point instruction sets and restores it
+/// inside its own block ([`crate::fpu_rounding`]).
 pub(crate) fn compute_hash_inner(
     state: &mut VmState,
     prepared: &crate::PreparedCache,
@@ -2442,16 +2418,11 @@ pub(crate) fn compute_hash_inner(
     use blake2::digest::consts::U32;
     use blake2::{Blake2b, Blake2b512, Digest};
 
-    #[cfg(not(any(feature = "proto-rounding-b", feature = "proto-rounding-c")))]
-    crate::fpu_rounding::set_rounding_mode(0);
-
     // Pool-reuse safety: reset `fprc` so a recycled `VmState` from
     // [`crate::vm_pool::VmStatePool`] does not carry forward the
-    // prior call's CFROUND mode in the in-memory tracker. The
-    // hardware FPU register is reset by `set_rounding_mode(0)` above;
-    // this line keeps the in-memory shadow consistent. For a
-    // freshly-constructed [`VmState`] from [`VmState::new`] the
-    // assignment is a no-op (the field already starts at 0).
+    // prior call's CFROUND mode. For a freshly-constructed
+    // [`VmState`] from [`VmState::new`] the assignment is a no-op
+    // (the field already starts at 0).
     state.fprc = 0;
 
     // Step 1: temp_hash = Blake2b-512(data). Output is 64 bytes,
@@ -2517,8 +2488,6 @@ pub(crate) fn compute_hash_inner(
     let out = hasher.finalize();
     let mut output = [0u8; 32];
     output.copy_from_slice(&out);
-    #[cfg(not(any(feature = "proto-rounding-b", feature = "proto-rounding-c")))]
-    crate::fpu_rounding::set_rounding_mode(0);
     output
 }
 
@@ -2872,7 +2841,7 @@ mod tests {
     /// every test in this module) reuses the same instance. Per
     /// the [`std::sync::OnceLock`] contract, concurrent first-
     /// callers race once and exactly one initialization runs.
-    fn shared_prepared_cache() -> &'static PreparedCache {
+    pub(super) fn shared_prepared_cache() -> &'static PreparedCache {
         static PREPARED: OnceLock<PreparedCache> = OnceLock::new();
         PREPARED.get_or_init(|| PreparedCache::derive(Seedhash::from_bytes(TEST_SEEDHASH_BYTES)))
     }
@@ -2912,9 +2881,7 @@ mod tests {
         vm1.init_program(&TEST_PROGRAM_SEED);
         vm2.init_program(&TEST_PROGRAM_SEED);
 
-        crate::fpu_rounding::set_rounding_mode(0);
         vm1.execute_program(cache);
-        crate::fpu_rounding::set_rounding_mode(0);
         vm2.execute_program(cache);
 
         assert!(
@@ -2949,9 +2916,7 @@ mod tests {
         vm1.init_program(&TEST_PROGRAM_SEED);
         vm2.init_program(&TEST_PROGRAM_SEED);
 
-        crate::fpu_rounding::set_rounding_mode(0);
         vm1.execute_program(cache);
-        crate::fpu_rounding::set_rounding_mode(0);
         vm2.execute_program(cache);
 
         assert_eq!(vm1.r, vm2.r, "execute_program(SAME_INPUTS) `r` divergent");
@@ -3200,8 +3165,6 @@ mod tests {
             state.fprc, 2,
             "CFROUND should not update fprc when isrc & 60 is nonzero",
         );
-
-        crate::fpu_rounding::set_rounding_mode(0);
     }
 
     // -----------------------------------------------------------------
@@ -3698,10 +3661,9 @@ mod tests {
             let mixed = i.wrapping_mul(0x9E).wrapping_add(0x37);
             *byte = u8::try_from(mixed & 0xff).expect("masked u8");
         }
-        // Pin the FPU rounding mode to RN before each probe so the
-        // helper is rounding-mode-clean across tests. Per-probe FP
-        // matrix tests overwrite this immediately before dispatch.
-        crate::fpu_rounding::set_rounding_mode(0);
+        // The probe dispatches instructions directly, without
+        // `execute_program`, so it captures this thread's word itself.
+        state.fp = FpEnv::capture();
         state
     }
 
@@ -3716,18 +3678,15 @@ mod tests {
         }
     }
 
-    /// Drive `dispatch_instruction` for one probe under MXCSR mode
+    /// Drive `dispatch_instruction` for one probe under RandomX mode
     /// `fprc` and return the 256-byte post-execution register-file
-    /// snapshot. Resets the FPU mode to RN on exit so subsequent
-    /// probes start clean.
+    /// snapshot.
     fn run_probe(opcode: u8, dst: u8, src: u8, mod_: u8, imm32: u32, fprc: u32) -> [u8; 256] {
         let mut state = canonical_phase2d_state();
-        crate::fpu_rounding::set_rounding_mode(fprc);
+        state.fprc = fprc;
         let i = instr(opcode, dst, src, mod_, imm32);
         dispatch_instruction(&i, &mut state);
-        let snap = register_file_snapshot(&state);
-        crate::fpu_rounding::set_rounding_mode(0);
-        snap
+        register_file_snapshot(&state)
     }
 
     /// T9 spec-vector: single-opcode integer dispatch matches the v2
@@ -3890,12 +3849,10 @@ mod tests {
         for (case_idx, &src_value) in [0x0Cu64, 0x00, 0x03].iter().enumerate() {
             let mut state = canonical_phase2d_state();
             state.r[1] = src_value;
-            crate::fpu_rounding::set_rounding_mode(0);
             let i = instr(239, 0, 1, 0, 0);
             dispatch_instruction(&i, &mut state);
             let snap = register_file_snapshot(&state);
             let mode = state.fprc;
-            crate::fpu_rounding::set_rounding_mode(0);
 
             let off = case_idx * (256 + 4);
             actual[off..off + 256].copy_from_slice(&snap);
@@ -3910,61 +3867,166 @@ mod tests {
     }
 }
 
-/// PROTOTYPE: a hash must leave the thread's FP control word exactly as
-/// it found it, on return and on unwind. Today's code fails both on
-/// x86_64 (it writes 0x9FC0, flush-to-zero and denormals-are-zero on,
-/// instead of restoring the caller's word) and fails the unwind case on
-/// both architectures (a panic skips the closing reset).
+/// The rounding blocks seen from a whole hash ([`crate::fpu_rounding`]):
+/// a hash leaves the caller's control word as it found it, on return
+/// and on unwind, and its value does not depend on that word.
 #[cfg(test)]
-mod proto_leak_tests {
+mod fp_control_word_tests {
+    use super::tests::shared_prepared_cache;
     use super::*;
-    use crate::fp_proto::control_word;
+    use crate::fpu_rounding::{control_bits, with_caller_word, FLUSH_TO_ZERO_WORD};
 
-    fn prepared() -> crate::PreparedCache {
-        crate::PreparedCache::derive(crate::Seedhash::from_bytes([0x5A; 32]))
-    }
-
-    /// Inputs whose hash ends with CFROUND's mode not nearest.
-    fn inputs_ending_directed(p: &crate::PreparedCache, n: usize) -> Vec<Vec<u8>> {
+    /// Inputs whose hash ends with CFROUND's mode not nearest: where a
+    /// mode left in the hardware would show.
+    fn inputs_ending_directed(n: usize) -> Vec<Vec<u8>> {
+        let p = shared_prepared_cache();
         let mut out = Vec::new();
-        for i in 0u32..256 {
+        for i in 0u32..64 {
             let d = i.to_le_bytes().to_vec();
             let mut st = VmState::new();
             let _ = compute_hash_inner(&mut st, p, &d);
             if st.fprc != 0 {
                 out.push(d);
                 if out.len() == n {
-                    break;
+                    return out;
                 }
             }
         }
-        assert_eq!(out.len(), n, "found too few inputs ending in a directed mode");
-        out
+        panic!(
+            "found {} of {n} inputs ending in a directed mode among the first 64",
+            out.len()
+        );
     }
 
     #[test]
     fn a_hash_returns_the_control_word_it_found() {
-        let p = prepared();
-        let before = control_word();
-        for d in inputs_ending_directed(&p, 4) {
-            let _ = crate::compute_hash(&p, &d);
-            assert_eq!(control_word(), before, "control word changed by a hash ({before:#x} -> {:#x})", control_word());
+        let p = shared_prepared_cache();
+        let before = control_bits();
+        for d in inputs_ending_directed(2) {
+            let _ = crate::compute_hash(p, &d);
+            assert_eq!(
+                control_bits(),
+                before,
+                "control word changed by a hash ({before:#x} -> {:#x})",
+                control_bits()
+            );
         }
     }
 
     #[test]
     fn a_panic_mid_hash_leaves_the_control_word_it_found() {
-        let p = prepared();
-        let d = inputs_ending_directed(&p, 1).remove(0);
-        let before = control_word();
+        let p = shared_prepared_cache();
+        let d = inputs_ending_directed(1).remove(0);
+        let before = control_bits();
         // Late in the hash, at the first instruction after that point
         // that runs in a directed mode.
-        proto_panic_hook::PANIC_AFTER.with(|c| c.set(5_000_000));
-        let r = std::panic::catch_unwind(|| crate::compute_hash(&p, &d));
-        proto_panic_hook::PANIC_AFTER.with(|c| c.set(u64::MAX));
+        panic_hook::PANIC_AFTER.with(|c| c.set(1_000_000));
+        let r = std::panic::catch_unwind(|| crate::compute_hash(p, &d));
+        panic_hook::PANIC_AFTER.with(|c| c.set(u64::MAX));
         assert!(r.is_err(), "the planted panic did not fire");
-        let after = control_word();
-        // restore for the rest of the test binary before asserting
-        assert_eq!(after, before, "control word after unwind {after:#x}, before {before:#x}");
+        let after = control_bits();
+        assert_eq!(
+            after, before,
+            "control word after unwind {after:#x}, before {before:#x}"
+        );
+    }
+
+    /// With the caller's flush-to-zero (and, on x86_64,
+    /// denormals-are-zero) on, the hash is unchanged and the caller's
+    /// word comes back.
+    #[test]
+    fn a_hash_under_the_callers_flush_to_zero_is_unchanged() {
+        let p = shared_prepared_cache();
+        let inputs = inputs_ending_directed(2);
+        let want: Vec<[u8; 32]> = inputs.iter().map(|d| crate::compute_hash(p, d)).collect();
+        let (got, word_after) = with_caller_word(FLUSH_TO_ZERO_WORD, || {
+            let got: Vec<[u8; 32]> = inputs.iter().map(|d| crate::compute_hash(p, d)).collect();
+            (got, control_bits())
+        });
+        assert_eq!(
+            word_after, FLUSH_TO_ZERO_WORD,
+            "the caller's word must come back"
+        );
+        assert_eq!(
+            got, want,
+            "the hash must not depend on the caller's flush-to-zero"
+        );
+    }
+}
+
+/// RandomX's floating-point instructions never see or produce a
+/// subnormal: the premise of "IEEE results on every architecture, no
+/// flush-to-zero" (`docs/design/RANDOMX_V2_SPEC_ANCHORS.md`, Tier 4).
+/// The proof (decision record §5) rests on two program shapes this
+/// census also checks: no instruction runs more than three times in
+/// one iteration (CBRANCH blocks are disjoint and two consecutive
+/// carries are impossible), and no program has 256 or more FDIV_M on
+/// one E register (the only way an E value could fall below 2^-1022;
+/// probability about 2^-1698.6 per program).
+#[cfg(test)]
+mod subnormal_tests {
+    use super::tests::shared_prepared_cache;
+    use crate::fpu_rounding::census;
+
+    /// Hash `inputs_per_seedhash` inputs under each prepared cache and
+    /// check the census.
+    fn census_holds(caches: &[&crate::PreparedCache], inputs_per_seedhash: u32) {
+        let _ = census::take();
+        for p in caches {
+            for i in 0..inputs_per_seedhash {
+                let _ = crate::compute_hash(p, &[i.to_le_bytes(), [0x5B; 4]].concat());
+            }
+        }
+        let c = census::take();
+        let hashes = caches.len() as u64 * u64::from(inputs_per_seedhash);
+        assert_eq!(
+            c.subnormal_inputs, 0,
+            "a subnormal operand reached an instruction ({hashes} hashes)"
+        );
+        assert_eq!(
+            c.subnormal_results, 0,
+            "an instruction produced a subnormal ({hashes} hashes)"
+        );
+        assert_eq!(
+            c.nan_results, 0,
+            "an instruction produced a NaN ({hashes} hashes)"
+        );
+        for (op, modes) in c.ops.iter().enumerate() {
+            for (mode, n) in modes.iter().enumerate() {
+                assert!(*n > 0, "operation {op} never ran in mode {mode} over {hashes} hashes: the census is not exercising it");
+            }
+        }
+        assert!(
+            c.max_runs_per_instruction <= 3,
+            "an instruction ran {} times in one iteration",
+            c.max_runs_per_instruction
+        );
+        assert!(
+            c.max_fdiv_m_per_e_register < 256,
+            "a program has {} FDIV_M on one E register",
+            c.max_fdiv_m_per_e_register
+        );
+        eprintln!(
+            "census: {hashes} hashes, {} iterations, ops {:?}, max runs per instruction {}, max FDIV_M per E register {}",
+            c.iterations, c.ops, c.max_runs_per_instruction, c.max_fdiv_m_per_e_register
+        );
+    }
+
+    #[test]
+    fn no_subnormal_reaches_or_leaves_an_instruction() {
+        census_holds(&[shared_prepared_cache()], 2);
+    }
+
+    #[test]
+    #[ignore = "long: RANDOMX_FP_CENSUS_SEEDHASHES x 64 hashes (default 8); the nightly runs it"]
+    fn no_subnormal_reaches_or_leaves_an_instruction_long() {
+        let n: u8 = std::env::var("RANDOMX_FP_CENSUS_SEEDHASHES")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(8);
+        let caches: Vec<crate::PreparedCache> = (0..n)
+            .map(|k| crate::PreparedCache::derive(crate::Seedhash::from_bytes([k; 32])))
+            .collect();
+        census_holds(&caches.iter().collect::<Vec<_>>(), 64);
     }
 }

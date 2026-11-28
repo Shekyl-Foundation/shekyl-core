@@ -12,12 +12,6 @@ rust-version.workspace = true
 license.workspace = true
 
 [features]
-# PROTOTYPE (not for merge): the rounding comparison. One of b / c /
-# c-int selects the VM's FP implementation; census counts FP ops.
-proto-rounding-b = []
-proto-rounding-c = []
-proto-rounding-c-int = ["proto-rounding-c"]
-proto-fp-census = []
 # Enables the cfg-gated `VmStatePool` + `compute_hash_with_pool` shim
 # per `docs/design/RANDOMX_V2_PHASE2F_PLAN.md` §3.3 Round 3. The pool
 # body is implemented behind `#[cfg(any(test, feature = "internal-pool-bench"))]`
@@ -193,8 +187,3 @@ harness = false
 
 [lints]
 workspace = true
-
-# PROTOTYPE (not for merge).
-[[example]]
-name = "proto_census"
-required-features = ["proto-fp-census", "proto-rounding-c"]
