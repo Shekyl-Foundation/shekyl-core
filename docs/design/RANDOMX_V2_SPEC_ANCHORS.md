@@ -147,6 +147,31 @@ than manufacturing false independence:
   (subnormals, the exponent/mantissa mask, sign handling) that **can** be
   hand-derived from IEEE-754 semantics independently — a handful of targeted
   `vm.rs` tests with hand-computed expected bits.
+- **The floating-point environment: IEEE results on every architecture, no
+  flush-to-zero (RULED 2026-11-28, Rick).** Every RandomX floating-point
+  instruction rounds by the mode CFROUND last set and is otherwise IEEE 754
+  binary64: no flush-to-zero, no denormals-are-zero, on x86_64 and aarch64
+  alike, whatever the calling thread's control word holds. The C reference
+  differs here: on x86 it runs with flush-to-zero and denormals-are-zero on
+  (`rx_mxcsr_default = 0x9FC0`), and its portable path on aarch64 does not.
+  The two agree only while no subnormal occurs. `specs.md:618` says none
+  does ("no operation results in `NaN` or a denormal number"). That is
+  proven for the F group: its operands are integers converted exactly or
+  values of at least 1, and FSCAL of a value with a zero mantissa cannot
+  produce a subnormal. For the E group it holds with probability, not by
+  construction. A subnormal needs a program with 256 or more FDIV_M on one
+  E register, because each instruction runs at most three times per
+  iteration and the E load is at least 2^-255. The chance of such a program
+  is about **2^-1698.6** per program, far past any grinding. The proof is in
+  [`RANDOMX_ROUNDING_DECISION.md`](RANDOMX_ROUNDING_DECISION.md) §5. The test
+  that holds it is `vm::subnormal_tests` in `shekyl-pow-randomx`, a census
+  over whole hashes that asserts:
+  - no subnormal operand or result, and no NaN;
+  - every operation × mode cell populated;
+  - at most three runs of any instruction in one iteration;
+  - fewer than 256 FDIV_M on any E register.
+
+  The quick tier runs per PR; the long tier runs nightly.
 - The v2 AES FE-mix itself **stays fork-anchored** (T7 already covers it
   byte-for-byte). F4 does not fake an independent anchor here; it records the
   boundary: *this delta's oracle is specs.md §3.4 + the pinned fork, and that
