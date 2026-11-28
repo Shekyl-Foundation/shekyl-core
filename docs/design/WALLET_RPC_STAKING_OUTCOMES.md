@@ -514,9 +514,9 @@ evidence shows no bond and no pending record bridges it.
     outcome on every wallet start, and clears when the outcome is
     acknowledged.
   - An error log line is written on each start while the outcome stands.
-  - Nothing reads the alarm board in production yet (FOLLOWUPS, "No
-    production reader of any operator alarm board"). Until that changes,
-    the log line and the `staking_info` outcome are what a person sees.
+  - A person reads it through `operator_alarm` (`operator alarm` in the
+    CLI), beside the log line and the `staking_info` outcome, and clears
+    it with `operator_alarm_acknowledge`.
 
 **Invariant: the end date assumes the age limit never rises.** The end
 date is `reference_height + FCMP_REFERENCE_BLOCK_MAX_AGE` read now, while

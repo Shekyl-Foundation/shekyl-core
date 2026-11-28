@@ -2,7 +2,8 @@
 
 **Status: LIVING CONTRACT — implemented 2026-09-07 (legs 1–3 live;
 leg 4 slot registered, body staged per FOLLOWUPS); leg 5, pending
-outcomes, live in #1109; last verified 2026-10-17.**
+outcomes, live in #1109; one alarm board per open wallet and its reader,
+2026-11-28; last verified 2026-11-28.**
 
 Ruling of record: `.cursor/plans/wallet_rewrite_audit_cbf7c720.plan.md`
 §"Engine cadence driver" (2026-09-07). This document is the contract of
@@ -299,6 +300,31 @@ one-attempt ruling inside `task.rs` (§"One attempt, deliberately") is
 **amended, not deleted**: one attempt per start call stays; the
 driver owns retry across calls.
 
+### Where the two lifetimes meet: one board
+
+The driver and the serving task live for different spans — the driver for
+the wallet's open, each serving task for one start — and both report to
+the operator alarm board. They report to **one** board, the engine's
+(`Engine::operator_alarms`), which lives for the open span. The driver
+reads it when it starts (`start_cadence` under a brief read guard;
+`into_shared` before wrapping), and every `start_serving_if_staker` passes
+it into the task it spawns. Two boards, one per span, would break the
+board's own contract in two ways: each mints its incidents from 1, so an
+acknowledgment naming an incident could not say which board it meant; and
+a restarted host would start an empty board, losing a latched fault before
+anyone read it.
+
+Each producer holds a `CheckGuard` over the rows it watches — the driver
+loop over its four, the serving task over its three, each probe over its
+own, the persona's tor translator over its two — so a producer that panics
+or is aborted leaves its rows `CheckStopped`, never armed and quiet. A clean
+exit gives its own reason first: the serving task's rows read `NotServing`
+before the host starts and once it is gone; the driver's armed rows read
+`Unreported` when it stops, and a parked leg keeps `DriverLegParked`.
+
+The reader is the wallet RPC's `operator_alarm` (and the CLI's
+`operator alarm`); see §5.
+
 ### Leg 3 — per-epoch claim (every tick; may no-op)
 
 Fires on settlement close, uniform across all wallets, **no jitter** —
@@ -491,7 +517,27 @@ section and the crate cannot drift). `shekyl-operator-alarm` gains:
 
 None of these maps onto an existing condition — `ServeSetIntegrity` /
 `ServingDiskHeadroom` / `TransportLiveness` / `VanguardIntegrity` are
-all serving-side. WI-3's stall alarms (today `tracing::error` only)
+all serving-side.
+
+The board holds a row for every condition from its construction, disarmed
+as `DisarmedReason::Unreported` until the condition's producer first
+reports, so a non-staker's serving rows and the persona onion's
+`OnionReachability` row (armed by `TSR-W3`) read "not checked", never as a
+missing row. `DisarmedReason::CheckStopped` is the guard's reading for a
+producer that ended without saying so (§3, "one board"). The claim leg's
+reading arms `ClaimForfeiture` beside `EpochClaim`: it evaluates the
+forfeit floor on the same fire, so a forfeit row with nothing on it means
+checked.
+
+**The reader** (OA-1; Rick's brief 2026-11-28). `operator_alarm` returns
+every row and the acknowledgment queue; `operator_alarm_acknowledge
+{incident}` clears a waiting fault by the incident the board showed
+(`wallet_rpc.yaml` 0.28.0; names proposed in `INPUT_GRAMMAR.md` Part M).
+The read is pull-only and side-effect free, with one fixed shape, so its
+timing is the caller's and never the board's: the covert-channel rule the
+crate states for emission holds for the reader too. A caller needs the
+wallet RPC's credential, and nothing on the board names the persona's
+onion, its shards or a clock. WI-3's stall alarms (today `tracing::error` only)
 are out of scope here; a FOLLOWUPS row already tracks promoting them.
 
 ## 6. What this driver does not do

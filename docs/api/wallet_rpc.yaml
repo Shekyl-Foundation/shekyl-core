@@ -637,7 +637,7 @@ info:
   # the incident the board showed. A caller needs the wallet RPC's
   # credential and nothing finer. The board names no onion address, no
   # service id and no clock reading but durations. The names are proposed
-  # in INPUT_GRAMMAR.md Part H for Rick's ruling. api_version stays 1.
+  # in INPUT_GRAMMAR.md Part M for Rick's ruling. api_version stays 1.
   version: 0.28.0
   description: >
     JSON-RPC 2.0 interface served by `shekyl-wallet-rpc` (Phase 4 of the
@@ -2720,7 +2720,7 @@ components:
     # ── Operator alarm board — OA-1 ─────────────────────────────────────
     # One board per open wallet (Engine::operator_alarms). Keyword spelling
     # and the one-key objects follow IG-Q86 and IG-Q70; every name here is
-    # proposed in INPUT_GRAMMAR.md Part H, IG-Q115 onward.
+    # proposed in INPUT_GRAMMAR.md Part M, IG-Q115 onward.
     OperatorAlarmParams:
       type: object
       additionalProperties: false
