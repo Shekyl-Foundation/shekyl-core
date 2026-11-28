@@ -224,8 +224,13 @@ pub(crate) struct OutputDetectionInput {
 /// when a cancelled `ask` discards the un-taken reply.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
-// Not `bench-internals` too, as on `KeyEngine`: the bench calls
-// `try_claim_output` but reads only the variant, never `Mine`'s payload.
+// Code in flight, and a different gate from `KeyEngine` on purpose.
+// Tests read `Mine`'s payload. The key-dispatch bench constructs this
+// reply and matches `Mine(_)`, which on a `pub(crate)` enum does not
+// read tuple field 0, so `dead_code` still fires there and this
+// expectation stays fulfilled. `KeyEngine` is called by that bench, so
+// its expectation is off under `bench-internals`. A caller that reads
+// the payload makes this expectation unfulfilled.
 #[cfg_attr(
     not(test),
     expect(
