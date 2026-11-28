@@ -106,13 +106,14 @@ use super::bond_assembly::{
     SweepOverflowPolicy,
 };
 use super::bond_orchestrator::{
-    anchored_reference_block, p_lane_fee_from_build, p_lane_spend_fee, MEASURED_FEE_BUILDS,
+    anchored_reference_block, p_lane_extra_input_fee, p_lane_fee_from_build, MEASURED_FEE_BUILDS,
 };
 use super::curve_tree_actor::CurveTreeHandleError;
 use super::daemon::synced_chain_facts::TimelineBreak;
 use super::emission_source::{fetch_claim_source_for, ClaimSourceFor, EmissionSourceError};
 use super::fee_policy::{FeeEstimatorError, ValidatedFeeEstimates};
 use super::fee_snapshot::map_daemon_engine_fee_error;
+use super::fee_variant::converge_selection;
 use super::output_selector::selection_layers;
 use super::prpc::PersonaIsolatedTransport;
 use super::pscan::block_source::daemon_claimed_tip;
@@ -515,30 +516,31 @@ where
                 .map_err(StakeEngineError::from)?;
         let reference_height = reference.height;
 
-        // The exit's fee is the `P`-lane floor fee on its own weight. It
-        // carries a `Release` vin the weight predictor does not model, so it
-        // is built, its weight read, and built again if the fee moved
-        // (`p_lane_fee_from_build`); the fee moves the weight only through
-        // its varint, so the second build settles. The seed is the fee of a
-        // one-input two-output transfer at this depth.
-        let mut fee = p_lane_spend_fee(
-            fee_estimates,
-            InputCount::clamped(1),
-            OutputCount::clamped(shekyl_tx_weight::MIN_NON_COINBASE_OUTPUTS),
-            selection_layers(tree_depth).as_proof(),
-        )?;
-        let mut settled = None;
-        for _ in 0..MEASURED_FEE_BUILDS {
-            let required = AtomicUnits::from_raw(
+        // The exit's fee is the `P`-lane floor fee on its own weight: the
+        // extra-input model over its `Release` vin, converged with the
+        // sweep's selection the send path's way (`converge_selection`). The
+        // build then measures it (`p_lane_fee_from_build`); a build whose
+        // measured fee differs from the model's is rebuilt at the measured
+        // fee, within `MEASURED_FEE_BUILDS`, so a model defect costs a
+        // second proof and never an underpaid exit.
+        let layers = selection_layers(tree_depth).as_proof();
+        let release_len = release_input_len(record.bonded_total_atomic())?;
+        let payout_outputs = OutputCount::clamped(shekyl_tx_weight::MIN_NON_COINBASE_OUTPUTS);
+        // What the sources must cover beyond the released collateral at
+        // `fee`: see the paragraph above `anchored_reference_block`.
+        let required_at = |fee: AtomicUnits| {
+            AtomicUnits::from_raw(
                 fee.to_raw()
                     .saturating_add(shekyl_tx_weight::MIN_NON_COINBASE_OUTPUTS as u64)
                     .saturating_sub(record.bonded_total_atomic()),
-            );
-            // CapLargest: the exit owes no consume-everything invariant, so a
-            // pool fragmented past the vin headroom caps to the largest subset
-            // (see `SweepOverflowPolicy`) instead of refusing — leftovers go to
-            // the retired persona's drain.
-            let selection = sweep_funding_outputs(
+            )
+        };
+        // CapLargest: the exit owes no consume-everything invariant, so a
+        // pool fragmented past the vin headroom caps to the largest subset
+        // (see `SweepOverflowPolicy`) instead of refusing — leftovers go to
+        // the retired persona's drain.
+        let sweep_at = |required: AtomicUnits| {
+            sweep_funding_outputs(
                 pruning_landed,
                 funding_records,
                 p_slot,
@@ -547,7 +549,26 @@ where
                 reference_height,
                 SweepOverflowPolicy::CapLargest,
             )
-            .map_err(StakeEngineError::from)?;
+            .map_err(|e| ReleaseRequestError::from(StakeEngineError::from(e)))
+        };
+        let (_, mut fee) = converge_selection(
+            |n| {
+                p_lane_extra_input_fee(
+                    fee_estimates,
+                    InputCount::clamped(n),
+                    payout_outputs,
+                    layers,
+                    release_len,
+                )
+                .map_err(ReleaseRequestError::Fee)
+            },
+            |fee| Ok(required_at(fee)),
+            sweep_at,
+            |selection| selection.records.len(),
+        )?;
+        let mut settled = None;
+        for _ in 0..MEASURED_FEE_BUILDS {
+            let selection = sweep_at(required_at(fee))?;
 
             let assemble_inputs: Vec<AssembleInput> = selection
                 .records
@@ -747,6 +768,35 @@ fn admit_exit_record(fetched: &ClaimSourceFor) -> Result<(), ReleaseRequestError
             format!("{why:?}"),
         )),
     }
+}
+
+/// The wire length of the `Release` input an exit of `bonded_total` carries,
+/// for the fee to price before the exit is built. The vin is
+/// `build_release_vin`'s at its fixed fields — the empty end-state holdings,
+/// a zero post-connect total and credit, the whole balance as the debit —
+/// over a placeholder identity key of the canonical length, which is all the
+/// writer reads of the key. The build's measured weight checks it
+/// ([`p_lane_fee_from_build`]).
+pub(crate) fn release_input_len(bonded_total: u64) -> Result<usize, ReleaseRequestError> {
+    let vin = shekyl_archival_retention::bond_wire::ArchivalBondPostVin::release(
+        vec![0; shekyl_wire::transaction::PQC_HYBRID_SINGLE_KEY_LEN],
+        [0; 32],
+        shekyl_archival_retention::HoldingsDescriptor {
+            kind: shekyl_archival_retention::HoldingsKind::ShardSetCompact,
+            shard_ids: shekyl_archival_retention::ShardSet::empty(),
+        },
+        0,
+        0,
+        bonded_total,
+    );
+    super::bond_assembly::wire_bond_post_input(&vin)
+        .map_err(|e| ReleaseRequestError::from(StakeEngineError::from(e)))?
+        .serialized_len()
+        .ok_or(ReleaseRequestError::Fee(
+            FeeEstimatorError::DaemonResponseInvalid {
+                reason: "the exit's Release input does not encode",
+            },
+        ))
 }
 
 #[cfg(test)]

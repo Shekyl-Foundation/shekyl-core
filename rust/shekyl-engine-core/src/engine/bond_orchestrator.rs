@@ -160,6 +160,52 @@ pub(crate) fn p_lane_spend_fee(
     })
 }
 
+/// The `P`-lane fee of a transaction carrying one input that is not an
+/// FCMP++ spend — a bond post's or a claim's, `extra_input_len` bytes as the
+/// wire writes it — beside `n_in` funding inputs: [`p_lane_floor_fee`] on its
+/// own predicted weight (`predict_weight_with_extra_input`), converged on the
+/// fee varint the way the send path converges a fee. It prices the
+/// transaction before it is built; the build's measured weight then confirms
+/// it ([`p_lane_fee_from_build`]).
+///
+/// # Errors
+///
+/// [`p_lane_floor_fee`]'s, and `DaemonResponseInvalid` for a fee that does
+/// not fit in `u64`, as the send path's estimator answers it.
+pub(crate) fn p_lane_extra_input_fee(
+    estimates: super::traits::FeeEstimates,
+    n_in: InputCount,
+    n_out: OutputCount,
+    layers: ProofLayers,
+    extra_input_len: usize,
+) -> Result<AtomicUnits, FeeEstimatorError> {
+    // Refuse an unreasonable snapshot by name before converging on it.
+    ValidatedFeeEstimates::try_new(estimates)?;
+    shekyl_tx_weight::converge_fee_by(
+        |fee| {
+            u64::try_from(shekyl_tx_weight::predict_weight_with_extra_input(
+                n_in,
+                n_out,
+                layers,
+                fee,
+                extra_input_len,
+            ))
+            .ok()
+        },
+        0,
+        |weight| {
+            let weight = usize::try_from(weight).ok()?;
+            p_lane_floor_fee(estimates, weight)
+                .ok()
+                .map(AtomicUnits::to_raw)
+        },
+    )
+    .map(AtomicUnits::from_raw)
+    .ok_or(FeeEstimatorError::DaemonResponseInvalid {
+        reason: "the fee does not fit in u64",
+    })
+}
+
 /// How many times a `P`-lane spend priced from a measured build
 /// ([`p_lane_fee_from_build`]) may be built. Two settle every shape (the fee
 /// moves the weight only through its varint); the third is the bound that

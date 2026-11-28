@@ -414,6 +414,14 @@ async fn the_exit_authorizes_under_bond_spend_pk_never_the_identity_key() {
             tx.weight(),
             "the extra-input model must weigh the built exit exactly"
         );
+        // And the exit's fee reads that input's length before any key
+        // exists, from the record's balance alone.
+        assert_eq!(
+            crate::engine::release_dispatch::release_input_len(3 * 750_000_000)
+                .expect("a Release input encodes"),
+            bond_input.serialized_len().expect("a written input"),
+            "the placeholder-key Release input must be the built one's length"
+        );
     }
 
     // The slot the pin reads: the bond post's own index in `vin`.
