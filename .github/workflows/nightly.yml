@@ -727,8 +727,9 @@ jobs:
     # this job counts the full blocks every night, and `bench-full-drift`
     # compares the counts with the night before. The set also holds the
     # emission claim's block (`benches/emission_claim_iai.rs`), connected on
-    # Chain L's first-settled-epoch snapshot, which the step before the
-    # capture builds.
+    # Chain L's first-settled-epoch snapshot, which the capture script
+    # fetches and builds before its gungraun runs (in the tree, so a night
+    # on main's copy of this file still builds it).
     #
     # Same matrix as above; the set is read from the checked-out ref's
     # scripts/bench/capture_rust_baseline.sh, so each leg is judged by its
@@ -763,31 +764,6 @@ jobs:
 
       - name: install gungraun-runner
         run: cargo install gungraun-runner --version '=0.19.4' --locked
-
-      - name: Chain L and its first-settled-epoch snapshot
-        # The emission-claim row (`benches/emission_claim_iai.rs`) starts
-        # from Chain L's first-settled-epoch snapshot, and its setup, which
-        # runs under callgrind, opens a sealed snapshot and never replays.
-        # The pinned chain is fetched and checked layer by layer, and the
-        # snapshot built here by a production replay from genesis, held to
-        # the pinned trace (CHAIN_FORGE.md §8). Rule 47: the step names one
-        # test, so it holds the run to one pass.
-        working-directory: rust
-        run: |
-          python3 ../scripts/ci/fetch_test_chain.py chain-l
-          status=0
-          cargo test --locked --release -p shekyl-chain-ingest --features pipeline --lib -- \
-            --ignored --exact chain_l::the_first_settled_epoch_snapshot_builds_and_opens \
-            > "${RUNNER_TEMP}/chain-l-snapshot.log" 2>&1 || status=$?
-          cat "${RUNNER_TEMP}/chain-l-snapshot.log"
-          if [ "$status" -ne 0 ]; then
-            echo "::error::the first-settled-epoch snapshot did not build"
-            exit "$status"
-          fi
-          if ! grep -q '^test result: ok\. 1 passed' "${RUNNER_TEMP}/chain-l-snapshot.log"; then
-            echo "::error::the snapshot step ran no test: its name no longer matches"
-            exit 1
-          fi
 
       - name: Capture the nightly set
         env:
