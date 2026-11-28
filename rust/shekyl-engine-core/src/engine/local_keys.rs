@@ -154,7 +154,7 @@ impl LocalKeys {
     ///
     /// Caches the account-public-address aggregate. Test builds also
     /// pre-compute the view scalar and the spend public point (see
-    /// [`DerivedScalars`]); production builds do neither, so this
+    /// `DerivedScalars`); production builds do neither, so this
     /// constructor cannot panic.
     ///
     /// # Panics
