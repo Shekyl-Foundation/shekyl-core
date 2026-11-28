@@ -54,8 +54,9 @@ use zeroize::Zeroizing;
 
 use crate::JsonRpcError;
 
-/// How long one call on the owner's leg may take, connect to last byte,
-/// unless the caller names its own bound.
+/// The default bound on one daemon call, connect to last byte, when the
+/// caller does not name one. The owner socket, the enrolled channel, and
+/// plaintext all use it.
 pub const CALL_WITHIN: Duration = Duration::from_secs(30);
 
 /// Why a call on "this computer" did not reach the daemon. The two classes
@@ -245,6 +246,28 @@ impl LocalTarget {
         self.path.as_deref()
     }
 
+    /// The service published for this local target. An unreadable record
+    /// is a refusal, so callers cannot fall through to another transport.
+    /// The choice between this record and the owner socket is
+    /// [`crate::service_channel`].
+    pub(crate) fn service(&self) -> Result<Option<ServiceRecord>, super::channel::ChannelFault> {
+        let Some(place) = &self.service_record else {
+            return Ok(None);
+        };
+        let bytes = place.read().map_err(|e| {
+            super::channel::ChannelFault::Local(format!("service record {place}: {e}"))
+        })?;
+        bytes
+            .map(|bytes| {
+                ServiceRecord::parse(&bytes).ok_or_else(|| {
+                    super::channel::ChannelFault::Local(format!(
+                        "invalid service record at {place}"
+                    ))
+                })
+            })
+            .transpose()
+    }
+
     /// Connect to the owner's leg and check its peer.
     ///
     /// # Errors
@@ -325,7 +348,8 @@ impl LocalTarget {
     }
 
     /// One call of method `M`, the same envelope and checks
-    /// [`crate::SyncDaemon::call`] makes, bounded by [`CALL_WITHIN`].
+    /// [`crate::SyncDaemon::call`] makes. `within` bounds the whole call,
+    /// the same bound a channel post and a plaintext post take.
     ///
     /// # Errors
     ///
@@ -334,14 +358,15 @@ impl LocalTarget {
     pub fn call<M: shekyl_rpc_client::RpcMethod>(
         &self,
         request: &M::Request,
+        within: Duration,
     ) -> Result<M::Reply, JsonRpcError<LocalFault>> {
         crate::call_via::<M, _>(request, |route, body| {
-            self.post(route, &body, CALL_WITHIN)
-                .map(|reply| reply.to_vec())
+            self.post(route, &body, within).map(|reply| reply.to_vec())
         })
     }
 
-    /// One JSON-RPC call by name, its result decoded as `Reply`.
+    /// One JSON-RPC call by name, its result decoded as `Reply`. `within`
+    /// bounds the whole call.
     ///
     /// # Errors
     ///
@@ -350,14 +375,14 @@ impl LocalTarget {
         &self,
         method: &str,
         request: &Req,
+        within: Duration,
     ) -> Result<Reply, JsonRpcError<LocalFault>>
     where
         Req: serde::Serialize,
         Reply: serde::de::DeserializeOwned,
     {
         crate::json_rpc_via(method, request, |route, body| {
-            self.post(route, &body, CALL_WITHIN)
-                .map(|reply| reply.to_vec())
+            self.post(route, &body, within).map(|reply| reply.to_vec())
         })
     }
 }
@@ -742,6 +767,14 @@ impl LocalRpc {
             refused: Arc::new(std::sync::Mutex::new(None)),
         }
     }
+
+    /// The bound [`Self::within`] stored. Tests pin that a caller's duration
+    /// survives resolution.
+    #[cfg(any(test, feature = "test-override"))]
+    #[must_use]
+    pub fn bound(&self) -> Duration {
+        self.within
+    }
 }
 
 impl Rpc for LocalRpc {
@@ -954,13 +987,12 @@ mod tests {
             }
         );
         assert!(!fault.is_security_failure());
-        assert_eq!(
-            fault.to_string(),
-            format!(
-                "The node on this computer runs as a service. Until wallets reach a service \
-                 over the channel, set daemon-address = {view_at}"
-            )
+        let text = fault.to_string();
+        assert!(
+            text.contains("runs as a service") && text.contains("channel"),
+            "{text}"
         );
+        assert!(!text.contains("daemon-address"), "{text}");
         for listener in [&view, &channel] {
             listener.set_nonblocking(true).unwrap();
             assert!(
@@ -986,8 +1018,8 @@ mod tests {
             "{fault:?}"
         );
         let text = fault.to_string();
-        assert!(text.contains("serves no wallet leg"), "{text}");
-        assert!(text.contains("rpc-view-listen"), "{text}");
+        assert!(text.contains("rpc-listen"), "{text}");
+        assert!(!text.contains("daemon-address"), "{text}");
 
         std::fs::write(&record, b"shekyl-service-rendezvous 1\n").unwrap();
         assert!(

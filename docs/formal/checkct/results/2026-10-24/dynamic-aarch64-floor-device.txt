@@ -1,4 +1,4 @@
-dynamic (dudect-style) run — the rule-76 FLOOR DEVICE: Raspberry Pi 4 Model B, Cortex-A72 (CPU part 0xd08), aarch64 Linux, 4 cores, idle (load 0.16, the daemon inactive)
+dynamic (dudect-style) run — the rule-176 FLOOR DEVICE: Raspberry Pi 4 Model B, Cortex-A72 (CPU part 0xd08), aarch64 Linux, 4 cores, idle (load 0.16, the daemon inactive)
 binary: docs/formal/checkct/dynamic as committed at 144f81fc1, cargo build --release --target aarch64-unknown-linux-gnu with the crate's pinned 1.94.0 (LLVM 21.1.8), +crt-static
 method: dudect-style, fixed set of 32 distinct values against fresh values, [fixed-pair] companion per row, two positive controls; METHOD CHECK ON x86_64 IS OPEN (see dynamic-x86_64-method-check.txt), so this row bounds, it does not clear
 run window (UTC): Sat Oct 24 15:03:07 UTC 2026 -> Sat Oct 24 15:17:51 UTC 2026

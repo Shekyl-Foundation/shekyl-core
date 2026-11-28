@@ -153,7 +153,7 @@ impl<'id> WriteBatch<'_, 'id> {
     /// resolves to one and an id parameter could never name the set a
     /// regtest driver has in force. The store compares the value with the
     /// verdict's and refuses a mismatch, holding no schedule and no `Network`
-    /// itself (rule 71): it receives a value and compares. Resolving an id to
+    /// itself (rule 171): it receives a value and compares. Resolving an id to
     /// a set — and refusing an id no schedule issued — is the schedule's job,
     /// where the id→set mapping lives.
     ///

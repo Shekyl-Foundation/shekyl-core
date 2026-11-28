@@ -31,12 +31,12 @@
 //! their second reader, and their codecs — the one variable-width record
 //! this crate encodes — followed the orphan rule here (`archival`), with
 //! the strict cursor they read through ([`reader`]) made shared for the
-//! same reason. The daemon store's rule-42 fixture for the record
+//! same reason. The daemon store's rule-142 fixture for the record
 //! (`bond_record.snap`) still pins the bytes: the bytes did not move.
 //!
 //! What does **not** live here is as load-bearing as what does. Each
 //! store's own column codecs stay in that store. So does the daemon's
-//! rule-42 apparatus — the committed fixture snapshots, the
+//! rule-142 apparatus — the committed fixture snapshots, the
 //! `impl Canonical` source scan, and §11.1(b)'s obligation to bump
 //! `SCHEMA_VERSION` when stored bytes move. That obligation is a property
 //! of the daemon store's implementations, not of a general-purpose trait:

@@ -54,7 +54,7 @@
 //! fire only on synthetically constructed states. The terminal sweep is
 //! what makes it reachable: its payment is an **output of selection**
 //! (`Σ selected − fee`, [`select_for_sweep`](super::drain_select)), zero
-//! change by construction, reachable only under a [`TerminalExitObserved`]
+//! change by construction, reachable only under a [`NoExitOwed`]
 //! witness — the carve-amendment rationale lives on that selection arm and
 //! in `PRINCIPAL_STAKE_LIFECYCLE.md`.
 //!
@@ -98,7 +98,7 @@ use super::bond_assembly::SpentRecordsDurablyPruned;
 use super::bond_orchestrator::p_lane_floor_fee;
 use super::drain_dispatch::DrainRequestError;
 use super::drain_orchestrator::{
-    DrainError, DrainIntent, DrainMoved, DrainOrchestrationError, TerminalExitObserved,
+    DrainError, DrainIntent, DrainMoved, DrainOrchestrationError, NoExitOwed,
 };
 use super::emission_source::EmissionSourceError;
 use super::error::PersistenceError;
@@ -106,7 +106,7 @@ use super::fee_policy::FeeEstimatorError;
 use super::fee_snapshot::map_daemon_engine_fee_error;
 use super::pending::TxHash;
 use super::pending_post_gate::{ForegroundSession, UserPendingPost};
-use super::prpc::LocalNodeRpc;
+use super::prpc::{open_chain_reader, ChainOpen};
 use super::release_dispatch::ReleaseRequestError;
 use super::signer::EngineSignerKind;
 use super::stake_engine::StakeEngineError;
@@ -139,6 +139,11 @@ pub enum UnstakeOutcome {
         /// discriminant, never settlement truth).
         height: u64,
     },
+    /// The stake was still a plan, not yet signed, so it was withdrawn
+    /// (`ARCHIVAL_BOND_POST_DELAY.md` BD-Q3 as ruled 2026-11-26). Nothing was
+    /// sent; the persona's funding returns to this wallet by a drain the
+    /// staking scan sends.
+    Withdrawn,
 }
 
 /// Why [`StakeFacade::unstake`] refused, flattened for the `pub` boundary
@@ -192,8 +197,8 @@ pub enum UnstakeError {
          chain disagree; resync and retry"
     )]
     NoBondRecord,
-    /// The exit-transport constructor refused the daemon address (the ①
-    /// local posture accepts loopback only).
+    /// The exit's record fetch was given a plaintext daemon address that
+    /// is not this computer. An enrolled channel is not this refusal.
     #[error("exit transport: {detail}")]
     Transport {
         /// The constructor's own reason.
@@ -265,10 +270,13 @@ pub enum UnstakeError {
         /// The daemon's verdict rendering.
         detail: String,
     },
-    /// The exit's seal was saved, but the save was not confirmed on disk,
-    /// so nothing was sent; the seal was removed and the lane is open again
-    /// (Rick, 2026-11-19). The cause is the save's, and names its fix.
-    #[error("the exit was not sent: {0}")]
+    /// A save of the staking records was not confirmed on disk, so nothing
+    /// was sent (Rick, 2026-11-19). For an exit, its seal was removed and the
+    /// lane is open again. For a withdrawal, the plan's ending was written
+    /// but its save not confirmed; nothing was ever sent for a plan, and once
+    /// the save is confirmed the funds are returned. The cause is the
+    /// save's, and names its fix.
+    #[error("nothing was sent: {0}")]
     SealNotSaved(#[source] PersistenceError),
     /// The exit's bytes went out and its fate is the chain's: no verdict, a
     /// retryable one, or a daemon's terminal verdict, which never ends a
@@ -383,6 +391,10 @@ pub enum CollectUnstakedError {
         /// The anchoring helper's own (scalar-free) reason.
         detail: String,
     },
+    /// The node named its own remedy while preparing the sweep. The fault
+    /// is the sentence; this is not the retry-as-unreachable arm.
+    #[error("{0}")]
+    Daemon(shekyl_rpc_client::DaemonFault),
     /// A daemon query needed to prepare the sweep failed transiently — the
     /// dispatch-tip clock read. Pre-seal, so nothing propagated: check the
     /// daemon and retry. Distinct from `Unanchorable` (the wallet's reference
@@ -443,7 +455,7 @@ struct ExitEvidence {
     pscan: Option<PScanState>,
     pending: Option<PendingPostBlock>,
     /// Slot↔id addressing, keyed by [`PSlot`]. The persisted cache keeps raw
-    /// `u32` keys (postcard state, rule 18); [`read_exit_evidence`] converts
+    /// `u32` keys (postcard state, rule 118); [`read_exit_evidence`] converts
     /// at the boundary so everything transform-shaped speaks the typed slot.
     id_by_slot: BTreeMap<PSlot, PCanonicalId>,
 }
@@ -454,6 +466,8 @@ struct ExitEvidence {
 enum UnstakeTarget {
     /// Exit this slot (the first live-bonded slot).
     Post(PSlot),
+    /// Nothing live-bonded, but a stake is still a plan: withdraw it.
+    Withdraw(PCanonicalId),
     /// Nothing live-bonded, but exits are in flight or awaiting collection.
     ExitInProgress,
     /// Nothing live-bonded, but a bond post is confirming.
@@ -475,8 +489,8 @@ fn resolve_unstake_target(evidence: &ExitEvidence) -> Result<UnstakeTarget, &'st
         // Never scanned: no confirmed bond can be observed. In-flight posts
         // can still exist (sealed before the first scan seal).
         return Ok(match evidence.pending.as_ref() {
-            Some(p) if !p.posts().is_empty() => UnstakeTarget::BondConfirming,
-            _ => UnstakeTarget::NothingStaked,
+            Some(p) => in_flight_target(p),
+            None => UnstakeTarget::NothingStaked,
         });
     };
 
@@ -522,14 +536,26 @@ fn resolve_unstake_target(evidence: &ExitEvidence) -> Result<UnstakeTarget, &'st
     if !pscan.pending_releases().is_empty() || sealed_exit {
         return Ok(UnstakeTarget::ExitInProgress);
     }
-    let pending_post = evidence
+    Ok(evidence
         .pending
         .as_ref()
-        .is_some_and(|p| !p.posts().is_empty());
-    if pending_post {
-        return Ok(UnstakeTarget::BondConfirming);
+        .map_or(UnstakeTarget::NothingStaked, in_flight_target))
+}
+
+/// What `unstake` does with a stake that has not bonded (BD-Q3 as ruled
+/// 2026-11-26): a plan not yet signed is withdrawn; a signed post refuses
+/// withdrawal and confirms first; a stake that ended and whose funds are
+/// returning is an exit already in progress.
+fn in_flight_target(pending: &PendingPostBlock) -> UnstakeTarget {
+    if let Some(plan) = pending.plans().first() {
+        UnstakeTarget::Withdraw(plan.persona)
+    } else if !pending.posts().is_empty() {
+        UnstakeTarget::BondConfirming
+    } else if !pending.ended_plans().is_empty() {
+        UnstakeTarget::ExitInProgress
+    } else {
+        UnstakeTarget::NothingStaked
     }
-    Ok(UnstakeTarget::NothingStaked)
 }
 
 /// The `collect_unstaked` resolution verdict.
@@ -666,10 +692,9 @@ where
     /// and the exit pays `P`'s own base address (never the principal — the
     /// P↔principal edge is drawn only by the later, separate
     /// [`Self::collect_unstaked`] sweep). `daemon_address` is the
-    /// embedder-held endpoint (the [`Self::start_serving_if_staker`] shape);
-    /// the record fetch rides the ① local-posture transport built from it,
-    /// which refuses a non-loopback URL by construction (posture *selection*
-    /// remains the DQ-T2.3 slice).
+    /// embedder-held endpoint (the [`Self::start_serving_if_staker`] shape).
+    /// The record fetch uses that daemon: this computer, or an enrolled
+    /// channel. A plaintext address on another computer is refused.
     pub async fn unstake(
         engine: Arc<RwLock<Engine<S, D, LocalLedger, E, R, P, WalletFile>>>,
         daemon: &shekyl_rpc_transport::DaemonTarget,
@@ -706,16 +731,27 @@ where
                 detail: detail.to_owned(),
             })? {
                 UnstakeTarget::Post(slot) => slot,
+                UnstakeTarget::Withdraw(persona) => {
+                    return super::plan_withdraw::withdraw_plan(engine, gate, persona).await;
+                }
                 UnstakeTarget::ExitInProgress => return Err(UnstakeError::ExitInProgress),
                 UnstakeTarget::BondConfirming => return Err(UnstakeError::BondConfirming),
                 UnstakeTarget::NothingStaked => return Err(UnstakeError::NothingStaked),
             };
 
-        // ① local posture; refuses non-loopback by construction.
-        let release_rpc = LocalNodeRpc::new(daemon, EXIT_FETCH_TIMEOUT)
+        let release_rpc = open_chain_reader(daemon, EXIT_FETCH_TIMEOUT)
             .await
-            .map_err(|e| UnstakeError::Transport {
-                detail: e.to_string(),
+            .map_err(|error| match error {
+                ChainOpen::PlaintextNotLocal => UnstakeError::Transport {
+                    detail: shekyl_rpc_transport::PLAINTEXT_NOT_THIS_COMPUTER.to_owned(),
+                },
+                ChainOpen::Channel { fault, detail } => {
+                    tracing::warn!(%detail, "the exit could not open the channel");
+                    UnstakeError::DaemonTarget(shekyl_rpc_client::DaemonFault::Channel(fault))
+                }
+                ChainOpen::Unusable(error) => UnstakeError::DaemonUnreachable {
+                    detail: error.to_string(),
+                },
             })?;
 
         let witness = SpentRecordsDurablyPruned::arm1_watch_pruning_live();
@@ -740,7 +776,7 @@ where
     /// nonempty pool (engine-resolved; no wire parameter). The pass's
     /// payment is `Σ selected − fee` — exactly zero change, which is what
     /// lets the funded retirement gate finally fire — computed by the
-    /// selection stage under a [`TerminalExitObserved`] witness; no caller
+    /// selection stage under a [`NoExitOwed`] witness; no caller
     /// amount exists to get wrong. The reply carries the two-part
     /// completion fact: see [`CollectOutcome::Swept`].
     pub async fn collect_unstaked(
@@ -807,7 +843,7 @@ where
             let witness = evidence
                 .pscan
                 .as_ref()
-                .and_then(|s| TerminalExitObserved::for_persona(s, p_id))
+                .and_then(|s| NoExitOwed::for_released(s, p_id))
                 .ok_or(CollectUnstakedError::Engine {
                     context: "sweep witness",
                     detail: "the resolved persona lost its observed exit between reads".to_owned(),
@@ -1013,7 +1049,7 @@ fn flatten_unstake_error(e: ReleaseRequestError) -> UnstakeError {
         }
         // A target refusal on the fee query is not a fee problem and not a
         // retry. The fee arm is reached before the record fetch.
-        ReleaseRequestError::Fee(FeeEstimatorError::Daemon(fault)) if fault.is_target_refusal() => {
+        ReleaseRequestError::Fee(FeeEstimatorError::Daemon(fault)) if fault.has_own_remedy() => {
             UnstakeError::DaemonTarget(fault)
         }
         ReleaseRequestError::Fee(e) => UnstakeError::FeeEstimate(e),
@@ -1022,7 +1058,7 @@ fn flatten_unstake_error(e: ReleaseRequestError) -> UnstakeError {
         // malformed response is an untrusted-input rejection (internal).
         // A target refusal is neither: it is the fault, and it is not retried.
         ReleaseRequestError::Fetch(e) => match e {
-            EmissionSourceError::Rpc(error) if error.fault().is_target_refusal() => {
+            EmissionSourceError::Rpc(error) if error.fault().has_own_remedy() => {
                 UnstakeError::DaemonTarget(error.fault())
             }
             EmissionSourceError::Rpc(error) => UnstakeError::DaemonUnreachable {
@@ -1035,6 +1071,7 @@ fn flatten_unstake_error(e: ReleaseRequestError) -> UnstakeError {
         },
         // Pre-seal daemon-tip failure: retryable, never the opaque internal
         // -32603 a sealed-store read gets.
+        ReleaseRequestError::Target(fault) => UnstakeError::DaemonTarget(fault),
         ReleaseRequestError::DaemonUnreachable { context, detail } => {
             UnstakeError::DaemonUnreachable {
                 detail: format!("{context}: {detail}"),
@@ -1100,6 +1137,7 @@ fn flatten_collect_error(e: DrainRequestError) -> CollectUnstakedError {
         },
         // Pre-seal daemon-tip failure: retryable, never the opaque internal
         // -32603 a sealed-store read gets.
+        DrainRequestError::Target(fault) => CollectUnstakedError::Daemon(fault),
         DrainRequestError::DaemonUnreachable { context, detail } => {
             CollectUnstakedError::DaemonUnreachable {
                 detail: format!("{context}: {detail}"),

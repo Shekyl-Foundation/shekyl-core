@@ -25,7 +25,7 @@ pub mod table;
 
 pub use diagnostic::{Code, Diagnostic, Fault, Source};
 pub use help::help;
-pub use input::{read_cli, read_file, Cli, Given};
+pub use input::{read_cli, read_cli_then_words, read_file, Cli, Given};
 pub use kind::{
     is_global_unicast, Bearing, Dimension, EndpointRule, KeyRule, Kind, NameRule, PeerEndpoint,
     PeerRule, Secret, Value,

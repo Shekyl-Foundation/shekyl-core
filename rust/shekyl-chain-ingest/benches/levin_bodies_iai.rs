@@ -29,7 +29,7 @@
 //! `shekyl-chain-sync-runtime`, so a change to the decoder selects both.
 //!
 //! An instruction count on the CI runner's x86, never a floor figure
-//! (rule 76).
+//! (rule 176).
 
 use std::hint::black_box;
 

@@ -42,7 +42,7 @@ impl std::fmt::Display for DisplaySafetyError {
 /// created), so that a refusal creates nothing rather than orphaning a wallet
 /// whose one-time backup can never be shown — the server never re-exposes it.
 /// The deliberate, auditable way to capture a seed non-interactively is the
-/// `create --seed-out <path>` subcommand, not a redirected terminal.
+/// `wallet create --mnemonic-file <path>` command, not a redirected terminal.
 pub fn preflight_secret_display() -> Result<(), DisplaySafetyError> {
     if !io::stdout().is_terminal() {
         return Err(DisplaySafetyError::NotATty);

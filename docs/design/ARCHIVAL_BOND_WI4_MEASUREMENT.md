@@ -78,7 +78,7 @@
 > **Status: design spec / acceptance doc (WI-4 design round 1, 2026-07-05,
 > `feat/wi4-gf7-measurement`, stacked on `feat/wi3-dispatch-driver`).**
 > Spec-first per rule `05-system-thinking`; process shape per
-> `26-sub-pr-design-discipline` (this slice defines the graded genesis gate
+> `126-sub-pr-design-discipline` (this slice defines the graded genesis gate
 > for the coin's core principal↔`P` unlinkability claim — a priority-2
 > privacy surface — so it gets an explicit design round *before* any grading
 > code lands).

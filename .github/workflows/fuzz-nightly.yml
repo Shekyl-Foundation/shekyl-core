@@ -68,10 +68,10 @@ env:
 jobs:
   fuzz-targets:
     # The run this event owes, read from the tree under test. The inventory
-    # check and both scripts' selftests run first. A dispatch naming
+    # check and the three scripts' selftests run first. A dispatch naming
     # `fuzz_target` narrows the list to it.
     runs-on: ubuntu-latest
-    timeout-minutes: 10  # reads the tree and runs two selftests; no build
+    timeout-minutes: 10  # reads the tree and runs three selftests; no build
     strategy:
       matrix:
         branch: ${{ fromJSON(inputs.ref && format('[{0}]', toJSON(inputs.ref)) || '["dev"]') }}
@@ -93,6 +93,7 @@ jobs:
         run: |
           set -eu
           python3 scripts/ci/check_fuzz_inventory.py --selftest
+          python3 scripts/ci/fuzz_coverage.py --selftest
           python3 scripts/ci/fuzz_run.py --selftest
           python3 scripts/ci/check_fuzz_inventory.py
 
@@ -260,7 +261,7 @@ jobs:
             // `/` read as `_`, the name `fuzz_run.leg_names` builds.
             const fuzzLines = [
               'Reproduce a crash in `rust/<crate>` with `cargo +nightly fuzz run <target> <input>`, the input being the crash artifact linked above. The fix lands with the input added to the crate\'s `fuzz/seeds/<target>/`, the committed regression corpus every run reads.',
-              'A red with no crash is a run that did not prove it fuzzed (under 1,000 executions, no final line, an empty corpus, or coverage under the floor) or a target whose crate did not build (its `fuzz-build` leg is red too); the job summary says which (`scripts/ci/fuzz_run.py`).',
+              'A red with no crash is a run that did not prove it fuzzed (under 1,000 executions, no final line, an empty corpus, or coverage under its floor past the allowance for an unchanged crate) or a target whose crate did not build (its `fuzz-build` leg is red too); the job summary says which, and a coverage miss says whether the crate\'s sources changed (`scripts/ci/fuzz_run.py`).',
             ];
             const lanes = {
               'fuzz': {

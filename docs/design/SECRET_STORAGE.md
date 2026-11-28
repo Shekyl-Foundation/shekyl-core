@@ -1,6 +1,6 @@
 # Secret storage — locked pages for the long-lived secret types
 
-**Status:** OPEN — design round (rule 26) not yet run. Scope ruled by Rick,
+**Status:** OPEN — design round (rule 126) not yet run. Scope ruled by Rick,
 2026-11-08 (`SSR-R1`). The work lands after the alpha.12 cut, and the
 `unsafe` scoping PR (`SSR-R2`) follows it. `SSR-Q3`, the transaction key,
 is answered ahead of the round (R-21, Rick, 2026-11-15) and built.
@@ -31,7 +31,7 @@ the questions the round answers; `SSR-Q3` is the one answered.
   The same PR lands the decoder gate: a source scan that refuses an
   allocation sized by a count read from untrusted bytes with no bound
   before it
-  ([`25-rust-architecture`](../../.cursor/rules/25-rust-architecture.mdc),
+  ([`125-rust-architecture`](../../.cursor/rules/125-rust-architecture.mdc),
   §"Decoding untrusted bytes"; ruled by Rick, 2026-11-08).
 
 ## 2. Inputs

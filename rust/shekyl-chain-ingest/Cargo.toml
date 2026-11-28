@@ -203,7 +203,7 @@ shekyl-pow-randomx = { path = "../shekyl-pow-randomx" }
 # PassedThrough by construction), LogicalStateDigestV0 (the checkpoint
 # shape, assembled by one function on both sides).
 shekyl-chain-store = { path = "../shekyl-chain-store" }
-# `Network`: which public schedule a run resolves rules from (rule 71 —
+# `Network`: which public schedule a run resolves rules from (rule 171 —
 # data, never control flow). Default features only.
 shekyl-address = { path = "../shekyl-address" }
 # The network table: a run's network, its schedule, and the levers its row

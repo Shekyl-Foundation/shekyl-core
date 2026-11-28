@@ -241,7 +241,12 @@ fn call_over_the_channel(
         StaticKeypair::from_key_file(&std::fs::read(console_file).expect("the console key"))
             .expect("a key");
     let target = ChannelTarget::new(Network::Regtest.network_id(), daemon.clone(), console, leg);
-    let channel = ChannelDaemon::connect(&target, GrantSet::ALL).expect("admitted");
+    let channel = ChannelDaemon::connect(
+        &target,
+        GrantSet::ALL,
+        shekyl_rpc_transport::local::CALL_WITHIN,
+    )
+    .expect("admitted");
     let body = serde_json::to_vec(
         &serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": {}}),
     )

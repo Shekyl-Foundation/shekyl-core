@@ -496,7 +496,7 @@ pixels listen to it.
 ### Floor-device budget (measured 2026-09-06: falsified at every tier)
 
 The *Performance targets* below are provisioned at the floor device
-(`rule 76`: Pi 4), measured **on the floor only**. An x86 measurement
+(`rule 176`: Pi 4), measured **on the floor only**. An x86 measurement
 cannot bound the floor in either direction: measured per-term x86:A72
 ratios span 3.86×–12× **with one axis changing sign**, so no single
 scaling factor exists. Falsifier: any (fixture, size) cell over budget
@@ -922,7 +922,7 @@ design against the first.
      amendment discipline that moved the targets on 2026-09-06. What
      reopens the palette is the recorded acceptance, not the raw
      measurement; **or**
-   - rule 76's floor device is redefined to hardware slower than the
+   - rule 176's floor device is redefined to hardware slower than the
      Raspberry Pi 4 Model B Rev 1.4, and a floor capture on that device
      exceeds the amended targets; **or**
    - a conforming implementation demonstrates it cannot carry

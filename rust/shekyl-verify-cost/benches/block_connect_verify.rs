@@ -17,7 +17,7 @@
 //! whether or not its transactions came through our pool. The two states
 //! GAP-7 was written for pay it like any other block:
 //!
-//! 1. **Initial sync on the provisioning floor** (rule 76: Raspberry Pi 4),
+//! 1. **Initial sync on the provisioning floor** (rule 176: Raspberry Pi 4),
 //!    where every historical block is connected in turn; and
 //! 2. **the withhold-then-announce adversary**, who keeps transactions out of
 //!    relay and announces a full block. On this path withholding buys no
@@ -25,7 +25,7 @@
 //!    does — so the adversary's lever is the block's *contents* (the argmax
 //!    below), not its novelty.
 //!
-//! # SHAPE, NOT FLOOR — rule 76 §3/§4, do not misread these numbers
+//! # SHAPE, NOT FLOOR — rule 176 §3/§4, do not misread these numbers
 //!
 //! This bench runs on a development machine and establishes **which component
 //! dominates and how cost scales with the constants census-C2 R2 ratifies**.
@@ -33,7 +33,7 @@
 //!
 //! - *"Any constant derived from measured work time is provisioned at the
 //!   floor device, not at the machine that happened to be available"*
-//!   (rule 76 §1) — record the machine beside every number.
+//!   (rule 176 §1) — record the machine beside every number.
 //! - *"Cross-machine ratios are measured, never assumed"* (§3).
 //! - *"Values AND INCREMENTS for the floor device are measured ON it, never
 //!   scaled to it"* (§4) — the rule's own counter-example saw aggregate
@@ -139,11 +139,11 @@
 //! batched regime directly. The figures stand as the record they are; the
 //! next run of each phase replaces them.
 //!
-//! # Results — dev box, first run (SHAPE data; re-read the rule-76 section)
+//! # Results — dev box, first run (SHAPE data; re-read the rule-176 section)
 //!
 //! **Machine: Intel i9-11950H (8C/16T, 5.0 GHz boost), Linux 6.12, `cargo
 //! bench` profile, 2026-09-04.** Every number below is a dev-box SHAPE
-//! observation; none is a floor value (rule 76 §1/§4 above).
+//! observation; none is a floor value (rule 176 §1/§4 above).
 //!
 //! Per-term, per-tx (median):
 //!
@@ -203,7 +203,7 @@
 //! is noise (µs against ms). Neither can move the constants.
 //!
 //! **Outcome statement (steering's two-way), stated as HEADROOM on the
-//! measured machine — never as a floor prediction (rule 76 §3/§4 forbid
+//! measured machine — never as a floor prediction (rule 176 §3/§4 forbid
 //! assumed cross-machine ratios):** at the permanent floor operating point
 //! (600 kB) the worst-case cold block costs ≈ 1.5 s on this machine —
 //! crypto 1.17 s + RandomX 0.32 s (the PoW term is ~21 % of the zone-point
@@ -244,7 +244,7 @@
 //! exactly linear (marginal ≡ aggregate).
 //!
 //! Per-term at the argmax (1-in/2-out), floor vs i9 ratio bracketed:
-//! adm 128.97 ms [5.65×; per-input marginal 40.2 ms = 5.98× — rule 76 §4's
+//! adm 128.97 ms [5.65×; per-input marginal 40.2 ms = 5.98× — rule 176 §4's
 //! own cited figure, reproduced]; pqc 934 µs [5.25×]; RandomX (flagless)
 //! 1.222 s/block [3.86×]; C++ Bp+ single 13.59 ms @ 2-out / 71.8 ms @
 //! 16-out — **2.56× FASTER than this file's single-proof cell on the A72,
@@ -253,7 +253,7 @@
 //! 1.745 ms/proof (amortization 7.79× vs i9's 8.3× — algorithmic-first,
 //! confirmed). **Four-plus per-term floor ratios spanning 3.86× to ≈12×,
 //! one of them INVERTED: no single assumed scaling factor could have been
-//! right anywhere (rule 76 §3, measured).** Dev-box RELATIVE shape costs
+//! right anywhere (rule 176 §3, measured).** Dev-box RELATIVE shape costs
 //! are not floor relative costs — the sub-argmax ordering flipped.
 //!
 //! **The 2.56× was the eager `Â`, and the batched term is now measured.**
@@ -515,7 +515,7 @@ fn bench_budget_fill(c: &mut Criterion) {
         assert_verifies(&fx);
 
         // Multi-point span so the marginal per-byte cost is MEASURED, not
-        // inferred from endpoints (rule 76 §4's failure mode within one
+        // inferred from endpoints (rule 176 §4's failure mode within one
         // machine). 600 000 = 2 × zone, the permanent floor operating point.
         for budget in [600_000usize, 1_200_000, 2_400_000, 4_800_000] {
             let n_txs = budget / fx.weight;

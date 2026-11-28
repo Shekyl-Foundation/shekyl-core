@@ -74,7 +74,7 @@ is a hope; none of these is.
 | G7 | **The flag partitions first — by type.** Consensus rows and policy rows are **sibling enums** (`CenRow`, `PolicyRow`); a policy row cannot be inserted into a `RuleCoverage`, and `RuleSet` cannot name a `PolicyRow`. `implemented / enforced` and `ratified / enforced` are computed per flag; `E = rows of that flag − bucket 3`; both numbers always printed together with the definition of `E`. | Two enums, two `Coverage<R>` instantiations, two denominators (round-1 ruling Q4); `scripts/ci/check_chain_rules_coverage.py` (§6). |
 | G8 | **Bijection registry ↔ census.** Every enforced census row (bucket ≠ 3) has exactly one entry in the enum of its flag; no entry lacks a row; bucket-3 rows are absent. | The same gate (§6.2); rule 47 subject assertions and `--selftest`. |
 | G9 | **`implemented` is a compile-checked claim — of existence *and* identity.** An entry marked `implemented(path)` names a rule **type** (`rules::Rule`, one unit struct per row — slice 1, SCW-18; *records-was:* increment 1 wrote "names a rule function" and pinned existence only); a stale path is a **compile error**, and a type bound to another row's `ROW` is a **compile error** (`const _: () = assert!(matches!(<T as Bound<Name>>::ROW, Name::Var))`, forced red once at PR #762: `E0080 … bound to a different census row (SCW-18)`). The gate reads the same `census_rows!` invocations the compiler compiled. Runtime half: `covers_landed` at mint (G6). | Macro emits `use $path as _;` (§5.2); mint panic; unit test pins the generic form. |
-| G10 | **No pre-provisioning.** No `PoolView` (E5's), no fork version on `ChainView` (ruling Q7), no `Canonical`/codec impl for `RuleCoverage` (the store's, at S-CHAIN-W under rule 42), no second verdict type, no view method without a census row that reads it (Q3 ruling). | This document's API list is exhaustive; anything not in §4 is not in the crate. |
+| G10 | **No pre-provisioning.** No `PoolView` (E5's), no fork version on `ChainView` (ruling Q7), no `Canonical`/codec impl for `RuleCoverage` (the store's, at S-CHAIN-W under rule 142), no second verdict type, no view method without a census row that reads it (Q3 ruling). | This document's API list is exhaustive; anything not in §4 is not in the crate. |
 | G11 | **Absence is matched, never propagated.** A by-height lookup returns `AtHeight<T>` — `Recorded(T)` or `AboveTip` — not `Option<T>`. There is no `?`, `map`, `unwrap_or_*`, or `is_none_or` on it: a rule that reaches `AboveTip` writes its refusal at that arm. A substrate that cannot answer surfaces as `V::Fault`, a different thing from absence (§4.3). | `AtHeight<T>` has no combinator surface and no `Default`; `CurveTreeRoot`/`RecordedBlock` have no `Default`. |
 | G12 | **Hygiene.** `#![deny(unsafe_code)]`; no `println!`/`eprintln!`/`dbg!` outside `#[cfg(test)]`; `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` clean. | Crate attribute; `build.yml`'s debug-macro lint; rule 45. |
 | G13 | **No recorded transaction body crosses `ChainView`.** The trait's reads are the recorded chain's *permanent* facts — a key image's presence, a block's identity and header, a root, the tip — never a recorded transaction's bytes. Under `PDM-Q6` bodies below the retention watermark `W` are discarded, so a rule that read one would be an above-`W`-only rule with nothing marking it so; with no accessor, every rule in this crate is by construction one a body-less node can run, and Q3's owed instrument ("a consensus read reaches a discarded body") is a property of the trait's surface rather than a grep over `src/`. **Reopening (rule 21):** a census row that reads a *recorded* body — none does today; 4.I reads the *candidate's* bodies, which are in `Candidate`, and CEN-I12 reads a root — arrives with an accessor that is `Option`-shaped (`None` ⇔ discarded, never a sentinel) and a rule type marked above-`W` in the registry, both in that row's slice pre-flight. Shaping request from the pruning lane's review of `PDM-Q-F26` (PR #765), taken 2026-09-16. | The Q3 ruling (every `ChainView` method is justified by a named row) already refuses an unjustified accessor; this row names the *kind* of method that needs the extra mark. `RecordedBlock { hash, header }` — no body field (§4.3). |
@@ -96,7 +96,7 @@ this worktree (`feat/drs-e6-inc1-chain-rules-scaffold`, stacked on
 | tx identity | `TxHash` | `shekyl-types` (`hash32!`) | The `(TxHash, Tx)` pair type (ruling Q4/L4). |
 | key image | `KeyImage` | **`shekyl-types`** — moved there in this PR (round-1 ruling Q1; §3.4) | `hash32! { KeyImage, redact, no_display }`: truncated `Debug`, **no `Display`**, `from_canonical_bytes` retained. `shekyl-crypto-pq` re-exports it; the computation `I = x · H_p(O)` stays there. |
 | curve-tree root | `CurveTreeRoot` | **`shekyl-types`** — minted in this PR (round-1 ruling Q2; §3.4) | `hash32!` default arm. The tree's root *computation* stays in `shekyl-curve-tree`; the name lives where names live. |
-| network | `Network` | `shekyl-address/src/network.rs` | The workspace's one nettype enum (`Mainnet | Testnet | Stagenet`; used by `shekyl-wire` tests, `shekyl-crypto-pq`, `shekyl-engine-*`, `shekyl-genesis-tool`). Selects a `RuleSchedule` (rule 71: nettype selects data). Deps: `shekyl-encoding`, `shekyl-crypto-hash`, `bech32`, `thiserror`; no `redb` — the G1 belt confirms. See **Q12-3**. |
+| network | `Network` | `shekyl-address/src/network.rs` | The workspace's one nettype enum (`Mainnet | Testnet | Stagenet`; used by `shekyl-wire` tests, `shekyl-crypto-pq`, `shekyl-engine-*`, `shekyl-genesis-tool`). Selects a `RuleSchedule` (rule 171: nettype selects data). Deps: `shekyl-encoding`, `shekyl-crypto-hash`, `bech32`, `thiserror`; no `redb` — the G1 belt confirms. See **Q12-3**. |
 | block / header / tx / input | `Block`, `BlockHeader`, `Transaction`, `Input`, `Output` | `shekyl-wire/src/{block,transaction}.rs` | Verdict §3.2. |
 
 **Explicitly not reused:** `shekyl-curve-tree::BlockHeight` (the crate depends
@@ -113,7 +113,7 @@ one anyway); `shekyl-types::
   against raw `[u8; 32]` returns and fields; RTN-7 typed them 2026-09-18 —
   the shapes here are the current ones. RTN-7 also wrote in this crate —
   `A2::GENESIS_PREVIOUS` aliases `BlockHash::NULL` — a sibling-lane write
-  under rule 94 §6; the E6 lane re-verified at `dev` = `51d7f2416` the same
+  under rule 194 §6; the E6 lane re-verified at `dev` = `51d7f2416` the same
   day: coverage record unchanged, crate tests green, stamp moved in
   [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md).)*
 - `BlockHeader { major_version: u8, minor_version: u8, timestamp: u64, previous: BlockHash, nonce: u32, curve_tree_root: CurveTreeRoot, section_root: SectionRoot }`.
@@ -188,7 +188,7 @@ is a genuine predicate for a curve point and not for a hash, and 260 call sites
 across 67 files are not churned for symmetry. A `compile_fail` doctest pins
 "no `Display`".
 
-*Wire check (rule 42).* The current type is `#[serde(transparent)]` over
+*Wire check (rule 142).* The current type is `#[serde(transparent)]` over
 `[u8; 32]`; the family is the same, plus `#[repr(transparent)]` (ABI, not
 serialisation) and an opt-in `postcard_schema::Schema` derive.
 `TransferDetails` (`shekyl-engine-state`) holds `Option<KeyImage>`; its
@@ -332,7 +332,7 @@ impl RuleSet {
     pub const fn settlement_schedule(&self) -> SettlementSchedule;    // what `archival::transition` and the store's connect belt read
 }
 
-/// Height → rule set, per network. Nettype selects **data** (rule 71): one
+/// Height → rule set, per network. Nettype selects **data** (rule 171): one
 /// schedule per network, one `rules_at`, no `match network` anywhere a rule runs.
 /// The schedule is the identity: every network, every height → `GENESIS`.
 /// There is no fork table. A later activation is a design document before a
@@ -1274,7 +1274,7 @@ from a `ChaCha20Rng` seeded by `cshake256_32`, under
   change re-derives them, and cancelling an invalid statement's error is
   a `1/ℓ` event per attempt.
 
-*The cost on the Rust path (2026-10-15).* Shape data, not a floor (rule 76).
+*The cost on the Rust path (2026-10-15).* Shape data, not a floor (rule 176).
 Machine: dev box, i9-11950H (8C/16T), `--release`. The box was shared with
 other lanes: load average 15–21 on 16 threads during both runs. Each figure
 is a median of seven runs, with the seed's cSHAKE inside it.
@@ -2086,7 +2086,7 @@ that instrument.
    *(Planned title said "round 2 → implemented"; round 2 is implemented on its
    defaults, not closed — the reviewer closes it at PR review. Banner says so.)*
 
-Each commit builds, `fmt`/`clippy` clean, tests green (rule 26 B5).
+Each commit builds, `fmt`/`clippy` clean, tests green (rule 126 B5).
 
 ---
 
@@ -2113,7 +2113,7 @@ Each commit builds, `fmt`/`clippy` clean, tests green (rule 26 B5).
   `KeyImage` home, encoding unchanged; `CurveTreeRoot`). `docs/README.md`
   front-door table: one row beside the `SI-` register's.
 - `CLAUDE.md` key-crates list: add `shekyl-chain-rules` (it enumerates crates).
-  `25-rust-architecture.mdc` does **not** enumerate crates (verified) — no edit.
+  `125-rust-architecture.mdc` does **not** enumerate crates (verified) — no edit.
   `rust/Cargo.toml`'s member comment said `build.yml`; corrected to the
   `rust-audit-test.yml` belt script (same correction as §6.5).
 - Crate `//!`: staging note (STAGED; consumer S-CHAIN-W), the replay hook
@@ -2129,7 +2129,7 @@ Each commit builds, `fmt`/`clippy` clean, tests green (rule 26 B5).
 | Q | Question | Ruling |
 | --- | --- | --- |
 | Q1 | `KeyImage` — depend on `shekyl-crypto-pq`, bare array, or move? | **RULED 2026-09-15 — override:** move to `shekyl-types` (same 32-byte shape as `BlockHash`/`TxHash`; "we need the type" must not pull 25 crypto deps into the crate whose defining property is that it has almost none; two same-named newtypes are an unchecked drift source). Move, don't duplicate; `shekyl-crypto-pq` re-exports. **Refinement on verification (round 2):** `hash32!`'s `redact` arm would add a full-hex `Display` the type deliberately omits (spend↔wallet correlation) — a third arm `redact, no_display` is added; `from_canonical_bytes` kept (§3.4). |
-| Q2 | Root type on `root_at` — bare array, mint in `shekyl-types`, or here? | **RULED 2026-09-15 — override:** mint `CurveTreeRoot` in `shekyl-types` now. "Rule 18's home is the redb-bearing curve-tree crate" is the reason to reject the default — the rules crate would depend on a store-bearing crate to *name a value*, the inversion R8 banned arriving through a type. Computation stays in the tree crate. |
+| Q2 | Root type on `root_at` — bare array, mint in `shekyl-types`, or here? | **RULED 2026-09-15 — override:** mint `CurveTreeRoot` in `shekyl-types` now. "Rule 118's home is the redb-bearing curve-tree crate" is the reason to reject the default — the rules crate would depend on a store-bearing crate to *name a value*, the inversion R8 banned arriving through a type. Computation stays in the tree crate. |
 | Q3 | Payloads of `block_at` / `output_at` | **RULED 2026-09-15 — default, with a binding condition:** every field is justified by a named CEN row when introduced; `ChainView`'s narrowness is what keeps rules mockable and the mock smaller than the store. **Applied (round 2):** `output_at` has no justifiable field and is dropped (§3.3); `has_output_key` is the shape the output-key row will need. |
 | Q4 | Policy rows — same enum + `Flag`, or sibling enum? | **RULED 2026-09-15 — override:** sibling enums. A `Flag` field is a check someone can forget; two enums make proximity promotion unrepresentable; two coverage bitsets and two denominators are exactly the two-line record. §7.5.1's gate bullet names the hazard ("a policy row counted toward consensus coverage is proximity promotion arriving through the instrument"). |
 | Q5 | `RuleSetId` representation | **RULED 2026-09-15 — accept `RuleSetId(u8)`, `GENESIS = 1`, but not defined as the header major version:** its own space with an explicit `rules_at(nettype, height) -> RuleSetId` seeded as identity. The 1:1 was then true only because the hardfork table had one entry — the same inertness that hid the `on_block_popped` defect; a function preserves the distinction, equality erases it. **UPDATE 2026-10-09:** that table is deleted ([`CXX_VERSION_GATES.md`](../completed/CXX_VERSION_GATES.md) §5). The 1:1 remains because there is one rule set and one block version, not because a table has one row. |
@@ -2210,7 +2210,7 @@ state-shaped enum), but a third relocation in a scaffold PR, not proposed here.
 - `ChainView::has_output_key` — the output-key-uniqueness row when ruled; §3.3.
 - `RecordedBlock` field growth — ~~cumulative difficulty~~ (**landed with
   4.D, slice 2**); weight arrives with 4.G, with its row.
-- `RuleCoverage` persisted encoding — S-CHAIN-W, rule 42 there (ruling §9.4
+- `RuleCoverage` persisted encoding — S-CHAIN-W, rule 142 there (ruling §9.4
   "persisted with anything it writes").
 - `ChainView` store-side implementor (`Fault = StoreError`), `connect`,
   `ChainTip.connect` — S-CHAIN-W.
@@ -2309,7 +2309,7 @@ Neither is a rule to port; both are properties of the surface.**
   its absence is a recorded decision with `PDM-Q5` named; (b) its
   selector is *not* `RuleSchedule` — the schedule is height → set per
   network, and below-anchor is position relative to this node's `C`
-  (rule 71: `C`/`H` are per-network data consumed by one arm); (c) the
+  (rule 171: `C`/`H` are per-network data consumed by one arm); (c) the
   anchor check itself (block `C` has hash `H`) is either a census row
   (`CenRow` ↔ census is a bijection) or a node-policy check outside
   `CenRow` — `PDM-Q5` rules which, and it lands with the set. The store

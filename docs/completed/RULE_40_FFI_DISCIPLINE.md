@@ -1,14 +1,14 @@
-# Rule 40, FFI discipline — the retired rule
+# `RULE_40_FFI_DISCIPLINE`, FFI discipline — the retired rule
 
 **Status:** CLOSED-as-record, retired 2026-11-08 (ruled by Rick). The FFI
 surface it governed is deleted: there is no `shekyl-ffi`, no `shekyl_ffi.h`,
 and the tree holds no first-party C or C++ (PR #1299). What still binds
-is in [`25-rust-architecture`](../../.cursor/rules/25-rust-architecture.mdc):
+is in [`125-rust-architecture`](../../.cursor/rules/125-rust-architecture.mdc):
 "do not add a C ABI to reach a Rust crate", and §"Boundary reads and
 reserves" and §"Refuse, never panic" below, re-scoped to every decoder of
 untrusted bytes with their FFI-only bullets dropped. Do not implement from
 this record; the body below is why the surface stayed
-coarse while it existed, and the design records that cite "rule 40" read
+coarse while it existed, and the design records that cite "`RULE_40_FFI_DISCIPLINE`" read
 against it.
 
 ## The FFI surface is an audit obligation

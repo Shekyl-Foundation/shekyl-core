@@ -103,7 +103,7 @@ pub const PQC_LEAF_POINT_BYTES: usize = 32;
 
 // The three KEM sizes above are WIRE-FREEZE pins: they must never
 // silently track a crypto-library change (that would be an unversioned
-// format change, rule 42) — but they must also never silently diverge
+// format change, rule 142) — but they must also never silently diverge
 // from what the KEM actually emits (`shekyl-crypto-pq`, the
 // cryptographic source of truth). `shekyl-crypto-pq` is deliberately a
 // dev-only dependency (the serializer's runtime dep surface stays

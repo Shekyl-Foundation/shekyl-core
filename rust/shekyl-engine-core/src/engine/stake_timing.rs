@@ -5,22 +5,18 @@
 
 //! Typed newtypes for the archival bond request path (S4, Rounds 2 and 4).
 //!
-//! **Timing seams:** `NetworkGap(BlockSpan)` guards the block-level standoff
-//! draw; `EconomicSpacing(SebSpan)` guards the principal→`P` funding interval.
-//! They carry distinct inner types, so passing one where the other is expected
-//! is a compile error.
+//! **Timing seam:** `NetworkGap(BlockSpan)` is the bond-post delay's window,
+//! measured from the funding's anchor (`ARCHIVAL_BOND_POST_DELAY.md` BD-Q2).
+//! There is no floor between the funding and the bond: a floor is a constant
+//! shift an observer subtracts (BD-Q5).
 //!
 //! **Amount seams:** `CoverAmount` names the optional amount sent with the bond
 //! transaction to decouple the principal→`P` flow from `bond_floor`. Lives here
 //! (rather than a separate module) because it has one consumer today and
 //! participates in the same request-path composition as the timing types.
 //!
-//! **Design-now / wire-later.** Both types and their default constants land in
-//! 2c-2b. The *real checks* (has ≥ 1 SEB elapsed? has the standoff fired?) are
-//! wired in later sub-PRs; only the logic that *names* the constraint is here.
-//!
-//! **Home rationale.** `BlockSpan` and `SebSpan` have a single consumer today
-//! (this crate). Per `18-type-placement.mdc`, promoting them to `shekyl-types`
+//! **Home rationale.** `BlockSpan` has a single consumer today
+//! (this crate). Per `118-type-placement.mdc`, promoting them to `shekyl-types`
 //! waits for a second consumer — `21-reversion-clause-discipline.mdc` reopening
 //! criterion: "a downstream crate names one of these types in its public API."
 
@@ -126,14 +122,6 @@ impl BlockSpan {
     }
 }
 
-/// A span measured in Settlement Epoch Boundaries — the inner unit of
-/// [`EconomicSpacing`].
-///
-/// One `SebSpan(1)` means "at least one full SEB must separate these events."
-/// The raw `u64` is the SEB count; no finer granularity is defined here.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct SebSpan(pub u64);
-
 /// A timing constraint measured in blocks — gates the `draw_entry_gap` standoff
 /// window for the archival bond request path (S4, `ARCHIVAL_BOND_CONSTRUCTION.md`
 /// §10, `ARCHIVAL_TIMING_CONSTANTS.md` §7).
@@ -143,9 +131,6 @@ pub(crate) struct SebSpan(pub u64);
 /// (prep-spend / announce / bond-post) horizon; the order-coin retirement
 /// deleted the second (funding-send) event, so that derivation is now stale —
 /// see the F-W3 banner on `shekyl_standoff::DEFAULT_ENTRY_GAP_WINDOW`.
-///
-/// **Not interchangeable with [`EconomicSpacing`]** — the inner type is
-/// `BlockSpan`, not `SebSpan`, so cross-application is a compile error.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct NetworkGap(pub BlockSpan);
 
@@ -157,21 +142,6 @@ impl NetworkGap {
         self.0.as_u64()
     }
 }
-
-/// A timing constraint measured in Settlement Epoch Boundaries — gates the
-/// principal→`P` funding-transfer → bond-post interval for cold-start bonds
-/// (SP-2.d, `ARCHIVAL_BOND_CONSTRUCTION.md` §10, `ARCHIVAL_TIMING_CONSTANTS.md`
-/// §7).
-///
-/// The cold-start decorrelation guard: at least `MIN_COLD_START_SPACING` SEB
-/// must elapse between the principal's generic seed transfer to `P` and `P`'s
-/// bond post. The real elapsed check is wire-later (deferred to cold-start
-/// wiring); this type names the constraint now.
-///
-/// **Not interchangeable with [`NetworkGap`]** — the inner type is `SebSpan`,
-/// not `BlockSpan`, so cross-application is a compile error.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct EconomicSpacing(pub SebSpan);
 
 /// The default archival-bond entry-gap window, **typed** as a [`NetworkGap`]
 /// (B6).
@@ -188,19 +158,6 @@ pub(crate) struct EconomicSpacing(pub SebSpan);
 /// the B6 open item from §4.
 pub(crate) const DEFAULT_ENTRY_GAP: NetworkGap =
     NetworkGap(BlockSpan(shekyl_standoff::DEFAULT_ENTRY_GAP_WINDOW));
-
-#[allow(dead_code)] // inert until cold-start spacing check is wired
-/// Minimum economic spacing for cold-start principal→`P` funding (SP-2.d).
-///
-/// At least 1 Settlement Epoch Boundary must elapse between the principal's
-/// generic seed transfer to `P` and `P`'s bond post — i.e. `≥ 1 settlement
-/// epoch` per `ARCHIVAL_TIMING_CONSTANTS.md` §7 ("Min spacing join-Market ↔
-/// principal spend", gate-6 R4). The SEB *length* is consensus
-/// (`config/consensus_constants.json` `settlement_epoch_blocks = 10000`); this
-/// const is the wallet-policy *count* (1 SEB). The real elapsed check —
-/// `SebSpan → blocks` via `settlement_epoch_blocks` — wires in cold-start
-/// wiring (B6b reconciliation, R0-D3).
-pub(crate) const MIN_COLD_START_SPACING: EconomicSpacing = EconomicSpacing(SebSpan(1));
 
 // ---------------------------------------------------------------------------
 // SH-2b-2 — the serving-launch standoff (gate-6 §10.9 restore-flow)
@@ -236,9 +193,8 @@ pub(crate) const MIN_COLD_START_SPACING: EconomicSpacing = EconomicSpacing(SebSp
 /// `n` opens has expectation `window / (n + 1)`. The window therefore has to be
 /// sized against *expected open frequency*, and a window that is comfortable for
 /// a wallet opened weekly is thin for one opened hourly. This is the same
-/// discrete-vs-continuous axis [`posture`](super::posture) draws between fetch-③
-/// (continuous, statistical, unavoidable — disclosed) and broadcast-③ (discrete,
-/// categorical, avoidable — forbidden).
+/// discrete-versus-continuous axis between a fetch that is continuous and
+/// disclosed and a broadcast that is discrete and avoidable.
 ///
 /// # Provenance of the value: **UNDERIVED, and deliberately named as such**
 ///

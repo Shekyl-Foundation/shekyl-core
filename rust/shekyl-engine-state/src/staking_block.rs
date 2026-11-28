@@ -46,7 +46,7 @@
 //! config-shaped but are **funds-load-bearing config** — lose them and
 //! the engine stops deriving the personas that hold bonds — so they
 //! are sealed state by the funds-first placement order
-//! (`docs/WALLET_SETTINGS.md` §1, rule 42): anything a reset to default
+//! (`docs/WALLET_SETTINGS.md` §1, rule 142): anything a reset to default
 //! could reach would silently drop them. `WalletLedger` is that tier and
 //! the semantic home, and keeps staking inside the Rust engine with its
 //! own [`STAKING_BLOCK_VERSION`].
@@ -149,7 +149,7 @@ pub struct StakingBlock {
     /// (at the first open whose seed-in-scope window covers the slot) and
     /// cached here; every later open loads the map instead of paying the
     /// per-slot PQ keygen — that is what makes the principal scan's
-    /// unconditional bond watch free at the rule-76 device floor. Public
+    /// unconditional bond watch free at the rule-176 device floor. Public
     /// identifiers by function (`P` is public; the firewall protects only
     /// the `P`↔principal edge), but the slot↔id *association* is
     /// persona history — hence the redacted `Debug` and the AEAD seal.

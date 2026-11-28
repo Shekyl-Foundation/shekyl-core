@@ -15,7 +15,7 @@ a different primitive, `CTW-Q5` ruled with a different justification,
 discriminator, §3.9); no `RuleCoverage` row for growth (§3.1). Each row of
 §8 carries its ruling line-locally. Identifier families **`CTW-`** (findings)
 and **`CTW-Q`** (questions), registered in `IMPLEMENTATION_INDEX.md` §2 with
-this file (rule 94 §1; `check_index_prefix_uniqueness.py` branch (a)). Parent
+this file (rule 194 §1; `check_index_prefix_uniqueness.py` branch (a)). Parent
 plan: [`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) — the **DRS-E3** node of
 the lane graph (`E1 → E2 → E3 → E4 → E5`), *"curve storage only"*; the
 boundary statement it builds against is [`DRS_E1_SCURVE.md`](../completed/DRS_E1_SCURVE.md)

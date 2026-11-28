@@ -5,7 +5,7 @@
 `CF-3` (2026-11-20), and verified there: the forged chains are written at
 layout 5 and replayed through it, and the committed corpora still read at
 layout 4. Ruled by Rick, 2026-11-18: "Corpus
-codec crate: yes, in its own PR under rule 26. Codec only: magic, version,
+codec crate: yes, in its own PR under rule 126. Codec only: magic, version,
 encode and decode. The five committed corpora must round-trip byte for
 byte. Classify the crate in the production graph check."
 
@@ -107,7 +107,7 @@ lockfile gains only the crate itself.
 
 ## 5. Changing the format
 
-A layout change bumps `CORPUS_FORMAT_VERSION` (rule 42's discipline), and
+A layout change bumps `CORPUS_FORMAT_VERSION` (rule 142's discipline), and
 the reader refuses every value but the current layout: an artifact is
 rebuilt, never migrated (rule 15). The one exception is `LAYOUT_4`
 (`CF-R7`): the reader also reads layout 4, with layout 4's tags, until the

@@ -295,7 +295,7 @@ class Powerloss:
             held["mounted"] = True
             sh("chown", f"{os.getuid()}:{os.getgid()}", self.mnt)
             subject = os.path.join(self.mnt, "subject")
-            os.makedirs(subject)
+            B.owner_dir(subject)
 
             seed = session.spawn("seed", seed_dir, [], session.sp2p, session.srpc)
             with session.running(seed, session.srpc) as ready:
@@ -384,7 +384,7 @@ class Powerloss:
             subject = os.path.join(self.mnt, "subject")
             store = os.path.join(subject, "chain.db")
             point["store"] = os.path.exists(store)
-            os.makedirs(subject, exist_ok=True)
+            B.owner_dir(subject)
             proc = session.spawn(f"reopen-{point['entry']}", subject, [], session.bp2p,
                                  session.brpc, offline=True)
             with session.running(proc, session.brpc) as ready:

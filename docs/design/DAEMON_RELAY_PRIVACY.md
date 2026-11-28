@@ -83,9 +83,9 @@ adversary **clearnet-only** and the black-hole adversary transport-independent
 collapses from π₀≈0.45 (clearnet, 30 % attack) to 0.000 (Tor) — so the Tor
 recommendation rests on a measurement, not on reasoning. §11 anchors every finding against the Dandelion++ paper and the Bitcoin
 Core source. Decisions D-1…D-7 stand as amended; §7 is the Round-3 agenda.
-**Process rule:** [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
+**Process rule:** [`126-sub-pr-design-discipline.mdc`](../../.cursor/rules/126-sub-pr-design-discipline.mdc)
 (FFI-boundary-moving), and
-[`20-rust-vs-cpp-policy.mdc`](../completed/RULE_20_RUST_VS_CPP.md)
+[`RULE_20_RUST_VS_CPP.md`](../completed/RULE_20_RUST_VS_CPP.md)
 §"Migration is a planning activity" — this document exists so the port is not
 folded into feature work.
 **Spec-first per** [`05-system-thinking.mdc`](../../.cursor/rules/05-system-thinking.mdc).
@@ -1732,7 +1732,7 @@ art, credited as such, and worth reading. It is **not** a dependency:
    monorepo-internal with workspace-relative dependencies, so consuming it
    means vendoring at a pinned commit, not `cargo add` — a
    [`17-dependency-discipline`](../../.cursor/rules/17-dependency-discipline.mdc)
-   posture change, and a [`10-shekyl-first`](../../.cursor/rules/10-shekyl-first.mdc)
+   posture change, and a [`110-shekyl-first`](../../.cursor/rules/110-shekyl-first.mdc)
    question about adopting a sibling's application code.
 2. **The shape is wrong for this seam.** `dandelion-tower` is a
    `tower::Service` stack over tokio timers and futures streams, and abstracts
@@ -2290,7 +2290,7 @@ traffic (not a new peer), the net is dominated by the ~86× rate reduction.
   g-enriched draw before reshape forwards to it. Reusing "`out_mapping_[other]`"
   is not sufficient if the peer *in* that slot was re-rolled by churn.
 
-**Deferred to implementation (RP-2+, with its own design round per rule 20):**
+**Deferred to implementation (RP-2+, with its own design round per `RULE_20_RUST_VS_CPP`):**
 the actual re-stem wiring in `levin_notify` / `tx_pool`, the tx-hash-keyed retry
 store, and the `out_mapping_` alternate-selection helper. This section specifies
 *what* must hold; the *how* is a later PR. Acceptance gates: W1 and W6 (closed by
@@ -3580,7 +3580,7 @@ line-number verification, and every port anchor holds at source on `origin/dev`:
 fresh-draw-on-churn refill at [dandelionpp.cpp:160]; outbound-only fluff on Tor/I2P
 at [levin_notify.cpp:448]; fluff-on-expiry at [cryptonote_core.cpp:1087].
 
-**Rust owns the logic; C++ holds an opaque handle (rules 20/40).** `stem_map.rs`
+**Rust owns the logic; C++ holds an opaque handle (`RULE_20_RUST_VS_CPP`/`RULE_40_FFI_DISCIPLINE`).** `stem_map.rs`
 already implements the map. RP-2a reimplements `dandelionpp.cpp`'s ~210 lines of
 logic as **forwarding calls** to a map FFI in `shekyl-ffi`, and keeps
 `dandelionpp.h`'s class ABI so `levin_notify.cpp` and the `net.cpp` gtests compile
@@ -3651,7 +3651,7 @@ in daemon behaviour. Each is verified at the call site, not paraphrased.
   nil-collapsed order passes the map gtests and **misassigns noise channels** in
   the daemon; micro-test (6) pins the order.
 
-**Type security — the migration's dividend (rule 25).** Rust owns the map with
+**Type security — the migration's dividend (rule 125).** Rust owns the map with
 `Option<ConnectionId>` (an empty slot is `None`, not a magic nil UUID) and a
 `ConnectionId([u8; 16])` newtype; `stem_for`'s "must fluff" is `None`, not a
 sentinel. The FFI maps `None ↔ nil-uuid` **explicitly at the boundary** so zero
@@ -3808,7 +3808,7 @@ already draw different sequences. `EmbargoTimer`'s table *is* the distribution �
 integer, built by recurrences with no transcendentals, bit-identical across
 platforms, and pinned by fingerprint in `tests/golden_vector.rs`. Fixing the
 distribution in C++ would re-create debt the migration must pay down (rules
-16/20). So the draw moves, and F-1/F-2/F-3 die together: the value, the
+16/`RULE_20_RUST_VS_CPP`). So the draw moves, and F-1/F-2/F-3 die together: the value, the
 distribution, and the derivation all come from one place.
 
 **The seam is smaller than RP-2a's — no handle.** The map needed one because it
@@ -4145,7 +4145,7 @@ whether 3a lands cleanly with the snapshot seam intact.
    round tractable: the primitives stay dependency-light, synchronous, and pure
    `&mut self` steps — which is exactly the property the `run_*` force-step
    hooks, and therefore the 33-test oracle, depend on. The new crate owns the
-   driver and the transport callbacks and depends on the primitives; rule 25's
+   driver and the transport callbacks and depends on the primitives; rule 125's
    "implement logic in a dedicated crate" points the same way.
 
 ### 18.4a The shim is the layer the oracle cannot see
@@ -4662,7 +4662,7 @@ consolidation's whole value is that it removes a seam rather than adding a
 mechanism. If it ends with the seam still standing under a different name, it did
 not happen.
 
-**Identifiers this round registers** (rule 94 — a family registers at birth, and
+**Identifiers this round registers** (rule 194 — a family registers at birth, and
 these are numbered in discovery order, which is not document order):
 
 | ID | Invariant | Defined | Acceptance |
@@ -8320,10 +8320,10 @@ all.**
 whether `decision_interval` is constant, and whether the adversary controls the
 timing of its own judgement.** All three belong in the comparison.
 
-## 38. Q-10.1 answered: Rust owns it — and rule 20 dissolves the plumbing problem
+## 38. Q-10.1 answered: Rust owns it — and `RULE_20_RUST_VS_CPP` dissolves the plumbing problem
 
-**2026-08-01, maintainer ruling: the reputation state is Rust's, and per rule
-20 Rust should own as much of this as possible.** That does not merely assign
+**2026-08-01, maintainer ruling: the reputation state is Rust's, and per
+`RULE_20_RUST_VS_CPP` Rust should own as much of this as possible.** That does not merely assign
 the accumulator — **it changes the architecture, because the obvious wiring
 becomes the wrong one.**
 
@@ -8333,7 +8333,7 @@ The obvious design lets `tx_pool` report each embargo's resolution, since that
 is where it arms and fires today. **`tx_pool` holds no relay-zone handle**, so
 importing the outcome means **building a new C++ path from the mempool into
 the relay layer** — and every byte of that path is **C++ deciding something
-Rust could decide.** Rejected under rule 20.
+Rust could decide.** Rejected under `RULE_20_RUST_VS_CPP`.
 
 **The relay layer already sees both directions**: it *chooses* the stem
 successor, and it is told the `source` of every arriving transaction. So
@@ -8411,7 +8411,7 @@ cannot be called until identity reaches that layer, and there are exactly two
 ways to get it: **hash the blobs in the notify path** (new work in a layer that
 deliberately treats them as opaque) or **plumb hashes from `cryptonote_core`,
 which already has them**, through `net_node` → `notify`. The second is the
-rule-20 direction — core hands over data it already holds — and it is a
+`RULE_20_RUST_VS_CPP` direction — core hands over data it already holds — and it is a
 signature change through two layers, which is its own commit.
 
 **So §33.2's finding is *not* closed: the signal still does not exist in
@@ -8966,7 +8966,7 @@ job*, and that — not ordering — is what §42.5's open 1 calls non-mechanical
 The relay plan already crosses the FFI: `shekyl_relay_zone_plan_relay_with_refresh`
 returns `SHEKYL_RELAY_PLAN_STEM` / `NO_ROUTE` / `FLUFF_EPOCH`, and the stem
 path at `levin_notify.cpp` consumes it. **Rust decides, C++ dispatches** — the
-architecture rule 20 asks for is already in place for the phase.
+architecture `RULE_20_RUST_VS_CPP` asks for is already in place for the phase.
 
 **The covert branch is the one path that never asks.** So the restoration is
 not a port of working C++ into Rust; it is bringing an inherited bypass under
@@ -8981,7 +8981,7 @@ a seam that already exists, and the correct model is already on the Rust side
 | dummy payload bytes | **Rust** — one owner for the covert parameters |
 | strand dispatch, levin fragmenting, socket write | **C++** — epee-bound, stays |
 
-Per rule 40's coarse-call rule this is **one** crossing returning a plan that
+Per `RULE_40_FFI_DISCIPLINE`'s coarse-call rule this is **one** crossing returning a plan that
 carries phase *and* carrier *and* slot — the precedent being
 `shekyl_relay_zone_roll_originated_zone`, which folded a roll and its mapping
 into a single call rather than shuttling an intermediate verdict across.
@@ -9345,7 +9345,7 @@ packed-byte decoding reaches the watch, arrival resolves as propagated, and
 the unreturned id resolves as **silent through the production poll path** at
 a `now` past any adopted draw — plus null-handle/null-hash no-op checks.
 
-> **SUPERSEDED SAME DAY BY §47 — rule 20 applied to the checklist below
+> **SUPERSEDED SAME DAY BY §47 — `RULE_20_RUST_VS_CPP` applied to the checklist below
 > deleted it.** The join key is *this layer's* fact (`TxId` is documented as
 > opaque join bytes), so Rust derives it **from the blob** and C++ hands over
 > only what it already holds at each call site. `tvc.m_tx_hash`, the
@@ -9391,9 +9391,9 @@ design left in it. Landing the FFI half separately keeps the branch green and
 puts the contract (window choice, every-zone arrival, packed layout) under
 test before its first C++ caller exists.
 
-## 47. §12.11's signal exists in production — the plumbing landed as a rule-20 collapse
+## 47. §12.11's signal exists in production — the plumbing landed as a `RULE_20_RUST_VS_CPP` collapse
 
-**2026-08-01.** The maintainer's reminder — *rule 20 as you proceed* — applied
+**2026-08-01.** The maintainer's reminder — *`RULE_20_RUST_VS_CPP` as you proceed* — applied
 to §46.2's checklist deleted most of it. **The C++ half landed as ~40 lines
 with no signature changes, and §33.2's finding is closed: the per-successor
 disarm signal production never recorded now exists.**
@@ -9465,7 +9465,7 @@ was cleanly constructed and its premise was wrong.
 
 ### 48.1 The finding
 
-The rule-20 argument said: the join never leaves this layer, so the only
+The `RULE_20_RUST_VS_CPP` argument said: the join never leaves this layer, so the only
 requirement is *same bytes → same key on both paths*. **The join is local —
 the inputs are not.** The stem side hashes what `O` sent; the arrival side
 hashes what the network returned, after arbitrary intermediate hops. Nothing
@@ -9522,9 +9522,9 @@ re-serialization charges `O`'s honest successor.** Struck at the site.
 already workspace-pinned — not a policy choice. Moot by deletion; the join
 key is now the consensus hash itself.)*
 
-### 48.4 The revised rule-20 axis, recorded because it will recur
+### 48.4 The revised `RULE_20_RUST_VS_CPP` axis, recorded because it will recur
 
-Rule 20 was applied on *"is this key compared with anything external?"* **The
+`RULE_20_RUST_VS_CPP` was applied on *"is this key compared with anything external?"* **The
 load-bearing axis is: do all parties who must agree on the key derive it from
 the same input?** Here one side hashed what it sent and the other what the
 network returned. **The canonical tx hash exists precisely because blob bytes
@@ -10161,7 +10161,7 @@ telemetry. Closed — after two corrections about where it belonged.
 
 **First**: I built the readout as `connection_info` fields — **73 lines of C++
 across 7 files** against 54 in Rust — for one number. Reverted on the
-rule-20 challenge.
+`RULE_20_RUST_VS_CPP` challenge.
 
 **Second, and it reverses the first's reasoning**: I justified the revert as
 *"premature, and the RPC layer is C++ anyway."* **Wrong — there is a Rust
@@ -11890,7 +11890,7 @@ matters most:
 
 **Correcting my own claim.** §64.4 called the origin-zone field *"a
 persisted-metadata change, so §42's version-constant discipline applies."*
-**It does not.** [`42-serialization-policy`](../../.cursor/rules/42-serialization-policy.mdc)
+**It does not.** [`142-serialization-policy`](../../.cursor/rules/142-serialization-policy.mdc)
 is scoped by its own `globs` to `rust/shekyl-engine-state/**` and
 `rust/shekyl-engine-file/**` — the **wallet's** persisted Rust blocks.
 `txpool_tx_meta_t` is daemon-side C++ LMDB state and is not governed by it.
@@ -12393,7 +12393,7 @@ would have kept reporting numbers for a network that does not exist. **That is
 F-7's failure mode — an input measured on a configuration the deployment does
 not use — re-created underneath the fix for F-7.**
 
-**Rust owns it now** (rule 20): `params::P2P_DEFAULT_OUT_PEERS`, exported as
+**Rust owns it now** (`RULE_20_RUST_VS_CPP`): `params::P2P_DEFAULT_OUT_PEERS`, exported as
 `shekyl_p2p_default_out_peers()`, with the `#define` **deleted** and the three
 C++ consumers plus the one gtest reading the FFI. Adding a Rust constant while
 leaving the `#define` in place would have created a *sixth* mirror with no
@@ -13016,7 +13016,7 @@ that the constant needs to roughly double, not move an order.**
 > [`CONSENSUS_C2_R1_REORG.md`](../completed/CONSENSUS_C2_R1_REORG.md) §3):** the
 > per-block-checkpoint fast path this section found was **deleted** — the
 > "unmade shipping decision" is made: not shipped. The reopening criterion
-> (a named design round; interim trigger 72 h initial sync on the rule-76
+> (a named design round; interim trigger 72 h initial sync on the rule-176
 > floor device) carries this section's concern forward; the analysis below
 > is kept as the record it was.
 
@@ -13039,7 +13039,7 @@ and the block path pays full verification. At 127 ms, one year at 20k tx/day
 > *false* for historical blocks — the checkpoint skip was what rescued them, and
 > it is gone.
 >
-> **This is a Pi-4 provisioning claim under [`76-device-provisioning-floor`](../../.cursor/rules/76-device-provisioning-floor.mdc),
+> **This is a Pi-4 provisioning claim under [`176-device-provisioning-floor`](../../.cursor/rules/176-device-provisioning-floor.mdc),
 > so it is not left as a note.** The relay lane owns re-deriving initial-sync
 > cost without the checkpoint skip; queued in `FOLLOWUPS.md` with that blocker
 > and a pre-genesis target. **The retraction is written here rather than only in
@@ -13112,7 +13112,7 @@ Three claims hung on it, and two do not survive:
   > default mitigation is now unmitigated, so §74.2's 11-day figure is the case
   > rather than the worst case. The re-derivation is queued in
   > [`FOLLOWUPS.md`](../FOLLOWUPS.md) with its blocker (the replacement figure
-  > needs a measurement, not an argument) and its rule-76 owner.
+  > needs a measurement, not an argument) and its rule-176 owner.
 - **Large-input transactions are under-provisioned — this survives, and it is
   the real output.** 383 ms against a 175 ms constant at 4 inputs and chain
   age, on the arm the policy derives from. **A privacy penalty correlated with
@@ -13451,7 +13451,7 @@ the minimum spec later *shortens* the embargo — a change every node must adopt
 together. **The spec is therefore genesis-frozen in the same sense staking
 default-on is** (the genesis-freeze bucket): not literally unchangeable, but
 changeable only by coordinated upgrade, which §75's rule
-([`75-system-autonomy`](../../.cursor/rules/75-system-autonomy.mdc)) exists to
+([`175-system-autonomy`](../../.cursor/rules/175-system-autonomy.mdc)) exists to
 minimise. **Choosing it low costs latency forever; choosing it high sorts
 anonymity forever.** That asymmetry belongs in the decision.
 
@@ -13726,7 +13726,7 @@ hierarchies**, so the ratio may well drift with depth.
 - **it holds** → the check §80.6 wanted, now earned rather than assumed.
 
 The x86 arm is fast, so this is cheap. **Measure both columns per tier.**
-*(This is [`76-device-provisioning-floor`](../../.cursor/rules/76-device-provisioning-floor.mdc)
+*(This is [`176-device-provisioning-floor`](../../.cursor/rules/176-device-provisioning-floor.mdc)
 rule 3 in its first application: cross-machine ratios are measured, never
 assumed.)*
 
@@ -13741,7 +13741,7 @@ synthesized depth-5 number as measured and **skips the re-measurement the
 schedule exists to trigger** — which is `175`'s failure exactly: a plausible
 number standing where a measurement belongs. **The difference is that here we
 would know it, and can say so at the value.**
-*(Rule 4 of [`76-device-provisioning-floor`](../../.cursor/rules/76-device-provisioning-floor.mdc).)*
+*(Rule 4 of [`176-device-provisioning-floor`](../../.cursor/rules/176-device-provisioning-floor.mdc).)*
 
 ### 81.3 Which corrects what the schedule is for
 
@@ -13763,7 +13763,7 @@ device landscape does (*"if we ever need to switch to our quantum computer
 mobile devices"*).
 
 Landed as
-[`76-device-provisioning-floor`](../../.cursor/rules/76-device-provisioning-floor.mdc),
+[`176-device-provisioning-floor`](../../.cursor/rules/176-device-provisioning-floor.mdc),
 carrying the floor itself, why it is a decision rather than a benchmark note,
 the four rules §81.1–81.2 generalise, and the **asymmetry that governs moving
 it**: too low is an error with a feedback channel, too high is one nothing
@@ -13844,7 +13844,7 @@ rather than a scalar with a scheduled bump.
 ### 82.5 Owed
 
 **The Pi columns.** Rule 3 of
-[`76-device-provisioning-floor`](../../.cursor/rules/76-device-provisioning-floor.mdc):
+[`176-device-provisioning-floor`](../../.cursor/rules/176-device-provisioning-floor.mdc):
 cross-machine ratios are measured, never assumed. The 5.56× invariant was
 established on the *input* axis; §81.1 flagged that it may drift with depth
 because deeper trees mean larger working sets against very different cache
@@ -13905,7 +13905,7 @@ edit rather than vigilance.**
 > **And it gives the schedule teeth it otherwise would not have. A dated note
 > in a design document is a hope; a table that stops answering is a deadline.**
 
-*(This is [`76-device-provisioning-floor`](../../.cursor/rules/76-device-provisioning-floor.mdc)
+*(This is [`176-device-provisioning-floor`](../../.cursor/rules/176-device-provisioning-floor.mdc)
 rule 4 with an enforcement mechanism: a projection is a prior to be confirmed,
 and refusing past the edge is what makes the confirmation happen rather than
 be assumed.)*
@@ -14001,7 +14001,7 @@ spreads (0.36, 0.23) are *narrower* than the input axis's own 0.39.
 
 > **The strongest form of the result is the ordering: the control drifted
 > MORE than the watch cell.** A cache spill in the 8-input depth-7 cell would
-> have reversed that. **§80.6's invariant is earned**, and rule 76.4 stays
+> have reversed that. **§80.6's invariant is earned**, and rule 176.4 stays
 > precautionary rather than becoming load-bearing.
 
 **And the arc's first clean pre-registration.** Both branches of §84.1 were
@@ -14038,9 +14038,9 @@ The totals hide it. Per-layer:
 found none. What it says is that **the depth-walking work is slightly more
 Pi-unfavourable than the average workload.**
 
-### 85.5 Which sharpens rule 76.4 exactly where the schedule operates
+### 85.5 Which sharpens rule 176.4 exactly where the schedule operates
 
-Rule 76.4 forbids scaling a **value**. **The schedule's actual future move is
+Rule 176.4 forbids scaling a **value**. **The schedule's actual future move is
 to scale an *increment*:** *"tier 5 passed, measure the delta on x86, add
 5.56×."*
 
@@ -14050,7 +14050,7 @@ direction, same invisibility as everything else this arc has caught.
 > **And the totals being flat is precisely what makes the increment shortcut
 > look safe.** The reassuring result is the one that sets the trap.
 
-Rule 76.4 amended to read **values *and* increments**.
+Rule 176.4 amended to read **values *and* increments**.
 
 ### 85.6 The capture was lossy, and it gets the jig treatment
 
@@ -14116,7 +14116,7 @@ stem-over-Tor round:
 | --- | --- |
 | `hop`'s definition | fixed (§71): receive-to-forward, transit + verification + scheduling, identical on both transports |
 | the verification surface | measured on both arms, 48 cells, invariant earned (§85) |
-| minimum spec | decided — Pi 4, and now a rule (§78, `76-device-provisioning-floor`) |
+| minimum spec | decided — Pi 4, and now a rule (§78, `176-device-provisioning-floor`) |
 | shape handling | D adopted, table not fit, refuses past its edge (§80, §83) |
 | per-zone embargo precondition | scoped to **two reserved bits** with a safe default (§65.4) |
 | the three gates | identified (§64.2) |
@@ -14128,7 +14128,7 @@ discovering mid-round that the two arms were measuring different quantities.
 
 ## 87. The guards must defend themselves — a spec for D's implementation
 
-**2026-08-05, maintainer.** §83.3 and rule 76.4 are currently *explained*. **A
+**2026-08-05, maintainer.** §83.3 and rule 176.4 are currently *explained*. **A
 comment explaining a guard is a hope.** Both can be made structural, and the
 spec belongs here before the table is built.
 
@@ -14146,7 +14146,7 @@ difference is what it costs to remove: a reviewer who thinks the refusal is
 brittle must **delete a test whose name states the consequence**, which is a
 different act from relaxing a `panic!`.
 
-### 87.2 Rule 76.4 becomes structural rather than a rule
+### 87.2 Rule 176.4 becomes structural rather than a rule
 
 **Give each table cell a provenance field** — `measured_on: Pi4 | X86` — and
 **assert that every cell on the spec path is `Pi4`.**
@@ -16394,7 +16394,7 @@ exactly what a surprising measurement would distort.**
 
 ### 94.4 What lands
 
-`ANON_ZONE_TRANSIT_MEASURED_MS` — registered at birth per rule 94 — replacing
+`ANON_ZONE_TRANSIT_MEASURED_MS` — registered at birth per rule 194 — replacing
 `ANON_ZONE_TRANSIT_ASSUMPTION_MS`, carrying the `Provenance` field §87.2
 introduced, so a reader can tell a measured value from a labelled assumption
 without leaving the code. The assumption constant is **deleted in the same
@@ -16577,13 +16577,13 @@ round was not simply run on a remote machine.
 
 **Both Tor daemons' first hops leave the measurement host, so its uplink appears
 twice in every sample.** A datacenter VM has a materially better uplink than the
-provisioning floor: rule 76 names a Raspberry Pi 4, and a Pi 4 is not sitting on
+provisioning floor: rule 176 names a Raspberry Pi 4, and a Pi 4 is not sitting on
 10 GbE. Measuring there biases transit **low** — and §94.2(d) already fixed
 under-estimating as the privacy-losing direction, because it shortens the
 embargo. A datacenter reading would be a *lower* bound on what a floor node
 sees, which is the bound this round must not adopt.
 
-This is rule 76's own warning one axis over: not *the CPU that was handy*, **the
+This is rule 176's own warning one axis over: not *the CPU that was handy*, **the
 uplink that was handy**.
 
 **Amended to:** the host's network position is recorded with every session and
@@ -16609,7 +16609,7 @@ direction — the same sign as the missing transit term (§91.6), the two `F′`
 errors before it, and every other omission this arc has found.
 
 **Why the Pi does not host the transit measurement, even though it is the
-floor.** Rule 76's domain is *work time*, and it is already applied where it
+floor.** Rule 176's domain is *work time*, and it is already applied where it
 belongs: `verify_cost.rs` carries `Provenance::MeasuredPi4`, asserted by test.
 Transit is not work time. Two further reasons:
 
@@ -17465,7 +17465,7 @@ row. Pins below were read at `98fbd20acb`.
 | Levin invoke timer: the session layer's `INVOKE_TIMEOUT`, 120 s, for a 1002 request's response (`shekyl-p2p-session/src/timing.rs`, brief §7.6). *Records-was:* `P2P_DEFAULT_HANDSHAKE_INVOKE_TIMEOUT` 5000 ms, `src/cryptonote_config.h` at `ac3836de90` (line 199), armed at `net_node.inl:1414` inside `do_handshake_with_peer` and at `:2696` inside `try_get_support_flags` — deleted 2026-11-05 with the C++ host | `timing.rs`; one timing engine wakes it | **Assumption.** The Levin handler's `LEVIN_DEFAULT_TIMEOUT_PRECONDITION`, kept as written. **Not the dialer's clock (Rick, 2026-10-08):** the outbound handshake's only clock is each connector's transport gap, the D9 row above; an inbound handshake is held by the connector profile's `handshake_within` | The session's outstanding 1002 request | Not re-measured; it is a ceiling on a reply, not a pacing value. Support flags are not invoked (the capability is carried in the handshake) |
 | Dial wake spacing | Each connector's dial profile, `shekyl-transport-layer` `dial_profile(connector).wake` (the dial profile, Rick 2026-10-27), drawn by `shekyl-dialer/src/pace.rs` `next_wake_nanos`. **R3 (Rick, 2026-10-12):** `0.5 s + U(0, 1.0 s)`, mean 1 s, PWD-B2's bounded-uniform shape, drawn per dial (`P2P_3_SLICE_3_DIALER_BRIEF.md`, the fill). *Records-was:* ruled 2026-09-25 as a jittered per-dial wake with no number; before the Rust dialer, the C++ `m_connections_maker_interval` idle maker and the 60 s housekeeping timer | **Assumption.** The shape and the number are ruled; neither is measured | The fill (dialer brief) | After PR-3, on the Rust dialer: dial pacing, into this register |
 | In-flight dial bound: Tor 5, clearnet 1 | Each connector's dial profile, `rust/shekyl-transport-layer/src/profile.rs` `dial_profile(connector).in_flight_bound` (the dial profile, Rick 2026-10-27); each dial attempt a task on the transport runtime (the dialer in-flight bound, revision 2, Rick 2026-10-25); a Tor attempt that fails at or after the managed Tor's `SocksTimeout` is final within its test (revision 4, Rick 2026-10-26) | **Measured** (Tor), the floor device, 2026-10-26, on #1190's merged head (`d22ac70aa`): at half dead bound 5's median fill is 508 s over 5 samples, inside the 600 s horizon (bound 1, 1064 s); refill after a Tor respawn 126 s over 3 (bound 1, 928 s) (`docs/benchmarks/p2p_tor_inflight_bound_20261025.md`, the short series; nine full-window `0xF0` replies were still retried then, fixed on #1203, so the medians are slightly long). **Derived** 2026-10-25, restated 2026-10-26, the same record, with half the draws dead, on the full-window-final lifecycle (a dead attempt modelled at the 120 s dial deadline; the managed Tor answers at its 105 s `SocksTimeout`, from 104 s to a few seconds past, always inside 120 s, so the times are an upper bound): five is the smallest bound whose median fill of the 12-session Tor target is within one stem epoch (`min_epoch_secs` 600): 523 s, four 597 s. The record's three-column table is the evidence: one attempt per test gives the same answer (517 s), and three attempts with a waiting `Keep` holding its place meets no horizon (a plateau at about 1,585 s). The half: two attacker sessions at the intake cap (2 × 24) plant as many onions as an honest pool at the diversity floor (48). Dial times: the 189 cold-contact sessions of the 2026-10-14 rerun. Past six the fill stops improving: a dead pending `Keep` holds its target place for its window. **Two regimes, recorded and not changed.** On a large network the bound sets the fill time. On a small one the white diversity floor does: with 64 onions in gray, floor run 1 filled in 258 s at bound 5 against 190 s at bound 1, because the extra slots drew gray down, white stayed under its floor of 48, and the fill rule confirmed rather than kept (one sample: 15 keeps, 45 confirms). That is the floor building white diversity first, as designed. **Fingerprint (`TSR-Q9`).** A stock Tor client's cap on circuits under construction, `MaxClientCircuitsPending` (default 32), counts only general and descriptor-fetch circuits (`CIRCUIT_PURPOSE_COUNTS_TOWARDS_MAXPENDING`), not introduction or rendezvous circuits; the Tor 0.4.9.14 files and lines are in the record. Five connects hold at most five descriptor fetches pending, under a sixth of that cap. **Dead-onion stalling.** A planted dead onion holds one slot and one target place for about 105 s, until Tor's `0x06`, then cools: 2 min, doubling to 1 h, with U(0, 50%) jitter. Holding all five slots for an hour takes 5 × 3,600 / 105 ≈ 171 draws, every one a plant, so the plants must be nearly all of the drawable pool; that share is the binding cost. While the node holds any session the ladder climbs: at the 1 h cap a plant is drawable at most once an hour, so about 170 plants at the cap, planted once: 8 attacker sessions at the intake cap (24 per session per 24 h). With no sign of life on Tor (`DIALER_OUTAGE_EVIDENCE.md` §3.3) a plant's failure is excused and waits the outage retry, 10–15 s, so a plant is redrawn about every 2 min (its 105 s and the retry) and about six plants hold the hour (5 × 117.5 / 105); the node then reaches nothing already, and every honest onion in gray cycles the same way. *Records-was, SUPERSEDED (#1235):* under the quiet stretch a plant was redrawn every first step, about 4 to 5 min, and about 13 held the hour. At bound one, a fifth as many plants held the whole connector. **Assumption** (clearnet): one, the 2026-10-08 interim; a clearnet dial ends within 1.4 s. *Records-was: one dial per connector, unmeasured, and the loop thread sat inside each dial, so no second dial could start* | The fill (`plan`); the descriptor reservation adds each connector's bound to its target | A floor-device fill at half dead past one stem epoch at bound 5, or a dead share argued above one half |
-| Clearnet accept rates: the connector's bucket one token every 100 ms, a burst of 20; the host's (an IPv4 address, or an IPv6 /64) one token every 6 s, a burst of 3 | `rust/shekyl-transport-layer/src/accept_rate.rs` `CLEARNET_CONNECTOR_RATE`, `CLEARNET_HOST_RATE`, read by `accept_bound(Clearnet)` beside the declaration (rule 71); the mechanism is `AcceptGate`, checked at accept before any cryptography (`P2P_TRANSPORT_LAYER.md` D10.3) | **Assumption** (Rick, 2026-10-31), written ahead of the measurement. **CPU:** at the full connector rate the responder spends about 0.7 % of a floor-device core (10 handshakes a second at 684.5 µs, C5, `docs/benchmarks/p2p_c5_pi4_20260926T005507Z.txt`), which proposes a CPU budget of about 1 % of a core. **Linger:** with the clearnet handshake span (1.426 s) the linger cap is 20 + ⌊1.426 s / 100 ms⌋ = 34 descriptors, reserved beside the inbound ceiling (D10.2). **Honest arrivals:** about two hundred times below the connector rate. **Per host:** the burst holds a dial and a white redial from one peer, and a few nodes behind one NAT. Several nodes on one machine reach each other from one loopback host and share its bucket | `AcceptGate` per connector and per host (`Sockets::accept_clearnet`); the linger cap (`linger_cap`, `clearnet_linger_descriptors`) and through it the daemon's descriptor reservation (`reserved_descriptors`) | The step 7 record's item 6 (`NOISE_STEP7_EVALUATION_BRIEF.md`): the flood measured against this limiter on the floor device, in two configurations; the rates and the CPU budget are re-derived from it and ruled |
+| Clearnet accept rates: the connector's bucket one token every 100 ms, a burst of 20; the host's (an IPv4 address, or an IPv6 /64) one token every 6 s, a burst of 3 | `rust/shekyl-transport-layer/src/accept_rate.rs` `CLEARNET_CONNECTOR_RATE`, `CLEARNET_HOST_RATE`, read by `accept_bound(Clearnet)` beside the declaration (rule 171); the mechanism is `AcceptGate`, checked at accept before any cryptography (`P2P_TRANSPORT_LAYER.md` D10.3) | **Assumption** (Rick, 2026-10-31), written ahead of the measurement. **CPU:** at the full connector rate the responder spends about 0.7 % of a floor-device core (10 handshakes a second at 684.5 µs, C5, `docs/benchmarks/p2p_c5_pi4_20260926T005507Z.txt`), which proposes a CPU budget of about 1 % of a core. **Linger:** with the clearnet handshake span (1.426 s) the linger cap is 20 + ⌊1.426 s / 100 ms⌋ = 34 descriptors, reserved beside the inbound ceiling (D10.2). **Honest arrivals:** about two hundred times below the connector rate. **Per host:** the burst holds a dial and a white redial from one peer, and a few nodes behind one NAT. Several nodes on one machine reach each other from one loopback host and share its bucket | `AcceptGate` per connector and per host (`Sockets::accept_clearnet`); the linger cap (`linger_cap`, `clearnet_linger_descriptors`) and through it the daemon's descriptor reservation (`reserved_descriptors`) | The step 7 record's item 6 (`NOISE_STEP7_EVALUATION_BRIEF.md`): the flood measured against this limiter on the floor device, in two configurations; the rates and the CPU budget are re-derived from it and ruled |
 | D5 thread budgets: transport `workers` 2, `blocking` 1 | `rust/shekyl-transport-layer/src/spans.rs` `WORKERS`, `BLOCKING`, read by `shekyl-p2p`'s `network.rs` into the transport runtime; D5 (`P2P_TRANSPORT_LAYER.md`). *Records-was:* `net_node.inl:3411` to `:3412`, and `executor_workers` 2 at `:1236` for the asio executor pool, deleted 2026-11-05 with the C++ host; there is no second pool | **Assumption.** Each is a placeholder "the run record replaces". None of D5's four legs is recorded on the floor device. **UPDATE 2026-11-05:** leg 4's instrument (the timing engine's per-class lateness) has fleet-host readings in shekyl-dev `infrastructure/captures/p2p-remnant/README.md` (the `hop` row above); legs 1 to 3 are not read | The transport runtime `shekyl-p2p` builds | D5's legs on the floor device, all on the Rust path since the cutover: legs 1 to 3 time the transport; leg 4 times the Rust `Driver` (the timing engine), the interim asio executor it was to run on first being gone |
 | `DISCLOSE_COUNT`, 12 | `shekyl-peer-bounds/src/lib.rs` `DISCLOSE_COUNT`, re-exported by `shekyl-peerlist` and read by `shekyl-levin`'s handshake frame bound (PR-3, 2026-10-13); the C++ `P2P_DEFAULT_PEERS_IN_HANDSHAKE` / `P2P_MAX_PEERS_IN_HANDSHAKE` are deleted | **Assumption** (D3, Rick 2026-10-09). A protocol constant, the same on every node and every connector; the number is the interim outbound target carried over, not a derivation | The cached disclosure sample (size and the receiver limit), the per-session intake cap below, the white floor below | After PR-3, on the Rust path: from intake diversity, honest fill, and per-reply exposure (slice 1 brief §2); into this register |
 | Per-session gray intake cap, `2 × DISCLOSE_COUNT` = 24 distinct addresses in any 24-hour span | `shekyl-peerlist/src/lib.rs` `SESSION_INTAKE_CAP`, derived from `DISCLOSE_COUNT`; `INTAKE_SPAN_NANOS` beside it | **Assumption** (D-S1, Rick 2026-10-09). Twice the sample so an honest peer's cached sample cannot reach it; the multiple is not derived | `admit_gray`'s refusal (`PeerlistRefused`), inbound and outbound sessions alike | After PR-3, on the Rust path, with §96 item 3's instrument: time for an attacker to fill gray and the resulting `p_h`, per connector |
@@ -17486,7 +17486,7 @@ wanted: the operational replacement for 3250 ms, on the Rust path.
 **Status: OPEN — implementation landed on `feat/hidden-stem-slot`
 (#1018, `ed87cc03cd`); D-PR1-2 and the structure ruled 2026-10-09,
 D-PR1-1 ruled (c) and revised to (c′) the same day on 98.10's table
-(98.4). Closes as record when #1018 merges.** Rule 26 is cited: this is the substrate
+(98.4). Closes as record when #1018 merges.** Rule 126 is cited: this is the substrate
 re-check between the §95 ruling and PR-1's first production commit.
 The governing design is §95.3's `HiddenStemSlot` paragraph, §96 item 1,
 and `TOR_COVER_POSTURE.md`'s 2026-10-08 UPDATE. Lines were read on `dev`
@@ -18065,7 +18065,7 @@ sessions an attacker holds is PM-2a's number. The handshake-address
 ruling removes the self-entry the paper's identity step used, and PM-1
 measures the sample that remains. **TC-III** is a Tor-layer threat
 (TRC-1), open with §96 item 4 until PM-3 has run. **This section mints
-`PM-1…PM-3`** (rule 94; registered in `IMPLEMENTATION_INDEX.md` §2);
+`PM-1…PM-3`** (rule 194; registered in `IMPLEMENTATION_INDEX.md` §2);
 PM-2 splits into 2a and 2b, the paper's TC-I and TC-II.
 
 ### 99.1 The benchmark's job

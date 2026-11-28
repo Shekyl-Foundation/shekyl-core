@@ -52,6 +52,30 @@ impl Leg {
         Self::Ip { addr, proxy }
     }
 
+    /// The proxy used to reach this endpoint, if configured.
+    #[must_use]
+    pub fn proxy(&self) -> Option<SocketAddr> {
+        match self {
+            Self::Ip { proxy, .. } => *proxy,
+            Self::Onion { proxy, .. } => Some(*proxy),
+            #[cfg(unix)]
+            Self::Socket(_) => None,
+            #[cfg(windows)]
+            Self::Pipe(_) => None,
+        }
+    }
+
+    /// The network exposure warnings for a configured channel endpoint.
+    #[must_use]
+    pub fn disclosures(&self, label: &str) -> crate::network_posture::DaemonDisclosures {
+        crate::network_posture::daemon_disclosures(
+            label,
+            &self.to_string(),
+            self.proxy().map(|p| format!("socks5h://{p}")).as_deref(),
+            crate::network_posture::ProxyResolution::AlwaysRemote,
+        )
+    }
+
     /// An onion through `proxy`.
     #[must_use]
     pub fn onion(host: String, port: u16, proxy: SocketAddr) -> Self {

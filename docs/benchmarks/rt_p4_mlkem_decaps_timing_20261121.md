@@ -73,7 +73,7 @@ chosen after seeing them.
 
 **Two registered runs**, each with its own verdict:
 
-- **The floor device** (Raspberry Pi 4, Cortex-A72, rule 76), target
+- **The floor device** (Raspberry Pi 4, Cortex-A72, rule 176), target
   `aarch64-unknown-linux-gnu`, no rustflags, under a quiet claim in the
   estate's usage ledger. Recorded at the start and the end, as on
   2026-10-11 and none of them a line: the CPU governor, `vcgencmd

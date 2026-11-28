@@ -43,7 +43,7 @@
 //! refuses every successor, so a chain that mined slowly enough died. The
 //! floor replaces that refusal; this crate no longer has a zero to refuse
 //! and so no CEN-D6 verdict to return. The floor lives in the algorithm,
-//! not here: the validator still adds no rule of its own (rule 71).
+//! not here: the validator still adds no rule of its own (rule 171).
 //!
 //! # The window is the view's
 //!

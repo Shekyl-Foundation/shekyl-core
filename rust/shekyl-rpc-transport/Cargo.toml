@@ -11,7 +11,7 @@ license = "BSD-3-Clause"
 repository = "https://github.com/Shekyl-Foundation/shekyl-core"
 authors = ["Luke Parker <lukeparker5132@gmail.com>", "Shekyl Foundation <dev@shekyl.org>"]
 edition = "2021"
-rust-version = "1.75"
+rust-version.workspace = true
 
 [package.metadata.docs.rs]
 all-features = true
@@ -27,6 +27,8 @@ workspace = true
 test-override = []
 
 [dependencies]
+# Publish complete owner-only client keys without replacing another wallet's key.
+tempfile = "3"
 hex = { version = "0.4", default-features = false, features = ["alloc"] }
 zeroize = { version = "^1.5", default-features = false, features = ["alloc", "std"] }
 digest_auth = { version = "0.3", default-features = false }
@@ -61,6 +63,9 @@ serde_json = { workspace = true }
 # network whose id the name hashes.
 shekyl-rpc-rendezvous = { path = "../shekyl-rpc-rendezvous" }
 shekyl-network = { path = "../shekyl-network" }
+# A grammar peer (`PeerEndpoint`) is the route a client dials. The plaintext
+# HTTP base and the channel leg are both that route (`channel::PeerRoute`).
+shekyl-options = { path = "../shekyl-options" }
 
 # The account's root and, on Unix, the peer's account for the owner's leg's
 # check (`SO_PEERCRED`, `getpeereid`): the leaf with no network stack that
@@ -98,7 +103,6 @@ shekyl-win-sec = { path = "../shekyl-win-sec" }
 [dev-dependencies]
 # This crate's own integration tests name a test node's directory.
 shekyl-rpc-transport = { path = ".", features = ["test-override"] }
-tempfile = "3"
 # rt for #[tokio::test]; io-util for the in-test SOCKS5 acceptor's
 # read_exact/write_all (the ATYP=DOMAIN wire pin in `http_client`).
 tokio = { version = "1", default-features = false, features = ["macros", "rt", "io-util"] }

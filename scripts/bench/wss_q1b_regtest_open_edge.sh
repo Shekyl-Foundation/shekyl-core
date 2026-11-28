@@ -51,30 +51,21 @@ rm -rf "$DATA"; mkdir -p -m 0700 "$DATA"
 # socket, so the daemon needs no session directory and never meets another
 # at the default rendezvous (RPC_CHANNEL.md section 7.1).
 mkdir -m 0700 "$DATA/sock"
-"$BIN" --network regtest --clearnet off --tor off --dev-difficulty 1 --dev-rpc \
+# `--config-file none`: the default file is the machine's (/etc/shekyl),
+# where a host's own regtest node keeps its settings.
+"$BIN" --network regtest --config-file none --clearnet off --tor off --dev-difficulty 1 --dev-rpc \
   --mine-address "$ADDR" \
   --rpc-admin-listen "127.0.0.1:$PORT" --rpc-socket-dir "$DATA/sock" \
   --data-dir "$DATA" --log-file "$DATA/shekyld.log" --log-level info < /dev/null > "$DATA/daemon.out" 2>&1 &
 DPID=$!
 echo "daemon pid $DPID, port $PORT"
 
-# Wait for RPC readiness rather than sleeping a guessed interval.
-#
-# No pipe: `curl ... | grep -q` would put an EARLY-EXIT consumer on the end of
-# the pipeline, which is the SIGPIPE trap 46-shell-gate-exits names, and the
-# verdict that matters (did the daemon answer?) would travel through it. The
-# reply is captured and tested in the shell instead.
-for _ in $(seq 1 60); do
-  REPLY_BODY=$(curl -s -m 2 -X POST "http://127.0.0.1:$PORT/json_rpc" \
-    -H 'Content-Type: application/json' \
-    -d '{"jsonrpc":"2.0","id":0,"method":"daemon_status"}')
-  case "$REPLY_BODY" in
-    *'"result"'*) READY=1; break ;;
-  esac
-  sleep 2
-done
-if [ "${READY:-0}" != 1 ]; then
-  echo "daemon never became ready; tail of its log:"; tail -20 "$DATA/daemon.out"
+# Wait for the first posted template, rather than sleeping a guessed
+# interval or taking an answer to another method as ready: a
+# dev_block_generate sent before it is refused `no_view`. The helper's exit
+# status is the verdict; nothing is piped (46-shell-gate-exits).
+if ! python3 "$WT/scripts/posted_template.py" "http://127.0.0.1:$PORT/json_rpc" 120; then
+  echo "the daemon posted no template; tail of its log:"; tail -20 "$DATA/daemon.out"
   kill -9 "$DPID" 2>/dev/null; exit 9
 fi
 echo "daemon ready"

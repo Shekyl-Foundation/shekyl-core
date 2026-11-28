@@ -1,0 +1,22 @@
+---
+description: "shekyl-core's part of the Rust lint checks (45): the two crates allowed unsafe_code at their root."
+globs:
+  - "**/*.rs"
+  - "**/Cargo.toml"
+scope: core
+---
+
+# Rust lint checks: shekyl-core's part
+
+Estate rule [`45-rust-lint-checks`](45-rust-lint-checks.mdc) holds in every Shekyl repository.
+This rule holds the part of it that only shekyl-core has: the two crates
+allowed `unsafe_code` at their root.
+
+## The two crate-level exceptions
+
+**The two crate-level exceptions** are the crates that exist to bind and
+drive the vendored RandomX C reference for the differential harness, outside
+every shipped binary: `randomx-v2-sys` and `shekyl-randomx-differential`.
+Each carries `#![allow(unsafe_code)]` at its root with the reason stated
+beside it, and still a `// SAFETY:` comment on each `unsafe` block. No other
+crate joins them.

@@ -138,7 +138,7 @@ SETTLED) + §SP-2.d; `GENESIS_TX_WIRE_FORMAT.md` §2.0 (the security-crux flag);
 `ARCHIVAL_FIREWALL_GATE6.md` §10.12 (the funding seam); `STAKER_ARCHIVAL_SIM.md`
 (the shard-count / bond-standardization population — the input C1 inherits).
 Mechanism sibling: `shekyl-standoff` (the entry-gap timing draw).
-**Process rule:** `26-sub-pr-design-discipline.mdc` (genesis-adjacent privacy
+**Process rule:** `126-sub-pr-design-discipline.mdc` (genesis-adjacent privacy
 surface; lightweight — the *architecture* is settled, this pins one draw).
 
 ---

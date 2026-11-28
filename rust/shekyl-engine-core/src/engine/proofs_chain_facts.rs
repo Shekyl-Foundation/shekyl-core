@@ -431,16 +431,19 @@ impl ProofChainView {
         rpc: &R,
         key_images: Vec<HashHex>,
     ) -> Result<Vec<Spent>, ProofsError> {
-        let asked = key_images.len();
-        let spent = rpc
-            .call::<wire::ChainSpent>(SpentQuery {
-                key_image: key_images,
-            })
-            .await?;
-        if spent.len() != asked {
-            return Err(ProofsError::Daemon(RpcError::InvalidNode(
-                "chain_spent returned a different count than requested".to_string(),
-            )));
+        let mut spent = Vec::with_capacity(key_images.len());
+        for page in key_images.chunks(wire::chain::MAX_SPENT_KEY_IMAGES) {
+            let reply = rpc
+                .call::<wire::ChainSpent>(SpentQuery {
+                    key_image: page.to_vec(),
+                })
+                .await?;
+            if reply.len() != page.len() {
+                return Err(ProofsError::Daemon(RpcError::InvalidNode(
+                    "chain_spent returned a different count than requested".to_string(),
+                )));
+            }
+            spent.extend(reply);
         }
         Ok(spent)
     }

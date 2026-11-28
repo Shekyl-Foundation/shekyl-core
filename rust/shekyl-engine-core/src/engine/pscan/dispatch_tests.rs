@@ -16,7 +16,8 @@
 //! boundaries (gate 1), one-per-tick + deterministic ordering (gate 2),
 //! seal-before-send (gate 3), byte-identical resubmit (gate 4),
 //! confirmation retire + reservation release in one seal / state-agnostic
-//! confirmation (gate 5), terminal rejection removal (gate 6), the
+//! confirmation (gate 5), a terminal verdict held to the end date (gate 6,
+//! BD-Q3 Rule 2), the
 //! alarm-horizon resubmit bound (§3.4), and gate 5b — reservation
 //! settlement for the claim/drain kinds.
 
@@ -27,14 +28,20 @@ use std::sync::Mutex;
 use shekyl_types::{BlockCount, ChainCount, PSlot, TxHash};
 
 use super::*;
+use crate::engine::bond_plan::PlanAttempt;
 use crate::engine::transaction_submitter::BroadcastKind;
-use shekyl_engine_state::pending_post_block::OutcomeKind;
+use shekyl_engine_state::pending_post_block::{OutcomeKind, PlanEnding, PlanWait};
 use shekyl_engine_state::PendingPostBlock;
 
 /// One scripted submit verdict (the `BondBroadcast` return shape).
 type Verdict = Result<SubmitSuccess, BroadcastSubmitError>;
-/// The driver under test: in-memory seal store + scripted broadcast.
-type TestDriver = DispatchDriver<std::sync::Arc<MemStore>, std::sync::Arc<ScriptedBroadcast>>;
+/// The driver under test: in-memory seal store + scripted broadcast +
+/// scripted signer.
+type TestDriver = DispatchDriver<
+    std::sync::Arc<MemStore>,
+    std::sync::Arc<ScriptedBroadcast>,
+    std::sync::Arc<ScriptedSigner>,
+>;
 
 // -- test doubles --------------------------------------------------------
 
@@ -129,26 +136,158 @@ impl BondBroadcast for std::sync::Arc<ScriptedBroadcast> {
     }
 }
 
+/// Scripted [`BondPlanSigner`]: each `sign_at_due` takes the next scripted
+/// attempt (an empty script signs). Signing replaces the plan (or re-signs
+/// the post never sent) in the in-memory store at the canonical reference for
+/// the tick's tip, through the same checked block methods the engine seals
+/// with, so the driver sees what production's engine would leave behind.
+#[derive(Default)]
+struct ScriptedSigner {
+    store: std::sync::Arc<MemStore>,
+    script: Mutex<VecDeque<PlanAttempt>>,
+    signed: Mutex<Vec<PCanonicalId>>,
+    drains: Mutex<Vec<(PSlot, PCanonicalId)>>,
+    ended: Mutex<Vec<PSlot>>,
+    retired: Mutex<Vec<PSlot>>,
+}
+
+impl ScriptedSigner {
+    fn over(store: std::sync::Arc<MemStore>) -> Self {
+        Self {
+            store,
+            ..Self::default()
+        }
+    }
+
+    fn signed(&self) -> Vec<PCanonicalId> {
+        self.signed.lock().expect("signed").clone()
+    }
+
+    fn drains(&self) -> Vec<(PSlot, PCanonicalId)> {
+        self.drains.lock().expect("drains").clone()
+    }
+
+    fn ended(&self) -> Vec<PSlot> {
+        self.ended.lock().expect("ended").clone()
+    }
+
+    fn retired(&self) -> Vec<PSlot> {
+        self.retired.lock().expect("retired").clone()
+    }
+}
+
+impl BondPlanSigner for std::sync::Arc<ScriptedSigner> {
+    async fn sign_at_due(&self, persona: PCanonicalId, tip: ChainCount) -> PlanAttempt {
+        self.signed.lock().expect("signed").push(persona);
+        if let Some(scripted) = self.script.lock().expect("script").pop_front() {
+            if scripted != PlanAttempt::Signed {
+                return scripted;
+            }
+        }
+        let reference = canonical_reference(tip).expect("a tip past the first reference");
+        let mut guard = self.store.block.lock().expect("mem store");
+        let block = guard.as_mut().expect("a seeded block");
+        let generation = block.generation();
+        // Copy the row out first: the stage borrow cannot overlap the seal.
+        // A sent post is Rule 1 and builds nothing.
+        enum Row {
+            Plan {
+                p_slot: PSlot,
+                funding: Vec<shekyl_types::GlobalOutputIndex>,
+            },
+            Unsent(PendingBondPost),
+        }
+        let row = match block.stake_stage(&persona) {
+            Some(shekyl_engine_state::StakeStage::Plan(plan)) => Some(Row::Plan {
+                p_slot: plan.p_slot,
+                funding: plan.funding_gindexes.clone(),
+            }),
+            Some(shekyl_engine_state::StakeStage::Unsent(post)) => Some(Row::Unsent(post.clone())),
+            Some(
+                shekyl_engine_state::StakeStage::Sent(_)
+                | shekyl_engine_state::StakeStage::Ended(_),
+            )
+            | None => None,
+        };
+        let Some(row) = row else {
+            return PlanAttempt::Raced;
+        };
+        let admission = match row {
+            Row::Plan { p_slot, funding } => block.sign_plan(
+                signed_post(p_slot, persona, funding, reference, tip),
+                generation,
+            ),
+            Row::Unsent(held) => block.resign_post(
+                PendingBondPost {
+                    wait: None,
+                    reference_height: reference,
+                    ..held
+                },
+                generation,
+            ),
+        };
+        match admission {
+            shekyl_engine_state::SignAdmission::Signed => PlanAttempt::Signed,
+            _ => PlanAttempt::Raced,
+        }
+    }
+
+    async fn drain_ended(&self, p_slot: PSlot, persona: PCanonicalId) {
+        self.drains.lock().expect("drains").push((p_slot, persona));
+    }
+
+    async fn persona_ended(&self, p_slot: PSlot) {
+        self.ended.lock().expect("ended").push(p_slot);
+    }
+
+    async fn slot_retired(&self, p_slot: PSlot) {
+        self.retired.lock().expect("retired").push(p_slot);
+    }
+}
+
 fn persona(byte: u8) -> PCanonicalId {
     PCanonicalId::from_bytes([byte; 32])
 }
 
-fn post(persona_byte: u8, anchor: u64, offset: u64, gindexes: &[u64]) -> PendingBondPost {
+fn signed_post(
+    p_slot: PSlot,
+    persona: PCanonicalId,
+    funding_gindexes: Vec<shekyl_types::GlobalOutputIndex>,
+    reference_height: BlockHeight,
+    due: ChainCount,
+) -> PendingBondPost {
+    let byte = persona.as_bytes()[0];
     PendingBondPost {
-        p_slot: PSlot::from_raw(u32::from(persona_byte)),
-        persona: persona(persona_byte),
-        tx_bytes: vec![persona_byte, 0xBE, 0xEF],
-        bond_post_offset_blocks: BlockCount::from_raw(offset),
-        anchor_t0: ChainCount::from_raw(anchor),
-        funding_gindexes: gindexes
+        wait: None,
+        p_slot,
+        persona,
+        tx_bytes: vec![byte, 0xBE, 0xEF],
+        posture: shekyl_engine_state::PlannedPosture::SupportCompleteTree,
+        due,
+        funded_through: BlockHeight::from_raw(1_000),
+        funding_gindexes,
+        state: PendingPostState::Pending,
+        reference_height,
+        terminal: None,
+    }
+}
+
+/// A post signed at its due count `anchor + offset`: its reference is the
+/// canonical one for that count, so it is first sent at a tick of exactly
+/// that count (a later tick re-signs it first, BD-Q3 Rule 1).
+fn post(persona_byte: u8, anchor: u64, offset: u64, gindexes: &[u64]) -> PendingBondPost {
+    let due = ChainCount::from_raw(anchor + offset);
+    signed_post(
+        PSlot::from_raw(u32::from(persona_byte)),
+        persona(persona_byte),
+        gindexes
             .iter()
             .copied()
             .map(shekyl_types::GlobalOutputIndex::from_raw)
             .collect(),
-        state: PendingPostState::Pending,
-        reference_height: shekyl_types::BlockHeight::from_raw(anchor.saturating_sub(6)),
-        terminal: None,
-    }
+        canonical_reference(due).expect("a due past the first reference"),
+        due,
+    )
 }
 
 fn test_config() -> DispatchConfig {
@@ -157,6 +296,7 @@ fn test_config() -> DispatchConfig {
         // No dispersal sleep in tests: the draw's decorrelation is a
         // WI-4-graded behavior, not a unit-testable invariant.
         dispersal_bound: Duration::ZERO,
+        reorg_depth: BlockCount::from_raw(720),
     }
 }
 
@@ -190,7 +330,14 @@ fn driver_with_posts(
     }
     *store.block.lock().expect("mem store") = Some(block);
     let broadcast = std::sync::Arc::new(ScriptedBroadcast::scripted(outcomes));
-    let driver = DispatchDriver::new(store.clone(), broadcast.clone(), test_config(), test_lock());
+    let signer = std::sync::Arc::new(ScriptedSigner::over(store.clone()));
+    let driver = DispatchDriver::new(
+        store.clone(),
+        broadcast.clone(),
+        signer,
+        test_config(),
+        test_lock(),
+    );
     (driver, store, broadcast)
 }
 
@@ -221,13 +368,22 @@ fn ambiguous() -> Verdict {
 }
 
 async fn tick(driver: &mut TestDriver, tip: u64) {
+    // Nothing spent: every reserved output is still live, as it is in
+    // production until a record's own transaction spends it.
+    let live = driver
+        .store()
+        .read(PendingPostBlock::reserved_gindexes)
+        .await
+        .expect("read the seal");
     driver
         .on_tick(
             ChainCount::from_raw(tip),
             TickEvidence {
                 confirmed_posts: &BTreeSet::new(),
-                live_funding: &BTreeSet::new(),
+                live_funding: &live,
                 scanned_through: None,
+                funding: &BTreeMap::new(),
+                retired: &BTreeSet::new(),
             },
             &CancellationToken::new(),
         )
@@ -257,6 +413,8 @@ async fn tick_with(
                 confirmed_posts: &confirmed,
                 live_funding: &live,
                 scanned_through: Some(shekyl_types::BlockHeight::from_raw(scanned_through)),
+                funding: &BTreeMap::new(),
+                retired: &BTreeSet::new(),
             },
             &CancellationToken::new(),
         )
@@ -271,74 +429,6 @@ fn sealed_block(store: &MemStore) -> PendingPostBlock {
         .expect("mem store")
         .clone()
         .expect("sealed")
-}
-
-// -- gate 1: due-check boundaries ----------------------------------------
-
-/// `due = anchor_t0 + offset`, boundary-exact: nothing fires at
-/// `due − 1`, the dispatch fires at `due`, and a late tick (`due + k`)
-/// still fires (late is monotone noise, §3.6).
-#[tokio::test]
-async fn due_check_boundaries() {
-    // anchor 100 + offset 10 ⇒ due at 110.
-    let (mut driver, _store, broadcast) = driver_with_posts(
-        vec![post(1, 100, 10, &[7])],
-        (0..3).map(|_| accepted()).collect(),
-    );
-
-    tick(&mut driver, 109).await;
-    assert!(broadcast.sent().is_empty(), "tip = due − 1 must not fire");
-
-    tick(&mut driver, 110).await;
-    assert_eq!(broadcast.sent().len(), 1, "tip = due fires");
-
-    // A later overdue tick would resubmit only on unknown outcome; the
-    // accepted verdict holds it — covered below. Late-first-dispatch:
-    let (mut late_driver, _s, late_broadcast) =
-        driver_with_posts(vec![post(2, 100, 10, &[8])], vec![accepted()]);
-    // Late, but before the end date (reference 94 + 100 = 194). Past it the
-    // post is never sent (`selector_skips_held_resubmits_recorded_verdicts_and_dead_posts`).
-    tick(&mut late_driver, 190).await;
-    assert_eq!(
-        late_broadcast.sent().len(),
-        1,
-        "tip = due + k fires (lateness only adds delay, never a re-draw)"
-    );
-}
-
-// -- gate 2: one-per-tick + deterministic ordering ------------------------
-
-/// A catch-up backlog (every post overdue on one tick) dispatches exactly
-/// one post per tick, lowest due block first; ties break by `anchor_t0`
-/// then persona id.
-#[tokio::test]
-async fn one_per_tick_and_deterministic_ordering() {
-    // due: A=130 (anchor 100), B=120 (anchor 90), C=120 (anchor 80),
-    // D=120 (anchor 80, higher persona byte than C).
-    let posts = vec![
-        post(0xAA, 100, 30, &[1]),
-        post(0xBB, 90, 30, &[2]),
-        post(0xCC, 80, 40, &[3]),
-        post(0xDD, 80, 40, &[4]),
-    ];
-    let (mut driver, _store, broadcast) =
-        driver_with_posts(posts, (0..4).map(|_| accepted()).collect());
-
-    // Every post overdue at once — the downtime catch-up shape (§3.2) — and
-    // still inside every end date (the earliest, C's and D's, is 174).
-    for _ in 0..4 {
-        tick(&mut driver, 150).await;
-    }
-    let sent: Vec<PCanonicalId> = broadcast.sent().iter().map(|(p, _)| *p).collect();
-    assert_eq!(
-        sent,
-        vec![persona(0xCC), persona(0xDD), persona(0xBB), persona(0xAA)],
-        "order: lowest due first (C/D/B at 120 before A at 130); the C/D tie breaks by \
-         anchor_t0 (equal) then persona id (0xCC < 0xDD)"
-    );
-
-    // And strictly one per tick: 4 ticks, 4 sends.
-    assert_eq!(broadcast.sent().len(), 4);
 }
 
 // -- gate 3: seal-before-send ---------------------------------------------
@@ -378,6 +468,8 @@ async fn failed_seal_sends_nothing() {
                 confirmed_posts: &BTreeSet::new(),
                 live_funding: &BTreeSet::new(),
                 scanned_through: None,
+                funding: &BTreeMap::new(),
+                retired: &BTreeSet::new(),
             },
             &CancellationToken::new(),
         )
@@ -453,6 +545,7 @@ async fn restart_reprobes_a_dispatched_post_once() {
     let mut driver2 = DispatchDriver::new(
         store.clone(),
         broadcast2.clone(),
+        std::sync::Arc::new(ScriptedSigner::over(store.clone())),
         test_config(),
         test_lock(),
     );
@@ -493,6 +586,8 @@ async fn confirmation_retires_bytes_and_reservation_in_one_seal() {
                 confirmed_posts: &confirmed,
                 live_funding: &BTreeSet::new(),
                 scanned_through: None,
+                funding: &BTreeMap::new(),
+                retired: &BTreeSet::new(),
             },
             &CancellationToken::new(),
         )
@@ -571,7 +666,8 @@ fn driver_with_reservations() -> (TestDriver, std::sync::Arc<MemStore>) {
     let store = std::sync::Arc::new(MemStore::default());
     *store.block.lock().expect("mem store") = Some(block);
     let broadcast = std::sync::Arc::new(ScriptedBroadcast::scripted(vec![]));
-    let driver = DispatchDriver::new(store.clone(), broadcast, test_config(), test_lock());
+    let signer = std::sync::Arc::new(ScriptedSigner::over(store.clone()));
+    let driver = DispatchDriver::new(store.clone(), broadcast, signer, test_config(), test_lock());
     (driver, store)
 }
 
@@ -602,6 +698,8 @@ async fn a_bond_post_confirmation_never_retires_a_reservation_observed_record() 
                 confirmed_posts: &confirmed,
                 live_funding: &live,
                 scanned_through: None,
+                funding: &BTreeMap::new(),
+                retired: &BTreeSet::new(),
             },
             &CancellationToken::new(),
         )
@@ -649,6 +747,8 @@ async fn a_settled_reservation_retires_the_claim_the_drain_and_the_release() {
                 confirmed_posts: &BTreeSet::new(),
                 live_funding: &BTreeSet::new(),
                 scanned_through: None,
+                funding: &BTreeMap::new(),
+                retired: &BTreeSet::new(),
             },
             &CancellationToken::new(),
         )
@@ -751,6 +851,7 @@ async fn a_stalled_claim_drain_and_release_on_one_persona_all_alarm() {
     let mut driver = DispatchDriver::new(
         store.clone(),
         std::sync::Arc::new(ScriptedBroadcast::scripted(vec![])),
+        std::sync::Arc::new(ScriptedSigner::over(store.clone())),
         test_config(),
         test_lock(),
     );
@@ -766,6 +867,8 @@ async fn a_stalled_claim_drain_and_release_on_one_persona_all_alarm() {
                 confirmed_posts: &BTreeSet::new(),
                 live_funding: &live,
                 scanned_through: None,
+                funding: &BTreeMap::new(),
+                retired: &BTreeSet::new(),
             },
             &CancellationToken::new(),
         )
@@ -879,6 +982,7 @@ async fn settling_a_claim_leaves_still_stuck_drain_and_release_alarms_marked() {
     let mut driver = DispatchDriver::new(
         store.clone(),
         std::sync::Arc::new(ScriptedBroadcast::scripted(vec![])),
+        std::sync::Arc::new(ScriptedSigner::over(store.clone())),
         test_config(),
         test_lock(),
     );
@@ -895,6 +999,8 @@ async fn settling_a_claim_leaves_still_stuck_drain_and_release_alarms_marked() {
                 confirmed_posts: &BTreeSet::new(),
                 live_funding: &all_live,
                 scanned_through: None,
+                funding: &BTreeMap::new(),
+                retired: &BTreeSet::new(),
             },
             &CancellationToken::new(),
         )
@@ -920,6 +1026,8 @@ async fn settling_a_claim_leaves_still_stuck_drain_and_release_alarms_marked() {
                 confirmed_posts: &BTreeSet::new(),
                 live_funding: &claim_gone,
                 scanned_through: None,
+                funding: &BTreeMap::new(),
+                retired: &BTreeSet::new(),
             },
             &CancellationToken::new(),
         )
@@ -968,6 +1076,8 @@ async fn settling_a_claim_leaves_still_stuck_drain_and_release_alarms_marked() {
                 confirmed_posts: &BTreeSet::new(),
                 live_funding: &drain_only,
                 scanned_through: None,
+                funding: &BTreeMap::new(),
+                retired: &BTreeSet::new(),
             },
             &CancellationToken::new(),
         )
@@ -1043,31 +1153,50 @@ fn every_reservation_writer_rechecks_the_union_under_the_seal_lock() {
     // accident a refactor moving them inline would revoke in silence. The
     // `false` arm now ASSERTS the absence, so acquiring an inline tests module
     // fails loudly with instructions instead of quietly widening the scan.
+    //
+    // The fifth column is how the seam takes its seal basis: directly
+    // through `load_seal_basis`, or through `sweep_bond_funding`, the one
+    // sweep body both stake halves share, which takes it there. The stake
+    // has two writers since BD-Q3: the request seals the plan
+    // (`seal_plan`, through `classify_seal`), and the due block replaces the
+    // plan with its signed post (`sign_plan`, which rechecks the generation
+    // and every other record's reservation itself).
     const TESTS_MARKER: &str = "\n#[cfg(test)]\nmod tests {";
-    for (name, src, seal, inline_tests) in [
+    for (name, src, seal, inline_tests, basis) in [
         (
             "drain_dispatch.rs",
             include_str!("../drain_dispatch.rs"),
             ".seal_drain(",
             true,
+            "load_seal_basis(",
         ),
         (
             "claim_dispatch.rs",
             include_str!("../claim_dispatch.rs"),
             ".seal_claim(",
             true,
+            "load_seal_basis(",
         ),
         (
             "bond_orchestrator.rs",
             include_str!("../bond_orchestrator.rs"),
-            ".seal_post(",
+            ".seal_plan(",
             false,
+            "load_seal_basis(",
+        ),
+        (
+            "bond_due.rs",
+            include_str!("../bond_due.rs"),
+            ".sign_plan(",
+            false,
+            "sweep_bond_funding(",
         ),
         (
             "release_dispatch.rs",
             include_str!("../release_dispatch.rs"),
             ".seal_release(",
             true,
+            "load_seal_basis(",
         ),
     ] {
         let production = if inline_tests {
@@ -1130,8 +1259,8 @@ fn every_reservation_writer_rechecks_the_union_under_the_seal_lock() {
         // itself would be free to concurrently join them again, which is
         // exactly the regression review #572 round 6 found.
         assert!(
-            code.contains("load_seal_basis("),
-            "{name} builds its seal basis without `load_seal_basis`, so nothing \
+            code.contains(basis),
+            "{name} builds its seal basis without `{basis}`, so nothing \
              holds the pending read ahead of the pscan load"
         );
     }
@@ -1170,20 +1299,25 @@ async fn a_terminal_verdict_holds_the_post_and_never_resends() {
 
     // The cause is durable: a restarted driver over the same seal does not
     // resend either.
-    let mut restarted =
-        DispatchDriver::new(store.clone(), broadcast.clone(), test_config(), test_lock());
+    let mut restarted = DispatchDriver::new(
+        store.clone(),
+        broadcast.clone(),
+        std::sync::Arc::new(ScriptedSigner::over(store.clone())),
+        test_config(),
+        test_lock(),
+    );
     tick(&mut restarted, 102).await;
     assert_eq!(broadcast.sent().len(), 1, "a restart does not resend it");
 
-    // At the end date (reference 94 + 100), with the post unmatched and its
+    // At the end date (reference 93 + 100), with the post unmatched and its
     // inputs live, the chain has decided: it did not land.
-    tick_with(&mut restarted, 900, &[], &[7, 8], 193).await;
+    tick_with(&mut restarted, 900, &[], &[7, 8], 192).await;
     assert_eq!(
         sealed_block(&store).posts().len(),
         1,
         "a block short of the end date: held"
     );
-    tick_with(&mut restarted, 900, &[], &[7, 8], 194).await;
+    tick_with(&mut restarted, 900, &[], &[7, 8], 193).await;
     let block = sealed_block(&store);
     assert!(block.posts().is_empty(), "released at the end date");
     assert!(
@@ -1210,12 +1344,12 @@ async fn resends_stop_at_the_end_date_and_the_record_waits_for_the_scan() {
         vec![ambiguous(), ambiguous(), ambiguous()],
     );
 
-    tick(&mut driver, 100).await; // dispatch, at = 100
-    tick(&mut driver, 194).await; // ambiguous: the last height it can land at
+    tick(&mut driver, 100).await; // dispatch, at = 100; reference 93
+    tick(&mut driver, 193).await; // ambiguous: the last height it can land at
     assert_eq!(broadcast.sent().len(), 2);
 
+    tick(&mut driver, 194).await;
     tick(&mut driver, 195).await;
-    tick(&mut driver, 196).await;
     assert_eq!(
         broadcast.sent().len(),
         2,
@@ -1230,7 +1364,7 @@ async fn resends_stop_at_the_end_date_and_the_record_waits_for_the_scan() {
         "with its reservation"
     );
 
-    tick_with(&mut driver, 1_000, &[], &[7], 194).await;
+    tick_with(&mut driver, 1_000, &[], &[7], 193).await;
     let block = sealed_block(&store);
     assert!(block.posts().is_empty());
     assert_eq!(block.outcomes()[0].outcome, OutcomeKind::Expired);
@@ -1317,15 +1451,30 @@ fn selector_skips_held_resubmits_recorded_verdicts_and_dead_posts() {
         "a recorded verdict is never resent"
     );
 
-    // Reference 94 (anchor 100 − 6): the end date is 194. A send at tip
-    // count 194 lands at height 194 at the soonest: still in. At 195 it
-    // cannot land anywhere.
-    let last = ChainCount::from_raw(194);
-    assert!(select_dispatch_candidate(&posts, last, &BTreeSet::new()).is_some());
-    let dead = ChainCount::from_raw(195);
+    // Reference 93 (the canonical reference for count 100): the end date is
+    // 193. A post already sent is resent at tip count 193, landing at height
+    // 193 at the soonest: still in. At 194 it cannot land anywhere.
+    let sent: Vec<PendingBondPost> = posts
+        .iter()
+        .cloned()
+        .map(|mut p| {
+            p.state = PendingPostState::Dispatched {
+                at: ChainCount::from_raw(100),
+                attempts: 1,
+            };
+            p
+        })
+        .collect();
+    let last = ChainCount::from_raw(193);
+    assert!(select_dispatch_candidate(&sent, last, &BTreeSet::new()).is_some());
+    let dead = ChainCount::from_raw(194);
     assert!(
-        select_dispatch_candidate(&posts, dead, &BTreeSet::new()).is_none(),
+        select_dispatch_candidate(&sent, dead, &BTreeSet::new()).is_none(),
         "nothing is sent past the end date"
+    );
+    assert!(
+        select_dispatch_candidate(&posts, last, &BTreeSet::new()).is_none(),
+        "a post never sent goes out only at its canonical reference (BD-Q3 Rule 1)"
     );
 }
 
@@ -1385,45 +1534,6 @@ async fn gf7_emits_bond_post_dispatched_per_submit() {
     );
 }
 
-/// **A post due after its end date is never sent, and ends `expired`**
-/// (WR-Q3; the FOLLOWUPS row "The bond-post delay does not decorrelate the
-/// funding transfer from the bond" is the defect behind it). The post is
-/// signed at the stake request with its reference at `anchor − 6` and due
-/// `offset` blocks later; with an offset of 300 its end date (`anchor + 94`)
-/// passes before it is due. The driver never sends it, holds the reservation
-/// until the scan covers the end date, and releases it there.
-#[tokio::test]
-async fn a_post_due_after_its_end_date_is_never_sent_and_expires() {
-    let anchor: u64 = 10_000;
-    let offset: u64 = 300;
-    let (mut driver, store, broadcast) =
-        driver_with_posts(vec![post(1, anchor, offset, &[7])], Vec::new());
-    let end = anchor - 6 + 100;
-    assert!(
-        anchor + offset > end,
-        "the fixture's premise: due after the end date"
-    );
-
-    tick(&mut driver, anchor + offset).await;
-    tick(&mut driver, anchor + offset + 1).await;
-    assert!(
-        broadcast.sent().is_empty(),
-        "a post that cannot land is never sent"
-    );
-    assert_eq!(
-        sealed_block(&store).posts().len(),
-        1,
-        "held until the scan decides"
-    );
-
-    tick_with(&mut driver, anchor + offset + 2, &[], &[7], end - 1).await;
-    assert_eq!(sealed_block(&store).posts().len(), 1);
-    tick_with(&mut driver, anchor + offset + 3, &[], &[7], end).await;
-    let block = sealed_block(&store);
-    assert!(block.posts().is_empty() && block.reserved_gindexes().is_empty());
-    assert_eq!(block.outcomes()[0].outcome, OutcomeKind::Expired);
-}
-
 // -- Coverage: a loaded record is sent only under a confirmed save ----------
 
 /// A volume where Windows cannot confirm a save survives a power loss.
@@ -1446,6 +1556,7 @@ async fn a_bond_post_whose_seal_was_unconfirmed_is_not_sent_on_the_next_tick() {
     let mut driver = DispatchDriver::new(
         store.clone(),
         broadcast.clone(),
+        std::sync::Arc::new(ScriptedSigner::over(store.clone())),
         test_config(),
         crate::engine::pending_post_gate::PendingPostGate::new(),
     );
@@ -1532,3 +1643,6 @@ async fn a_post_whose_mark_is_unconfirmed_is_not_sent() {
         "an unconfirmed mark sends nothing"
     );
 }
+
+#[path = "plan_dispatch_tests.rs"]
+mod plan_dispatch;

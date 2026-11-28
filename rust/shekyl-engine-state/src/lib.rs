@@ -24,7 +24,7 @@
 //!   there.
 //!
 //! The serialization-format policy for this crate is pinned by
-//! `.cursor/rules/42-serialization-policy.mdc` (added in Commit 2n): the ledger blocks
+//! `.cursor/rules/142-serialization-policy.mdc` (added in Commit 2n): the ledger blocks
 //! defined here use `postcard` for on-disk storage. The earlier JSON metadata bundle in
 //! `shekyl-crypto-pq` (identity + settings) was a superseded first draft and has been
 //! deleted; identity is carried in the encrypted `.wallet.keys` envelope, and user
@@ -82,8 +82,9 @@ pub use payment_request::{
     PaymentRequestState, ReceiveAttribution,
 };
 pub use pending_post_block::{
-    PendingBondPost, PendingDrain, PendingEmissionClaim, PendingPostBlock, PendingPostState,
-    PendingRelease, PENDING_POST_VERSION,
+    DrainedEndedPlan, EndedPlan, PendingBondPlan, PendingBondPost, PendingDrain,
+    PendingEmissionClaim, PendingPostBlock, PendingPostState, PendingRelease, PlanEnding, PlanWait,
+    PlannedPosture, SignAdmission, StakeStage, WaitingStake, Withdrawal, PENDING_POST_VERSION,
 };
 pub use safety_constants::{
     ReorgDepthBelowLockWindow, ReorgDepthOverride, WalletSafetyConstants, MIN_REORG_DEPTH,

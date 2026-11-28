@@ -2,7 +2,7 @@ name: cs2-long-run
 
 # The chain-sync floor measurement (CS-Q11). Not a pull-request gate:
 # nothing here is required for merge. The runner is the floor device (a
-# Pi 4; rule 76).
+# Pi 4; rule 176).
 #
 # It records what loopback can measure, and nothing a network decides:
 # - the owner's cost per header, apart from RandomX, at 5,000 to 50,000

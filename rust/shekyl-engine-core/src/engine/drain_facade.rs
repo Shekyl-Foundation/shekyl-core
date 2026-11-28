@@ -181,6 +181,9 @@ pub enum DrainToPrincipalError {
     /// fault the user can act on. Nothing was sent.
     #[error("the signer refused the drain: {0}")]
     Signer(shekyl_tx_builder::SignFault),
+    /// The node named its own remedy. The fault is the sentence.
+    #[error("{0}")]
+    Daemon(shekyl_rpc_client::DaemonFault),
     /// A non-transient engine fault: a sealed-state read, a corrupted
     /// resident key, the curve-tree actor, or the assembly itself. Fail
     /// closed; not retryable by waiting.
@@ -227,6 +230,10 @@ impl From<DrainRequestError> for DrainToPrincipalError {
             // prior disposition (the failure was `State` before) — retyping
             // `drain_to_principal`'s daemon-outage remedy is its own concern,
             // not the exit lane's.
+            DrainRequestError::Target(fault) => Self::Daemon(fault),
+            // A plain miss keeps the prior disposition (it was `State`
+            // before the tip read grew its own arm). A channel fault does
+            // not: its sentence is the remedy.
             DrainRequestError::DaemonUnreachable { context, detail } => {
                 Self::State { context, detail }
             }
@@ -468,7 +475,7 @@ mod tests {
         assert!(
             code.contains("DrainIntent::Payment(")
                 && !code.contains("TerminalSweep")
-                && !code.contains("TerminalExitObserved"),
+                && !code.contains("NoExitOwed"),
             "this façade sends the user-target Payment intent ONLY — the \
              terminal sweep and its witness mint belong to collect_unstaked \
              (unstake_facade), whose exited-persona resolution this \

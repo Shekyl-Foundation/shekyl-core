@@ -39,7 +39,10 @@ pub mod resolve;
 pub mod sections;
 pub mod table;
 
-pub use load::{after_file, load, load_default_file_unread, AfterFile, ConfigFileFate, Loaded};
+pub use load::{
+    after_file, load, load_default_file_unread, load_table, AfterFile, ConfigFileFate, Loaded,
+    TableLoaded,
+};
 pub use lock::Lock;
 pub use marker::{MarkerOutcome, MarkerRead, NetworkId};
 pub use network::Network;
@@ -47,7 +50,7 @@ pub use owner_socket::OwnerSocketPlan;
 pub use platform::{Platform, RunMode};
 pub use resolve::Resolved;
 pub use sections::{
-    apply_logging, link_limits, log_location_creatable, log_location_writable, logging, Clearnet,
-    DaemonConfig, Logging, Tor,
+    apply_logging, link_limits, log_location_creatable, log_location_writable, logging,
+    logging_to_named_file, Clearnet, DaemonConfig, Logging, Tor,
 };
 pub use table::{runtime_owner, RuntimeOwner, BYTES, LEVEL, LEVELS, LOG_CATEGORY, NETWORKS, TABLE};

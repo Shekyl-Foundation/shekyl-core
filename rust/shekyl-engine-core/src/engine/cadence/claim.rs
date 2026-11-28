@@ -26,7 +26,7 @@ use super::super::Engine;
 use super::{CadenceLeg, WeakEngine};
 
 /// Consecutive claim-leg faults before [`AlarmCondition::EpochClaim`]
-/// raises (rule 75: rationale + bounds).
+/// raises (rule 175: rationale + bounds).
 ///
 /// **Rationale.** One fault is routine (a daemon restart, a transient
 /// transport refusal); the leg retries on the next chain advance for free.
@@ -115,9 +115,10 @@ pub(crate) struct ClaimLegState {
 ///    write lock totally orders the check against every foreground
 ///    registration.
 /// 4. **Fee + transport:** the daemon's live economy estimate over the
-///    claim envelope; the claim-source fetch rides a fresh loopback
-///    [`LocalNodeRpc`] over the driver's daemon target (this computer, or a
-///    loopback address; any other address is a named, alarmable refusal).
+///    claim envelope. The claim-source fetch rides
+///    [`open_chain_reader`](super::super::prpc::open_chain_reader): this
+///    computer, or an enrolled channel. A plaintext address on another
+///    computer is a named, alarmable refusal.
 /// 5. **Dispatch** through [`Engine::submit_emission_claim`] — the CB-3
 ///    seam, persist-before-dispatch and the audited submitter choke point
 ///    included.
@@ -126,7 +127,6 @@ pub(crate) struct ClaimLegState {
 /// [`EmissionClaimError::ValueDeferred`]: super::super::emission_claim::EmissionClaimError::ValueDeferred
 /// [`ForegroundSession`]: super::super::pending_post_gate::ForegroundSession
 /// [`ForegroundHold`]: super::super::claim_dispatch::EmissionClaimRequestError::ForegroundHold
-/// [`LocalNodeRpc`]: super::super::prpc::LocalNodeRpc
 pub(crate) struct EpochClaimLeg<S, D, L, E, R, P>
 where
     S: EngineSignerKind + Send + Sync + 'static,
@@ -301,18 +301,15 @@ where
                 Err(e) => return claim_fault(&state, &alarms, settled, &e.into()),
             };
             let claim_rpc =
-                match super::super::prpc::LocalNodeRpc::new(&target, CLAIM_RPC_TIMEOUT).await {
+                match super::super::prpc::open_chain_reader(&target, CLAIM_RPC_TIMEOUT).await {
                     Ok(rpc) => rpc,
-                    Err(e) => {
-                        // Named requirement (rule 82): the claim-source fetch is
-                        // persona-isolated and currently loopback-only.
+                    Err(error) => {
                         tracing::warn!(
-                            error = %e,
-                            "epoch-claim leg: emission claims require a loopback \
-                             daemon address; claims are on hold until one is \
-                             configured"
+                            error = %error,
+                            detail = error.detail(),
+                            "epoch-claim leg: the claim source could not be opened"
                         );
-                        return claim_fault(&state, &alarms, settled, &e);
+                        return claim_fault(&state, &alarms, settled, &error);
                     }
                 };
 

@@ -114,7 +114,7 @@
 //! reference's `randomx_get_cache_memory` for the same seedhash; the
 //! Phase 2g harness asserts this equivalence at every test invocation
 //! (no new validation surface introduced at C5 per
-//! [`19-validation-surface-discipline.mdc`](../../../.cursor/rules/19-validation-surface-discipline.mdc)).
+//! [`119-validation-surface-discipline.mdc`](../../../.cursor/rules/119-validation-surface-discipline.mdc)).
 //!
 //! The `gen_canonical_outputs` binary (extended at C5) provides the
 //! second independent computation path — C-reference-derived — for
@@ -469,7 +469,7 @@ mod tests {
     /// compile-time [`FAMILY_1_RECIPE_SHA256`] meta-pin combine
     /// to surface the drift, even though the comments may have
     /// gone stale. Per
-    /// [`19-validation-surface-discipline.mdc`](../../../.cursor/rules/19-validation-surface-discipline.mdc),
+    /// [`119-validation-surface-discipline.mdc`](../../../.cursor/rules/119-validation-surface-discipline.mdc),
     /// adding a parallel `FAMILY_1_RECIPE_NAMES` mirror to assert
     /// comment-vs-corpus consistency would create a new drift
     /// surface (every regeneration would update three arrays

@@ -4,7 +4,7 @@
 authority: Rick. Companion to
 [`../V3_SHARD_VISUALIZATION.md`](../V3_SHARD_VISUALIZATION.md) (*SV-D
 continuation*) and [`SHARD_VIEW_FETCH.md`](SHARD_VIEW_FETCH.md).
-Identifier family `ASL-1`…`ASL-N`, registered at birth (rule 94 §1).
+Identifier family `ASL-1`…`ASL-N`, registered at birth (rule 194 §1).
 
 **One sentence.** A 2024–2026 survey of hash, streaming, erasure-coded
 storage, post-quantum data-availability, proof-of-replication, and

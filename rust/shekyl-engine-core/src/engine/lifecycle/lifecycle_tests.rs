@@ -106,6 +106,98 @@ async fn create_full_then_open_full_round_trips_state() {
     assert_eq!(wallet.capability(), Capability::Full);
 }
 
+/// A binary that fails its address-derivation self-check creates nothing:
+/// the refusal names its platform and the wallet's directory stays empty.
+/// Red edit: move `check_address_derivation` below `WalletFile::create`, and
+/// the directory holds the new wallet.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_failed_derivation_check_refuses_create_before_any_file() {
+    let fix = make_create_fixture();
+    let creds = Credentials::password_only(b"correct horse battery staple");
+    let seed = fixed_seed();
+    let params = EngineCreateParams::for_test_full(&fix.base_path, &creds, &seed);
+
+    let refused = {
+        let _fails = crate::engine::lifecycle::support::DerivationCheckFails::new();
+        Engine::<SoloSigner>::create(params, dummy_daemon()).err()
+    };
+
+    let Some(OpenError::DerivationSelfCheckFailed { platform }) = refused else {
+        panic!("expected the derivation refusal, got {refused:?}");
+    };
+    assert!(platform.contains(std::env::consts::OS), "{platform}");
+    assert!(platform.contains(std::env::consts::ARCH), "{platform}");
+    let parent = fix.base_path.parent().expect("the fixture's directory");
+    assert_eq!(
+        std::fs::read_dir(parent)
+            .expect("read the directory")
+            .count(),
+        0,
+        "a refused create wrote a file"
+    );
+}
+
+/// The same check runs at every open, before the wallet file is read: the
+/// refusal leaves the file's bytes as they were, and the wallet opens once
+/// the check passes. Red edit: delete the call in `open_full_inner`, and
+/// this open succeeds.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_failed_derivation_check_refuses_open_and_leaves_the_wallet() {
+    let fix = make_create_fixture();
+    let creds = Credentials::password_only(b"correct horse battery staple");
+    let seed = fixed_seed();
+    let params = EngineCreateParams::for_test_full(&fix.base_path, &creds, &seed);
+    let network = params.network;
+    let created = Engine::<SoloSigner>::create(params, dummy_daemon()).expect("create");
+    created.close(&creds).await.expect("close");
+
+    let parent = fix.base_path.parent().expect("the fixture's directory");
+    let files = || {
+        let mut files: Vec<(PathBuf, Vec<u8>)> = std::fs::read_dir(parent)
+            .expect("read the directory")
+            .map(|entry| entry.expect("entry").path())
+            .filter(|path| path.is_file())
+            .map(|path| {
+                let bytes = std::fs::read(&path).expect("read");
+                (path, bytes)
+            })
+            .collect();
+        files.sort();
+        files
+    };
+    let before = files();
+    assert!(!before.is_empty(), "the fixture wrote a wallet");
+
+    let refused = {
+        let _fails = crate::engine::lifecycle::support::DerivationCheckFails::new();
+        Engine::<SoloSigner>::open_full(
+            &fix.base_path,
+            &creds,
+            network,
+            dummy_daemon(),
+            SafetyOverrides::none(),
+        )
+        .err()
+    };
+    assert!(
+        matches!(refused, Some(OpenError::DerivationSelfCheckFailed { .. })),
+        "expected the derivation refusal, got {refused:?}"
+    );
+    assert!(
+        before == files(),
+        "a refused open changed the wallet's files"
+    );
+
+    Engine::<SoloSigner>::open_full(
+        &fix.base_path,
+        &creds,
+        network,
+        dummy_daemon(),
+        SafetyOverrides::none(),
+    )
+    .expect("the wallet opens once the check passes");
+}
+
 /// `CURVE_TREE_CLIENT.md` §11 and §11.1: when `close` returns, the
 /// wallet's curve-tree store and persona body store are closed, so either
 /// file opens at once, with no retry anywhere. Checked on the files
@@ -638,7 +730,12 @@ async fn a_stale_pscan_seal_refuses_the_staker_start_naming_the_file_and_version
     let expected_path = shekyl_engine_file::paths::pscan_state_path_from(&fix.base_path);
 
     let arc = std::sync::Arc::new(tokio::sync::RwLock::new(opened));
-    match Engine::<SoloSigner>::start_pscan(arc.clone()).await {
+    match Engine::<SoloSigner>::start_pscan(
+        arc.clone(),
+        &crate::engine::test_support::node_never_reached(),
+    )
+    .await
+    {
         Err(PScanStartError::StateFileVersionUnsupported {
             path,
             found,
@@ -655,7 +752,11 @@ async fn a_stale_pscan_seal_refuses_the_staker_start_naming_the_file_and_version
     // The single-flight slot was released on the refusal (RAII guard), so a
     // second start refuses the same way rather than with `AlreadyRunning`.
     assert!(matches!(
-        Engine::<SoloSigner>::start_pscan(arc.clone()).await,
+        Engine::<SoloSigner>::start_pscan(
+            arc.clone(),
+            &crate::engine::test_support::node_never_reached()
+        )
+        .await,
         Err(PScanStartError::StateFileVersionUnsupported {
             found: PSCAN_STATE_VERSION_KEYLESS_JOIN,
             ..

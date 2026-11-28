@@ -176,7 +176,7 @@ impl DepartureLedger {
     /// serve, in the record's own shape ([`Obligation`]); `pinned` is what
     /// the store is actually retaining. The difference is
     /// retained-but-not-owed — the leak `§9.7` item 5 prices at ~13.6 GB
-    /// against a rule-76 Pi-4 floor, since nothing else removes a pin.
+    /// against a rule-176 Pi-4 floor, since nothing else removes a pin.
     ///
     /// # The gate is epoch-shaped, not reorg-shaped, and that is the point
     ///

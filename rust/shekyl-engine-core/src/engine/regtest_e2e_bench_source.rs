@@ -58,7 +58,7 @@ use super::super::error::SendError;
 use super::super::pending::{FeePriority, SubmitOutcome, TxDestination, TxRecipient, TxRequest};
 use super::super::refresh::RefreshOptions;
 use super::super::{Engine, SoloSigner};
-use super::create_wallet;
+use super::{create_wallet, loopback_rpc};
 
 /// The source's seed: one wallet, the same in every run.
 const SEED_BYTE: u8 = 0xB5;
@@ -90,7 +90,7 @@ async fn bench_tx_source() {
     )
     .expect("a port");
     let seed = [SEED_BYTE; shekyl_crypto_pq::account::SEED_BYTES];
-    let (wallet, _tmp) = create_wallet(port, &seed, b"bench-source").await;
+    let (wallet, _tmp) = create_wallet(loopback_rpc(port).await, &seed, b"bench-source");
     let address = wallet.primary_address().encode().expect("encode address");
     match mode.as_str() {
         "address" => say(&format!("BENCH_TX_SOURCE_ADDR={address}")),

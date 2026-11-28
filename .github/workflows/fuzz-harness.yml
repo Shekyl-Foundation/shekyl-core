@@ -62,6 +62,8 @@ jobs:
       - name: the inventory, derived from the tree
         run: |
           python3 scripts/ci/check_fuzz_inventory.py --selftest
+          python3 scripts/ci/fuzz_coverage.py --selftest
+          python3 scripts/ci/fuzz_run.py --selftest
           python3 scripts/ci/check_fuzz_inventory.py
       - name: the coverage floors, one per target, each moved only with its run
         # Against HEAD^1 (the base, in a pull request's merge commit): the

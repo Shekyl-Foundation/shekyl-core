@@ -66,7 +66,7 @@ shekyl-address = { path = "../shekyl-address" }
 # `OutputSelector`/`FeeEstimator` targets, claim/multisig-intent amounts).
 shekyl-units = { path = "../shekyl-units" }
 # Canonical state-shaped newtypes; `TxHash` is re-exported from
-# `engine::pending` (no local redefinition — see `18-type-placement.mdc`).
+# `engine::pending` (no local redefinition — see `118-type-placement.mdc`).
 shekyl-types = { path = "../shekyl-types" }
 shekyl-engine-file = { path = "../shekyl-engine-file" }
 shekyl-engine-state = { path = "../shekyl-engine-state" }
@@ -78,10 +78,6 @@ shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 shekyl-proofs = { path = "../shekyl-proofs" }
 shekyl-encoding = { path = "../shekyl-encoding" }
 shekyl-rpc-transport = { path = "../shekyl-rpc-transport" }
-# SP-T2: the per-P Tor transport primitive (PTorClient). engine-core wraps it in
-# `PRpc` (an `Rpc` impl); it does NOT depend on `ureq` — all agent construction
-# and use is confined to shekyl-p-transport (§2b invariant 1).
-shekyl-p-transport = { path = "../shekyl-p-transport" }
 # `WalletTorControl` (P's Tor instance) and `OnionIdentity` (expanded in the
 # wallet context, §7.2(iii) / SH-2b-1). The identity type is re-exported from
 # the wallet crate so this crate does not take the control-protocol client —
@@ -259,6 +255,9 @@ kameo = { workspace = true }
 shekyl-win-sec = { path = "../shekyl-win-sec" }
 
 [dev-dependencies]
+# Live regtest nodes publish their owner socket or pipe in a private fixture directory.
+shekyl-rpc-transport = { path = "../shekyl-rpc-transport", features = ["test-override"] }
+shekyl-rpc-rendezvous = { path = "../shekyl-rpc-rendezvous" }
 # `test-tamper` compiles `CurveTreeClient::test_tamper_poison`, which the
 # curve-tree actor's in-place recovery tests poison a client with;
 # `test-paths` compiles `AssembledPaths::from_parts_unchecked`, the

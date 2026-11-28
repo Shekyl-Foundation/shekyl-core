@@ -35,11 +35,13 @@ base64 = "0.22"
 # secret under 35-secure-memory.mdc). Same pin as shekyl-scanner.
 subtle = "2"
 tracing = "0.1"
-clap = { version = "4", features = ["derive"] }
 rand = "0.8"
 hex = "0.4"
 zeroize = { workspace = true }
 shekyl-logging = { path = "../shekyl-logging" }
+# The option table and its one load (`INPUT_GRAMMAR.md` IG-15, §12.4).
+shekyl-options = { path = "../shekyl-options" }
+shekyl-daemon-config = { path = "../shekyl-daemon-config" }
 shekyl-engine-core = { path = "../shekyl-engine-core" }
 shekyl-engine-file = { path = "../shekyl-engine-file" }
 shekyl-engine-state = { path = "../shekyl-engine-state" }
@@ -73,6 +75,7 @@ shekyl-os-account = { path = "../shekyl-os-account" }
 shekyl-win-sec = { path = "../shekyl-win-sec" }
 
 [dev-dependencies]
+shekyl-rpc-transport = { path = "../shekyl-rpc-transport", features = ["test-override"] }
 tokio = { version = "1", features = ["full", "test-util"] }
 # The receive-row projection tests build a real `TransferDetails` through
 # the scanner's `test-utils` constructor (same edge shekyl-engine-state's
@@ -87,6 +90,9 @@ tracing-subscriber = { version = "0.3", features = ["fmt"] }
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
 tempfile = "3"
+# A spawned server's configuration file sits below no directory another
+# account can write, as the file's check requires.
+shekyl-os-account = { path = "../shekyl-os-account", features = ["test-fixture"] }
 # Enable the engine-core `test-helpers` surface for this crate's tests only
 # (the `__test_helpers::make_staker_for_test` staker constructor the WI-1 P-scan
 # lifecycle test needs). Dev-dep self-referencing the same path dep so the

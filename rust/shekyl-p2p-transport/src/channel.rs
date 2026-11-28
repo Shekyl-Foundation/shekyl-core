@@ -85,6 +85,32 @@ impl SendHalf {
         }
         Ok(out)
     }
+
+    /// Seal `plaintext` one record at a time.
+    ///
+    /// `write` sees each record before the next is sealed. The records
+    /// match [`Self::seal`]. An empty slice calls `write` zero times.
+    ///
+    /// # Errors
+    ///
+    /// [`SealEachError::Record`] from the framer, or [`SealEachError::Write`]
+    /// from `write`. A write error has already sealed that record; later
+    /// records are not sealed. The caller does not retry the same plaintext.
+    pub fn seal_each<E>(
+        &mut self,
+        plaintext: &[u8],
+        mut write: impl FnMut(&[u8]) -> Result<(), E>,
+    ) -> Result<(), SealEachError<E>> {
+        if plaintext.is_empty() {
+            return Ok(());
+        }
+        for chunk in plaintext.chunks(MAX_BODY) {
+            let mut record = Vec::new();
+            seal_chunk(&mut self.dir, chunk, &mut record)?;
+            write(&record).map_err(SealEachError::Write)?;
+        }
+        Ok(())
+    }
 }
 
 impl RecvHalf {
@@ -105,6 +131,39 @@ impl RecvHalf {
             }
             ok => ok,
         }
+    }
+
+    /// Open one record from `pending` and drop the bytes it consumed.
+    ///
+    /// `Ok(None)` is a short buffer. The direction stays usable.
+    ///
+    /// # Errors
+    ///
+    /// The same errors as [`Self::open_one`], other than truncation.
+    pub fn take_one(&mut self, pending: &mut Vec<u8>) -> Result<Option<Vec<u8>>, RecordError> {
+        match self.open_one(pending) {
+            Ok((plain, used)) => {
+                pending.drain(..used);
+                Ok(Some(plain))
+            }
+            Err(RecordError::Truncated) => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+}
+
+/// [`SendHalf::seal_each`] stopped on a record or on the caller's write.
+#[derive(Debug)]
+pub enum SealEachError<E> {
+    /// The record layer refused the plaintext.
+    Record(RecordError),
+    /// `write` returned this.
+    Write(E),
+}
+
+impl<E> From<RecordError> for SealEachError<E> {
+    fn from(error: RecordError) -> Self {
+        Self::Record(error)
     }
 }
 
@@ -169,11 +228,11 @@ mod tests {
         let nid = [0x11u8; 16];
         let (ini, m1) = Initiator::new(&nid).unwrap();
         let (resp, m2) = Responder::new(&nid)
-            .read_message1(&m1)
+            .read_message1(m1.message())
             .unwrap()
             .write_message2()
             .unwrap();
-        let ini = ini.read_message2(&m2).unwrap();
+        let ini = ini.read_message2(m2.message()).unwrap();
         let (a_send, a_recv) = ini.split();
         let (b_send, b_recv) = resp.split();
         (a_send, a_recv, b_send, b_recv)
@@ -186,6 +245,34 @@ mod tests {
         let (pt, n) = b_recv.open_one(&ct).unwrap();
         assert_eq!(n, ct.len());
         assert_eq!(pt, b"levin");
+    }
+
+    /// Red edit: seal the whole plaintext before the first `write`.
+    #[test]
+    fn seal_each_writes_one_record_at_a_time() {
+        let (mut send, _a_recv, _b_send, mut recv) = pair();
+        let plain = vec![9u8; MAX_BODY + 3];
+        let mut records = Vec::new();
+        send.seal_each(&plain, |record| {
+            records.push(record.to_vec());
+            Ok::<(), RecordError>(())
+        })
+        .expect("seal");
+        assert_eq!(records.len(), plain.chunks(MAX_BODY).count());
+        assert!(
+            records.len() > 1,
+            "a body past one record is several writes"
+        );
+        let mut pending = Vec::new();
+        for record in &records {
+            pending.extend_from_slice(record);
+        }
+        let mut opened = Vec::new();
+        while let Some(piece) = recv.take_one(&mut pending).expect("open") {
+            opened.extend(piece);
+        }
+        assert!(pending.is_empty());
+        assert_eq!(opened, plain);
     }
 
     #[test]

@@ -63,7 +63,7 @@ use std::time::{Duration, Instant};
 
 use shekyl_engine_state::pending_post_block::{PendingBondPost, PendingPostState, SealAdmission};
 use shekyl_standoff::gf7::{BroadcastTimelineObserver, TimelineEvent};
-use shekyl_types::{BlockCount, ChainCount, PCanonicalId, PSlot};
+use shekyl_types::{ChainCount, PCanonicalId, PSlot};
 use tokio::sync::RwLock;
 
 use super::pscan::dispatch::{DispatchConfig, PendingPostStore, PendingSealStore};
@@ -281,18 +281,20 @@ fn synthetic_persona(arm_tag: u64, run: usize, wallet: usize, slot: usize) -> PC
     PCanonicalId::from_bytes(bytes)
 }
 
-/// One synthetic pending bond post, due immediately (`anchor_t0 = 0`,
-/// `bond_post_offset_blocks = 0`). The bytes are deliberately garbage: the
+/// One synthetic pending bond post, signed and due at count 0 so it is
+/// sent at once. The bytes are deliberately garbage: the
 /// channel under grade ends at the emit (§19.8.5 rejects the full WI-2
 /// funding path), and the daemon's terminal rejection is what retires the
 /// record for the next round's seed.
 fn synthetic_post(persona: PCanonicalId, slot: usize, round: usize) -> PendingBondPost {
     PendingBondPost {
+        wait: None,
         p_slot: PSlot::from_raw(u32::try_from(slot).expect("slot fits u32")),
         persona,
         tx_bytes: format!("gf7-sealing-run synthetic post slot={slot} round={round}").into_bytes(),
-        bond_post_offset_blocks: BlockCount::ZERO,
-        anchor_t0: ChainCount::from_raw(0),
+        posture: shekyl_engine_state::PlannedPosture::SupportCompleteTree,
+        due: ChainCount::from_raw(0),
+        funded_through: shekyl_types::BlockHeight::from_raw(0),
         funding_gindexes: Vec::new(),
         state: PendingPostState::Pending,
         reference_height: shekyl_types::BlockHeight::from_raw(1_000_000),
@@ -403,7 +405,7 @@ async fn one_run(
     for wallet in 0..WALLETS {
         let seed = wallet_seed(arm_tag, run, wallet);
         let (arc, tmp, _principal) =
-            staker_wallet(daemon.rpc_port(), &seed, PSlot::from_raw(0)).await;
+            staker_wallet(daemon.wallet_rpc(), &seed, PSlot::from_raw(0)).await;
         let write_lock = arc.read().await.pending_gate.clone();
         let store = pending_post_store_for_engine(arc.clone(), write_lock);
         for slot in 0..PERSONAS_PER_WALLET {
@@ -433,6 +435,7 @@ async fn one_run(
             tokio::time::sleep(Duration::from_millis(stagger_ms)).await;
             Engine::<SoloSigner>::start_pscan_sealing_run(
                 arc_for_start,
+                &crate::engine::test_support::node_never_reached(),
                 SealingRunOverrides {
                     observer: Box::new(observer),
                     dispatch_config: dispatch_override,
@@ -559,10 +562,7 @@ async fn gf7_sealing_run_writes_receipts_artifact() {
     // panics the task, which the run loop's `is_finished` health check
     // converts into a loud session failure — a silently frozen chain must
     // never grade.
-    let miner_rpc =
-        shekyl_rpc_transport::HttpRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port()))
-            .await
-            .expect("miner rpc");
+    let miner_rpc = daemon.wallet_rpc();
     let miner = tokio::spawn(async move {
         let mut consecutive_failures = 0u32;
         loop {

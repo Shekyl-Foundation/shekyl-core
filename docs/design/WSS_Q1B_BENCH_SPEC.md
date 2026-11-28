@@ -28,7 +28,7 @@ corpus and protocol §6.3.4 leaves to the bench.
 
 **Identifier family:** `WSS-` — this is bench work under the wallet-side store
 round and registers **no new family**
-([rule 94](../../.cursor/rules/94-tracking-index.mdc), one lane one family).
+([rule 194](../../.cursor/rules/194-tracking-index.mdc), one lane one family).
 
 ---
 
@@ -454,7 +454,7 @@ session the rig exists for.
 
 **What this rig grades, and what it does not.** The pins grade **obligation-A**
 quantities — the principal's proving path, which every wallet walks, and which
-is why rule 76's floor is the right subject for them. **No serving-path
+is why rule 176's floor is the right subject for them. **No serving-path
 measurement grades on this rig**, conservative baseline notwithstanding: an
 archiver runs a bonded persona with a Tor service and multi-gigabyte holdings,
 and sizing that box is a separate question with its own reference class, owed
@@ -780,7 +780,7 @@ round-trip term alone reached 5 s.
 ### 7.2 First `Cortex-A72` session — 2026-09-23, **ungraded: the storage pin is unmet**
 
 **Read the pin failure first, because it bounds everything below.** The board
-matches every rule-76 pin *except storage*: root is `/dev/mmcblk0p2`, a
+matches every rule-176 pin *except storage*: root is `/dev/mmcblk0p2`, a
 **microSD**, and the only USB disk present is a rotational WD HDD that is not
 mounted. §6.3.4's rig table requires **USB-SSD** and states why — *"buffer
 refetch and replay are I/O-bound; microSD and SSD differ by more than the
@@ -995,7 +995,7 @@ either quantity measured here, and a faster disk will not move them.
 **FCMP++ proving on a Cortex-A72 is `6.052 s`**, against 1.105 s on x86: a
 **5.5× penalty that is purely the processor**, irreducible by any amortization,
 because it is the prover rather than this project's code. That figure is the
-one bearing on whether the rule-76 floor is the right floor — a question this
+one bearing on whether the rule-176 floor is the right floor — a question this
 session **cannot** answer, because the reducible terms dominate every measured
 total and would be answering for our unoptimised code under the board's name.
 It becomes answerable when increment 4 exists and increment 6 re-grades it.

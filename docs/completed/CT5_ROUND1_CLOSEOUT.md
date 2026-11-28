@@ -87,7 +87,7 @@ Per `21-reversion-clause-discipline.mdc`, each carries a named reopening trigger
   k-input tx). **Reopens** when per-tx batching at scale is taken up: fold to
   once-per-transaction with an ingest-time `gindex → position` index
   (O(log n)/O(1) per input). Not built in Round 1 — premature before mainnet
-  scale (rules 21/70); correctness is unaffected.
+  scale (rules 21/170); correctness is unaffected.
 - **Reactive `ProofStale` detection — Phase 6.** Needs a daemon-side stale-root
   signal (`SHEKYLD_PREREQUISITE`); CT-5 lands only the proactive horizon guard
   (`should_reanchor`). **Reopens** with the daemon signal (2A §3.6).

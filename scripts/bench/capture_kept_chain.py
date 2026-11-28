@@ -131,7 +131,11 @@ def main():
     console = open(console_log, "w", encoding="utf-8")
     try:
         proc = subprocess.Popen(
-            [args.daemon, "--network", "regtest", "--data-dir", args.data,
+            # `--config-file none`: the default file is the machine's
+            # (`/etc/shekyl`), where a host's own regtest node keeps its
+            # settings.
+            [args.daemon, "--network", "regtest", "--config-file", "none",
+             "--data-dir", args.data,
              "--log-file", daemon_log, "--clearnet", "off", "--tor", "off",
              "--p2p-local", "--dev-rpc",
              "--rpc-admin-listen", f"127.0.0.1:{admin_port}"]

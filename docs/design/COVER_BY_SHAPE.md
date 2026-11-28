@@ -2,7 +2,7 @@
 
 **Status: OPEN — Round 0 (Rick). The direction in §2 was ruled on 2026-11-19, and `CBS-E1` and `CBS-E4` on 2026-11-20; `CBS-E2`, `CBS-E3` and `CBS-E5`–`CBS-E7` in §6 are open. Last ruling recorded: 2026-11-20.** Nothing here is built. Read at two commits of this repository: `88864d06`, the head of PR #1431's branch on 2026-11-19, and `d86ef32f` on `dev`; the file and line citations in §3 are at those commits unless an item names another. This is a second approach to wire-observer cover, beside the volume build of #1431, which is held and then closed unmerged, its branch kept (`CBS-E4`).
 
-**Identifier family:** `CBS-`, registered at birth (rule 94) in [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2. `CBS-R1`–`CBS-R6` are the rulings of §2; `CBS-E1`–`CBS-E7` are the decisions of §6, of which `CBS-E1` and `CBS-E4` are ruled and `CBS-E2`, `CBS-E3` and `CBS-E5`–`CBS-E7` are open.
+**Identifier family:** `CBS-`, registered at birth (rule 194) in [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2. `CBS-R1`–`CBS-R6` are the rulings of §2; `CBS-E1`–`CBS-E7` are the decisions of §6, of which `CBS-E1` and `CBS-E4` are ruled and `CBS-E2`, `CBS-E3` and `CBS-E5`–`CBS-E7` are open.
 
 ## 1. The idea (Rick)
 

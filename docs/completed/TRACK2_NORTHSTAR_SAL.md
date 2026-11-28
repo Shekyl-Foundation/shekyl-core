@@ -136,7 +136,7 @@ SHEKYLD_BIN=/abs/build/bin/shekyld \
 The crypto and wire are **shared/canonical** — the daemon verify is the same Rust
 `shekyl_fcmp::proof::verify` via FFI; the spend layout is `shekyl-wire` (PR #178).
 The remaining bug is **wallet-side key derivation** — Rust, our code; fix it
-Rust-side (rules 20/36, Rust owns secrets). Honor rules 30 (crypto discipline),
+Rust-side (rules `RULE_20_RUST_VS_CPP`/36, Rust owns secrets). Honor rules 30 (crypto discipline),
 36 (secret locality), 45 (fmt/clippy), 50 (testing), 06 (branching). The KeyEngine
 derivation is consensus-adjacent crypto — verify against the SAL relation, do not
 guess.

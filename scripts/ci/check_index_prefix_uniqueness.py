@@ -5,7 +5,7 @@
 #
 # Identifier-family prefix uniqueness for docs/design/IMPLEMENTATION_INDEX.md §2.
 #
-# Rule 94: a family's prefix up to the first digit (with an optional
+# Rule 194: a family's prefix up to the first digit (with an optional
 # hyphen-letter infix, so SP- and SP-T coexist, as do F- and FA-, CT- and
 # CT-ACT-) must be unique among registered families. Parsed from the first
 # identifier in column 0 of the §2 table.
@@ -17,7 +17,7 @@
 #   (no args)            gate the registered §2 table, as CI runs it.
 #   --prefix CELL CELL…  print the prefix each candidate Family cell parses to,
 #                        and whether they collide EITHER with each other OR with
-#                        a family already registered in §2. Rule 94 §6 requires
+#                        a family already registered in §2. Rule 194 §6 requires
 #                        this before splitting one row into per-sub-family rows:
 #                        distinct prefixes take branch (a), collapsing ones take
 #                        branch (b). Both the grammar and the registry are read
@@ -112,7 +112,7 @@ def registry_rows() -> list[str] | None:
 
 
 def report_candidates(cells: list[str], replaced: list[str] | None = None) -> int:
-    """Rule 94 §6: print what each proposed Family cell parses to, and whether
+    """Rule 194 §6: print what each proposed Family cell parses to, and whether
     the shape is admissible.
 
     `replaced` names Family cells of rows the proposal REMOVES. Without it the
@@ -256,7 +256,7 @@ def report_candidates(cells: list[str], replaced: list[str] | None = None) -> in
             print(f"index prefixes: SEPARATELY, {pref!r} is registered by "
                   f"{row!r}, so candidate {cand!r} collides with an unrelated "
                   f"family — this one needs a rename or a --replace")
-        print("COLLIDE — rule 94 §6 branch (b): keep one row and put per-lane "
+        print("COLLIDE — rule 194 §6 branch (b): keep one row and put per-lane "
               "status in the owning doc. Do NOT widen the grammar to separate "
               "them; that costs the check its power to catch a real duplicate.")
         if unrelated:
@@ -281,7 +281,7 @@ def report_candidates(cells: list[str], replaced: list[str] | None = None) -> in
     assert len(seen) == len(cells)
     print(f"\nDISTINCT ({len(cells)} candidates -> {len(seen)} prefixes, and "
           f"none collide with the {len(registered)} other families registered in "
-          f"§2) — rule 94 §6 branch (a): one row per sub-family is available.")
+          f"§2) — rule 194 §6 branch (a): one row per sub-family is available.")
     return 0
 
 
@@ -315,7 +315,7 @@ def main() -> int:
             continue
         # `rows` holds one entry per table LINE, so two entries can only be
         # byte-identical when two rows register the same family — itself a
-        # rule 94 §1 violation. An earlier `and seen[pref] != cell` guard
+        # rule 194 §1 violation. An earlier `and seen[pref] != cell` guard
         # excused exactly that case, suppressing the duplicate it was meant
         # to catch; a repeated prefix is a collision however the cells read.
         if pref in seen:

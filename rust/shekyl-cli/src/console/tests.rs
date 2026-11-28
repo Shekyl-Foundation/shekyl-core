@@ -29,7 +29,7 @@ fn with_daemon(
 ) -> Result<String, String> {
     let address = address.ok_or_else(|| "no daemon".to_owned())?;
     let daemon = DaemonClient::new(
-        shekyl_rpc_transport::DaemonTarget::address(format!("http://{address}")),
+        shekyl_rpc_transport::DaemonTarget::fixture_address(format!("http://{address}")),
         None,
         network,
     )
@@ -2057,7 +2057,7 @@ fn the_tor_vectors_read_through_the_client() {
     let read = |value: serde_json::Value| {
         let address = route_server(vec![(rpc::<wire::DaemonStatus>(), rpc_result(value))]);
         let daemon = DaemonClient::new(
-            shekyl_rpc_transport::DaemonTarget::address(format!("http://{address}")),
+            shekyl_rpc_transport::DaemonTarget::fixture_address(format!("http://{address}")),
             None,
             shekyl_rpc_types::Network::Mainnet,
         )
@@ -2066,8 +2066,8 @@ fn the_tor_vectors_read_through_the_client() {
     };
     let known = tor_vectors("known");
     // The known directory, the same count `the_vector_set_is_there` pins
-    // (`onion-published-elsewhere` is one of them).
-    assert_eq!(known.len(), 27);
+    // (`onion-guards-refused` and `onion-guards-unfilled` are two of them).
+    assert_eq!(known.len(), 29);
     for (name, value) in known {
         let status = read(value).unwrap_or_else(|error| panic!("{name}: {error}"));
         let tor = status.tor_status().expect("Status is shown");

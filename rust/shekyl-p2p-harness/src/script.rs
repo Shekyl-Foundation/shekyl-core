@@ -64,6 +64,10 @@ impl NamedSeed {
 /// Handshake invoke split on a stride derived from the seed.
 pub const PROPERTY_SEEDS: Range<u64> = 100..116;
 
+/// The network id the seam host and the scripted peer both open their
+/// channel under.
+pub(crate) const SEAM_NETWORK_ID: [u8; 16] = [0x11; 16];
+
 /// The seam host's send queue. One byte past it does not fit.
 pub const SEND_QUEUE_BYTES: usize = 64 * 1024;
 

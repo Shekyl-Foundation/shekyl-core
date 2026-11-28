@@ -34,7 +34,7 @@
 //!   tier that admits an alt block reads no executed-chain fact and
 //!   derives none, and promotion re-derives supply by executing the chain.
 //!   A field with no reader is not stored, so "nothing reads it" is the
-//!   type, not a grep. Deleted at `SCHEMA_VERSION` 24 (rule 42);
+//!   type, not a grep. Deleted at `SCHEMA_VERSION` 24 (rule 142);
 //! - the **proof-of-work hash** the tier computed, under its seed
 //!   ([`RecordedPow`], 64 bytes after the cumulative difficulty;
 //!   `SCHEMA_VERSION` 26): its reader is the switch, which re-forms the
@@ -422,7 +422,7 @@ impl Canonical for AltBodies {
 /// the codec test and the snapshot fixture build **the same** bytes.
 ///
 /// The coinbase is built **inline, from literals alone — no rules-harness
-/// fixture, no consensus constant** (rule 42: a codec snapshot's input is
+/// fixture, no consensus constant** (rule 142: a codec snapshot's input is
 /// constructed inline, never a shared value). This codec carries the block
 /// as a blob; its snapshot pins the blob's bytes, and `schema-snapshot.yml`
 /// demands a `SCHEMA_VERSION` bump for any snapshot change. Anything read

@@ -27,9 +27,9 @@ wants it too. **No other implementation PR from this document lands.**
 `d89f99791` (the #772 merge). **Round 1 ruled 2026-09-18** (maintainer, on PR
 #776; §8, each ruling line-local): CTS-Q1 ruled to a third option — type the
 **return** of `open_frozen_segment_body`, not the handle (§2.1 F, §3.1);
-CTS-Q2…Q6 stand as defaulted. Implementation may start, PR A first. Rule-26
+CTS-Q2…Q6 stand as defaulted. Implementation may start, PR A first. Rule-126
 sub-PR discipline is
-invoked by this document (`26-sub-pr-design-discipline.mdc`): a multi-commit
+invoked by this document (`126-sub-pr-design-discipline.mdc`): a multi-commit
 store-format change behind a stable API, with a substrate re-check and an
 artifact run before each cut.
 

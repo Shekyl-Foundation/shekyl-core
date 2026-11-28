@@ -53,7 +53,7 @@ so Tor is the only way between them. Ports and hosts are in
 `shekyl-dev`'s usage ledger.
 
 - **Run A:** the responder is the measurement host (x86, Ubuntu 24.04).
-- **Run B:** the responder is the floor device (Pi 4, aarch64, rule 76),
+- **Run B:** the responder is the floor device (Pi 4, aarch64, rule 176),
   built natively from the same commit, with the pinned 16.0a13 aarch64
   bundle beside it. The same client, the same link.
 

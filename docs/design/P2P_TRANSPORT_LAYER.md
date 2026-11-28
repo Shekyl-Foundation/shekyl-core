@@ -8,11 +8,11 @@ not touch epee, `src/p2p`, `src/net`, the transport crate, or the
 protocol docs, so Round 1's anchors still hold. **The deliverable of
 this round is a design, not code.** Implementation does not start until
 the round closes. **Pre-flight discharged 2026-09-26** at `dev`
-`0aa207208` (rule 26). Production code follows that record. The
-service is the first of it. Target is 4–6 review rounds (rule 20). **Rule 26 is
-cited explicitly** (`26-sub-pr-design-discipline.mdc`): this work
+`0aa207208` (rule 126). Production code follows that record. The
+service is the first of it. Target is 4–6 review rounds (`RULE_20_RUST_VS_CPP`). **Rule 126 is
+cited explicitly** (`126-sub-pr-design-discipline.mdc`): this work
 crosses an FFI boundary and replaces an inherited reference. Numeric
-budgets are not written before a measurement (rule 26 B9). This
+budgets are not written before a measurement (rule 126 B9). This
 document mints no identifier family; decisions stay `PWD-` and the
 slices stay P2P-3's.
 
@@ -44,7 +44,7 @@ the pipe would not carry; protocol evidence does not need the pipe.
 | 5 | Transport-layer implementation, then a differential harness against epee. The thread budget and the per-connector deadlines are measured on this build | Code, after the round closes |
 | 6 | Cutover, one branch (ruled 2026-09-28): zone binding, the operator link budget, the call sites that move with them, the cross-build and the measurements on that build, then the deletions and the goldens. Merges once, when the run records are in | Not a flag day (D11) |
 | 7 | Option evaluation: window size, rekey cost, Nagle, flood. Not the source of the cutover numbers | Evaluation record |
-| 8 | The flip | Flag day (rule 07), only after step 7 |
+| 8 | The flip | Flag day (rule 107), only after step 7 |
 
 The scaffolding-deletion FOLLOWUPS row is step 2, a separate doc PR.
 Its owner is [`SHEKYL_P2P_PROTOCOL.md`](SHEKYL_P2P_PROTOCOL.md), which
@@ -81,7 +81,7 @@ force. The transport layer does not repeat the mistakes:
 
 ## Pre-flight — DISCHARGED 2026-09-26
 
-Rule 26, between design closure and the first production line. Pin:
+Rule 126, between design closure and the first production line. Pin:
 `dev` `0aa207208`, the merge of #870. This is not a new round. The
 record is this section, the same shape as the timing-engine pre-flight:
 the findings are a substrate confirmation and a sequence, not a
@@ -147,7 +147,7 @@ implementation. They are not a reason to wait before the service.
 
 ## Logic core — LANDED (PR #875, 2026-09-26)
 
-Rule 26 is cited. This is not a new round and not a second pre-flight.
+Rule 126 is cited. This is not a new round and not a second pre-flight.
 The pass above is discharged. This note is the scope of the first
 transport increment.
 
@@ -340,12 +340,10 @@ minted from the loopback bind. An `--anonymous-inbound` bind is
 `OperatorInbound`. It does not convert into `ForwardAddr`, so it is
 not a publish target.
 
-Before the flip, ruling 4's exception is still in force. The option off
-omits the Noise layer the declaration adds, and the socket bytes are the
-session bytes. The differential harness compares those Levin bytes and
+The channel follows the stack plan: clearnet's plan is Noise, and no
+option turns it off. Nothing matches on a network's identity. The
+differential harness compares the Levin bytes inside that channel and
 the session result, as the seam section states.
-The option on follows the stack plan: clearnet's plan is Noise, and that
-is what step 7 evaluates. Neither arm matches on a network's identity.
 The worker count, the blocking cap, the shutdown timeout, and the
 handshake span are the caller's, labelled unmeasured until a measurement
 names them.
@@ -1140,7 +1138,7 @@ type deleted, and the pipe branch deleted.
   operator writes through RPC `set_bans` and the ban file. A peer
   cannot make a ban. The transport layer enforces the entry at
   accept and before dialing.
-- **FFI (rule 40).** Every call names its direction and who owns the
+- **FFI (`RULE_40_FFI_DISCIPLINE`).** Every call names its direction and who owns the
   buffer. A callback context is not a raw `this`.
 
 The parked branch's `on_plain` nonzero path is this contract, not code
@@ -1461,8 +1459,7 @@ declaration, not a new set of branches.
   clearnet provides natively. The stack includes Noise because clearnet
   declares no native encryption. `noise.rs`, `channel.rs` and `prefix.rs`
   are that layer in `shekyl-p2p-transport`. `aead.rs`, `direction.rs` and
-  `symmetric.rs` are the shared state in `shekyl-noise`. The option-off path is the exception in ruling 4;
-  the flip is "enforce the contract". `--proxy` is a D3 dial duty and changes
+  `symmetric.rs` are the shared state in `shekyl-noise`. `--proxy` is a D3 dial duty and changes
   no declared capability.
 - **Tor is a complete overlay, not a VPN.** The Tor connector speaks onion to
   onion. Encryption is end to end to the peer's service, classical only,
@@ -1603,7 +1600,7 @@ flight sizes (1,224 and 1,160 bytes on the wire, prefix included), the
 Pi-4 crypto cost from step 3, and RTT measured on that connector. A
 single global handshake deadline would break on a network whose mixing
 delay is seconds. Clearnet deadlines are the 2026-09-30 update below;
-Tor's are in the benchmark record. Rule 26 B9.
+Tor's are in the benchmark record. Rule 126 B9.
 
 Pi-4 C5 run, 2026-09-26, the floor device (aarch64, 4 cores), about 90 seconds:
 [`p2p_c5_pi4_20260926T005507Z.txt`](../benchmarks/p2p_c5_pi4_20260926T005507Z.txt).
@@ -1825,7 +1822,7 @@ listener, and so a connection in the gap phase.
    once a minute, never once per connection. One linger task is shared
    by every clearnet listener (D10.2). The rates are protocol data in
    `accept_bound`, beside
-   the declaration, the same on every node (rule 71): Tor's row is the
+   the declaration, the same on every node (rule 171): Tor's row is the
    onion's proof-of-work (item 4), and clearnet's row carries the two
    buckets above. The build refuses a connector whose inbound peers have
    an address but whose bound is not assessed, and one whose inbound
@@ -1946,7 +1943,7 @@ round can reject them.
   carries the same bytes epee does, and Tor/I2P are unchanged on the
   wire, so a connector node and an epee node interoperate. The
   differential harness is what shows that. The flag day is the flip
-  (step 8), under rule 07, not the cutover.
+  (step 8), under rule 107, not the cutover.
 
 ---
 

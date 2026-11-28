@@ -6,9 +6,10 @@
 //! Wallet lifecycle commands over the native RPC surface (WI-RPC-2a):
 //! create, open, close, restore, refresh, rescan, status, password.
 
+use std::path::Path;
+
 use crate::outcome::{failed, CommandResult, Presentation};
 use serde_json::{json, Value};
-use zeroize::Zeroizing;
 
 use super::{read_password, require_closed, require_open};
 use crate::rpc_client::{params, RpcError, RpcSession};
@@ -16,31 +17,48 @@ use crate::rpc_client::{params, RpcError, RpcSession};
 const SEED_FILE_HINT: &str = "\
 Refusing to create a wallet whose one-time seed backup cannot be shown here.\n\
 For a script or for JSON output, use:\n  \
-shekyl-cli create <name> --seed-out <path> --password-file <path>";
+shekyl-cli --wallet-password-file <path> wallet create <name> --mnemonic-file <path>";
 
 const SEED_NOT_SHOWN: &str = "\
 The output closed before the seed backup could be shown. \
 The wallet was created, and its seed is shown only once. \
 Delete the wallet and create it again where you can read the output.";
 
-pub fn cmd_create(rpc: &RpcSession, presentation: &Presentation, filename: &str) -> CommandResult {
+/// Create `filename`. The recovery words go to `mnemonic_file` when it is
+/// set, and onto the screen when it is not. The password is
+/// `wallet-password-file` when that is set, and otherwise the hidden prompt
+/// with a confirmation. One policy for both destinations.
+pub fn create_wallet(
+    rpc: &RpcSession,
+    presentation: &Presentation,
+    source: Option<&super::scripted::PasswordSource>,
+    filename: &str,
+    mnemonic_file: Option<&Path>,
+) -> CommandResult<super::scripted::CreatedWallet> {
+    match mnemonic_file {
+        Some(path) => super::scripted::run_create(rpc, presentation, source, filename, path),
+        None => create_on_screen(rpc, presentation, source, filename),
+    }
+}
+
+fn create_on_screen(
+    rpc: &RpcSession,
+    presentation: &Presentation,
+    source: Option<&super::scripted::PasswordSource>,
+    filename: &str,
+) -> CommandResult<super::scripted::CreatedWallet> {
     require_closed(rpc)?;
     // Gate the one-time seed display BEFORE creating anything. The server never
     // re-exposes the seed, so a wallet created here whose backup we then cannot
     // safely show would be permanently unrecoverable. Refuse and create nothing.
-    // The file command is the deliberate path: `create --seed-out`.
+    // The file command is the deliberate path: `--mnemonic-file`.
     if !presentation.shows_seed_on_stdout() {
         return failed(SEED_FILE_HINT);
     }
     if let Err(e) = crate::display::preflight_secret_display() {
         return failed(format!("{e}\n{SEED_FILE_HINT}"));
     }
-    let password = read_password("New wallet password: ")?;
-    let confirm = read_password("Confirm password: ")?;
-    if password != confirm {
-        return failed("Passwords do not match.");
-    }
-    drop(confirm);
+    let password = super::scripted::new_wallet_password(presentation, source)?;
 
     rpc.make_wallet_dir()?;
     let result = rpc.call(
@@ -74,7 +92,10 @@ pub fn cmd_create(rpc: &RpcSession, presentation: &Presentation, filename: &str)
             if shown == crate::display::SecretDisplay::NotShown {
                 return failed(SEED_NOT_SHOWN);
             }
-            Ok(json!({"name": filename}))
+            Ok(super::scripted::CreatedWallet {
+                name: filename.to_owned(),
+                backup_file: None,
+            })
         }
         Err(e) => Err(rpc.report("Failed to create wallet", &e)),
     }
@@ -99,15 +120,23 @@ pub fn open_with_password(rpc: &RpcSession, filename: &str, password: &str) -> C
     }
 }
 
-pub fn cmd_open(rpc: &RpcSession, presentation: &Presentation, filename: &str) -> CommandResult {
+pub fn cmd_open(
+    rpc: &RpcSession,
+    presentation: &Presentation,
+    source: Option<&super::scripted::PasswordSource>,
+    filename: &str,
+) -> CommandResult {
     require_closed(rpc)?;
-    if !presentation.interactive() {
-        return failed(
-            "A script cannot prompt for a wallet password. \
-             Start with --wallet <name> --password-file <path>.",
-        );
-    }
-    let password = read_password("Wallet password: ")?;
+    let password = match source {
+        Some(source) => source.read()?,
+        None if presentation.interactive() => read_password("Wallet password: ")?,
+        None => {
+            return failed(
+                "A script cannot prompt for a wallet password. \
+                 Set wallet-password-file to a file or stdin.",
+            );
+        }
+    };
     open_with_password(rpc, filename, &password)
 }
 
@@ -131,24 +160,76 @@ pub(crate) fn show_closed(_val: &Value) {
     crate::out_line!("Wallet closed.");
 }
 
-pub fn cmd_restore(
+/// Restore `filename`. The recovery words come from `mnemonic_file` when it
+/// is set, and from the hidden prompt when it is not. The password is the
+/// same policy as [`create_wallet`].
+pub fn restore_wallet(
     rpc: &RpcSession,
     presentation: &Presentation,
+    source: Option<&super::scripted::PasswordSource>,
     filename: &str,
-    seed_words: &[String],
-) -> CommandResult {
+    mnemonic_file: Option<&Path>,
+    restore_height: Option<u64>,
+) -> CommandResult<super::scripted::RestoredWallet> {
     require_closed(rpc)?;
-    if !presentation.shows_seed_on_stdout() {
-        return failed(
-            "wallet restore here would put the seed on the script or the JSON transcript. \
-             Use: shekyl-cli restore <name> --seed-file <path> --password-file <path>",
-        );
-    }
-    // Seed material: wiped on drop like the password, on every path out of
-    // this function rather than on the paths somebody remembered to annotate.
-    let mnemonic = Zeroizing::new(seed_words.join(" "));
-    let password = read_password("New wallet password: ")?;
+    // The file first: a refused file costs no password prompt. The prompt
+    // is refused when the screen cannot hold the words.
+    let mnemonic = match mnemonic_file {
+        Some(path) => super::scripted::read_secret_text(path, "--mnemonic-file")?,
+        None => {
+            if !presentation.shows_seed_on_stdout() {
+                return failed(
+                    "wallet restore here cannot ask for the seed. Use: shekyl-cli \
+                     --wallet-password-file <path> wallet restore <name> --mnemonic-file <path>",
+                );
+            }
+            // Asked for without echo, so the words reach no line, history or
+            // transcript (IG-Q24). `Zeroizing` wipes them on every path out.
+            read_password("Seed backup (not shown as you type): ")?
+        }
+    };
+    let password = super::scripted::new_wallet_password(presentation, source)?;
+    let restore_height = chosen_restore_height(presentation, restore_height)?;
+    let name = filename.to_owned();
 
+    rpc.make_wallet_dir()?;
+    let result = rpc.call(
+        "restore_wallet",
+        params::Restore {
+            name: filename,
+            password: &password,
+            mnemonic: mnemonic.trim(),
+            restore_height,
+        },
+    );
+    drop(password);
+    drop(mnemonic);
+
+    match result {
+        Ok(_) => {
+            rpc.set_open(filename);
+            Ok(super::scripted::RestoredWallet {
+                name,
+                restore_height,
+            })
+        }
+        Err(e) => Err(rpc.report("Failed to restore wallet", &e)),
+    }
+}
+
+/// The block to scan from. A named height is that height. At a terminal
+/// with none named, the prompt asks. A script with none named scans from
+/// genesis.
+fn chosen_restore_height(
+    presentation: &Presentation,
+    restore_height: Option<u64>,
+) -> CommandResult<u64> {
+    if let Some(height) = restore_height {
+        return Ok(height);
+    }
+    if !presentation.interactive() {
+        return Ok(0);
+    }
     crate::err_inline!(
         "Restore from block (the first block to scan; 0 = scan from the genesis block): "
     );
@@ -158,40 +239,17 @@ pub fn cmd_restore(
         return failed("Failed to read the block to restore from.");
     }
     let height_input = height_input.trim();
-    let restore_height: u64 = if height_input.is_empty() {
-        0
-    } else {
-        match height_input.parse() {
-            Ok(h) => h,
-            Err(_) => {
-                return failed("Invalid block to restore from: expected a block number.");
-            }
-        }
-    };
-
-    rpc.make_wallet_dir()?;
-    let result = rpc.call(
-        "restore_wallet",
-        params::Restore {
-            name: filename,
-            password: &password,
-            mnemonic: &mnemonic,
-            restore_height,
-        },
-    );
-
-    match result {
-        Ok(_) => {
-            rpc.set_open(filename);
-            Ok(json!({"name": filename, "restore_height": restore_height}))
-        }
-        Err(e) => Err(rpc.report("Failed to restore wallet", &e)),
+    if height_input.is_empty() {
+        return Ok(0);
+    }
+    match height_input.parse() {
+        Ok(height) => Ok(height),
+        Err(_) => failed("Invalid block to restore from: expected a block number."),
     }
 }
 
-pub(crate) fn show_restored(val: &Value) {
-    let name = val.get("name").and_then(|v| v.as_str()).unwrap_or("?");
-    crate::out_line!("Restored wallet: {name}");
+pub(crate) fn show_restored(restored: &super::scripted::RestoredWallet) {
+    crate::out_line!("Restored wallet: {}", restored.name);
     crate::out_line!("Run \"wallet refresh\" to scan the chain for your funds.");
 }
 

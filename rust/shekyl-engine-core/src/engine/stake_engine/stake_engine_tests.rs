@@ -817,7 +817,6 @@ fn verify_credit_funding_rejects_wrong_total() {
 #[tokio::test]
 async fn plan_bond_post_slot_mismatch_is_rejected() {
     use crate::engine::stake_persist::PersistedBondTicket;
-    use shekyl_archival_retention::{HoldingsDescriptor, HoldingsKind};
 
     let handle = spawn_over(&[0, 1], &[], None);
     mint_and_activate(&handle, 0)
@@ -832,16 +831,8 @@ async fn plan_bond_post_slot_mismatch_is_rejected() {
     // via the test-only constructor on PersistedBondTicket).
     let ticket_for_slot_1 = PersistedBondTicket::__test_only_forge(PSlot::from_raw(1));
 
-    let holdings = HoldingsDescriptor {
-        kind: HoldingsKind::ShardSetCompact,
-        shard_ids: ShardSet::new(vec![7, 42]).unwrap(),
-    };
     let err = handle
-        .plan_bond_post(
-            h0,
-            ticket_for_slot_1,
-            crate::engine::holdings_fill::FilledHoldings::for_test(holdings),
-        )
+        .plan_bond_post(h0, ticket_for_slot_1)
         .await
         .expect_err("slot mismatch must fail");
 
@@ -873,7 +864,6 @@ async fn plan_bond_post_emits_gf7_draw_and_schedule_events() {
     use crate::engine::stake_engine::types::StakeEngineArgs;
     use crate::engine::stake_persist::PersistedBondTicket;
     use kameo::actor::Spawn;
-    use shekyl_archival_retention::{HoldingsDescriptor, HoldingsKind};
     use shekyl_crypto_pq::archival_p::ArchivalPKeys;
 
     struct Recorder(Arc<Mutex<Vec<TimelineEvent>>>);
@@ -905,16 +895,8 @@ async fn plan_bond_post_emits_gf7_draw_and_schedule_events() {
         .await
         .expect("mint handle for slot 0");
     let ticket = PersistedBondTicket::__test_only_forge(PSlot::from_raw(0));
-    let holdings = HoldingsDescriptor {
-        kind: HoldingsKind::ShardSetCompact,
-        shard_ids: ShardSet::new(vec![7, 42]).unwrap(),
-    };
-    let post = handle
-        .plan_bond_post(
-            h0,
-            ticket,
-            crate::engine::holdings_fill::FilledHoldings::for_test(holdings),
-        )
+    let draw = handle
+        .plan_bond_post(h0, ticket)
         .await
         .expect("plan_bond_post succeeds for a held, matching slot");
 
@@ -956,8 +938,8 @@ async fn plan_bond_post_emits_gf7_draw_and_schedule_events() {
             );
             assert_eq!(
                 bond_post_offset_blocks,
-                post.bond_post_offset_blocks.to_raw(),
-                "schedule event must match the offset riding the reply"
+                draw.to_raw(),
+                "schedule event must match the draw the plan seals"
             );
         }
         ref other => panic!("second event must be the schedule, got {other:?}"),

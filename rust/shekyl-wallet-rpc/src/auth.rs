@@ -41,16 +41,14 @@ pub struct BasicCredential {
 
 impl BasicCredential {
     /// Build a credential, refusing a blank user or password. The error
-    /// names the flag and never echoes the value (it may hold a partial
-    /// secret): `:` used to yield an empty user and password, which
-    /// `Authorization: Basic Og==` satisfies, and a value without `:` used
-    /// to become a username with an empty password — a typo in a flag must
-    /// not become a passwordless listener (rule 82; RT-2).
+    /// names the rows and never echoes the value (it may hold a partial
+    /// secret): a blank half must not become a passwordless listener, since
+    /// `Authorization: Basic Og==` satisfies an empty pair (rule 82; RT-2).
     pub fn new(username: &str, password: &str) -> Result<Self, String> {
         if username.is_empty() || password.is_empty() {
             return Err(
-                "--rpc-login must be NAME:PASSWORD with both halves non-empty (omit the flag \
-                 to disable authentication on a loopback bind or, on Unix, a uds:// socket)"
+                "rpc-username and rpc-password must both be non-empty (leave both out for no \
+                 authentication on a loopback address or a socket)"
                     .into(),
             );
         }
@@ -92,14 +90,14 @@ impl std::fmt::Debug for BasicCredential {
 /// Auth configuration for the RPC listener.
 #[derive(Clone)]
 pub enum AuthConfig {
-    /// No credential check (UDS / `--disable-rpc-login`).
+    /// No credential check: neither `rpc-username` nor `rpc-password` is set.
     Disabled,
     /// Require HTTP basic auth with this credential.
     Basic(BasicCredential),
 }
 
 /// Manual (not derived) so no `Debug` of server state — `ServerConfig`,
-/// `AppState`, a panic message — can ever render the `--rpc-login` password
+/// `AppState`, a panic message — can ever render the `rpc-password` value
 /// (rule 35: it is a secret; rendering is the one thing Debug must not do).
 impl std::fmt::Debug for AuthConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -111,37 +109,6 @@ impl std::fmt::Debug for AuthConfig {
 }
 
 impl AuthConfig {
-    /// Build from a `--rpc-login` value that was **given**. The value is
-    /// split at the first `:` and handed to [`BasicCredential::new`], which
-    /// refuses a blank half — so an empty value, or one without `:` (no
-    /// password), is refused rather than becoming "no authentication" or a
-    /// username with an empty password. Omission is [`Self::from_cli`]'s
-    /// to decide; a value is never silently equal to no value.
-    pub fn from_rpc_login(login: &str) -> Result<Self, String> {
-        let (username, password) = login.split_once(':').unwrap_or((login, ""));
-        BasicCredential::new(username, password).map(Self::Basic)
-    }
-
-    /// Build from the binary's flag pair, where **presence** is the signal:
-    /// `None` is the flag omitted. `--rpc-login` given together with
-    /// `--disable-rpc-login` is refused as a contradiction rather than
-    /// resolved by precedence — an operator who wrote both believes a
-    /// password is set, and silently running without one is the failure
-    /// RT-2 exists to prevent (name the action, not the intent). That holds
-    /// for `--rpc-login=` too: an empty value is a value.
-    pub fn from_cli(rpc_login: Option<&str>, disable_rpc_login: bool) -> Result<Self, String> {
-        match (disable_rpc_login, rpc_login) {
-            (true, Some(_)) => Err(
-                "--disable-rpc-login and --rpc-login contradict each other; pass one. \
-                 --disable-rpc-login is accepted only on a loopback bind or, on Unix, a \
-                 uds:// socket"
-                    .into(),
-            ),
-            (_, None) => Ok(Self::Disabled),
-            (false, Some(login)) => Self::from_rpc_login(login),
-        }
-    }
-
     /// Whether a request's `Authorization` header satisfies this config.
     pub fn check(&self, authorization: Option<&str>) -> bool {
         match self {
@@ -205,58 +172,22 @@ pub async fn require_basic_auth(
 mod tests {
     use super::*;
 
-    /// The parser is the public seam: every shape that would have produced
-    /// a blank credential — the empty value included — is refused there,
-    /// naming the flag and never echoing the value. (`BasicCredential::new`
-    /// is what refuses; the parser only splits, so one table covers both.)
+    /// Every shape that would have produced a blank credential is refused,
+    /// naming the rows and never echoing a value.
     #[test]
-    fn rpc_login_parses_name_password_and_refuses_blank_halves() {
-        let Ok(AuthConfig::Basic(cred)) = AuthConfig::from_rpc_login("alice:hunter2") else {
-            panic!("NAME:PASSWORD must parse to Basic");
-        };
+    fn a_blank_half_is_refused_without_echoing_the_other() {
+        let cred = BasicCredential::new("alice", "hunter2").expect("a whole pair");
         assert_eq!(cred.username(), "alice");
-        for bad in ["", ":", "alice:", ":hunter2", "alice"] {
-            let err = AuthConfig::from_rpc_login(bad).expect_err(bad);
-            assert!(
-                err.contains("--rpc-login"),
-                "{bad:?}: must name the flag: {err}"
-            );
+        for (user, password) in [("", ""), ("alice", ""), ("", "hunter2")] {
+            let Err(err) = BasicCredential::new(user, password) else {
+                panic!("{user:?}/blank-or-set: a blank half must be refused");
+            };
+            assert!(err.contains("rpc-username"), "must name the row: {err}");
+            assert!(err.contains("rpc-password"), "must name the row: {err}");
             assert!(
                 !err.contains("alice") && !err.contains("hunter2"),
-                "{bad:?}: the value must not be echoed: {err}"
+                "the value must not be echoed: {err}"
             );
-        }
-    }
-
-    /// The flag pair: omission disables, alone or with `--disable-rpc-login`;
-    /// a given value must be a credential; a given value together with
-    /// `--disable-rpc-login` is a contradiction, refused by name — and
-    /// `--rpc-login=` is a given value, not an omission, on both counts. The
-    /// edits that turn this red: resolving the pair by precedence, or
-    /// treating the empty value as absent.
-    #[test]
-    fn flag_pair_presence_is_the_signal() {
-        assert!(matches!(
-            AuthConfig::from_cli(None, false),
-            Ok(AuthConfig::Disabled)
-        ));
-        assert!(matches!(
-            AuthConfig::from_cli(None, true),
-            Ok(AuthConfig::Disabled)
-        ));
-        assert!(matches!(
-            AuthConfig::from_cli(Some("alice:hunter2"), false),
-            Ok(AuthConfig::Basic(_))
-        ));
-        let empty = AuthConfig::from_cli(Some(""), false).expect_err("an empty value is refused");
-        assert!(empty.contains("--rpc-login"), "{empty}");
-        for given in ["alice:hunter2", ""] {
-            let err = AuthConfig::from_cli(Some(given), true).expect_err("contradiction");
-            assert!(
-                err.contains("--disable-rpc-login") && err.contains("contradict"),
-                "{given:?}: {err}"
-            );
-            assert!(!err.contains("hunter2"), "{err}");
         }
     }
 

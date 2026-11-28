@@ -26,8 +26,8 @@
 //! This client performs **no** SOCKS authentication: the principal daemon's
 //! access control is the operator's own node / the proxy, not a per-connection
 //! SOCKS identity. Per-persona SOCKS-username isolation is a *different*
-//! transport (`shekyl-p-transport`) and deliberately does not share this one;
-//! see the `PersonaIsolatedTransport` pin in engine-core.
+//! transport (`shekyl-p-transport`) and does not share this client. Persona
+//! peer circuits stay there. Daemon chain reads use the operator's node.
 
 use std::io;
 use std::pin::Pin;
@@ -70,7 +70,7 @@ impl std::error::Error for SocksTunnel {}
 /// Errors constructing or using the client.
 #[derive(Debug)]
 pub(crate) enum HttpError {
-    /// The `--proxy` value was not a usable SOCKS5 `host:port`.
+    /// The `daemon-socks` value was not a usable SOCKS5 `host:port`.
     InvalidProxy(String),
     /// The TLS connector could not be built (no roots available).
     Tls(String),
@@ -85,7 +85,7 @@ impl HttpError {
     pub(crate) fn fault(self) -> crate::TransportFault {
         match self {
             Self::InvalidProxy(detail) => crate::TransportFault::Proxy(format!(
-                "invalid --proxy for the daemon transport: {detail}"
+                "invalid daemon-socks for the daemon transport: {detail}"
             )),
             Self::Tls(detail) => {
                 crate::TransportFault::Tls(format!("TLS connector unavailable: {detail}"))
@@ -100,7 +100,7 @@ impl std::fmt::Display for HttpError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::InvalidProxy(detail) => {
-                write!(f, "invalid --proxy for the daemon transport: {detail}")
+                write!(f, "invalid daemon-socks for the daemon transport: {detail}")
             }
             Self::Tls(detail) => write!(f, "TLS connector unavailable: {detail}"),
             Self::ProxyTunnel(detail) | Self::Request(detail) => write!(f, "{detail}"),

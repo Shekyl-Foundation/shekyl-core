@@ -39,7 +39,7 @@ fn grading_is_refused_on_a_machine_that_is_not_the_rig() {
 
 #[test]
 fn grading_is_refused_on_a_thirty_two_bit_userland() {
-    // Rule 76's floor is a device class; §6.3.4 adds the userland, because "a
+    // Rule 176's floor is a device class; §6.3.4 adds the userland, because "a
     // 32-bit userland on the same board is a different machine for this work".
     let board = Environment {
         pointer_width_bits: 32,

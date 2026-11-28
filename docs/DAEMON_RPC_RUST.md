@@ -146,7 +146,7 @@ returned the answer flagged `untrusted=true`.
 inherited flows that contradict the threat model are migrated, not
 rationalized). The forward inverts Shekyl's daemon posture — own node by
 default; a remote is the *wallet's* explicit, user-visible choice
-(`--daemon-address`, onion). It moved the wallet's most identifying query
+(`--daemon-endpoint`, onion). It moved the wallet's most identifying query
 pattern to a node the user never chose, selected by the daemon from peer
 gossip, over clearnet unless a proxy was also configured, and flagged it with a
 field no wallet in this tree reads. The wallet can already do the honest
@@ -157,7 +157,7 @@ removes their knowledge of where their queries went. Same shape as
 widen who sees the wallet.
 
 **Rule-21 reopen.** Evidence that IBD at the device floor
-([`76`](../.cursor/rules/76-device-provisioning-floor.mdc), Pi 4) leaves a
+([`176`](../.cursor/rules/176-device-provisioning-floor.mdc), Pi 4) leaves a
 fresh install without a usable wallet for longer than the failure-mode UX
 ([`82`](../.cursor/rules/82-failure-mode-ux.mdc)) can carry, **and** a design
 that keeps the choice with the user: a wallet-side "use this remote until my
@@ -228,7 +228,7 @@ is refused as `OutsideTheGrant` (`-32002`) before its handler runs.
 |---------|--------|
 | Local | The owner's socket or pipe ("this computer": this account's node, the peer checked on every dial), the default for `shekyl-cli` and the wallet. The plaintext listeners (`rpc-admin-listen`, `rpc-view-listen`) bind loopback only: a wildcard or a network bind is refused at the Rust bind seam (RT-1/RT-2). shekyld does **not** register `--rpc-login` or `--rpc-ssl*`. |
 | Remote (your other machine) | The authenticated channel (`rpc-listen`): hybrid post-quantum Noise, enrolled keys only (`rpc client add`); `shekyl-rpc-tunnel` fronts it for a tool that speaks plain HTTP. Still operator-to-operator. |
-| Wallet-RPC | Separate Rust process. `--rpc-login` (HTTP Basic) on loopback; any non-loopback bind requires it and wildcard binds are refused; there is no `--rpc-ssl*` — the encrypted remote leg is pinned mutual TLS (`docs/design/RPC_TRANSPORT_POSTURE.md` RT-4). |
+| Wallet-RPC | Separate Rust process. `rpc-username` and `rpc-password` (HTTP Basic, in its configuration file) on loopback; any non-loopback listen requires them and wildcard binds are refused; there is no `--rpc-ssl*` — the encrypted remote leg is pinned mutual TLS (`docs/design/RPC_TRANSPORT_POSTURE.md` RT-4). |
 | CLI outbound | Daemon commands are `shekyl-cli` words. `shekyld` takes options only; a bare word is refused before it loads. |
 
 **Rule-21 reopen for in-daemon clearnet TLS / digest auth:** named production
@@ -322,7 +322,7 @@ Specified in [`design/DAEMON_RPC_KV_CUTOVER.md`](completed/DAEMON_RPC_KV_CUTOVER
 (family `RK-`). The Phase-1 sentence "replace epee portable-storage in
 `core_rpc_ffi.cpp` with a Rust-native codec" was re-scoped there: a Rust
 codec cannot serialize C++ structs without a `#[repr(C)]` façade of every
-wire type (rule 40), so the wire type and the handler of each method move to
+wire type (`RULE_40_FFI_DISCIPLINE`), so the wire type and the handler of each method move to
 Rust **together**, over coarse `shekyl_rpc_*_facts` FFI, with the console
 rendering following the method. epee KV leaves the RPC path method by method
 and `core_rpc_server.*` / `core_rpc_server_commands_defs.h` / the dispatch

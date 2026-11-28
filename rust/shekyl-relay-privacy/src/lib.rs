@@ -191,8 +191,6 @@ pub use params::{
     MIXED_ELIGIBILITY_PCT_HUNDREDTHS,
 };
 pub use poisson::PoissonTable;
-#[allow(deprecated)]
-pub use schedule::EmbargoDistribution;
 pub use schedule::{
     DelayFamily, EmbargoTimer, Epoch, EpochScheduler, FluffScheduler, Millis, NoiseCadence,
     PeerDirection, DEFAULT_EMBARGO_TICK_MILLIS,

@@ -1,6 +1,8 @@
 ---
 description: Inherited code is not inherited architecture. CryptoNote-derived data flows that contradict Shekyl's threat model are migrated, not rationalized.
 alwaysApply: true
+scope: estate
+repos: [core, gui, prism]
 ---
 
 # Architectural inheritance

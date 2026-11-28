@@ -8,7 +8,7 @@ journaled claimed-set revert, severity-upgraded — the prune straddle is a
 prune-evicted members atomically with the inserted `E`; §3a pin (a)).
 The leg's design is complete; the PR-E3 implementation pre-flight runs against
 current `dev` (§7.1, §8).
-**Process:** [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
+**Process:** [`126-sub-pr-design-discipline.mdc`](../../.cursor/rules/126-sub-pr-design-discipline.mdc)
 (A2 audit-against-actual-code; the pre-flight substrate re-check).
 Dispositions follow [`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc).
 **Spec of record:** [`REWARD_EMISSION_LEG.md`](../design/REWARD_EMISSION_LEG.md);
@@ -400,7 +400,7 @@ rationale no longer applies)*). Implementation pins beyond the round
    `txin_archival_reward_emission`, whose C++ variant type is C-1's transport
    shim — there is no type to iterate until the activating cut. Its KATs
    defer with it; C-1's merge blocker list grows by this item.
-4. **C-1 — the activating cut** (separate PR; [`07-consensus-atomic-cutovers.mdc`](../../.cursor/rules/07-consensus-atomic-cutovers.mdc)):
+4. **C-1 — the activating cut** (separate PR; [`107-consensus-atomic-cutovers.mdc`](../../.cursor/rules/107-consensus-atomic-cutovers.mdc)):
    ML-DSA witness minter + `check_inputs_types_supported` whitelist flip + C++
    shim dispatch + `VARIANT_TAG 0x06`. Merge blocker = ML-DSA present/tested **and**
    the gate-6 backing-lineage ladder + sweep wired in the wallet pre-join path
@@ -1338,7 +1338,7 @@ rule.
 - **The §8.1 guard asymmetry landed fixed.** `blockchain.cpp:4301` now
   carries the `h_fire > h_close` guard symmetric with `db_lmdb.cpp:5267`
   (landed in #269 with item 1).
-- **Rule 07 check re-confirmed at this head:** C-1 remains a normal
+- **Rule 107 check re-confirmed at this head:** C-1 remains a normal
   atomic acceptance flip — the inert-until-flip decomposition exists
   (accrual and shim are consensus-inert before the whitelist byte), so
   criterion 2 fails and the exception is not invoked. The PR carries this

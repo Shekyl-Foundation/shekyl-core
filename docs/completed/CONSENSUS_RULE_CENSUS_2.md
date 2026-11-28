@@ -13,7 +13,7 @@ instrument, not a ruling: bucket 4 records the question, never the
 answer. No code is specified to change here.
 **Identifier family:** `RC-` (rule census, pass 2), registered in
 [`IMPLEMENTATION_INDEX.md`](../design/IMPLEMENTATION_INDEX.md) §2 in the commit
-that lands this document (rule 94). `CEN-` is the sibling census family
+that lands this document (rule 194). `CEN-` is the sibling census family
 ([`CONSENSUS_RULE_CENSUS_3.md`](CONSENSUS_RULE_CENSUS_3.md), PR #584)
 so the two enumerations cannot mint colliding tokens. Prefix `RC-` is
 unique against `RF-` / `RK-` / `RP-` / `RT-` / `CEN-`.
@@ -641,7 +641,7 @@ actually contained at `8ba1aae3d`.
 15. **This document's family is `RC-`, not `CEN-`.** The brief minted
     `CEN-` for the census program. This is the second independent
     walk; registering `CEN-` here would collide with the sibling
-    first census. `RC-` (rule census) is free under rule 94's
+    first census. `RC-` (rule census) is free under rule 194's
     alphabetic-prefix-until-digit test.
 
 16. **`validate_miner_transaction`'s `version` is the hardfork

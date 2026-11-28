@@ -36,8 +36,9 @@
 
 use std::sync::Arc;
 
-use shekyl_tor_control_wallet::service::{ServiceFailure, ServiceWarning, TorPosture};
-use shekyl_tor_control_wallet::vanguard_rotation::VanguardsWarning;
+use shekyl_tor_control_wallet::service::{
+    ServiceFailure, ServiceWarning, TorPosture, VanguardsWarning,
+};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 

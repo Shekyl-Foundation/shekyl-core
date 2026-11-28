@@ -28,7 +28,7 @@ capability, never a blocker on deleting C++ that no longer exists.
 > **Note (2026-07-22, WI-RPC-2a/2b).** The migration the WI-RPC-1 note
 > anticipated has landed. `shekyl-cli` is off wallet2 and is a JSON-RPC
 > client of `shekyl-wallet-rpc` (Shape B — self-hosted in-process over a
-> private UDS, or `--rpc-url`); the matrix below is reconciled against the
+> private UDS, or `--wallet-rpc-endpoint`); the matrix below is reconciled against the
 > WI-RPC-2b command set. The wallet2-era account/subaddress, key-image,
 > secret-display, and sweep rows are closed **Out of scope
 > (deleted-by-design)** — those commands refuse at parse time with guidance
@@ -38,9 +38,9 @@ capability, never a blocker on deleting C++ that no longer exists.
 >
 > **Update (2026-07-23, WI-RPC-2a review fixes).** For scripting/automation
 > the CLI now also has non-interactive `create` / `restore` **subcommands**
-> (`shekyl-cli create <name> --seed-out <path> [--password-file|--password-stdin]`;
-> `restore <name> --seed-file <path> …`). The seed reaches a file **only**
-> through the explicit `--seed-out` (0600, O_EXCL); the interactive `create`
+> (`shekyl-cli --wallet-password-file <path|stdin> wallet create <name> --mnemonic-file <path>`;
+> `wallet restore <name> --mnemonic-file <path> …`). The seed reaches a file **only**
+> through the explicit `--mnemonic-file` (0600, O_EXCL); the interactive `create`
 > refuses to print the seed to a non-TTY (pipe/redirect/log) rather than leak
 > it — so the `seed`-safety row's guarantee now holds on every path.
 
@@ -56,7 +56,7 @@ capability, never a blocker on deleting C++ that no longer exists.
 | 6 | `show_transfer` | `tx show <id>` | Covered | Native `get_transfer_by_id`. Prints both the row id and the transaction hash. |
 | 7 | `sweep_all` | N/A | Out of scope | Deleted-by-design: no Engine sweep surface; FOLLOWUPS "`sweep_all`" row carries the reopening criterion (Engine-level `build_sweep_tx`, specced contract-first) |
 | 8 | `stake` | `stake` (read); `stake join <shard-id>...` (does not post) | Covered | Bare `stake` reads posture, bond state, and the returnable amount. Market join names shard ids and refuses until wallet-RPC `stake` accepts a shard set (`-29505` / FOLLOWUPS shard assignment). |
-| 8a | `stake --complete-tree-foundation` | hidden startup flag `--complete-tree-foundation` | Covered | Not a prompt command (CU-7). Unbounded disk, no reward. The flag is hidden from ordinary `--help`. A TTY prints `FOUNDATION_POSTURE_WARNING` and requires the typed phrase `serve without reward`. A pipe requires `--acknowledge "serve without reward"` and `--password-file` on the invocation. The password is wiped after the one `stake` call. The GUI never sends the field. |
+| 8a | `stake --complete-tree-foundation` | startup option `--archival-complete-tree` | Covered | Not a prompt command (CU-7). Unbounded disk, no reward. The option is listed in `--help`. A TTY prints `FOUNDATION_POSTURE_WARNING` and requires the typed phrase `serve without reward`. A pipe requires `--acknowledge "serve without reward"` and `--password-file` on the invocation. The password is wiped after the one `stake` call. The GUI never sends the field. |
 | 9 | `unstake` | `stake release` | Covered | **Shipped with PR-C (2026-09-03)** as `stake exit`; the live verb is `stake release` (2026-10-04). `stake exit` and `unstake` are retired spellings. No-argument grammar, by contract: the persona is engine-resolved (the wire never names a slot), the fee is the canonical P-lane floor, and the release covers the whole bonded total (consensus's exact-debit rule). The CLI carries the irreversibility confirmation (CLI-side, never RPC-side; `--yes` on a script or one-shot, ignored on an interactive terminal) and, on success, the completion guidance: run `stake collect` once the release confirms. |
 | 10 | `claim_rewards` | N/A | Out of scope | No manual claim step by design: emission claims are assembled and dispatched engine-side (WI-2/WI-3 orchestration); rewards surface in `staked_balance` |
 | 11 | `staking_info` | `stake` | Covered | Bare `stake` is the read (`staking_info` plus the returnable amount), including the records in progress and how each kind last ended. `stake balance` / `stake outputs` are the breakdowns. |
@@ -86,7 +86,7 @@ capability, never a blocker on deleting C++ that no longer exists.
 | 35 | `help` | `help` | Covered | Categorized; names the RESERVED set and its gates |
 | 36 | `bc_height` | `status` | Covered | Height shown in status |
 | 37 | `fee` | `fee` | Covered | Native `get_default_fee_priority` tier quotes + `estimate_tx_size_and_weight` (WI-RPC-1). Principal lane only — P-lane fees are canonical, never user-facing |
-| 38 | `set_daemon` | `--daemon-address` | Covered | CLI flag, not runtime change; `--rpc-url` selects an external wallet-RPC |
+| 38 | `set_daemon` | `--daemon-endpoint` | Covered | Startup option, not a runtime change; `--wallet-rpc-endpoint` selects an external wallet-RPC |
 | 39 | `incoming_transfers` | `tx list` / `tx list --in --unmatched` | Covered | `tx list` lists ledger rows; unattributed receives via `get_transfers` attribution filter (WI-RPC-4). `history` diagnoses as `tx list --in --unmatched` |
 | 40 | `restore_height` | `restore` | Covered | Native `restore_wallet` (BIP-39 + optional `restore_height`) |
 | 41 | `address_book` | N/A | Out of scope | Monero feature, not used in Shekyl |
@@ -115,7 +115,7 @@ capability, never a blocker on deleting C++ that no longer exists.
 | 64 | `scan_tx` | N/A | Out of scope | Single-tx scan, low priority |
 | 65 | `set` | N/A | Out of scope | Runtime settings, replaced by CLI flags |
 | 66 | `set_description` | N/A | Out of scope | Wallet description, trivial metadata |
-| 67 | `set_log` | N/A | Out of scope | Log level, use RUST_LOG env var |
+| 67 | `set_log` | `log-level`, `log-category` | Covered | Startup options, on the command line or in the file |
 | 68 | `set_tx_key` | N/A | Out of scope | Manual tx key injection, niche |
 | 69 | `set_tx_note` | `tx note <txid> <text...>` | Covered | Native `set_tx_note` (PR-SA-4 / SJ-DQ-7); CLI landed WI-RPC-5. The note is the verbatim line remainder; a missing note is a usage error, never a silent clear (the wire's empty-note clear stays RPC-only). 4096-UTF-8-byte ceiling |
 | 70 | `show_qr_code` | N/A | Out of scope | QR display, GUI concern |

@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use shekyl_engine_file::WalletFile;
 use shekyl_engine_state::pscan_state::PScanState;
-use shekyl_types::GlobalOutputIndex;
+use shekyl_types::{GlobalOutputIndex, PCanonicalId};
 use tokio::sync::RwLock;
 
 use super::dispatch::PendingPostStore;
@@ -41,6 +41,9 @@ pub(crate) struct SealBasis {
     reserved: BTreeSet<GlobalOutputIndex>,
     /// The sealed pscan state, or `None` for a wallet that never scanned.
     pscan: Option<PScanState>,
+    /// Personas whose planned stake ended without a bond (read with the
+    /// reservation set, in the same locked read).
+    ended_plans: BTreeSet<PCanonicalId>,
 }
 
 impl SealBasis {
@@ -57,6 +60,18 @@ impl SealBasis {
     /// The pscan seal this basis was taken with.
     pub(crate) fn pscan(&self) -> Option<&PScanState> {
         self.pscan.as_ref()
+    }
+
+    /// Whether `persona` owes no exit, so its drain sweeps to zero with no
+    /// exit-fee reserve: its terminal `Release` is confirmed in the pscan
+    /// seal, or its planned stake ended without a bond. The dispatch seam's
+    /// authoritative re-resolution of [`NoExitOwed`](crate::engine::drain_orchestrator::NoExitOwed).
+    pub(crate) fn owes_no_exit(&self, persona: &PCanonicalId) -> bool {
+        self.ended_plans.contains(persona)
+            || self
+                .pscan
+                .as_ref()
+                .is_some_and(|s| s.pending_releases().contains_key(persona))
     }
 
     /// Consume the basis for its pscan seal, where the caller needs it owned.
@@ -133,8 +148,14 @@ where
     // 1. Pending block, to completion. Generation and reservation set come from
     //    ONE locked read: the counter is only meaningful paired with the set it
     //    describes.
-    let (generation, reserved) = store
-        .read(|block| (block.generation(), block.reserved_gindexes()))
+    let (generation, reserved, ended_plans) = store
+        .read(|block| {
+            (
+                block.generation(),
+                block.reserved_gindexes(),
+                block.ended_plans().iter().map(|e| e.persona).collect(),
+            )
+        })
         .await
         .map_err(SealBasisError::Pending)?;
     // 2. Only now the pscan seal. Anything that settles from here on bumps the
@@ -147,5 +168,6 @@ where
         generation,
         reserved,
         pscan,
+        ended_plans,
     })
 }

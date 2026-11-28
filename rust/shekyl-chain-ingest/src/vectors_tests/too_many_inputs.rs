@@ -5,7 +5,7 @@
 
 //! CEN-I4 on a captured regtest chain, under that chain's own rules.
 //!
-//! The input cap binds every network (rule 71; `CHAIN_RULES_SLICE_6.md`
+//! The input cap binds every network (rule 171; `CHAIN_RULES_SLICE_6.md`
 //! §5.4). The mutation family's harness chain judges `TooManyInputs` under
 //! the genesis rules, which an exemption keyed on the test networks would
 //! not reach. This test applies the same mutation to the captured
@@ -92,7 +92,7 @@ async fn the_ninth_input_is_refused_on_a_captured_regtest_chain() {
     assert_eq!(
         verdict.rule,
         CenRow::I4,
-        "refused on {}: the input cap binds the test networks too (rule 71)",
+        "refused on {}: the input cap binds the test networks too (rule 171)",
         verdict.rule.as_str()
     );
     assert_eq!(

@@ -56,7 +56,7 @@ fi
 
 # The subject itself, and exactly the subject: the corpus is the set of Rust
 # sources git TRACKS under rust/ (the vendored shekyl-oxide fork excluded —
-# rule 10, it is a disposable downstream consumer). Two reasons this is a
+# rule 110, it is a disposable downstream consumer). Two reasons this is a
 # file list handed to rg rather than a directory walk with globs:
 #
 #   * A magic floor ("expect >= 100 files") is a number someone has to keep

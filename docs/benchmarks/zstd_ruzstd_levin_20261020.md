@@ -52,7 +52,7 @@ against the input: libzstd of libzstd, libzstd of ruzstd, ruzstd of
 ruzstd, and ruzstd of libzstd. All 76 passed on both hosts.
 
 **Hosts.** The x86_64 development host (11th-gen Core i9, 16 threads).
-The floor device (rule 76, the Pi 4) ran a binary cross-built from the
+The floor device (rule 176, the Pi 4) ran a binary cross-built from the
 same tree, pinned to core 3, under a quiet claim, with the testnet daemon
 resident and idle. Core 3 read 1.5 GHz before the run and 1.3 GHz after.
 

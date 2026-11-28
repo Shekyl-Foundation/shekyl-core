@@ -64,7 +64,7 @@
 //! wraps `flock(2)` on POSIX and `LockFileEx` on Windows behind a
 //! `#![forbid(unsafe_code)]`-compatible safe API. This keeps
 //! `shekyl-engine-file` itself `#![deny(unsafe_code)]` with zero
-//! exceptions (see `25-rust-architecture.mdc`).
+//! exceptions (see `125-rust-architecture.mdc`).
 //!
 //! The acquisition path:
 //!

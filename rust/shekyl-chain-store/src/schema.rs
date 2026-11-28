@@ -87,7 +87,7 @@
 //! and the key/value [`TypeName`]s redb checks against the definition at
 //! every `open_table`. Those facts are what a binary with a different
 //! layout trips over, so they are what the table catalogue snapshot
-//! (`codec::snapshot_tests`, rule 42) pins: adding, removing or re-keying
+//! (`codec::snapshot_tests`, rule 142) pins: adding, removing or re-keying
 //! a table moves the snapshot and therefore requires the `SCHEMA_VERSION`
 //! bump §11.1(b) owes. A definition cannot be added outside the invocation
 //! without that module's source scan failing. The snapshot line spells

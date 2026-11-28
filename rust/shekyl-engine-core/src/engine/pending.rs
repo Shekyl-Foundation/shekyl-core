@@ -204,7 +204,7 @@ impl ReservationId {
 ///
 /// The canonical [`TxHash`] from `shekyl-types`, re-exported here so the
 /// pending-tx surface keeps its `pending::TxHash` path while there is a
-/// single definition workspace-wide (`18-type-placement.mdc`: re-export,
+/// single definition workspace-wide (`118-type-placement.mdc`: re-export,
 /// never redefine). Built from raw bytes via [`TxHash::from_bytes`].
 ///
 /// Submit returns the daemon's reported tx hash. One live path cannot:

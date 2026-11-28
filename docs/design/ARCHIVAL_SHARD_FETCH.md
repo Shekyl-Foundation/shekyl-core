@@ -11,7 +11,7 @@ carrier; `SF-D8` RULED (signed message and response carrier; AMENDED
 2026-10-04 — the message ends in a nonce-salted digest of the delivered
 response, under the v3 scheme domain); `SF-D9`
 done; `SF-D11` WITHDRAWN; `SF-D12` a corollary of `SF-D10`. **The
-rule-26 halt is lifted:** implementation may begin, in the landing
+rule-126 halt is lifted:** implementation may begin, in the landing
 sequence §9.1 fixes (2026-09-13): (a0) the v2 pass-countersignature
 verifier alone → (a) serve side → (b) `shekyl-p-fetch` → (c) W₂ then
 `N`. This file stays in `docs/design/` because it still owns named
@@ -27,8 +27,8 @@ residue (the "when (c) pins `N`" criterion expired 2026-09-16: `N` is
 pinned and `L` / Sub-PR 2 remain). Organic draw bound `k`
 is `TJ-D`'s, not this PR's.
 Identifier family `SF-` (index row `SF-D1…SF-Dn`, registered at
-birth per rule 94 §1). Process per
-[`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc):
+birth per rule 194 §1). Process per
+[`126-sub-pr-design-discipline.mdc`](../../.cursor/rules/126-sub-pr-design-discipline.mdc):
 a multi-round design front on an FFI-adjacent, privacy-load-bearing
 surface. Decision authority: Rick. The FOLLOWUPS row is the
 implementation record.
@@ -250,7 +250,7 @@ criterion**. Rick ruled them. `SF-D2`…`SF-D7` RULED. `SF-D9` done
 (same-change heading). `SF-D10` RULED. `SF-D11` withdrawn (§4 /
 `PWD-E9`). `SF-D12` a corollary of `SF-D10`, not a coupled question.
 `SF-D13` ruled the signing key before `SF-D8`; `SF-D8` RULED last
-(signed message, then carrier), which lifted the rule-26 halt.
+(signed message, then carrier), which lifted the rule-126 halt.
 `SF-D5`/`SF-D8` were amended later the same day, twice: first to
 requester-random plus published-tip height (SUPERSEDED the same day,
 never landed), then to requester-random plus a buried chain anchor
@@ -282,7 +282,7 @@ archival-fetch on one process (§7 threat 4, named next to `EU-D1` /
 SPIKE-F-12). That residual is accepted: guards are per-process.
 `SF-D3`'s per-read credentials separate circuits, not guards, and a
 second Tor is a second failure domain and a second version to
-supervise on the Pi 4 floor (rule 76). `--no-ephemeral-tor` with no
+supervise on the Pi 4 floor (rule 176). `--no-ephemeral-tor` with no
 `--tx-proxy` leaves no tor zone and no SOCKS: refuse-at-construction,
 not a second Tor and not a fetch-failure. `SF-D6` names that case as
 a non-row so it cannot drift back in as a taxonomy outcome.
@@ -859,7 +859,7 @@ the split — `SF-D10`'s selection-statistics channel reintroduced
 through queue order — for a latency benefit the timing analysis shows
 is unnecessary.
 
-**Rule 76 is the sizing, not a compromise.** Provision at the floor so
+**Rule 176 is the sizing, not a compromise.** Provision at the floor so
 a Pi 4 organic caller is not overcommitted — that is the caller that
 actually runs there. A miner is not constrained by a cap sized for a
 Pi: its binding constraint is uplink and Tor circuit throughput, not
@@ -994,7 +994,7 @@ hole per call.
   `OnionIdentity`. Same rend-spec transform (`shekyl-onion-v3`),
   different types (`PWD-E9`). `BondPost.endpoint` is a
   bare `[u8; BOND_POST_ENDPOINT_LEN]` on the genesis-frozen wire and
-  stays bare (rule 42 — the wire is not touched for type hygiene).
+  stays bare (rule 142 — the wire is not touched for type hygiene).
   The newtype is minted in `shekyl-p-fetch` (the daemon is who dials);
   onion-address derivation is `shekyl-onion-v3`. `shekyl-wire` cannot
   be its home: it depends on
@@ -1008,7 +1008,7 @@ hole per call.
   chain state and still depends on nothing but `shekyl-curve-tree`
   and `shekyl-crypto-pq`; the types carry the provenance obligation
   the crate cannot check itself. A call site that constructs any of
-  these from wire or response bytes is a rule-19 violation the review
+  these from wire or response bytes is a rule-119 violation the review
   catches.
 
 ### `SF-D13` — countersigning key — RULED 2026-09-13
@@ -1468,7 +1468,7 @@ needed a home that is neither the inner frame nor a header:
 - **Reopen if:** the reconstruct caller demonstrates a need for an
   unverified stream (for example partial-segment resume) that cannot
   be met behind the seam. The fixed-width envelope read is the
-  rule-76 answer; it is not a reopen.
+  rule-176 answer; it is not a reopen.
 
 Whether a verify failure is remembered is `SF-D12`: it is not a
 selection input. It is logged (`SF-D12`).
@@ -1685,7 +1685,7 @@ distinction the mechanism deliberately ignores.
   mechanism-side distinction), rather than a log distinction. That
   reopens `SF-D10`'s "never a selection input" with it.
 
-## 7. Threat-model frame (rule 26 A3)
+## 7. Threat-model frame (rule 126 A3)
 
 Named attacker objectives this round's rulings are evaluated against:
 
@@ -1801,7 +1801,7 @@ Named attacker objectives this round's rulings are evaluated against:
    `PWD-E9` (`SF-D11` withdrawn). Blending with overlay volume is a
    side effect, not a cover mechanism — cover is TRC's subject.
 
-## 8. Explicitly out of this round (rule 19)
+## 8. Explicitly out of this round (rule 119)
 
 - **TJ-D storage:** DRS coupling, segment-freeze leaf-exclusion / chunk
   store, actually discarding local leaves. Not the fetch client (§2.1).
@@ -1919,7 +1919,7 @@ change with HTTP framing. Four PRs, each green alone, in this order:
   `archival_attestation_anchor_lag_blocks = 4` PROVISIONAL), with its
   KAT regenerated under an armed regenerator and the decision-log
   entry rule 50 requires. This is a consensus verifier change: it
-  lands on its own (rule 07 shape), not inside a serve-side HTTP PR.
+  lands on its own (rule 107 shape), not inside a serve-side HTTP PR.
   `SM-R-3` is live the moment `P` signs caller-chosen bytes, so a
   defect in the domain-separation construction surfaces here, before
   anything depends on it.

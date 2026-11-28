@@ -24,6 +24,7 @@ import glob
 import json
 import os
 import re
+import shutil
 import sys
 import tempfile
 import unittest
@@ -888,6 +889,45 @@ class Preflight(unittest.TestCase):
         # class is what makes this a control rather than a probe of this box.
         self.assertFalse(any("engine switch" in x or "MDB_NOSYNC" in x
                              or "is not a file" in x for x in r), r)
+
+
+class OwnerDir(unittest.TestCase):
+    """The daemon refuses a data directory others can enter, and one under a
+    directory its account's group can write. A host whose umask is 002 makes
+    every plain `os.makedirs` group-writable."""
+
+    def setUp(self):
+        self.umask = os.umask(0o002)
+        self.root = tempfile.mkdtemp()
+        # The operator's directory, above the first one the harness makes.
+        self.operator = os.path.join(self.root, "operator")
+        os.mkdir(self.operator)
+        os.chmod(self.operator, 0o775)
+
+    def tearDown(self):
+        os.umask(self.umask)
+        shutil.rmtree(self.root)
+
+    def mode(self, path):
+        return os.stat(path).st_mode & 0o777
+
+    def test_every_directory_it_makes_is_owner_only_under_umask_002(self):
+        made = R.owner_dir(os.path.join(self.operator, "work", "crash", "subject"))
+        for directory in ("work", "work/crash", "work/crash/subject"):
+            path = os.path.join(self.operator, directory)
+            self.assertEqual(self.mode(path), R.DATA_DIR_MODE, directory)
+        self.assertEqual(made, os.path.join(self.operator, "work", "crash", "subject"))
+
+    def test_an_existing_directory_it_names_is_set_owner_only(self):
+        kept = os.path.join(self.operator, "seed")
+        os.mkdir(kept)
+        os.chmod(kept, 0o775)
+        R.owner_dir(kept)
+        self.assertEqual(self.mode(kept), R.DATA_DIR_MODE)
+
+    def test_the_directories_above_the_first_that_exists_are_left_alone(self):
+        R.owner_dir(os.path.join(self.operator, "work"))
+        self.assertEqual(self.mode(self.operator), 0o775)
 
 
 class HardwareFingerprint(unittest.TestCase):

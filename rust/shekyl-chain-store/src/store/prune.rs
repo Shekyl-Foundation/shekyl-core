@@ -178,7 +178,7 @@ pub(super) const FIRST_PRUNING_EPOCH: u64 = 2;
 /// re-checks the cap **and the epoch** against the set in force at every
 /// height ([`Self::check_against`]), so a schedule step that raises the
 /// cap or moves the epoch is refused at the block it applies to. The
-/// store holds no rule set and no schedule (rule 71): the caller hands the
+/// store holds no rule set and no schedule (rule 171): the caller hands the
 /// pair here as it hands the set to `connect`, and the set carries the
 /// same pair (`RuleSet::settlement_schedule`, `RuleSet::reorg_cap`).
 /// Production runs `D_max` on both sides; a regtest under a shortened

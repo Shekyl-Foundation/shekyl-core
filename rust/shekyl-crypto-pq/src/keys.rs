@@ -5,7 +5,7 @@
 
 //! Typed wrappers around the wallet's secret-bearing key material.
 //!
-//! Per `.cursor/rules/18-type-placement.mdc`, secret-bearing 32-byte
+//! Per `.cursor/rules/118-type-placement.mdc`, secret-bearing 32-byte
 //! values get type-system protection against accidental misuse. Each
 //! wrapper:
 //!
@@ -80,7 +80,7 @@ use crate::kem::ML_KEM_768_DK_LEN;
 /// `&[u8; 32]` and rely on this representation being stable across
 /// every call site. Changing the encoding here invalidates every
 /// previously-derived value keyed on `view_secret`. See
-/// `.cursor/rules/18-type-placement.mdc` for the discipline.
+/// `.cursor/rules/118-type-placement.mdc` for the discipline.
 ///
 /// # FFI layout invariant
 ///
@@ -135,7 +135,7 @@ impl ViewSecret {
 /// representation. Cryptographic functions (e.g.
 /// [`crate::output::compute_output_key_image`]) take `&[u8; 32]` and
 /// rely on this representation being stable across every call site.
-/// See `.cursor/rules/18-type-placement.mdc`.
+/// See `.cursor/rules/118-type-placement.mdc`.
 ///
 /// # FFI layout invariant
 ///
@@ -191,7 +191,7 @@ impl SpendSecret {
 /// decapsulation-key encoding. Cryptographic functions
 /// (e.g. [`crate::output::scan_output_recover`]) take
 /// `&[u8]` and rely on this representation being stable across
-/// every call site. See `.cursor/rules/18-type-placement.mdc`
+/// every call site. See `.cursor/rules/118-type-placement.mdc`
 /// for the discipline.
 ///
 /// # FFI layout invariant
@@ -236,7 +236,7 @@ impl MlKem768DecapKey {
     /// call site to repeat the wrapping decision. Per
     /// `.cursor/rules/35-secure-memory.mdc`'s hand-off section and the
     /// typed-wrapper discipline of
-    /// `.cursor/rules/18-type-placement.mdc`.
+    /// `.cursor/rules/118-type-placement.mdc`.
     ///
     /// `pub(crate)` because the only legitimate construction sites
     /// are inside this crate (key derivation in `account.rs`,

@@ -8,7 +8,7 @@ currently exposed.
 **operational lifetime**, not a single transaction.
 **Parent designs:** `ARCHIVAL_FIREWALL_GATE6.md`, `ARCHIVAL_COVER_DRAW.md`,
 `ARCHIVAL_BOND_2D1_PSCAN_PLAN.md`, `shekyl-standoff` (timing draw).
-**Process rule:** `26-sub-pr-design-discipline.mdc` (firewall-load-bearing).
+**Process rule:** `126-sub-pr-design-discipline.mdc` (firewall-load-bearing).
 
 ---
 

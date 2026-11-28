@@ -262,7 +262,7 @@ last field, a wrapped enum field, and a wrapped tuple variant. The
 archived §4 still described the pre-review `dict[str, str]` shape with
 the addressee buried in the reason; that paragraph is the
 `Allow(reason, addressee)` contract above. The unified implementation
-index stamp was left at `20ebdf1e5` by this pass (rule 94: RTN-7 is a
+index stamp was left at `20ebdf1e5` by this pass (rule 194: RTN-7 is a
 row-local UPDATE; stamping HEAD would have claimed the DRS-E6 coverage
 gate ran against a tree it never read) — the E6 lane's post-merge re-run
 is what moves it (§7's closing note).

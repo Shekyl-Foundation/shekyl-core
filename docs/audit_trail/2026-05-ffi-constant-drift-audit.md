@@ -202,7 +202,7 @@ FFI are the bug class. Two things are landing to close it:
    Trade-off accepted: the JSON authority direction (neither C++ nor
    Rust owns the value) sidesteps the bigger consensus-authority-
    migration question (Rust-as-authority per
-   `20-rust-vs-cpp-policy.mdc`) for now. That migration stays an
+   `RULE_20_RUST_VS_CPP.md`) for now. That migration stays an
    open V3.x agenda item but doesn't gate audit; today's pattern is
    strictly safer than the pre-audit hand-maintained duplicates and
    is reversible (the JSON could become Rust-`pub const`s with
