@@ -6094,6 +6094,46 @@ async fn e2e_drain_wire_shape_matches_a_real_transfer() {
         "raw transfer/drain bytes must differ"
     );
 
+    // ── The drain pays what an ordinary transfer of its shape pays ──
+    // (P-lane fee ruling, 2026-11-23.) The fee is cleartext, so a drain priced
+    // off the lane's old ceiling marked itself however identical its bytes.
+    // At the economy rate the drain was quoted from: its fee is the send
+    // path's converged fee for a solo 1-in/2-out spend at its depth, and it
+    // is the rate on the drain's own measured weight.
+    {
+        let Ct::Fcmp {
+            fee: drain_fee_paid,
+            prunable: Some(ref prunable),
+            ..
+        } = drain_tx.ct
+        else {
+            panic!("the drain is an FCMP++ spend with its proof")
+        };
+        let depth = u8::try_from(prunable.tree_depth).expect("a proof depth fits u8");
+        let transfer_fee = super::tx_fee_model::converge_fee(
+            &fee_estimates.economy,
+            super::tx_fee_model::InputCount::clamped(1),
+            super::tx_fee_model::OutputCount::clamped(2),
+            depth,
+            &[],
+            0,
+        )
+        .expect("an ordinary transfer's fee converges");
+        assert_eq!(
+            drain_fee_paid, transfer_fee,
+            "a drain pays an ordinary transfer's fee for its shape, depth and rate"
+        );
+        assert_eq!(
+            drain_fee_paid,
+            shekyl_economics::quantized_fee(
+                drain_tx.weight() as u64,
+                fee_estimates.economy.per_weight()
+            )
+            .expect("the drain's fee fits"),
+            "the drain pays the economy rate on its own weight"
+        );
+    }
+
     let mut transfer_norm = transfer_tx;
     let mut drain_norm = drain_tx;
     super::test_support::normalize_fcmp_wire_shape(&mut transfer_norm);
