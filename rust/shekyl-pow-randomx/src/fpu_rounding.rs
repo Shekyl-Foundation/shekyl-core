@@ -103,13 +103,15 @@ const fn fixed_word(mode: u32) -> ControlWord {
 /// The four fixed words, indexed by RandomX mode.
 const FIXED_WORDS: [ControlWord; 4] = [fixed_word(0), fixed_word(1), fixed_word(2), fixed_word(3)];
 
+/// [`FIXED_WORDS`] at an address: `ldmxcsr` takes no register
+/// operand, so the x86_64 blocks read the fixed word from memory.
+#[cfg(target_arch = "x86_64")]
+static FIXED_TABLE: [ControlWord; 4] = FIXED_WORDS;
+
 /// What a program run needs to compute RandomX floating-point
-/// instructions: the fixed words and the caller's word.
+/// instructions: the caller's word.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct FpEnv {
-    /// [`FIXED_WORDS`], held here so the x86_64 blocks can read them
-    /// from memory (`ldmxcsr` takes no register operand).
-    fixed: [ControlWord; 4],
     /// The caller's word, written back at the end of every block.
     caller: ControlWord,
     /// The caller's control bits are the fixed nearest word, so a
@@ -123,7 +125,6 @@ impl FpEnv {
     /// `VmState` that has not run a program yet; every program run
     /// replaces it with [`Self::capture`].
     pub(crate) const DEFAULT: Self = Self {
-        fixed: FIXED_WORDS,
         caller: FIXED_WORDS[0],
         plain_nearest: true,
     };
@@ -132,7 +133,6 @@ impl FpEnv {
     pub(crate) fn capture() -> Self {
         let caller = read_word();
         Self {
-            fixed: FIXED_WORDS,
             caller,
             plain_nearest: caller & !STATUS_FLAGS == FIXED_WORDS[0],
         }
@@ -157,9 +157,36 @@ impl FpEnv {
         PLAIN && mode == NEAREST
     }
 
+    /// The fixed word for `mode` as the x86_64 blocks take it: a
+    /// reference into [`FIXED_TABLE`].
+    #[cfg(target_arch = "x86_64")]
     #[inline(always)]
-    fn fixed(&self, mode: u32) -> &ControlWord {
-        &self.fixed[(mode & 3) as usize]
+    fn fixed_arg(mode: u32) -> &'static ControlWord {
+        &FIXED_TABLE[(mode & 3) as usize]
+    }
+
+    /// The fixed word for `mode` as the aarch64 blocks take it: in a
+    /// register, computed from the mode. A table here costs a load
+    /// chain in front of every `msr` once the table's address is
+    /// spilled (RANDOMX_ROUNDING_DECISION.md §6).
+    #[cfg(target_arch = "aarch64")]
+    #[inline(always)]
+    fn fixed_arg(mode: u32) -> ControlWord {
+        fixed_word(mode)
+    }
+
+    /// The caller's word as the x86_64 blocks take it: by reference.
+    #[cfg(target_arch = "x86_64")]
+    #[inline(always)]
+    fn caller_arg(&self) -> &ControlWord {
+        &self.caller
+    }
+
+    /// The caller's word as the aarch64 blocks take it: in a register.
+    #[cfg(target_arch = "aarch64")]
+    #[inline(always)]
+    fn caller_arg(&self) -> ControlWord {
+        self.caller
     }
 
     /// `a + b` per lane, rounded by `mode`.
@@ -168,7 +195,7 @@ impl FpEnv {
         let r = if self.plain::<PLAIN>(mode) {
             [a[0] + b[0], a[1] + b[1]]
         } else {
-            hw::add(self.fixed(mode), &self.caller, a, b)
+            hw::add(Self::fixed_arg(mode), self.caller_arg(), a, b)
         };
         #[cfg(test)]
         fp_census::note(fp_census::Op::Add, mode, a, b, r);
@@ -181,7 +208,7 @@ impl FpEnv {
         let r = if self.plain::<PLAIN>(mode) {
             [a[0] - b[0], a[1] - b[1]]
         } else {
-            hw::sub(self.fixed(mode), &self.caller, a, b)
+            hw::sub(Self::fixed_arg(mode), self.caller_arg(), a, b)
         };
         #[cfg(test)]
         fp_census::note(fp_census::Op::Sub, mode, a, b, r);
@@ -194,7 +221,7 @@ impl FpEnv {
         let r = if self.plain::<PLAIN>(mode) {
             [a[0] * b[0], a[1] * b[1]]
         } else {
-            hw::mul(self.fixed(mode), &self.caller, a, b)
+            hw::mul(Self::fixed_arg(mode), self.caller_arg(), a, b)
         };
         #[cfg(test)]
         fp_census::note(fp_census::Op::Mul, mode, a, b, r);
@@ -207,7 +234,7 @@ impl FpEnv {
         let r = if self.plain::<PLAIN>(mode) {
             [a[0] / b[0], a[1] / b[1]]
         } else {
-            hw::div(self.fixed(mode), &self.caller, a, b)
+            hw::div(Self::fixed_arg(mode), self.caller_arg(), a, b)
         };
         #[cfg(test)]
         fp_census::note(fp_census::Op::Div, mode, a, b, r);
@@ -220,7 +247,7 @@ impl FpEnv {
         let r = if self.plain::<PLAIN>(mode) {
             [a[0].sqrt(), a[1].sqrt()]
         } else {
-            hw::sqrt(self.fixed(mode), &self.caller, a)
+            hw::sqrt(Self::fixed_arg(mode), self.caller_arg(), a)
         };
         #[cfg(test)]
         fp_census::note(fp_census::Op::Sqrt, mode, a, a, r);
@@ -321,7 +348,7 @@ mod hw {
         ($name:ident, $insn:literal) => {
             #[inline(always)]
             #[allow(unsafe_code)]
-            pub(super) fn $name(fixed: &ControlWord, caller: &ControlWord, mut a: [f64; 2], b: [f64; 2]) -> [f64; 2] {
+            pub(super) fn $name(fixed: ControlWord, caller: ControlWord, mut a: [f64; 2], b: [f64; 2]) -> [f64; 2] {
                 // SAFETY: the block writes FPCR twice, the second time
                 // back to the caller's word; it reads and writes no
                 // memory, pushes nothing, and touches no register but
@@ -333,8 +360,8 @@ mod hw {
                         concat!($insn, " {a0:d}, {a0:d}, {b0:d}"),
                         concat!($insn, " {a1:d}, {a1:d}, {b1:d}"),
                         "msr fpcr, {caller}",
-                        fixed = in(reg) *fixed,
-                        caller = in(reg) *caller,
+                        fixed = in(reg) fixed,
+                        caller = in(reg) caller,
                         a0 = inout(vreg) a[0],
                         a1 = inout(vreg) a[1],
                         b0 = in(vreg) b[0],
@@ -353,7 +380,7 @@ mod hw {
 
     #[inline(always)]
     #[allow(unsafe_code)]
-    pub(super) fn sqrt(fixed: &ControlWord, caller: &ControlWord, mut a: [f64; 2]) -> [f64; 2] {
+    pub(super) fn sqrt(fixed: ControlWord, caller: ControlWord, mut a: [f64; 2]) -> [f64; 2] {
         // SAFETY: as in `binop!`.
         unsafe {
             asm!(
@@ -361,8 +388,8 @@ mod hw {
                 "fsqrt {a0:d}, {a0:d}",
                 "fsqrt {a1:d}, {a1:d}",
                 "msr fpcr, {caller}",
-                fixed = in(reg) *fixed,
-                caller = in(reg) *caller,
+                fixed = in(reg) fixed,
+                caller = in(reg) caller,
                 a0 = inout(vreg) a[0],
                 a1 = inout(vreg) a[1],
                 options(nomem, nostack),
