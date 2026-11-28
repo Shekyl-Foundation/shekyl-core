@@ -20,9 +20,10 @@
 //!   is dropped.
 //! - [`LocalKeys::account_public_address`]: cached at construction;
 //!   trait-method [`KeyEngine::account_public_address`] returns a borrow.
-//! - [`LocalKeys::derived`]: pre-decompressed cryptographic forms of the
-//!   spend public key and view scalar, computed once at construction
-//!   to avoid per-call decompression / mod-order-reduction costs.
+//! - `LocalKeys::derived` (test builds only): the decompressed spend
+//!   public key and the reduced view scalar, which the signing and
+//!   index-sensitivity tests read. Production builds neither store nor
+//!   compute them.
 //!
 //! # Primary-account claim contract (FA-2)
 //!
@@ -58,7 +59,9 @@
 // claim path uses the base spend key (`x = ho + b`, no offset).
 #[cfg(test)]
 use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
-use curve25519_dalek::{edwards::CompressedEdwardsY, EdwardsPoint, Scalar};
+use curve25519_dalek::Scalar;
+#[cfg(test)]
+use curve25519_dalek::{edwards::CompressedEdwardsY, EdwardsPoint};
 use shekyl_crypto_pq::account::AllKeysBlob;
 use shekyl_crypto_pq::derivation::derive_output_secrets;
 use shekyl_crypto_pq::handle::derive_output_handle;
@@ -79,9 +82,13 @@ use super::traits::key::{
     SourceSecretsBundle, TxSignatures, TxToSign,
 };
 
-/// Cryptographic forms of the wallet's account-level public material,
-/// pre-computed at construction so per-call paths do not pay the
-/// decompression / mod-order-reduction cost.
+/// Cryptographic forms of the wallet's account-level key material that
+/// only the signing and index-sensitivity tests read (they derive
+/// `D + m_i·G`). The production claim path uses `x = ho + b` and compares
+/// the bare `spend_pk`, so non-test builds carry none of this: no
+/// view-secret-derived copy (`35-secure-memory.mdc`: no unnecessary secret
+/// duplication) and no decompression that could panic.
+#[cfg(test)]
 struct DerivedScalars {
     /// View scalar `a` (Ed25519) — derived from
     /// `AllKeysBlob::view_sk.as_canonical_bytes()` via
@@ -89,19 +96,11 @@ struct DerivedScalars {
     /// reduced mod the Ed25519 group order). Wrapped in [`Zeroizing`]
     /// so the in-memory copy is wiped when `LocalKeys` is dropped, in
     /// addition to `AllKeysBlob`'s own wipe path.
-    ///
-    /// Used only by the signing/index-sensitivity tests (which derive
-    /// `D + m_i·G`); the production claim path uses `x = ho + b` (no offset).
-    /// Gated `#[cfg(test)]` so non-test builds neither store nor materialize
-    /// this view-secret-derived copy (`35-secure-memory.mdc`: no unnecessary
-    /// secret duplication).
-    #[cfg(test)]
     view_scalar: Zeroizing<Scalar>,
 
     /// Public spend point `B = b*G` — decompressed from
     /// `AllKeysBlob::spend_pk`. Signing tests derive `D + m₀*G` from this
-    /// point; production claim path compares bare `spend_pk` directly.
-    #[cfg_attr(not(test), allow(dead_code))]
+    /// point.
     spend_public: EdwardsPoint,
 }
 
@@ -130,15 +129,6 @@ struct DerivedScalars {
 /// `LocalLedger::populate_for_bench`
 /// exactly: bench-only `pub` widening under a feature flag the
 /// public API contract explicitly disclaims.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "docs/FOLLOWUPS.md row \"The claim reroute through the key owner has no \
-                  production caller\": the ownership round's prepared-scan-batches package \
-                  wires try_claim_output in, or deletes it"
-    )
-)]
 pub struct LocalKeys {
     /// Wallet key material. `AllKeysBlob` is `ZeroizeOnDrop` so this
     /// field is wiped on drop.
@@ -148,43 +138,47 @@ pub struct LocalKeys {
     /// reference from [`KeyEngine::account_public_address`].
     account_public_address: AccountPublicAddress,
 
-    /// Pre-computed cryptographic forms of the wallet's account-level
-    /// keys. See [`DerivedScalars`].
+    /// The test-only forms of the wallet's account-level keys. See
+    /// [`DerivedScalars`].
+    #[cfg(test)]
     derived: DerivedScalars,
 }
 
 impl LocalKeys {
     /// Construct a [`LocalKeys`] from a fully-derived [`AllKeysBlob`].
     ///
-    /// Production constructor — called by `Engine::open_full` /
-    /// `Engine::create` (orchestrator-side wiring lands in M3c+) once
-    /// the keys blob has been re-derived from the master seed via
+    /// Production constructor — called by
+    /// [`KeyActor`](super::key_actor::KeyActor)'s `on_start` with a keys
+    /// blob re-derived from the master seed via
     /// [`shekyl_crypto_pq::account::rederive_account`].
     ///
-    /// Pre-computes the view scalar, the spend public point, and the
-    /// account-public-address aggregate.
+    /// Caches the account-public-address aggregate. Test builds also
+    /// pre-compute the view scalar and the spend public point (see
+    /// [`DerivedScalars`]); production builds do neither, so this
+    /// constructor cannot panic.
     ///
     /// # Panics
     ///
-    /// Panics if `keys.spend_pk` does not decompress to a valid
-    /// Ed25519 point. This indicates wallet-state corruption: the
-    /// spend public key was produced by `rederive_account` from a
-    /// canonical scalar via `ED25519_BASEPOINT_TABLE * scalar`, which
-    /// always produces a decompressable point. Per the §5.1
-    /// `RuntimeFailure` discipline that `LocalLedger` adopts for lock
-    /// poisoning, the correct response to corrupt wallet state is
-    /// process termination, not silent continuation.
+    /// Test builds only: panics if `keys.spend_pk` does not decompress
+    /// to a valid Ed25519 point. `rederive_account` produces it as
+    /// `ED25519_BASEPOINT_TABLE * scalar` from a canonical scalar, which
+    /// always decompresses, so a failure means the test fixture is corrupt.
     pub(crate) fn from_keys_blob(keys: AllKeysBlob) -> Self {
-        // Test-only: the view scalar feeds the index-sensitivity helpers; the
-        // production claim path never reads it (`x = ho + b`, no offset), so we
-        // do not materialize this view-secret copy in non-test builds.
+        // Test-only: the signing and index-sensitivity helpers read these;
+        // the production claim path never does (`x = ho + b`, no offset), so
+        // non-test builds neither materialize the view-secret copy nor
+        // decompress the spend key.
         #[cfg(test)]
-        let view_scalar = Zeroizing::new(Scalar::from_bytes_mod_order(
-            *keys.view_sk.as_canonical_bytes(),
-        ));
-        let spend_public = CompressedEdwardsY(*keys.spend_pk.as_canonical_bytes())
-            .decompress()
-            .expect("AllKeysBlob::spend_pk decompresses (rederive_account guarantees canonicity)");
+        let derived = DerivedScalars {
+            view_scalar: Zeroizing::new(Scalar::from_bytes_mod_order(
+                *keys.view_sk.as_canonical_bytes(),
+            )),
+            spend_public: CompressedEdwardsY(*keys.spend_pk.as_canonical_bytes())
+                .decompress()
+                .expect(
+                    "AllKeysBlob::spend_pk decompresses (rederive_account guarantees canonicity)",
+                ),
+        };
 
         let account_public_address = AccountPublicAddress {
             pqc_public_key: keys.pqc_public_key.to_vec(),
@@ -194,11 +188,8 @@ impl LocalKeys {
         Self {
             keys,
             account_public_address,
-            derived: DerivedScalars {
-                #[cfg(test)]
-                view_scalar,
-                spend_public,
-            },
+            #[cfg(test)]
+            derived,
         }
     }
 

@@ -224,7 +224,17 @@ pub(crate) struct OutputDetectionInput {
 /// when a cancelled `ask` discards the un-taken reply.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
-#[allow(dead_code)] // M3a Commit 4 introduces the implementor; consumers land in M3c+.
+// Not `bench-internals` too, as on `KeyEngine`: the bench calls
+// `try_claim_output` but reads only the variant, never `Mine`'s payload.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "docs/FOLLOWUPS.md row \"The claim reroute through the key owner has no \
+                  production caller\": the ownership round's prepared-scan-batches package \
+                  wires try_claim_output in, or deletes it"
+    )
+)]
 pub(crate) enum OutputClaimResult {
     Mine(OutputClaim),
     NotMine,
