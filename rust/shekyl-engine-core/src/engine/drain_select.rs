@@ -530,6 +530,36 @@ mod tests {
         // orchestrator's sweep_slot_remainder owns the figure.
     }
 
+    /// This bites against the sweep pricing a count other than the one it
+    /// takes: a fee quoted before selection, at one input, or at the cap
+    /// when the pass took fewer. The fee closure charges 7 per input, so the
+    /// payment names the count it was priced at, under the cap and at it.
+    #[test]
+    fn sweep_prices_the_count_it_takes() {
+        let per_input = |n: usize| Some(AtomicUnits::from_raw(7 * n as u64));
+
+        // Three mature of 100 (and one immature) under a cap of eight: the
+        // pass takes three and pays 3 × 7.
+        let under = [
+            candidate(1, 100, 10),
+            candidate(2, 100, 10),
+            candidate(3, 100, 10),
+            candidate(4, 100, 99),
+        ];
+        let sel = select_for_sweep(&under, per_input, REFERENCE, 8).expect("three fund 21");
+        assert_eq!(sel.chosen.len(), 3);
+        assert_eq!(sel.fee, AtomicUnits::from_raw(21));
+        assert_eq!(sel.payment, AtomicUnits::from_raw(300 - 21));
+
+        // Ten mature of 100 under a cap of four: the pass takes four and
+        // pays 4 × 7, not 10 × 7.
+        let over: Vec<_> = (1..=10).map(|i| candidate(i, 100, 10)).collect();
+        let sel = select_for_sweep(&over, per_input, REFERENCE, 4).expect("four fund 28");
+        assert_eq!(sel.chosen.len(), 4);
+        assert_eq!(sel.fee, AtomicUnits::from_raw(28));
+        assert_eq!(sel.payment, AtomicUnits::from_raw(400 - 28));
+    }
+
     /// This bites against the sweep refusing (or panicking) at the input cap
     /// instead of taking a full capped pass — the multi-pass contract
     /// `collect_unstaked` documents (the overflow's residue is the
