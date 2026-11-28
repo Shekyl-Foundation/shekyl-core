@@ -1120,13 +1120,15 @@ persona's first drawn epoch settled, opened as a copy and refused if a
 byte moved. `BlockPath::resumed` reads the identities and the header
 ledger's window off the store, as the connector answers the ingest
 driver. The subject is the block the corpus writes next, height 1,800,
-which lists Chain L's first emission claim; setup forms it, and judges
-it once in a batch it aborts (`BlockPath::rehearse`), so the count reads
-the drawable memo a running node holds, as the fixture rows' history
-leaves theirs. The count is `validate_with_memo` with the claim's backing
-proof and two signatures, `WriteBatch::connect` and the commit. Setup
-never replays: the snapshot must be sealed in the cache, which
-`nightly.yml`'s `bench-full` builds in the step before its capture. It
+which lists Chain L's first emission claim; setup forms it. The count is
+`validate_with_memo` with the claim's backing proof and two signatures,
+`WriteBatch::connect` and the commit: **401,097,182** instructions
+(2026-11-28, on a 16-vCPU build host, through the capture script). The
+drawable memo starts empty, as a daemon's does when it opens its store;
+judging the block once in an aborted batch beforehand, so the count read
+a filled memo, moved it by 0.03 %, so the row does not. Setup never
+replays: the snapshot must be sealed in the cache, which the capture
+script builds before its gungraun runs whenever the row is selected. It
 is a nightly row for that reason.
 
 ## 16. `crypto_bench_randomx_verify_header` — one header's proof-of-work (`BA-T42`)

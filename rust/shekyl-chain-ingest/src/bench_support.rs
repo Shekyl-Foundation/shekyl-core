@@ -56,7 +56,7 @@ use shekyl_chain_rules::{
     FormClaims, HeaderRecord, ReferenceClaims, RuleSet, StructurallyValid, Substrate, Target,
 };
 use shekyl_chain_store::apply_policy::ApplyPolicy;
-use shekyl_chain_store::store::{ChainStore, Horizons, StoreError};
+use shekyl_chain_store::store::{ChainStore, Horizons};
 use shekyl_types::{BlockHash, BlockHeight, PowHash, Timestamp};
 
 use crate::corpus::CorpusSource;
@@ -219,46 +219,6 @@ impl BlockPath {
             clock: FixedClock::new(),
             memo: DrawableMemo::new(),
             _dir: dir,
-        }
-    }
-
-    /// Judge `candidate` on the tip and abort the batch, so the drawable
-    /// memo holds what judging it files: a row then counts the block as a
-    /// running node does, with its memo built by the blocks before. Nothing
-    /// is written.
-    ///
-    /// A driver built by [`Self::replayed`] arrives with the memo its
-    /// history filled; one built by [`Self::resumed`] has judged nothing,
-    /// as a daemon has not when it opens its store.
-    ///
-    /// # Panics
-    ///
-    /// The block is refused or the store faults: a stale chain.
-    pub fn rehearse(&mut self, candidate: &Candidate, claimed: &Claimed) {
-        enum Rehearsed {
-            Judged,
-            Store(StoreError),
-        }
-        impl From<StoreError> for Rehearsed {
-            fn from(fault: StoreError) -> Self {
-                Self::Store(fault)
-            }
-        }
-        let formed = self.form(candidate.clone(), claimed);
-        let trust = self.rules.trust();
-        let memo = &mut self.memo;
-        let rehearsed = self.store.write(|batch| -> Result<(), Rehearsed> {
-            let view = batch.chain_view();
-            judged(
-                validate_with_memo(formed, &view, &claimed.rule_set, &trust, Some(memo)),
-                claimed.height,
-            );
-            Err(Rehearsed::Judged)
-        });
-        match rehearsed {
-            Err(Rehearsed::Judged) => {}
-            Ok(()) => unreachable!("the rehearsal never commits"),
-            Err(Rehearsed::Store(fault)) => panic!("the rehearsal's batch faulted: {fault}"),
         }
     }
 

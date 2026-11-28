@@ -17,10 +17,10 @@
 //!
 //! Setup never replays. It opens the snapshot the cache already holds, which
 //! `chain_l::the_first_settled_epoch_snapshot_builds_and_opens` (`shekyl-chain-ingest`,
-//! ignored) builds; `nightly.yml`'s `bench-full` runs that step first. It
-//! then judges the subject once and discards the batch, so the count reads
-//! the drawable memo a running node holds, as the fixture rows' history
-//! leaves it (`BlockPath::rehearse`).
+//! ignored) builds; the capture script runs that step first. The drawable
+//! memo starts empty, as a daemon's does when it opens its store: judging
+//! the block once beforehand, so the count read a filled memo, moved it by
+//! 0.03 % (2026-11-28), so the row does not.
 //!
 //! The nightly capture's (`NIGHTLY_BENCHES`): the snapshot is a 34 MB store
 //! and Chain L is fetched by its pin, which a pull request's capture does
@@ -104,7 +104,6 @@ fn before_connect_claim() -> (BlockPath, StructurallyValid, Claimed) {
         "the claim's block extends the snapshot's tip"
     );
     let claimed = chain.claims(&subject);
-    chain.rehearse(&subject, &claimed);
     let formed = chain.form(subject, &claimed);
     (chain, formed, claimed)
 }
