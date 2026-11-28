@@ -46,6 +46,7 @@ import fsync_probe  # noqa: E402
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import armed_lever  # noqa: E402
 import owner_socket  # noqa: E402
+import posted_template  # noqa: E402
 
 ROOT = A.ROOT
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -53,6 +54,30 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 # that way and refuses an existing one others can enter
 # (`config.data-dir.exposed`; shekyl_os_account::OWNER_ONLY_DIR_MODE).
 DATA_DIR_MODE = 0o700
+
+
+def owner_dir(path):
+    """Make `path` owner-only, with any parent it lacks, and set an existing
+    `path` to that mode; return its absolute path.
+
+    The daemon also refuses a data directory under a directory any other
+    principal can write (`config.data-dir.ancestor-writable`), its account's
+    own group included. A directory made at the process umask is
+    group-writable where the umask is 002, and one others can enter where it
+    is 022. So every daemon data directory these harnesses make, and every
+    directory they make above one, comes from here. The directories above
+    the first that exists are the operator's; the daemon's refusal names
+    them."""
+    path = os.path.abspath(path)
+    missing = []
+    probe = path
+    while not os.path.isdir(probe):
+        missing.append(probe)
+        probe = os.path.dirname(probe)
+    for directory in reversed(missing):
+        os.mkdir(directory, DATA_DIR_MODE)
+    os.chmod(path, DATA_DIR_MODE)
+    return path
 
 
 def _fail(msg):
@@ -381,22 +406,13 @@ class _RunningDaemon:
 
 
 def _await_posted(port, timeout):
-    """Wait until the daemon on `port` answers `block_template`: its node
-    has posted a template, so `dev_block_generate` will not be refused at
-    start. Fails the run when no template is posted within `timeout`."""
-    deadline = time.time() + timeout
-    last = None
-    while time.time() < deadline:
-        try:
-            resp = _rpc(port, "block_template")
-            if "result" in resp:
-                return
-            last = resp.get("error")
-        except (urllib.error.URLError, OSError, json.JSONDecodeError, TimeoutError) as e:
-            last = repr(e)
-        time.sleep(0.1)
-    _fail(f"the seed on 127.0.0.1:{port} posted no template within {timeout}s; "
-          f"last answer: {last}")
+    """Wait until the daemon on `port` has posted a template, so
+    `dev_block_generate` will not be refused at start (`posted_template.py`).
+    Fails the run when no template is posted within `timeout`."""
+    try:
+        posted_template.await_posted(f"http://127.0.0.1:{port}/json_rpc", timeout)
+    except RuntimeError as refused:
+        _fail(str(refused))
 
 
 def mining_address(timeout):
@@ -422,10 +438,11 @@ def mining_address(timeout):
         _fail(f"expected exactly one REGTEST_MINING_ADDR line from the emitter, found "
               f"{len(hits)}. The emitter passed but did not report an address, so there "
               f"is nothing to mine to.\n{proc.stdout[-2000:]}")
-    addr = hits[0]
-    if addr.count("/") != 2 or not addr.startswith("shekyl1"):
-        _fail(f"emitted address is not the expected three-segment form: {addr[:60]}...")
-    return addr
+    # The format has one judge: the emitter passes only when its address
+    # decodes through the daemon's regtest decoder, and the daemon refuses a
+    # `--mine-address` it cannot read. A shape test here would be a second
+    # copy of the format, stale on the next change to it.
+    return hits[0]
 
 
 def measure(args):
@@ -436,14 +453,10 @@ def measure(args):
     subject is always wiped (an IBD from a partial chain is a different
     experiment).
     """
-    work = os.path.abspath(args.work_dir)
-    os.makedirs(work, exist_ok=True)
-    seed_dir = os.path.abspath(args.seed_dir or os.path.join(work, "seed"))
-    # Owner-only: the daemon refuses an existing data directory others can
-    # enter (`config.data-dir.exposed`). A seed kept from an earlier run is
-    # this script's own directory, so it is set here.
-    os.makedirs(seed_dir, mode=DATA_DIR_MODE, exist_ok=True)
-    os.chmod(seed_dir, DATA_DIR_MODE)
+    # The work directory and a seed kept from an earlier run are this
+    # script's own, so their mode is set here (`owner_dir`).
+    work = owner_dir(args.work_dir)
+    seed_dir = owner_dir(args.seed_dir or os.path.join(work, "seed"))
     daemon = daemon_executable(args.daemon)
     pre = A.measurement_preflight(daemon=daemon, work_dir=work,
         seed_dir=seed_dir, disk_class=args.disk_class)
@@ -453,10 +466,10 @@ def measure(args):
 
     subj_dir = os.path.join(work, "subject")
     shutil.rmtree(subj_dir, ignore_errors=True)
-    os.makedirs(subj_dir, mode=DATA_DIR_MODE)
+    owner_dir(subj_dir)
     if args.fresh_seed:
         shutil.rmtree(seed_dir, ignore_errors=True)
-        os.makedirs(seed_dir, mode=DATA_DIR_MODE)
+        owner_dir(seed_dir)
 
     # The control channel (§1.3a rule 2): the fsync probe on the subject's
     # filesystem from before the seed starts to after the sync ends, so the
@@ -488,7 +501,10 @@ def _measure_with_probe(args, work, seed_dir, daemon, addr, subj_dir):
     # (a fresh chain is a fresh data directory). The daemon takes no sync-mode
     # option (IG-Q4): its constant is DRS-D9's, and each run's durability is the
     # one its daemon reports at start.
-    common = ["--network", "regtest", "--dev-difficulty", "1", "--p2p-local",
+    # `--config-file none`: the default file is the machine's (`/etc/shekyl`),
+    # where a host's own regtest node keeps its settings.
+    common = ["--network", "regtest", "--config-file", "none",
+              "--dev-difficulty", "1", "--p2p-local",
               "--tor", "off", "--log-level", args.log_level]
     (sp2p, srpc, bp2p, brpc), held = _reserve_ports(4)
     for sk in held:
@@ -570,7 +586,7 @@ def _measure_with_probe(args, work, seed_dir, daemon, addr, subj_dir):
         seed_reused = have_h > 1
         # A Rust seed posts its first template once its follower has looped
         # after open (the owner's state at open, by the declaration); a
-        # dev_block_generate sent before that post is refused `mine.not_synced`
+        # dev_block_generate sent before that post is refused `mine.syncing`
         # by a daemon whose RPC is already up. The regtest harness waits the same way
         # (`await_posted`).
         _await_posted(srpc, args.startup_timeout)
