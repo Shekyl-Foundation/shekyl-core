@@ -335,22 +335,25 @@ fn tree(args: &[&str]) -> Result<BTreeMap<String, PathBuf>, String> {
         ));
     }
     let text = String::from_utf8(output.stdout).map_err(|e| format!("cargo tree: {e}"))?;
-    let mut out = BTreeMap::new();
-    for line in text.lines() {
-        // `name vX.Y.Z (/path/to/package)`, with ` (*)` on a repeat. A
-        // registry package carries no path.
-        let line = line.trim_end().trim_end_matches(" (*)");
-        let Some(name) = line.split_whitespace().next() else {
-            continue;
-        };
-        if let Some(path) = line
-            .split_once(" (/")
-            .and_then(|(_, rest)| rest.strip_suffix(')'))
-        {
-            out.insert(name.to_owned(), PathBuf::from(format!("/{path}")));
-        }
-    }
-    Ok(out)
+    Ok(text.lines().filter_map(package_dir).collect())
+}
+
+/// The name and directory of the package on one `cargo tree --prefix none`
+/// line, when it has a directory: `name vX.Y.Z (/path)` on Unix,
+/// `name vX.Y.Z (C:\path)` on Windows, with ` (proc-macro)` before the
+/// directory for a proc macro and ` (*)` after it on a repeat. A registry
+/// package names no directory and a git one names a URL; both are `None`.
+fn package_dir(line: &str) -> Option<(String, PathBuf)> {
+    let line = line.trim_end().trim_end_matches(" (*)");
+    let name = line.split_whitespace().next()?;
+    let inner = line.strip_suffix(')')?;
+    // The first ` (` whose remainder is an absolute path opens the
+    // directory, so a directory holding ` (` itself is read whole.
+    inner
+        .match_indices(" (")
+        .map(|(at, _)| Path::new(&inner[at + 2..]))
+        .find(|dir| dir.is_absolute())
+        .map(|dir| (name.to_owned(), dir.to_path_buf()))
 }
 
 /// Every workspace member that logs, by package name, with what it logs
@@ -514,6 +517,38 @@ mod tests {
     #[test]
     fn a_computed_target_is_refused() {
         assert!(scan_file("fn f() { info!(target: TARGET, \"x\"); }").is_err());
+    }
+
+    /// A package's directory is read on this platform's own spelling of an
+    /// absolute path, after a proc macro's mark, before a repeat's, and with
+    /// a ` (` inside it. A registry or git package has none.
+    #[test]
+    fn a_tree_line_names_its_package_directory_on_any_platform() {
+        let own = env!("CARGO_MANIFEST_DIR");
+        let spaced = Path::new(own).join("a (b)");
+        let spaced = spaced.display();
+        let dir =
+            |line: &str| package_dir(line).map(|(name, dir)| (name, dir.display().to_string()));
+        let want = |dir: &str| Some(("shekyl-logging".to_owned(), dir.to_owned()));
+        assert_eq!(dir(&format!("shekyl-logging v0.1.0 ({own})")), want(own));
+        assert_eq!(
+            dir(&format!("shekyl-logging v0.1.0 ({own}) (*)")),
+            want(own)
+        );
+        assert_eq!(
+            dir(&format!("shekyl-logging v0.1.0 (proc-macro) ({own})")),
+            want(own)
+        );
+        assert_eq!(
+            dir(&format!("shekyl-logging v0.1.0 ({spaced})")),
+            want(&spaced.to_string())
+        );
+        assert_eq!(dir("serde v1.0.228"), None);
+        assert_eq!(dir("serde_derive v1.0.228 (proc-macro)"), None);
+        assert_eq!(
+            dir("tor-rtcompat v0.30.0 (https://gitlab.torproject.org/tpo/core/arti#0123abcd)"),
+            None
+        );
     }
 
     /// The audit reads this crate's own tree: its subject exists.
