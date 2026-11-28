@@ -882,12 +882,19 @@ under [`RPC_CHANNEL.md`](RPC_CHANNEL.md) §4.3's bounds:
 
 **The finding.** RT-P4's harness, on Rick's Tiger Lake laptop (Core
 i9-11950H, Windows, MSVC), reads invalid ML-KEM-768 ciphertexts as
-decapsulating slower than valid ones. The gap roughly doubled between
-runs of identical decapsulation code: about 16 ns on 2026-10-23
-([record](../benchmarks/rt_p4_mlkem_decaps_timing_20261023.md)), and about
-36 ns at `d4917e9f79` on 2026-11-21
-([record](../benchmarks/rt_p4_mlkem_decaps_timing_20261121_message.md)),
-under 0.06 % of a decapsulation. The 2026-11-21 figure is the accepted one.
+decapsulating slower than valid ones. On `fips203` 0.4.3 the gap was 16
+to 18 ns (2026-10-23,
+[record](../benchmarks/rt_p4_mlkem_decaps_timing_20261023.md)). On 0.5.0
+it roughly doubled between two runs whose decapsulation code has identical
+instruction counts:
+- the `6b89c4862e` build read `valid-vs-invalid` 9.64 and
+  `fixed-vs-invalid` 20.38, 13 to 14 ns
+  ([record](../benchmarks/rt_p4_mlkem_decaps_timing_20261121.md));
+- the `d4917e9f79` build read 45.41 (35.6 ns) and 29.55 (27.0 ns)
+  ([record](../benchmarks/rt_p4_mlkem_decaps_timing_20261121_message.md)).
+
+That is under 0.06 % of a decapsulation. The `d4917e9f79` figure is the
+accepted one.
 
 | Host | `valid-vs-invalid` | `fixed-vs-bitflip` | Record |
 | --- | --- | --- | --- |
@@ -903,7 +910,9 @@ equal against one bit flipped (the `ct_ne 1088` rows of
 `docs/formal/checkct/dynamic/`), is flat on the desktop at 1.42 and 1.99,
 with 100,000 batches per class
 ([capture](../formal/checkct/results/2026-11-25/ca2-desktop-compare-1088.txt)).
-It has not been timed on Tiger Lake.
+It has no registered run on Tiger Lake. A development check on the
+workstation, at 200,000 samples under shared load, read `|t|` ≤ 2.03,
+and it is not a result.
 
 **The source.** There is no branch on validity. `fips203` 0.5.0 computes
 `J(z‖c)` unconditionally (`ml_kem.rs:128`) and selects the key with
@@ -914,10 +923,13 @@ valid ciphertext's compare folds equal bytes, and this core runs
 low-activity operands in fewer cycles) is untested on the machine that
 shows the gap. The desktop's flat compare does not test it there.
 
-**Shared with `CA-2`.** Neither row has shown up on the floor device or on
-the desktop. `CA-4` has shown up only on the Tiger Lake laptop. `CA-2`
-has shown up on a Tiger Lake workstation and on a fleet VM whose physical
-CPU is not recorded (QEMU's generic model). The
+**Shared with `CA-2`.** Neither row has shown up on the floor device.
+`CA-4` is flat on the desktop and has shown up only on the Tiger Lake
+laptop. `CA-2`'s direct rows were not run on the desktop: its
+localisation run there timed only their nulls, beside the halves and the
+sparse Montgomery rows. `CA-2` has shown up on a Tiger Lake workstation
+and on a fleet VM whose physical CPU is not recorded (QEMU's generic
+model). The
 before-measurement of the `CA-1`/`CA-2` Round 0 runs RT-P4's
 two validity comparisons in the same session as `CA-2`'s direct rows, on
 a Tiger Lake host, and is the next observation of this row.
