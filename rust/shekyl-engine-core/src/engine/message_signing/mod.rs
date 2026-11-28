@@ -29,7 +29,7 @@
 //! # This work does not run on the executor
 //!
 //! The PQ half is a full SLH-DSA-192s keygen plus sign — ~4.3 s on the
-//! Pi-4 provisioning floor (rule 76), and CPU-bound throughout. It goes
+//! Pi-4 provisioning floor (rule 176), and CPU-bound throughout. It goes
 //! to [`tokio::task::spawn_blocking`], the same disposition Argon2 gets
 //! at wallet open. Running it inline would park the runtime that also
 //! drives the key actor's mailbox and the refresh loop, so on the

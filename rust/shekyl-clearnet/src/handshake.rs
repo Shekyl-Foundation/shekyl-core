@@ -14,13 +14,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use shekyl_capped_stream::{node_gate, refund_unsent, write_all_counted};
+use shekyl_capped_stream::{node_gate, read_granted, write_granted, ReadStop};
 use shekyl_p2p_transport::{
-    prefix_for, Established, Initiator, Responder, SendHalf, MESSAGE1_LEN, MESSAGE2_LEN, PREFIX_LEN,
+    prefix_for, Established, Initiator, InitiatorFlight, Responder, SendHalf, MESSAGE1_LEN,
+    MESSAGE2_LEN, PREFIX_LEN,
 };
 use shekyl_timing_engine::{Clock, Handle, OwnerClass, Tick, WakeWait};
 use shekyl_transport_layer::{LinkDirection, MessageClass};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 
 use crate::seam::SeamRecv;
@@ -41,7 +42,7 @@ struct PoolSpans {
 }
 
 pub(crate) enum Setup {
-    Plain,
+    Native,
     Noise { flight: Vec<u8>, send: SendHalf },
 }
 
@@ -176,7 +177,7 @@ where
         initiator_job(network_id, &fired_job, &tally_job, queued)
     });
     let job = await_job(join, &mut wake, &fired).await;
-    let (initiator, message1, spans) = match job {
+    let (initiator, flight, spans) = match job {
         Ok(Ok(done)) if !fired.load(Ordering::Acquire) => done,
         Ok(Ok(_) | Err(SkipOrFail::Skipped)) => {
             ignore(owner.deregister());
@@ -195,9 +196,6 @@ where
             return Err(Observed::HandshakeOwnFailure);
         }
     };
-    let mut flight = Vec::with_capacity(PREFIX_LEN + message1.len());
-    flight.extend_from_slice(&prefix_for(&network_id));
-    flight.extend_from_slice(&message1);
     let writing = Instant::now();
     let wrote = tokio::select! {
         biased;
@@ -209,7 +207,7 @@ where
             node_gate().leave(LinkDirection::Up, conn);
             false
         }
-        result = write_budgeted(&mut write, conn, &flight) => result,
+        result = write_budgeted(&mut write, conn, flight.as_bytes()) => result,
     };
     if !wrote {
         ignore(owner.deregister());
@@ -278,32 +276,12 @@ where
     Ok((write, send, recv))
 }
 
-/// Write `bytes` under the up bucket, one grant at a time.
+/// Write `bytes` under the up budget.
 ///
-/// A failed grant refunds only the bytes the socket did not accept.
+/// The grant is held across the socket write. Drop, including when the
+/// deadline select drops this call, returns what the socket did not take.
 pub(crate) async fn write_budgeted(write: &mut OwnedWriteHalf, conn: u64, bytes: &[u8]) -> bool {
-    let gate = node_gate();
-    let mut off = 0usize;
-    while off < bytes.len() {
-        let room = bytes.len() - off;
-        let grant = gate
-            .acquire(LinkDirection::Up, conn, MessageClass::Session, room as u64)
-            .await;
-        let grant = usize::try_from(grant).unwrap_or(room).min(room);
-        if grant == 0 {
-            continue;
-        }
-        let end = off + grant;
-        match write_all_counted(write, &bytes[off..end]).await {
-            Ok(()) => off = end,
-            Err(wrote) => {
-                refund_unsent(&gate, LinkDirection::Up, conn, grant as u64, wrote);
-                return false;
-            }
-        }
-    }
-    gate.record_message(LinkDirection::Up, conn);
-    true
+    write_granted(write, bytes, &node_gate(), conn, MessageClass::Session).await
 }
 
 fn ignore<E>(result: Result<(), E>) {
@@ -342,17 +320,15 @@ fn handshake_job(
         let ready = Responder::new(&network_id)
             .read_message1(message1)
             .map_err(|_| SkipOrFail::Unverified)?;
-        let (established, message2) = ready.write_message2().map_err(|_| SkipOrFail::Own)?;
-        Ok((established, message2))
+        let (established, flight) = ready.write_message2().map_err(|_| SkipOrFail::Own)?;
+        Ok((established, flight))
     })();
     tally.dequeue();
-    let (established, message2) = result?;
+    let (established, flight) = result?;
     tally.compute();
     let compute_ns = span_ns(computing.elapsed());
     let (send, recv) = established_halves(established);
-    let mut flight = Vec::with_capacity(PREFIX_LEN + message2.len());
-    flight.extend_from_slice(&prefix_for(&network_id));
-    flight.extend_from_slice(&message2);
+    let flight = flight.as_bytes().to_vec();
     Ok((
         send,
         SeamRecv::Noise {
@@ -378,7 +354,7 @@ fn initiator_job(
     fired: &AtomicBool,
     tally: &HandshakeTally,
     queued: Instant,
-) -> Result<(Initiator, Vec<u8>, PoolSpans), SkipOrFail> {
+) -> Result<(Initiator, InitiatorFlight, PoolSpans), SkipOrFail> {
     let queue_ns = span_ns(queued.elapsed());
     if fired.load(Ordering::Acquire) {
         tally.skip();
@@ -387,11 +363,11 @@ fn initiator_job(
     }
     let computing = Instant::now();
     match Initiator::new(&network_id) {
-        Ok((initiator, message1)) => {
+        Ok((initiator, flight)) => {
             tally.dequeue();
             Ok((
                 initiator,
-                message1,
+                flight,
                 PoolSpans {
                     queue_ns,
                     compute_ns: span_ns(computing.elapsed()),
@@ -452,6 +428,11 @@ async fn await_job<T, C: Clock>(
     }
 }
 
+/// Read `buf` under the down budget, unless `wake` fires first.
+///
+/// A short socket read is a failure here: the handshake asked for the
+/// whole buffer. The read is the shared one: nothing is held while the
+/// peer is quiet, and the grant is settled before this returns the bytes.
 async fn read_or_wake<C: Clock>(
     read: &mut OwnedReadHalf,
     buf: &mut [u8],
@@ -460,53 +441,26 @@ async fn read_or_wake<C: Clock>(
     conn: u64,
 ) -> Result<(), Observed> {
     let gate = node_gate();
-    tokio::select! {
-        biased;
-        result = wake.as_mut() => {
-            fired.store(true, Ordering::Release);
-            match result {
-                Ok(_) | Err(_) => {}
-            }
-            gate.leave(LinkDirection::Down, conn);
-            Err(Observed::HandshakeDeadline)
-        }
-        result = read_budgeted(read, buf, conn) => result,
-    }
-}
-
-/// Read `buf` under the down bucket. A short socket read is a failure
-/// here: the handshake asked for the whole buffer.
-async fn read_budgeted(
-    read: &mut OwnedReadHalf,
-    buf: &mut [u8],
-    conn: u64,
-) -> Result<(), Observed> {
-    let gate = node_gate();
     let mut filled = 0usize;
     while filled < buf.len() {
-        let room = buf.len() - filled;
-        let grant = gate
-            .acquire(
-                LinkDirection::Down,
-                conn,
-                MessageClass::Session,
-                room as u64,
-            )
-            .await;
-        let grant = usize::try_from(grant).unwrap_or(room).min(room);
-        if grant == 0 {
-            continue;
+        match read_granted(
+            read,
+            &mut buf[filled..],
+            &gate,
+            conn,
+            MessageClass::Session,
+            wake,
+        )
+        .await
+        {
+            Ok(n) => filled += n,
+            Err(ReadStop::Cancel(_)) => {
+                fired.store(true, Ordering::Release);
+                gate.leave(LinkDirection::Down, conn);
+                return Err(Observed::HandshakeDeadline);
+            }
+            Err(ReadStop::Eof | ReadStop::Failed) => return Err(Observed::HandshakeBroken),
         }
-        let end = filled + grant.min(buf.len() - filled);
-        if read.read_exact(&mut buf[filled..end]).await.is_err() {
-            gate.refund(LinkDirection::Down, conn, grant as u64, true);
-            return Err(Observed::HandshakeBroken);
-        }
-        let got = end - filled;
-        if got < grant {
-            gate.refund(LinkDirection::Down, conn, (grant - got) as u64, false);
-        }
-        filled = end;
     }
     gate.record_message(LinkDirection::Down, conn);
     Ok(())

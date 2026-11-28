@@ -10,12 +10,12 @@ count to `⌊cum_before / W⌋` over a cumulative archival-length cell; the cons
 same, and three rows join the census (the stored length, the cell, the txid mixer).
 Identifier families **`SCC-`** (findings) and
 **`SCC-Q`** (questions), registered in
-[`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2 with this file (rule 94
+[`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2 with this file (rule 194
 §1; `check_index_prefix_uniqueness.py` branch (a) — `SCC` parses as its own
 prefix and is clear of `SCW`, `SCE` and `SCU`).
 
 **Design owner:** Claude (claude.ai, Shekyl project). **Rick authorizes and
-ratifies.** No consensus change lands without a rule-07 ratification.
+ratifies.** No consensus change lands without a rule-107 ratification.
 
 **This document is the effort's durable record.** Anything decided in the
 design-owner lane that is not written here does not exist. That is the whole
@@ -107,7 +107,7 @@ statement. **Held:** the txid mixer row, on the pruned-form blocker (FOLLOWUPS "
 | shard identity and holdings | `rust/shekyl-archival-retention/src/**` — 156 `shard_id`, 103 `shards`, 51 `shard_ids`, 36 `shard_age_milli`, 18 `r_market_by_shard` | bond holdings, admission, challenge draw, settlement | consensus | **yes, by enumeration** — every site that names or iterates shard ids | `segment_leaf_count` via `shard_age_milli` (family 2) |
 | wallet-side serve sets | `rust/shekyl-engine-core/src/engine/curve_tree_actor.rs:201`, `:378` (`pin_serve_set`), `rust/shekyl-engine-core/src/engine/bond_assembly.rs:584`, `rust/shekyl-engine-core/src/engine/bond_orchestrator.rs:427` | which shards a persona pins and posts | wallet | **yes** | — |
 | the FFI archival shims | `rust/shekyl-ffi/src/archival_ffi/*` (bond, emission, attestation, epoch_close, ct_balance, codes), `archival_admission_ffi.rs` | the C++ boundary for all of the above | consensus | **yes, wherever a shard id crosses** | — |
-| **new (`SHT-Q2`)** the archival-length row | `rust/shekyl-chain-store` schema, beside `txs_prunable_hash` / `txs_pqc_auth_hash` | each in-domain transaction's archival length (prunable + `pqc_auths` bytes, as `write_segments` emits them) | consensus | **new** — written at connect from the body; supplied by storage-pruned and skeleton forms like the prunable hash; a rule-42 schema bump | — |
+| **new (`SHT-Q2`)** the archival-length row | `rust/shekyl-chain-store` schema, beside `txs_prunable_hash` / `txs_pqc_auth_hash` | each in-domain transaction's archival length (prunable + `pqc_auths` bytes, as `write_segments` emits them) | consensus | **new** — written at connect from the body; supplied by storage-pruned and skeleton forms like the prunable hash; a rule-142 schema bump | — |
 | **new (`SHT-Q2`)** the cumulative archival-length cell | `block_info`, beside `cumulative_tx_count` (`rust/shekyl-chain-store/src/codec/chain.rs`) | running total of archival length through each block, `checked_add` under SI-8 | consensus | **new** — the operand of every boundary above; `cumulative_tx_count` stays, because it feeds the fee ladder (CEN-F20) | — |
 | **new (`SHT-Q2`)** the txid mixer | Rust `mix` (`rust/shekyl-wire/src/transaction/txid.rs`) — **the one mixer**, reached from a parsed body (`Transaction::txid_parts`), from a skeleton with its components supplied (`hash_with_supplied_components`; the one-supplied `hash_with_supplied_prunable` was deleted with `SB-Q2`), and from a serialized body's byte ranges (`TxidSegments::txid`); C++ `calculate_transaction_hash` (`src/cryptonote_basic/cryptonote_format_utils.cpp`) **calls the last over FFI** (`shekyl_txid_from_segments`), its hashing deleted (row 3 = (b), RULED 2026-09-29 — the length term is never written in C++) | the transaction id | consensus | **new operand** — the archival length is folded in, so **every non-coinbase txid changes**; the coinbase's 3-part form is unchanged | — |
 
@@ -376,7 +376,7 @@ Not owed if `T` moves — that coupling was struck by `L2`'s ruling.
 
 ---
 
-## F. Atomic cutover boundaries (rule 07)
+## F. Atomic cutover boundaries (rule 107)
 
 Two groups, each landing as one ratified change, because each contains a
 consensus verdict that would otherwise disagree with itself mid-flight.
@@ -494,7 +494,7 @@ Rust holds the parsed transaction, it derives them and nothing is supplied.
 
 **`g(age)`'s segment-keyed no-segment branch is this cutover's (RULED 2026-10-01,
 `SHT-8`) — LANDED the same day, Rust-side.** It is a row of this census, owned by the
-design-owner lane; it is not part of the family-1 txid change, and it is not a rule-07
+design-owner lane; it is not part of the family-1 txid change, and it is not a rule-107
 cutover: the C++ side and every wire surface are unchanged, the Rust library's
 vocabulary moved from the segment pair to `ShardClose` (§C's `g(age)` row).
 `escalation_knee_n` stays the sim lane's (`SCC-Q2`).

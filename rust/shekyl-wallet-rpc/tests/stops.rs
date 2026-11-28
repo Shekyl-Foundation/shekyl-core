@@ -46,15 +46,11 @@ const IGNORED_HOLDS: Duration = Duration::from_secs(1);
 const IGNORED_LINE: &str = "shekyl-wallet-rpc: Ctrl-C is off because the program that started \
      shekyl-wallet-rpc asked for it. Stop it with SIGTERM or the service stop.";
 
-/// A temporary directory only this account can enter. The wallet RPC binds
-/// its socket only in such a directory, and tempfile makes its directories
-/// with the umask's default mode (0755 under umask 022).
-fn owner_only_tempdir() -> tempfile::TempDir {
-    use std::os::unix::fs::PermissionsExt;
-    tempfile::Builder::new()
-        .permissions(std::fs::Permissions::from_mode(0o700))
-        .tempdir()
-        .expect("an owner-only temporary directory")
+/// A directory only this account can enter, under its home. The wallet RPC
+/// binds its socket only in such a directory, and refuses a configuration
+/// file below a directory another account can write, as the system temp is.
+fn owner_only_tempdir() -> shekyl_os_account::test_fixture::FixtureDir {
+    shekyl_os_account::test_fixture::tempdir().expect("fixture")
 }
 
 /// A short socket name: a socket path must fit `sun_path` (104 bytes on
@@ -87,10 +83,10 @@ fn run_child_if_asked() -> bool {
         listen: ListenAddr::Uds(socket_in(&dir)),
         wallet_dir: wallets,
         network: Network::Stagenet,
-        daemon: shekyl_wallet_rpc::tenant::DaemonTarget::Address {
-            url: "http://127.0.0.1:1".into(),
-            proxy: None,
-        },
+        daemon: shekyl_wallet_rpc::tenant::DaemonTarget::fixture_with_proxy(
+            "http://127.0.0.1:1".into(),
+            None,
+        ),
         auth: AuthConfig::Disabled,
         kdf: shekyl_crypto_pq::wallet_envelope::KdfParams::default(),
         tor_file: shekyl_wallet_rpc::server::TorFile::discover(),
@@ -228,10 +224,14 @@ impl Server {
         let wallets = dir.join(format!("wallets-{name}"));
         std::fs::create_dir_all(&wallets).expect("the wallet directory");
         let stderr = dir.join(format!("stderr-{name}"));
+        let config = dir.join(format!("config-{name}.toml"));
+        shekyl_os_account::private_file::write_private(&config, b"").expect("the config file");
         let mut command = Command::new(env!("CARGO_BIN_EXE_shekyl-wallet-rpc"));
         command
-            .args(["--network", "stagenet", "--disable-rpc-login"])
-            .arg(format!("--rpc-bind=uds://{}", socket.display()))
+            .args(["--network", "stagenet", "--config-file"])
+            .arg(&config)
+            .arg("--rpc-socket-file")
+            .arg(socket)
             .arg("--wallet-dir")
             .arg(&wallets)
             .stdin(Stdio::null())

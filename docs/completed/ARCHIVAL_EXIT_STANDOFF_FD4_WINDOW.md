@@ -1073,7 +1073,7 @@ item 1.** Rule-21 shape:
 Until ratification: no `σ_L` spec, no lever-vs-queue arbitration, no seal preparation, no
 downstream status sweeps (Gate-6 §12.5–§12.8, `IMPLEMENTATION_INDEX.md`, `FOLLOWUPS.md`
 swan-2/W8, `RELEASE_CHECKLIST.md` — the ratification commit is the named carrier for all of
-them, rule-21/rule-94 shape). **DISCHARGED 2026-07-16: the ratification commit carried all
+them, rule-21/rule-194 shape). **DISCHARGED 2026-07-16: the ratification commit carried all
 four sweeps** (Gate-6 §12.5/§12.6/§12.8 + revision history + §11.8 method note 2; index rows
 95–98; FOLLOWUPS swan-2/W8 closed as posed; the checklist seal entry removed). What remains
 owed: the mechanism-deletion PR (item 1's reviewer-map) and the Gate-6 R4 answer to §15.5.

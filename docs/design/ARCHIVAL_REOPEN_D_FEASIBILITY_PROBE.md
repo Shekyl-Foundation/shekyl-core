@@ -29,7 +29,7 @@ branch waits on PD-E and the band.
 (`ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md` §12.6 coordination paragraph).
 **Family:** `PD-*` (probe design questions `PD-A`…`PD-F`; Round-0 review
 findings `PD-1`…`PD-3`; registered in `IMPLEMENTATION_INDEX.md` at birth per
-rule 94).
+rule 194).
 
 ---
 

@@ -21,7 +21,7 @@
 //!
 //! `#[ignore]`: it builds a store of `N` blocks first (`N` from
 //! `SHEKYL_WEIGHTS_BENCH_BLOCKS`, default 100 000 — the long-term window),
-//! which is not a unit test's budget. Rule 76: the figure that decides Q2
+//! which is not a unit test's budget. Rule 176: the figure that decides Q2
 //! is the **Pi 4 floor's**; a desktop run is the reference the floor
 //! multiplier is read against, and the plan says which it is recording.
 //!

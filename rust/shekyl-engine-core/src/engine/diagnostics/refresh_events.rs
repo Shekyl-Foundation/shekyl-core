@@ -124,6 +124,8 @@ pub enum DaemonOp {
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ProtocolErrorKind {
+    /// The channel failed while fetching a block.
+    Channel(shekyl_rpc_client::WalletChannelFault),
     /// Transport-level connection failure (e.g., dropped TCP,
     /// TLS handshake failure, DNS resolution failure).
     ConnectionError,

@@ -100,8 +100,8 @@ def check(candidate: str, source: str) -> list[str]:
 
 _SAMPLE = '''
 pub enum Staging {
-    /// `dev-clearnet-encrypt`.
-    ClearnetEncrypt,
+    /// `dev-sample-flag`.
+    SampleFlag,
     /// `dev-relay-cover`.
     RelayCover,
 }
@@ -109,7 +109,7 @@ pub enum Staging {
 impl Staging {
     pub const fn deadline(self) -> &'static str {
         match self {
-            Self::ClearnetEncrypt => "v3.1.0",
+            Self::SampleFlag => "v3.1.0",
             Self::RelayCover => "v3.2.0-beta.1",
         }
     }
@@ -123,7 +123,7 @@ def selftest() -> int:
     assert keys == sorted(keys) and len(set(keys)) == len(keys), "SemVer precedence"
     assert check("v3.1.0-rc.1", _SAMPLE) == [], "before every deadline"
     refused = check("v3.1.0", _SAMPLE)
-    assert len(refused) == 1 and "dev-clearnet-encrypt" in refused[0], refused
+    assert len(refused) == 1 and "dev-sample-flag" in refused[0], refused
     assert len(check("v3.2.0", _SAMPLE)) == 2, "past both"
     for broken in (
         _SAMPLE.replace('            Self::RelayCover => "v3.2.0-beta.1",\n', ""),

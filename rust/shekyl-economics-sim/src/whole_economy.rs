@@ -1115,6 +1115,10 @@ pub(crate) fn summary_json(summary: &Summary) -> String {
 #[path = "whole_economy_report.rs"]
 mod report;
 
+#[path = "whole_economy_lifecycle.rs"]
+mod lifecycle;
+pub(crate) use lifecycle::write_view as write_lifecycle_view;
+
 #[cfg(test)]
 #[path = "whole_economy_tests.rs"]
 mod tests;

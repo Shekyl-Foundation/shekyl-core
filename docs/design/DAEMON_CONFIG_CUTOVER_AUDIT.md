@@ -357,7 +357,7 @@ of its own, for the same reason as the negative one.
   `log-category` as every other diagnostic is. The C++ test binaries
   construct the remnant from a snapshot the real parse builds
   (`shekyl_daemon_snapshot_parse`, `shekyl_daemon_snapshot_free`, in
-  `shekyl-daemon`'s entry, rule 26 B2): `core_tests` links the daemon
+  `shekyl-daemon`'s entry, rule 126 B2): `core_tests` links the daemon
   image for it, as `unit_tests` does; `node_server.cpp`'s non-offline
   fixture records the relay's posture itself, as `levin.cpp`'s does, so
   it no longer depends on an earlier test having recorded one. The

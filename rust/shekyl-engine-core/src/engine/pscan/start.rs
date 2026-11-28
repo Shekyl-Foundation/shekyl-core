@@ -71,6 +71,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use shekyl_engine_state::PendingPostBlock;
+use shekyl_rpc_transport::DaemonTarget;
 
 use super::block_source::DaemonBlockSource;
 use super::cadence::FixedRateSchedule;
@@ -88,7 +89,7 @@ use crate::engine::transaction_submitter::{
 };
 use crate::engine::Engine;
 
-/// Default wall-clock interval between P-scan sweeps (rule 75: rationale + bounds).
+/// Default wall-clock interval between P-scan sweeps (rule 175: rationale + bounds).
 ///
 /// **Rationale.** The P-scan is a catch-up loop over *final* blocks — its sweep
 /// ceiling trails the tip by [`ARCHIVAL_REORG_DEPTH_BLOCKS`] (720 blocks ≈ 24 h at
@@ -534,19 +535,7 @@ where
     WalletFilePendingSealStore { engine }.load().await
 }
 
-/// The production [`BondBroadcast`]: routes every dispatch through the
-/// [`BroadcastSubmitter::local`] pre-bound ① construction (which is itself
-/// the `for_posture` posture→submitter choke point) and its
-/// [`submit_bound`](BroadcastSubmitter::submit_bound) pairing check.
-///
-/// **Posture is hardwired ① `Local`** — the privacy default (the loopback
-/// broadcast originates on the operator's own box; exactly what
-/// [`select_broadcast`](crate::engine::posture::select_broadcast) resolves for
-/// no-choice + reachable-local). The operator's *explicit* posture choice (an
-/// ② `OwnRemote` over `P`'s own circuit, with its per-persona circuit-bound
-/// submitter) plugs in here when the 2c config-source slice lands; the seam —
-/// per-dispatch construction from `(posture, persona)` — is already the ②
-/// shape, so that slice swaps the hardwired value, not this type.
+/// Dispatch a persisted bond transaction through this wallet's operator-owned daemon.
 struct LocalBondBroadcast<D> {
     daemon: Arc<D>,
 }
@@ -559,7 +548,7 @@ impl<D: DaemonEngine> BondBroadcast for LocalBondBroadcast<D> {
         let daemon = self.daemon.clone();
         async move {
             let persona = *handoff.persona();
-            BroadcastSubmitter::local(persona, daemon)
+            BroadcastSubmitter::for_wallet(persona, daemon)
                 .submit_bound(handoff)
                 .await
         }
@@ -606,13 +595,14 @@ where
     /// wiring failure.
     pub async fn start_pscan_if_staker(
         self_arc: Arc<RwLock<Self>>,
+        node: &DaemonTarget,
     ) -> Result<Option<PScanHandle>, PScanStartError> {
         if self_arc.read().await.stake_handle().is_none() {
             return Ok(None);
         }
         // Benign TOCTOU: the stake engine is set at open and never unset during a
         // session, so a re-check inside `start_pscan` can only agree.
-        Self::start_pscan(self_arc).await.map(Some)
+        Self::start_pscan(self_arc, node).await.map(Some)
     }
 
     /// Spawn the driving P-scan task at production settings and return a
@@ -635,8 +625,17 @@ where
     /// - [`PScanStartError::LoadFailed`] if a sealed state cannot be loaded.
     /// - [`PScanStartError::StateFileVersionUnsupported`] if the `.wallet.pscan`
     ///   seal's own schema word is not this build's.
-    pub async fn start_pscan(self_arc: Arc<RwLock<Self>>) -> Result<PScanHandle, PScanStartError> {
-        Self::start_pscan_with(self_arc, PScanConfig::production(), DEFAULT_PSCAN_CADENCE).await
+    pub async fn start_pscan(
+        self_arc: Arc<RwLock<Self>>,
+        node: &DaemonTarget,
+    ) -> Result<PScanHandle, PScanStartError> {
+        Self::start_pscan_with(
+            self_arc,
+            node,
+            PScanConfig::production(),
+            DEFAULT_PSCAN_CADENCE,
+        )
+        .await
     }
 
     /// Spawn the driving P-scan task with explicit `config` + `cadence` — the
@@ -677,11 +676,13 @@ where
     /// All per-sweep failures are recoverable and logged by the loop, not here.
     pub(crate) async fn start_pscan_with(
         self_arc: Arc<RwLock<Self>>,
+        node: &DaemonTarget,
         config: PScanConfig,
         cadence: Duration,
     ) -> Result<PScanHandle, PScanStartError> {
         Self::spawn_pscan(
             self_arc,
+            node,
             config,
             cadence,
             #[cfg(all(test, feature = "gf7-hooks"))]
@@ -706,10 +707,12 @@ where
     #[cfg(all(test, feature = "gf7-hooks"))]
     pub(crate) async fn start_pscan_sealing_run(
         self_arc: Arc<RwLock<Self>>,
+        node: &DaemonTarget,
         overrides: SealingRunOverrides,
     ) -> Result<PScanHandle, PScanStartError> {
         Self::spawn_pscan(
             self_arc,
+            node,
             PScanConfig::production(),
             DEFAULT_PSCAN_CADENCE,
             Some(overrides),
@@ -723,6 +726,7 @@ where
     /// requirement) rather than a parallel copy that could drift.
     async fn spawn_pscan(
         self_arc: Arc<RwLock<Self>>,
+        node: &DaemonTarget,
         config: PScanConfig,
         cadence: Duration,
         #[cfg(all(test, feature = "gf7-hooks"))] sealing: Option<SealingRunOverrides>,
@@ -827,7 +831,13 @@ where
             ),
         }
 
-        let dispatch_config = DispatchConfig::production(cadence);
+        // The driver's anchor depth is the scan's own horizon (BD-Q2: a
+        // funding output is sweepable once the sealed scan covers its block),
+        // so the two read one number.
+        let dispatch_config = DispatchConfig {
+            reorg_depth: config.reorg_depth,
+            ..DispatchConfig::production(cadence)
+        };
         // Sealing-run injection (§19.8.1): split the overrides into the config
         // (positive control only) and the recording observer. `None` — every
         // production start and every graded sealing row — leaves both exactly
@@ -841,7 +851,14 @@ where
             None => (dispatch_config, None),
         };
 
-        let dispatch = DispatchDriver::new(pending_seal, broadcast, dispatch_config, pending_gate);
+        let signer = crate::engine::bond_due::LocalBondSigner::new(self_arc.clone(), node.clone());
+        let dispatch = DispatchDriver::new(
+            pending_seal,
+            broadcast,
+            signer,
+            dispatch_config,
+            pending_gate,
+        );
         #[cfg(all(test, feature = "gf7-hooks"))]
         let dispatch = match sealing_observer {
             Some(observer) => {

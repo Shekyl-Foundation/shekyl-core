@@ -23,9 +23,11 @@ fuzz_target!(|data: &[u8]| {
 
 fn message2(network: &[u8; 16]) -> Option<(Initiator, Vec<u8>)> {
     let (initiator, message1) = Initiator::new(network).ok()?;
-    let ready = Responder::new(network).read_message1(&message1).ok()?;
+    let ready = Responder::new(network)
+        .read_message1(message1.message())
+        .ok()?;
     let (_responder, message2) = ready.write_message2().ok()?;
-    Some((initiator, message2))
+    Some((initiator, message2.message().to_vec()))
 }
 
 fn mutate(message2: &mut Vec<u8>, data: &[u8]) {

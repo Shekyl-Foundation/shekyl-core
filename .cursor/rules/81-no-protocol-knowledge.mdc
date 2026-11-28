@@ -3,7 +3,10 @@ description: Users should never need to understand cryptographic protocols to us
 globs:
   - rust/shekyl-cli/**
   - rust/shekyl-wallet*/**
+  - src/**
   - src-tauri/src/**
+scope: estate
+repos: [core, gui]
 ---
 
 # No Protocol Knowledge Required

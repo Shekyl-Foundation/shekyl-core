@@ -10,7 +10,7 @@
 //! returns its reply **unbroadcast** (CB-3: the builder never self-schedules).
 //! This module is the other half of that routing: one explicit drain intent in
 //! (a slot, a [`DrainIntent`], a fee snapshot), one assembled drain dispatched through the
-//! audited posture→submitter choke point ([`BroadcastSubmitter::local`] →
+//! audited posture→submitter choke point ([`BroadcastSubmitter::for_wallet`] →
 //! [`submit_bound`]) out. Scheduling policy — when a drain fires, how it is
 //! split, over what cadence — stays external (the GUI drain flow, §12.4); this
 //! method fires once per caller intent, never on a loop of its own.
@@ -165,6 +165,10 @@ pub(crate) enum DrainRequestError {
         /// The transport's own rendering of the failure.
         detail: String,
     },
+    /// The node named its own remedy: a channel fault, a peer check, or a
+    /// service at this computer. Not the retry-as-unreachable arm.
+    #[error("{0}")]
+    Target(shekyl_rpc_client::DaemonFault),
     /// A live pending drain already exists for this persona. One live drain
     /// per persona: the live record IS the in-flight input reservation — a
     /// second drain would race for the same swept inputs. Wait for the pending
@@ -227,6 +231,14 @@ impl DrainRequestError {
         Self::DaemonUnreachable {
             context,
             detail: detail.to_string(),
+        }
+    }
+
+    /// A tip read. A fault that names its own remedy stays that fault.
+    fn from_tip(error: crate::engine::pscan::block_source::BlockSourceError) -> Self {
+        match error.own_remedy() {
+            Some(fault) => Self::Target(fault),
+            None => Self::daemon_unreachable("dispatch tip", error),
         }
     }
 }
@@ -342,19 +354,17 @@ where
             .as_ref()
             .map(|s| s.funding_outputs())
             .unwrap_or(&[]);
-        // Exempt from the exit-fee reserve once the persona's terminal `Release`
-        // has confirmed — i.e. it lives in `pending_releases`, the authoritative
-        // "no future Release is owed" signal. `retired_records()` is the WRONG
-        // source here: retirement is funded-gated (`retire_persona` only writes
-        // a retired record once the slot holds no funding), so a just-released
-        // persona is absent from it throughout the very drain-all that would
-        // empty the slot. Reading it would keep the reserve pinned on an
-        // released persona, refusing the sweep to zero (`ReserveBreached`) and
-        // deadlocking the funded-gated retirement — the pool can never fully
-        // drain, so the persona can never retire (DS-4 post-retirement sweep).
-        let retired = pscan_state
-            .as_ref()
-            .is_some_and(|s| s.pending_releases().contains_key(&p_canonical_id));
+        // Exempt from the exit-fee reserve once the persona owes no exit: its
+        // terminal `Release` has confirmed (it lives in `pending_releases`,
+        // the authoritative "no future Release is owed" signal), or its
+        // planned stake ended without a bond (it never bonded). `retired_records()`
+        // is the WRONG source here: retirement is funded-gated (`retire_persona`
+        // only writes a retired record once the slot holds no funding), so a
+        // just-released persona is absent from it throughout the very drain-all
+        // that would empty the slot. Reading it would keep the reserve pinned,
+        // refusing the sweep to zero (`ReserveBreached`) and deadlocking the
+        // funded-gated retirement (DS-4 post-retirement sweep).
+        let retired = basis.owes_no_exit(&p_canonical_id);
         let snapshot_generation = basis.generation();
         let reserved = basis.reserved();
 
@@ -417,7 +427,7 @@ where
         // stamps (WI-3 R2-1).
         let dispatch_tip = daemon_claimed_tip(&daemon)
             .await
-            .map_err(|e| DrainRequestError::daemon_unreachable("dispatch tip", e))?;
+            .map_err(DrainRequestError::from_tip)?;
         let persona = *assembled.bound_tx.persona();
         let sealed = PendingDrain {
             persona,
@@ -484,7 +494,7 @@ where
         // with its reservation (BD-Q3 Rule 2): the daemon holds valid bytes,
         // so only the record's end date ends it, and the cause names the
         // outcome there.
-        let submitter = BroadcastSubmitter::local(persona, Arc::new(daemon));
+        let submitter = BroadcastSubmitter::for_wallet(persona, Arc::new(daemon));
         let sent = submitter
             .submit_bound(super::transaction_submitter::BoundForSend::Fresh(
                 assembled.bound_tx.clone(),
@@ -524,7 +534,7 @@ mod tests {
     ///    (`orchestrate_drain`) — never a direct actor `assemble_drain` ask
     ///    that would skip the orchestrator's anchor/scope/reserve/path stages;
     /// 2. dispatch rides ONLY the audited persona-transport choke point (the
-    ///    pre-bound `BroadcastSubmitter::local` construction + `submit_bound`)
+    ///    pre-bound `BroadcastSubmitter::for_wallet` construction + `submit_bound`)
     ///    — never a bare submitter and never a default `DaemonClient` (T-DS-2);
     /// 3. persist-before-dispatch: the pending-drain seal (`seal_drain`)
     ///    textually precedes the network send.
@@ -557,7 +567,7 @@ mod tests {
             "the seam must not ask the actor directly (the pipeline owns anchor/reserve/paths)"
         );
 
-        let choke_construct = "BroadcastSubmitter::local(";
+        let choke_construct = "BroadcastSubmitter::for_wallet(";
         assert!(
             code.contains(choke_construct),
             "submitter construction must stay on the audited choke point"

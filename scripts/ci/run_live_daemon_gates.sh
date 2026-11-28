@@ -54,13 +54,13 @@
 #           consensus gates.
 #   acceptance — ACCEPTANCE, run by hand on a quiet fleet VM under a
 #           USAGE.md claim (Rick, 2026-11-14): the emission walk over Tor,
-#           about six hours, on the public Tor network with the pinned
+#           about thirteen hours, on the public Tor network with the pinned
 #           managed Tor. It WAITS on a healthy public onion network: run it
 #           when the Tor lane reports the network healthy, and rerun a
-#           failure on propagation (docs/FOLLOWUPS.md, the emission walk).
-#           Then it runs before each release cut and whenever the recapture
-#           check says the emission-claim vector is stale. Per PR its
-#           coverage is the vector's replay in the Rust job. Needs
+#           failure on propagation. Then it runs before each release cut.
+#           It has no per-PR coverage: its capture is a run record, never a
+#           committed corpus (CHAIN_FORGE.md CF-R6), and the corpus role
+#           passes to Chain L. Needs
 #           SHEKYL_TEST_TOR_BINARY, the pinned bundle's tor
 #           (scripts/release/tor_bundle.py stage).
 # Every lane name-checks ALL lists, so a rename is caught in every run.
@@ -301,12 +301,9 @@ ARMED=(
 # Consensus gates too heavy for the per-PR lane (depth-3 spend, 13 min
 # measured 2026-09-08; the two slice-7 gates ~5 min each in a debug build,
 # fifty spends apiece). The nightly live-daemon workflow runs these with
-# GATE_LANE=slow. The four bonded walks joined on 2026-10-29, when the Rust
-# daemon first admitted a kind-5 JoinMarket (the DRS-X flip), each
+# GATE_LANE=slow. The three bonded walks joined on 2026-10-29, when the
+# Rust daemon first admitted a kind-5 JoinMarket (the DRS-X flip), each
 # observed green on that daemon before it moved here:
-#   e2e_staker_bond_post_accepted_and_applied — the production stake entry
-#     (a complete-tree bond: mine + fund + discover + stake + submit +
-#     confirm), 264 s.
 #   e2e_drain_wire_shape_matches_a_real_transfer — the drain wire shape
 #     over a complete-tree bond, 165 s.
 #   The two market-bond walks stake a compact join onto shard 0, which
@@ -325,14 +322,35 @@ ARMED=(
 #     e2e_release_accepted_and_connected — 1 385 s (SEB 32, cap 8).
 #     e2e_unstake_collect_retire_composed_arc — 1 348 s (SEB 8, cap 2;
 #       the 248-block claim window included).
+# The two plan walks (BD-Q3, how a plan ends, ruled 2026-11-26) run the
+# production dispatch driver against the wallet's own node, local debug
+# build, 2026-11-27:
+#   e2e_a_plan_signed_at_its_due_block_lands_at_reference_age_six — the
+#     bond-post delay round's falsifier: the production stake entry, the
+#     driver signs at the due block, the first send carries reference age
+#     6 and comes within 8 blocks of the latest the due can be (the
+#     request plus the draw), and the bond lands, its swept funding pruned
+#     and its change found again. It mines toward the plan's real draw
+#     (0–600 blocks at the box's block pace) and stops at that bound so the
+#     driver can prove, so its time moves with the draw. The draw is
+#     logged; SHEKYL_TEST_REPLAY_PLAN_DRAW replays one. Green at the
+#     replayed draw 20 in 392 s (2026-11-28). Red with
+#     `select_reference_height` one block older: the first send carried
+#     age 7. Red before 4b6d7370b6 (mining every round): first sent at
+#     count 450, due by 118.
+#   e2e_a_withdrawn_plan_is_drained_to_the_principal_and_retired — a
+#     withdrawn plan, a reopen between its ending's save and the drain,
+#     one drain to the principal, the persona retired: green 358 s. Red
+#     with `drain_ended_persona` returning before it sends: no drain.
 ARMED_SLOW=(
   engine::regtest_e2e::e2e_fcmp_spend_over_depth3_tree
   engine::regtest_e2e::e2e_cxx_template_fills_to_its_median
   engine::regtest_e2e::e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx
-  engine::regtest_e2e::e2e_staker_bond_post_accepted_and_applied
   engine::regtest_e2e::e2e_drain_wire_shape_matches_a_real_transfer
   engine::regtest_e2e::e2e_release_accepted_and_connected
   engine::regtest_e2e::e2e_unstake_collect_retire_composed_arc
+  engine::regtest_e2e::e2e_a_plan_signed_at_its_due_block_lands_at_reference_age_six
+  engine::regtest_e2e::e2e_a_withdrawn_plan_is_drained_to_the_principal_and_retired
   # Observed red 2026-10-30 (the handed-over span removed from the queue
   # before the door connected it): the joiner stood at one height with the
   # door reporting no room, as the F-B subjects did at 724 of 762.
@@ -440,11 +458,12 @@ DECIDED_DARK=(
 # The acceptance lane's walks: over live Tor, hours long, run by hand (the
 # lane note above).
 #   e2e_emission_claim_accepted_and_applied — the emission walk (SO-D12 4b):
-#     three daemons on the pinned managed Tor, the persona's wallet serving
-#     its shard on an onion, the mining daemon's producer reading it, the
-#     served epoch's bundles admitted and settled, the claim accepted and
-#     paid. Its green run captures the emission-claim vector. Prior reds:
-#     sabotage 2026-09-08 (was ARMED_SLOW).
+#     five daemons on the pinned managed Tor, each connected to the others,
+#     the persona's wallet serving its shard on an onion, the mining
+#     daemon's producer reading it, the served epoch's bundles admitted and
+#     settled, the claim accepted and paid, and the reward re-discovered by
+#     the wallet's P-scan.
+#     Prior reds: sabotage 2026-09-08 (was ARMED_SLOW).
 ACCEPTANCE=(
   engine::regtest_e2e::e2e_emission_claim_accepted_and_applied
 )
@@ -660,6 +679,13 @@ fi
 #       a_flood_of_notifications_is_read_one_at_a_time_without_growing_memory
 #         — the permit made unlimited and each 2002 kept: "resident set
 #         grew 25040 KiB under a 33554493-byte flood".
+#       the_download_cap_paces_and_counts_the_bytes_on_the_wire — observed
+#         red 2026-11-27 against a daemon whose download budget refunds the
+#         Noise channel's overhead after decoding (it charges plaintext):
+#         the download count never reached the peer's wire bytes. The
+#         honest daemon, three runs: 655,429 wire bytes (425,691 plaintext)
+#         in 9.03 to 9.07 s at 64KiB/s against an 8.1 s wire floor, and the
+#         node's totals equal to the peer's wire bytes after the close.
 #     The first run against the honest daemon was red too: every clearnet
 #     admission on a Tor-off node ended as the node's own failure, because
 #     the pump that hands admissions to the session layer ended when the
@@ -676,6 +702,7 @@ ARMED_LEVIN=(
   session_black_box:transactions_are_ignored_while_unsynchronised_and_judged_once_synced
   session_black_box:the_txpool_complement_is_served
   session_black_box:a_flood_of_notifications_is_read_one_at_a_time_without_growing_memory
+  session_black_box:the_download_cap_paces_and_counts_the_bytes_on_the_wire
 )
 
 for entry in "${ARMED_LEVIN[@]}"; do

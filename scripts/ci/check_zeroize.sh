@@ -29,7 +29,7 @@
 # two produce byte-for-byte identical postcard output, so the
 # snapshot is blind to this gap. This script closes it.
 #
-# Policy is codified in `.cursor/rules/42-serialization-policy.mdc`
+# Policy is codified in `.cursor/rules/142-serialization-policy.mdc`
 # and documented in §3.5. Exit code 0 = clean; non-zero = either a
 # missing allowlist entry (someone added an unwrapped field) or a
 # stale allowlist entry (someone removed a field without also
@@ -160,7 +160,7 @@ UNWRAPPED_HITS=$(
 #
 # The allowlist enumerates every deliberate public-bytes field as
 # `<relative-path>|<normalized field-decl>` (see §3.5 and the policy
-# rule 42-serialization-policy.mdc for the entry format). Stripping
+# rule 142-serialization-policy.mdc for the entry format). Stripping
 # comments and blank lines gives us the active set.
 ACTIVE_ALLOW=$(
   grep -Ev '^[ \t]*(#|$)' "${ALLOWLIST}" | sed 's/[ \t]*$//' || true
@@ -196,7 +196,7 @@ if [ -n "${MISSING}" ]; then
   echo "block hash, tx hash, key image, mirror-struct schema, runtime"
   echo "index, etc.)."
   echo
-  echo "Policy: .cursor/rules/42-serialization-policy.mdc"
+  echo "Policy: .cursor/rules/142-serialization-policy.mdc"
   echo "        docs/MID_REWIRE_HARDENING.md §3.5"
 fi
 

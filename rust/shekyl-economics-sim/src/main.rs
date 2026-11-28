@@ -198,10 +198,20 @@ fn main() {
         .into_iter()
         .find(|i| std::env::args().any(|a| a == i.flag()));
     let jg = std::env::args().any(|a| a == "--jg-grid");
-    if !params.overrides().is_empty() && !stage2 && !esr10 && instrument.is_none() && !jg {
+    // §5.38: the slice takes a cell, printed beside the slice at
+    // production's values. The full table does not: its committed table is
+    // the production arm.
+    let economies_slice = std::env::args().any(|a| a == "--economies-slice");
+    if !params.overrides().is_empty()
+        && !stage2
+        && !esr10
+        && instrument.is_none()
+        && !jg
+        && !economies_slice
+    {
         refuse(
-            "overrides are read by --stage2, --esr10 and each instrument's own mode only: each \
-             prints a cell beside its baseline",
+            "overrides are read by --stage2, --esr10, --economies-slice and each instrument's own \
+             mode only: each prints a cell beside its baseline",
         );
     }
     // §5.36: the growth under standard traffic, traced. It names its own
@@ -217,9 +227,8 @@ fn main() {
     }
     // §5.37: the three economies graded whole. It names its own cells
     // (every economy, rule, scenario, zone and seed), so it takes no other
-    // mode, no control flag and no spread. With no sweep mode beside it,
-    // the check above has refused any override.
-    let economies_slice = argv.iter().any(|arg| arg == "--economies-slice");
+    // mode, no control flag and no spread. The check above has refused an
+    // override on the full table; the slice's is checked against its reach.
     if economies_slice || argv.iter().any(|arg| arg == "--economies") {
         let mode = if economies_slice {
             "--economies-slice"
@@ -239,9 +248,40 @@ fn main() {
         } else {
             whole_economy::Scope::Full
         };
-        let summary = whole_economy::run(&mut narration, &SimParams::default(), scope)
-            .expect("String sink is infallible");
-        eprint!("{narration}");
+        if !params.overrides().is_empty() {
+            let (mode, reads) = baseline::economies_slice_reach();
+            if let Err(e) =
+                baseline::check_reach(params.overrides(), params.baseline(), mode, reads)
+            {
+                refuse(&e.to_string());
+            }
+        }
+        let summary =
+            whole_economy::run(&mut narration, &params, scope).expect("String sink is infallible");
+        if params.overrides().is_empty() {
+            eprint!("{narration}");
+        } else {
+            // §5.38: the cell beside the slice at production's values, then
+            // the lifecycle view and the slice's table, both arms. The
+            // cell's summary alone goes to stdout; nothing is regenerated.
+            let mut baseline_narration = String::new();
+            let production =
+                whole_economy::run(&mut baseline_narration, &SimParams::default(), scope)
+                    .expect("String sink is infallible");
+            if let Some(reason) =
+                baseline::unmoved_cell_refusal(&narration, &baseline_narration, "--economies-slice")
+            {
+                refuse(&reason);
+            }
+            eprint!(
+                "{}",
+                baseline::beside_baseline(&narration, &baseline_narration)
+            );
+            let mut view = String::new();
+            whole_economy::write_lifecycle_view(&mut view, &summary, &production, &params)
+                .expect("String sink is infallible");
+            eprint!("{view}");
+        }
         // The summary's canonical bytes and nothing after them: the recorded
         // SHA-256 covers exactly these, so a redirected run reads back.
         std::io::stdout()

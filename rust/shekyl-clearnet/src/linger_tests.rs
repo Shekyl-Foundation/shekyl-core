@@ -20,7 +20,7 @@ use shekyl_transport_layer::{CloseKind, Sockets};
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 
-use super::super::{ChannelChoice, ClearnetOption};
+use super::super::ChannelChoice;
 
 /// A gate refusing every inbound from one host after its first, whose
 /// connector admits `burst` at once and one more every `every`: the linger
@@ -82,7 +82,6 @@ fn a_flight_written_after_the_refusal_ends_with_fin_not_rst() {
     let (engine, listener, seen) = super::start_on(
         refusing_gate(100_000_000, 4),
         super::ID,
-        ClearnetOption::On,
         Tick::new(5_000_000_000),
         InboundCeiling::Bounded(4),
     );
@@ -112,7 +111,6 @@ fn refusals_past_the_linger_cap_close_at_once() {
     let (engine, listener, seen) = super::start_on(
         refusing_gate(5_000_000_000, 1),
         super::ID,
-        ClearnetOption::On,
         Tick::new(5_000_000_000),
         InboundCeiling::Bounded(8),
     );
@@ -166,7 +164,7 @@ fn two_listeners_share_the_linger_cap() {
         let make_inbound = || super::super::Inbound {
             sockets: sockets_for_loops.clone(),
             ceiling: || InboundCeiling::Bounded(8),
-            kind: ChannelChoice::Plain,
+            kind: ChannelChoice::Native,
             network_id: super::ID,
             handshake_within: span,
             gap_within: None,
@@ -236,7 +234,6 @@ fn idle_refusals_close_at_the_span_and_free_their_slots() {
     let (engine, listener, seen) = super::start_on(
         refusing_gate(300_000_000, 1),
         super::ID,
-        ClearnetOption::On,
         Tick::new(300_000_000),
         InboundCeiling::Bounded(8),
     );

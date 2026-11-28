@@ -52,17 +52,20 @@ impl Drop for Flight {
 impl Drive {
     /// Dial this node's own onion with a fresh probe nonce (§4.5). The
     /// managed route and the onion are read now (`TSR-F10`). The nonce
-    /// stays on this driver until [`Self::cancel_probe`].
-    pub(super) fn probe(&mut self) -> Input {
+    /// stays on this driver until [`Self::cancel_probe`]. A supervisor that
+    /// runs no Tor returns before that cancel.
+    pub(super) fn probe(&mut self) -> Result<Input, super::SupervisorEnd> {
+        let isolation =
+            std::sync::Arc::clone(self.boot_for(super::TorAsk::Probe)?.probe_pair.shared());
         self.cancel_probe();
         let Some(service) = self.service.clone() else {
-            return Input::ProbeNotDialed;
+            return Ok(Input::ProbeNotDialed);
         };
-        let Some(proxy) = self.network.managed_route(self.probe_pair.shared()) else {
-            return Input::ProbeNotDialed;
+        let Some(proxy) = self.network.managed_route(&isolation) else {
+            return Ok(Input::ProbeNotDialed);
         };
         let Some(mut handshake) = self.network.mint_probe() else {
-            return Input::ProbeNotDialed;
+            return Ok(Input::ProbeNotDialed);
         };
         let minted_at = handshake.minted_at.get();
         let request = std::mem::take(&mut handshake.request);
@@ -93,7 +96,7 @@ impl Drive {
             task,
         });
         tracing::info!(target: "tor", "probing this node's onion");
-        Input::ProbeDialed { minted_at }
+        Ok(Input::ProbeDialed { minted_at })
     }
 
     /// End the probe in flight. Its [`Flight`] removes the nonce on this
@@ -219,6 +222,8 @@ fn link_inbound(inbound: Inbound) -> shekyl_p2p::InboundFacet {
                 InboundCause::ClockBehind { .. } => LinkCause::ClockBehind,
                 InboundCause::DescriptorNotFound => LinkCause::DescriptorNotFound,
                 InboundCause::PublishedElsewhere => LinkCause::PublishedElsewhere,
+                InboundCause::GuardsRefused => LinkCause::GuardsRefused,
+                InboundCause::GuardsUnfilled => LinkCause::GuardsUnfilled,
             },
             since: Tick::new(since),
         },

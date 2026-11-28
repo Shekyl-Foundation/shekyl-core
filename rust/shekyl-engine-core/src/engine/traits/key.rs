@@ -224,7 +224,22 @@ pub(crate) struct OutputDetectionInput {
 /// when a cancelled `ask` discards the un-taken reply.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
-#[allow(dead_code)] // M3a Commit 4 introduces the implementor; consumers land in M3c+.
+// Code in flight, and a different gate from `KeyEngine` on purpose.
+// Tests read `Mine`'s payload. The key-dispatch bench constructs this
+// reply and matches `Mine(_)`, which on a `pub(crate)` enum does not
+// read tuple field 0, so `dead_code` still fires there and this
+// expectation stays fulfilled. `KeyEngine` is called by that bench, so
+// its expectation is off under `bench-internals`. A caller that reads
+// the payload makes this expectation unfulfilled.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "docs/FOLLOWUPS.md row \"The claim reroute through the key owner has no \
+                  production caller\": the ownership round's prepared-scan-batches package \
+                  wires try_claim_output in, or deletes it"
+    )
+)]
 pub(crate) enum OutputClaimResult {
     Mine(OutputClaim),
     NotMine,
@@ -677,8 +692,15 @@ pub(crate) struct TxInputSignature {
 /// accrete from the implementor's actual failure modes during M3a
 /// Commit 4's `LocalKeys` work. The bound is the named landing pad
 /// for additive variants per §8.2.
-#[allow(dead_code)] // M3a Commit 4 introduces the implementor; pre-impl trait surface is
-                    // referenced via doc-tests only at this commit.
+#[cfg_attr(
+    not(any(test, feature = "bench-internals")),
+    expect(
+        dead_code,
+        reason = "docs/FOLLOWUPS.md row \"The claim reroute through the key owner has no \
+                  production caller\": the ownership round's prepared-scan-batches package \
+                  wires try_claim_output in, or deletes it"
+    )
+)]
 pub(crate) trait KeyEngine: Send + Sync + 'static {
     /// Implementor-specific error. Convertible into
     /// [`KeyEngineError`] so [`Engine<S>`](super::super::Engine)

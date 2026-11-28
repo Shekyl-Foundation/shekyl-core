@@ -518,7 +518,7 @@ and its whole validation path — `check_archival_serve_credit_input`
 but it is a wider mechanical edit than Half A.
 
 **The sequencing is three steps, not two, and the middle is the safety margin
-(`07-consensus-atomic-cutovers`).** You cannot delete the old vin (B) until the
+(`107-consensus-atomic-cutovers`).** You cannot delete the old vin (B) until the
 new writer (A) is live — until settlement writes the bit, the vin is the only
 thing that does, and a block between "vin deleted" and "first settlement" strands
 every archiver at zero credit. But you also cannot turn the new writer on cleanly
@@ -557,7 +557,7 @@ epoch's settlement**, compared against the actual `m_archival_serve_credit` tabl
 was to supersede `serve_credit_equivalence_kat_v1.json`, which pinned the old
 path; that fixture and its mirror were deleted ahead of it, 2026-10-02, DRS-E4
 commit 10d — there is nothing to supersede, and nothing for the successor to
-inherit from.) **Correction (2026-08-04): `42-serialization-policy` and its
+inherit from.) **Correction (2026-08-04): `142-serialization-policy` and its
 `schema-snapshot.yml` CI cover only `rust/shekyl-engine-state/**` wallet-state
 blocks — NOT the C++ consensus `block` wire or the LMDB store `VERSION`
 (`db_lmdb.cpp:103`). This surface has no automatic version-bump gate.** So the

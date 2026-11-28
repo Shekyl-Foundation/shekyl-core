@@ -4472,6 +4472,18 @@ payload_version)`. The pipeline bytes themselves remain frozen as of
 the 2026-06-10 entry; the landed items harden enforcement, not
 definition.
 
+**The operator surface moved (Rick, 2026-11-23).** `shekyl-cli
+derivation-freeze-self-check` is deleted. `wallet create`, `wallet restore`
+and every wallet open now call `address_derivation_manifest_self_check()`
+before any derivation and refuse on failure, naming the binary's platform
+(`-29018 DERIVATION_SELF_CHECK_FAILED`). The ruling set one condition on the
+open path, a cost under about 50 ms on the floor device. Measured on a
+4 GB Raspberry Pi 4 (Cortex-A72, no SHA-2 instructions; a 77,007-byte
+corpus; release build, rustc 1.94.0): 0.619 ms median over repeated calls
+(p99 at most 0.706 ms, maximum 0.883 ms), 0.774 ms median for the first call
+in a fresh process (maximum 0.966 ms), and 1.390 ms median with the page
+cache dropped (maximum 1.538 ms).
+
 **Reference.** `rust/shekyl-crypto-pq/src/account.rs` module docstring
 (authoritative diagram); `docs/WALLET_FILE_FORMAT_V1.md`;
 `docs/design/WALLET_REWRITE_PLAN.md` §"Key signature";
@@ -4641,7 +4653,7 @@ external-review-scoped"; *`shekyl-*` crate* = "ours, no upstream."
 - **MOVED-OUT → first-party** (relocate, PR #188 / dissolve, PR #189), renamed to
   role-honest names: `io → shekyl-curve-io`, `generators → shekyl-curve-generators`,
   `primitives → shekyl-curve-primitives` (kept distinct from `shekyl-types` — these
-  are transform-shaped, rule 18), `fcmp/bulletproofs → shekyl-bulletproofs` (name
+  are transform-shaped, rule 118), `fcmp/bulletproofs → shekyl-bulletproofs` (name
   kept; Q6 path label updated), `fcmp/fcmp++ → shekyl-fcmp-proofs`, `rpc →
   shekyl-rpc-client`, `rpc/simple-request → shekyl-rpc-transport`. The main crate
   **dissolved**: `Timelock → shekyl-types` (block-height-only — the CryptoNote `Time`
@@ -4915,7 +4927,7 @@ serialization, and is never placed on the wire or shared cross-node — verified
 the call graph before minting. Its only consumers compare two ids derived by the
 **same** code version within one wallet process. Nothing persisted or transmitted
 ever compares a pre- to a post-change id, so this is a **fresh mint, not a
-re-spelling**. No persisted-state change ⇒ no rule-42 (serialization-schema) bump.
+re-spelling**. No persisted-state change ⇒ no rule-142 (serialization-schema) bump.
 
 **Reference.** SA-3c (PR in flight, `feat/sa3c-snapshot-id-cshake`);
 `SIGNATURE_ALIGNMENT.md` §5 (the through-line rule) and §3 table;
@@ -5442,7 +5454,7 @@ present iff `post_kind == JoinMarket` and **mandatory** there (a bond
 without an endpoint was the discovery gap), immutable for the record's life.
 Ruled by Rick (`docs/design/ARCHIVAL_ENDPOINT_UPDATE.md` `EU-D3`,
 2026-09-11; narrowed to JoinMarket-only by the 2026-09-13 entry below);
-landed under `07-consensus-atomic-cutovers.mdc` as PR #724 (`f103acd38`,
+landed under `107-consensus-atomic-cutovers.mdc` as PR #724 (`f103acd38`,
 2026-09-13).
 
 **What moves.** Every serialized JoinMarket vin gains 32 bytes after
@@ -5872,7 +5884,7 @@ fingerprint; short of that, the rejection is not revisited on latency grounds.
   local `R_k` is the skeleton the **daemon's** store keeps after discarding
   leaves. Four objects must agree across that boundary, and they are not one
   kind of thing. (1) **Leaf bytes** (128 B = 4 Selene scalars): already
-  consensus — the hash preimage, PL-D3 frozen, rule-42 pinned, `LEAF_BYTES`
+  consensus — the hash preimage, PL-D3 frozen, rule-142 pinned, `LEAF_BYTES`
   derived from `SCALARS_PER_LEAF` with a const-assert (`segment.rs:36`);
   nothing to share. (2) **The segment partition** — `SEGMENT_LAYER_J = 2`,
   `outputs_per_node(j)`, `SegmentId` numbering (`segment.rs:18,:42,:48`) —
@@ -6328,7 +6340,7 @@ same date, on review of #992 and #993).** `SCS-P1`–`P12`, specification
 5. **A record keeps its input tag and `j`** (`SCS-P5`). The pair is
    derived from `(seed, h, j)`; `h` rides the carrier beside the seed;
    the witness key and signature are the carrier's prunable part. One
-   rule-42 bump covers record and carrier.
+   rule-142 bump covers record and carrier.
 6. **The set commitment covers the seed and `h`** (`SCS-P6`), with a
    fifth vector.
 7. **No bound on `anchor_height` at admission** (`SCS-P7`). A lower bound
@@ -6564,7 +6576,7 @@ that horizon.
   A slash missed below one half observed is accepted: the network has
   larger problems than one free rider at that point.
 - **Why now.** Adding the bound when pruning lands would be a consensus
-  change at that point (rule 07). In the rule from the first commit, the
+  change at that point (rule 107). In the rule from the first commit, the
   prune is not one.
 
 **Cost recorded.** A pair with ten misses, more than a retention window of
@@ -6604,7 +6616,7 @@ in [`ARCHIVAL_CHALLENGE_MECHANISM.md`](design/ARCHIVAL_CHALLENGE_MECHANISM.md)
 4. **Uniform, with no knob.** Priority shows only under contention, and
    timing already reveals load; if every `P` runs the same default the
    setting tells an observer nothing, and an opt-out would create a
-   population that behaves differently. Unconditional, under rule 75.
+   population that behaves differently. Unconditional, under rule 175.
 5. **Failure is a warning and a counter, never a refusal to serve.** A
    thread whose priority could not be lowered serves at normal priority.
    The host counts the threads still in that state — a thread that has
@@ -7580,7 +7592,7 @@ torn write).
 - **No migration and no compatibility code.** A pair an earlier build left
   beside a wallet is not read, moved or deleted.
 - `WALLET_PREFS.md` is retired to `docs/completed/`; what still holds is
-  restated in `WALLET_SETTINGS.md`, and rule 42's placement order loses the
+  restated in `WALLET_SETTINGS.md`, and rule 142's placement order loses the
   advisory tier.
 
 **Why.** Fixing the torn write (the body and its HMAC were two replaces,
@@ -7594,4 +7606,48 @@ pattern, while deterministic selection gives every wallet the same shapes.
 
 **Reopens.** The coin-selection knobs, only on a named user job the
 wallet's own selection does not cover. A per-wallet setting, only as
-sealed state (rule 42), never as an advisory file.
+sealed state (rule 142), never as an advisory file.
+
+## 2026-11-26 — A stake is signed at its due block; how a plan ends
+
+**Decision** (Rick, 2026-10-16 for BD-Q1–Q3 and BD-Q5; 2026-11-26 for how a
+plan ends; `ARCHIVAL_BOND_POST_DELAY.md` §3, §3.6).
+
+- **The request plans; the due block signs.** The stake request reserves the
+  persona's funding, draws the delay once and seals a plan with no bytes.
+  The delay is measured from the first block the funding can be bonded
+  (BD-Q2). At the due block the dispatch driver has the engine fill,
+  quote, sign at the canonical reference and seal, and sends in the same
+  tick, so the first send carries reference age 6.
+- **A persona sees one funding and one drain.** A plan that ends without a
+  bond ends its persona: its funding is drained to the principal, its slot is
+  retired and never reused, and staking again is a new persona with a new
+  funding and a new draw.
+- **Endings:** signed and sent (the end date ends it); spent elsewhere; withdrawn
+  by the owner before it is signed; shards that can no longer be bonded; the
+  maximum wait from the due block. Each has its own outcome.
+- **The maximum** is measured from the due block: one draw window (ruled
+  2026-11-27; the floor's median window, 100 000 blocks or about 139 days,
+  is no use as a limit on reserved funds). It moves with the window. 94 is
+  not used.
+- **The drain owed is one persisted state**, written in the same save that
+  ends the plan, and retried without a maximum.
+- **The slice's own choices, ruled 2026-11-27 as built**
+  (`ARCHIVAL_BOND_POST_DELAY.md` §3.6 lists them): draining a
+  spent-elsewhere remainder; the fill-failure classes, with an unnamed
+  assembly failure limited and each named cause keeping its own outcome;
+  `unstake` as the withdrawal verb; `start_pscan` taking the wallet's node; a
+  never-sent post ending at the maximum; an owed drain blocking a new stake,
+  refused with its own reason (`STAKE_FUNDS_RETURNING`, -29545); the market
+  posture plannable; absence counted only once scanned; an ending
+  deactivating its persona and retiring its slot in the same session; the
+  wait reason on the row that waits.
+
+**Why.** Signing at the request leaked the request time through the
+reference age and sent most posts after they could land. A persona that
+re-staked from an old funding would be a second link to the principal.
+
+**Recorded dependency.** The automatic drain's timing is safe only once a
+drain looks like an ordinary transfer; PR A (the fee on each transaction's
+own weight) removes the P-lane ceiling fee that marks it today.
+

@@ -44,7 +44,7 @@
 //! build that reads this format: its first bytes are not the magic.
 //!
 //! A change to these bytes bumps [`ADDRESS_FILE_VERSION`] in the same
-//! commit (rule 42). `schemas/address_file.snap` pins the encoding of a
+//! commit (rule 142). `schemas/address_file.snap` pins the encoding of a
 //! fixed set, and `schema-snapshot.yml` fails a PR that moves the
 //! snapshot without raising the constant.
 
@@ -260,7 +260,7 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<NetworkAddress>, AddressFileError> {
 
 #[cfg(test)]
 mod snapshot {
-    //! The rule-42 pin. `schema-snapshot.yml` runs this module by its
+    //! The rule-142 pin. `schema-snapshot.yml` runs this module by its
     //! path (`address_file::snapshot`) and compares
     //! [`ADDRESS_FILE_VERSION`] across the PR when the `.snap` moves.
 
@@ -269,7 +269,7 @@ mod snapshot {
     use std::net::{Ipv4Addr, Ipv6Addr};
     use std::path::PathBuf;
 
-    /// Built inline (rule 42): the subject is the encoding, so no shared
+    /// Built inline (rule 142): the subject is the encoding, so no shared
     /// fixture another change could move.
     fn fixture() -> Vec<NetworkAddress> {
         vec![

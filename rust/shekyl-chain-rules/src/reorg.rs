@@ -55,7 +55,7 @@
 //! the store's undo retention is boxed between them — at least the
 //! in-force set's cap, strictly inside the session's epoch — at open and at
 //! every connect, so a regtest that shortens the epoch runs a rule set
-//! whose cap fits (rule 71: nettype selects data, the data satisfies the
+//! whose cap fits (rule 171: nettype selects data, the data satisfies the
 //! same invariant).
 
 use shekyl_archival_retention::{archival_params, ARCHIVAL_REORG_DEPTH_BLOCKS, SLASH_GRACE_EPOCHS};
@@ -168,7 +168,7 @@ impl SlashLogFloor {
 /// the same pair the store refuses at open unless `0 < reorg_cap <
 /// epoch_blocks`. `k` and `n` are consensus constants denominated in
 /// epochs and do not vary by nettype; the whole window scales with the
-/// schedule (rule 71: nettype selects the schedule's data, never the
+/// schedule (rule 171: nettype selects the schedule's data, never the
 /// expression). `None` while the chain is shorter than the window.
 #[must_use]
 pub fn journal_horizon_under(

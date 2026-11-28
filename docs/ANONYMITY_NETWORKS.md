@@ -53,7 +53,7 @@ Practical consequences for anonymity relay:
 | Active bandwidth shaping | High | No second anonymity network is integrated | Tor circuits remain vulnerable |
 | Stream reuse (2+ tx same circuit) | Medium | Outgoing-only selection, 5-min rotation, 20-min change lock time | Small fixed outgoing pool → non-trivial reuse probability |
 | v3 tx size burst (new) | High | None on mainnet: the cover carrier is a testnet development flag, being redesigned | A guard-connection observer picks out the node's own sends (`TOR_COVER_POSTURE.md` banner) |
-| Levin 8-byte signature (DPI) | Low | Noise (`Noise_NNhfs_25519+MLKEM768_ChaChaPoly_BLAKE2s`) behind `dev-clearnet-encrypt`: testnet, stagenet and regtest only, off by default | Clearnet is plaintext Levin until the flag becomes the default; with it on, each connection still opens with a fixed eight-byte prefix per network, so clearnet traffic stays identifiable |
+| Levin 8-byte signature (DPI) | Low | Noise (`Noise_NNhfs_25519+MLKEM768_ChaChaPoly_BLAKE2s`) on every clearnet connection | Each connection still opens with a fixed eight-byte prefix per network, so clearnet traffic stays identifiable |
 
 ### Recommended Pre-Mainnet Testing
 
@@ -72,7 +72,8 @@ own transactions go only over a route that hides its address. When no such
 route is available, the node holds them, says so in its posture line, and
 keeps them until one is. It never falls back to clearnet on its own.
 `tor = off` with `clearnet = on` sends them over clearnet, and the posture line
-says that the open network is unencrypted. The posture table is in
+says that the link is encrypted and that peers can see the node's address.
+The posture table is in
 [`design/TOR_SUPERVISOR.md`](design/TOR_SUPERVISOR.md) §1.
 
 `shekyl-cli` and `shekyl-wallet-rpc` can reach a daemon through a SOCKS proxy.
@@ -183,9 +184,9 @@ HiddenServicePort 11029 127.0.0.1:11029
 Then point the wallet at that onion through the Tor SOCKS port:
 
 ```
-./shekyl-cli --wallet mywallet \
-    --proxy socks5h://127.0.0.1:9050 \
-    --daemon-address <56 characters>.onion:11029
+./shekyl-cli --wallet-file ~/.shekyl/wallets/mainnet/mywallet.wallet \
+    --daemon-socks 127.0.0.1:9050 \
+    --daemon-endpoint <56 characters>.onion:11029
 ```
 
 An onion address authenticates the service and encrypts the connection end to
@@ -356,7 +357,7 @@ commitment stand or fall together.
   to support *hosting* onion services as of early 2026 (Arti 2.x, committed LTS
   branch), which would let the archival pseudonym run a `.onion` responder
   **in-process** without a C dependency — fitting the Rust-canonical posture
-  ([`20-rust-vs-cpp-policy.mdc`](completed/RULE_20_RUST_VS_CPP.md)). The
+  ([`RULE_20_RUST_VS_CPP.md`](completed/RULE_20_RUST_VS_CPP.md)). The
   older "Arti has no onion-service support" notes are claimed stale (client-only
   1.x line). **Verify at source before relying on it.**
 - **I2P — reasonable secondary.** Inward-facing (good for a closed P2P overlay),

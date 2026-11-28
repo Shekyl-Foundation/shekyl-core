@@ -79,20 +79,22 @@ use shekyl_types::BlockHeight;
 /// The posture is the conversion: Market has nothing to post until
 /// assignment exists, Foundation is CompleteTree with the empty-set
 /// *encoding*. These are the two facts `first_stake` must not re-derive
-/// inline — they live on [`StakePosture::holdings`].
+/// inline — they live on [`StakePosture::planned`].
 #[test]
 fn market_posture_has_no_holdings_until_assignment_exists() {
     assert!(matches!(
-        StakePosture::Market.holdings(),
+        StakePosture::Market.planned(),
         Err(FirstStakeError::NoShardsAvailable)
     ));
 }
 
 #[test]
 fn foundation_posture_is_complete_tree_with_the_empty_encoding() {
-    let holdings = StakePosture::SupportCompleteTree
-        .holdings()
+    let planned = StakePosture::SupportCompleteTree
+        .planned()
         .expect("foundation posts");
+    let holdings =
+        super::planned_holdings(&planned).expect("a complete tree has no shard list to refuse");
     assert_eq!(
         holdings.kind,
         shekyl_archival_retention::HoldingsKind::CompleteTree
@@ -100,14 +102,14 @@ fn foundation_posture_is_complete_tree_with_the_empty_encoding() {
     assert!(holdings.shard_ids.is_empty());
 }
 
-/// F-2 (i): assemble stamps `anchor_t0` via [`daemon_claimed_tip`]; the
+/// F-2 (i): a stake request stamps `requested_at` via [`daemon_claimed_tip`]; the
 /// pscan `BlockSource::tip_height` path also routes through that same
 /// named function (see `block_source.rs`). This KAT pins that both
 /// modules name the same item.
 #[test]
 fn assemble_imports_named_daemon_claimed_tip() {
     // `daemon_claimed_tip` is in scope in this module (assemble path) and
-    // is the body of `DaemonBlockSource::tip_height` / `PBlockSource::tip_height`.
+    // is the body of `DaemonBlockSource::tip_height`.
     // A rename that forked the two clocks would break this shared import.
     let assemble_name =
         std::any::type_name_of_val(&daemon_claimed_tip::<crate::engine::test_support::TestDaemon>);

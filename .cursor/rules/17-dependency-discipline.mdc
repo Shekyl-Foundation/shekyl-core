@@ -1,6 +1,8 @@
 ---
 description: Verify dependencies before recommending them. Workspace state, API surface, and security properties get checked at source, not at vibes.
 alwaysApply: true
+scope: estate
+repos: [core, gui, prism]
 ---
 
 # Dependency discipline
@@ -175,7 +177,7 @@ landing without re-verifying.
 ## Related rules
 
 `00-mission.mdc` rejects a recommendation whose security property fails
-verification. `25-rust-architecture.mdc`
-governs how a dependency is added. `30-cryptography.mdc`,
+verification. Each repository's Rust-architecture rule (shekyl-core's
+is [`125-rust-architecture`](https://github.com/Shekyl-Foundation/shekyl-core/blob/dev/.cursor/rules/125-rust-architecture.mdc)) governs how a dependency is added. `30-cryptography.mdc`,
 `35-secure-memory.mdc`, and `36-secret-locality.mdc` are the properties
 the source check has to find, not assume.

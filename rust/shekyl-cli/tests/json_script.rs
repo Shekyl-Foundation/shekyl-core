@@ -10,11 +10,12 @@
 //! to carry. The daemon script beside them is the pattern for a daemon-
 //! backed run; it stays ignored until `SHEKYLD_BIN` is set.
 
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 
 use serde_json::Value;
+
+mod common;
 
 fn bin() -> &'static str {
     env!("CARGO_BIN_EXE_shekyl-cli")
@@ -22,13 +23,23 @@ fn bin() -> &'static str {
 
 fn write_password(dir: &Path) -> std::path::PathBuf {
     let path = dir.join("password");
-    let mut file = std::fs::File::create(&path).expect("password file");
-    writeln!(file, "script-password").expect("write password");
+    common::write_secret_file(&path, "script-password\n");
     path
 }
 
 fn run(args: &[&str]) -> (i32, String, String) {
+    let config = if args.contains(&"--daemon-endpoint") {
+        common::offline_channel_config()
+    } else {
+        common::empty_config()
+    };
+    run_config(args, &config)
+}
+
+fn run_config(args: &[&str], config: &common::EmptyConfig) -> (i32, String, String) {
     let output = Command::new(bin())
+        .arg("--config-file")
+        .arg(config.path())
         .args(args)
         .output()
         .expect("spawn shekyl-cli");
@@ -60,19 +71,20 @@ fn a_script_session_emits_one_json_line_per_command() {
         "stagenet",
         "--wallet-dir",
         wallets.to_str().unwrap(),
-        "--daemon-address",
+        "--daemon-endpoint",
         "127.0.0.1:1",
+        "--wallet-password-file",
+        password.to_str().unwrap(),
+        "wallet",
         "create",
         "scripted",
-        "--seed-out",
+        "--mnemonic-file",
         seed.to_str().unwrap(),
-        "--password-file",
-        password.to_str().unwrap(),
     ]);
     assert_eq!(code, 0, "stderr:\n{stderr}\nstdout:\n{stdout}");
     let created = &lines(&stdout)[0];
     assert_eq!(created["ok"], true);
-    assert_eq!(created["command"], "create");
+    assert_eq!(created["command"], "wallet create");
     assert_eq!(created["result"]["name"], "scripted");
     assert!(created["result"].get("mnemonic").is_none());
     assert!(created["result"].get("raw_seed_hex").is_none());
@@ -83,17 +95,17 @@ fn a_script_session_emits_one_json_line_per_command() {
     std::fs::write(&script, "# comment\nbalance\nsend 1 not-an-address\n").expect("script");
     let (code, stdout, stderr) = run(&[
         "--json",
-        "--script",
+        "--script-file",
         script.to_str().unwrap(),
         "--network",
         "stagenet",
         "--wallet-dir",
         wallets.to_str().unwrap(),
-        "--wallet",
-        "scripted",
-        "--password-file",
+        "--wallet-file",
+        wallets.join("scripted.wallet").to_str().unwrap(),
+        "--wallet-password-file",
         password.to_str().unwrap(),
-        "--daemon-address",
+        "--daemon-endpoint",
         "127.0.0.1:1",
     ]);
     assert_eq!(
@@ -114,8 +126,8 @@ fn a_script_session_emits_one_json_line_per_command() {
     assert!(!refused["error"]["message"].as_str().unwrap().is_empty());
 }
 
-/// A create that never reaches the server still names `create`, not a
-/// shared "scripted" bucket, and keeps the local refusal code.
+/// A create that never reaches the server still names `wallet create`, not
+/// a shared "scripted" bucket, and keeps the local refusal code.
 #[test]
 fn a_failed_create_names_create() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -127,55 +139,73 @@ fn a_failed_create_names_create() {
         "stagenet",
         "--wallet-dir",
         wallets.to_str().unwrap(),
-        "--daemon-address",
+        "--daemon-endpoint",
         "127.0.0.1:1",
+        "wallet",
         "create",
         "no-password",
-        "--seed-out",
+        "--mnemonic-file",
         seed.to_str().unwrap(),
     ]);
     assert_eq!(code, 1, "stderr:\n{stderr}\nstdout:\n{stdout}");
     let rows = lines(&stdout);
     assert_eq!(rows.len(), 1, "{stdout}");
-    assert_eq!(rows[0]["command"], "create");
+    assert_eq!(rows[0]["command"], "wallet create");
     assert_eq!(rows[0]["ok"], false);
     assert_eq!(rows[0]["error"]["code"], 1);
     assert!(!rows[0]["error"]["message"].as_str().unwrap().is_empty());
 }
 
-/// `--script` and a subcommand are two invocations. Neither runs.
+/// A script file and a command are two sessions. Neither runs, and the
+/// refusal is the table's, on standard error.
 #[test]
-fn script_and_a_subcommand_are_refused_before_either_runs() {
+fn a_script_file_and_a_command_are_refused_before_either_runs() {
     let (code, stdout, stderr) = run(&[
         "--json",
-        "--script",
+        "--script-file",
         "/no/such/script",
         "--network",
         "stagenet",
+        "wallet",
         "create",
         "ignored",
-        "--seed-out",
+        "--mnemonic-file",
         "/tmp/shekyl-should-not-create",
     ]);
-    assert_eq!(code, 1, "stderr:\n{stderr}\nstdout:\n{stdout}");
-    let rows = lines(&stdout);
-    assert_eq!(rows.len(), 1, "{stdout}");
-    assert_eq!(rows[0]["command"], "session");
-    assert_eq!(rows[0]["ok"], false);
-    assert!(rows[0]["error"]["message"]
-        .as_str()
-        .unwrap()
-        .contains("--script"));
+    assert_eq!(code, 2, "stderr:\n{stderr}\nstdout:\n{stdout}");
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(stderr.contains("script-file"), "{stderr}");
+    assert!(!Path::new("/tmp/shekyl-should-not-create").exists());
 }
 
-/// `help` is the prompt command. Clap's help subcommand must not take it.
+/// A global option after the command words is told where it goes.
+#[test]
+fn an_option_after_the_command_is_told_to_go_before_it() {
+    let (code, stdout, stderr) = run(&[
+        "--json",
+        "--network",
+        "stagenet",
+        "--daemon-endpoint",
+        "127.0.0.1:1",
+        "wallet",
+        "create",
+        "w",
+        "--debug",
+    ]);
+    assert_eq!(code, 1, "{stderr}\n{stdout}");
+    let rows = lines(&stdout);
+    let message = rows[0]["error"]["message"].as_str().expect("a message");
+    assert!(message.contains("put it before the command"), "{message}");
+}
+
+/// `help` is the prompt command; `--help` is the options.
 #[test]
 fn one_shot_help_is_the_prompt_command() {
     let (code, stdout, stderr) = run(&[
         "--json",
         "--network",
         "stagenet",
-        "--daemon-address",
+        "--daemon-endpoint",
         "127.0.0.1:1",
         "help",
     ]);
@@ -203,14 +233,15 @@ fn a_one_shot_uses_the_prompt_grammar_and_exits() {
         "stagenet",
         "--wallet-dir",
         wallets.to_str().unwrap(),
-        "--daemon-address",
+        "--daemon-endpoint",
         "127.0.0.1:1",
+        "--wallet-password-file",
+        password.to_str().unwrap(),
+        "wallet",
         "create",
         "once",
-        "--seed-out",
+        "--mnemonic-file",
         seed.to_str().unwrap(),
-        "--password-file",
-        password.to_str().unwrap(),
     ]);
     assert_eq!(code, 0, "{stderr}\n{stdout}");
 
@@ -220,11 +251,11 @@ fn a_one_shot_uses_the_prompt_grammar_and_exits() {
         "stagenet",
         "--wallet-dir",
         wallets.to_str().unwrap(),
-        "--wallet",
-        "once",
-        "--password-file",
+        "--wallet-file",
+        wallets.join("once.wallet").to_str().unwrap(),
+        "--wallet-password-file",
         password.to_str().unwrap(),
-        "--daemon-address",
+        "--daemon-endpoint",
         "127.0.0.1:1",
         "balance",
     ]);
@@ -242,11 +273,11 @@ fn a_one_shot_uses_the_prompt_grammar_and_exits() {
         "stagenet",
         "--wallet-dir",
         wallets.to_str().unwrap(),
-        "--wallet",
-        "once",
-        "--password-file",
+        "--wallet-file",
+        wallets.join("once.wallet").to_str().unwrap(),
+        "--wallet-password-file",
         password.to_str().unwrap(),
-        "--daemon-address",
+        "--daemon-endpoint",
         "127.0.0.1:1",
         "stake",
         "release",
@@ -267,6 +298,22 @@ fn a_one_shot_uses_the_prompt_grammar_and_exits() {
     );
 }
 
+/// How long a spawned daemon may take to listen. The tunnel's end-to-end
+/// test gives its daemon the same bound (`READY`).
+const DAEMON_READY: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// How often to try the listener while the daemon is still starting.
+const LISTEN_POLL: std::time::Duration = std::time::Duration::from_millis(200);
+
+/// The daemon's log file, inside its data directory. A refusal after the
+/// configuration names a log file is appended here.
+const DAEMON_LOG: &str = "shekyld.log";
+
+/// The daemon's standard error, inside its data directory. A refusal
+/// before the configuration names a log file is written here and nowhere
+/// else.
+const DAEMON_STDERR: &str = "daemon.stderr";
+
 /// A daemon this test owns. Drop kills, reaps, and removes the data
 /// directory, including when an assertion panics. Dropping a bare `Child`
 /// does not.
@@ -284,6 +331,10 @@ impl SpawnedDaemon {
         // one other accounts can enter (`config.data-dir.exposed`).
         shekyl_os_account::create_account_dir_all(&data_dir).expect("data dir");
         let port = rpc_port.to_string();
+        let log_file = data_dir.join(DAEMON_LOG).display().to_string();
+        // Kept, not discarded: a refusal before the configuration names a
+        // log file is on standard error alone.
+        let stderr = std::fs::File::create(data_dir.join(DAEMON_STDERR)).expect("stderr");
         // Both connectors off is the offline posture: no listener, no
         // dial, so no p2p port to pick (INPUT_GRAMMAR.md §5).
         let mut child = Command::new(bin);
@@ -291,21 +342,29 @@ impl SpawnedDaemon {
             .args([
                 "--network",
                 "testnet",
+                // The default file is the machine's (`/etc/shekyl`); a host
+                // that runs a testnet node keeps its settings there.
+                "--config-file",
+                "none",
                 "--clearnet",
                 "off",
                 "--tor",
                 "off",
                 "--rpc-admin-listen",
+                "none",
+                "--rpc-socket-dir",
+                data_dir.to_str().expect("utf8"),
+                "--rpc-listen",
                 &format!("127.0.0.1:{port}"),
                 "--data-dir",
                 data_dir.to_str().expect("utf8"),
                 "--log-file",
-                &data_dir.join("shekyld.log").display().to_string(),
+                &log_file,
                 "--log-level",
                 "info",
             ])
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null());
+            .stderr(std::process::Stdio::from(stderr));
         let child = child.spawn();
         match child {
             Ok(child) => Self { child, data_dir },
@@ -313,6 +372,41 @@ impl SpawnedDaemon {
                 drop(std::fs::remove_dir_all(&data_dir));
                 panic!("spawn shekyld: {error}");
             }
+        }
+    }
+
+    /// Standard error and the log file. A refusal before the configuration
+    /// names a log file is in the first only; a later one is in both.
+    fn refusal(&self) -> String {
+        let stderr = std::fs::read_to_string(self.data_dir.join(DAEMON_STDERR)).unwrap_or_default();
+        let log = std::fs::read_to_string(self.data_dir.join(DAEMON_LOG)).unwrap_or_default();
+        format!("stderr:\n{stderr}\nlog:\n{log}")
+    }
+
+    /// Until the channel listener at `address` accepts. A daemon that exits
+    /// first fails at once, with its standard error and its log. One still
+    /// starting after [`DAEMON_READY`] fails then, with both. A loaded host
+    /// takes tens of seconds to make the channel key and open the store
+    /// before it listens.
+    fn wait_accepting(&mut self, address: &str) {
+        let deadline = std::time::Instant::now() + DAEMON_READY;
+        loop {
+            if std::net::TcpStream::connect(address).is_ok() {
+                return;
+            }
+            if let Some(status) = self.child.try_wait().expect("the daemon's status") {
+                panic!(
+                    "the daemon ended before it listened on {address}: {status}\n{}",
+                    self.refusal()
+                );
+            }
+            if std::time::Instant::now() >= deadline {
+                panic!(
+                    "the daemon did not listen on {address} within {DAEMON_READY:?}\n{}",
+                    self.refusal()
+                );
+            }
+            std::thread::sleep(LISTEN_POLL);
         }
     }
 }
@@ -345,55 +439,96 @@ fn daemon_script_drives_balance_refresh_and_a_refused_send() {
     // Owned from the moment the process exists. A panic in the readiness
     // or wallet assertions still kills and reaps it and removes its data
     // directory; dropping a bare `Child` does neither.
-    let daemon = SpawnedDaemon::spawn(&bin, rpc_port);
+    let mut daemon = SpawnedDaemon::spawn(&bin, rpc_port);
     let address = format!("127.0.0.1:{rpc_port}");
-    let mut up = false;
-    for _ in 0..50 {
-        if std::net::TcpStream::connect(&address).is_ok() {
-            up = true;
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(200));
-    }
-    assert!(up, "daemon did not accept RPC on {address}");
+    daemon.wait_accepting(&address);
 
+    let config = common::empty_config();
+    let root = config.path().parent().unwrap();
+    let owner = shekyl_rpc_transport::local::LocalTarget::test_override(
+        shekyl_wallet_rpc::Network::Testnet,
+        &shekyl_rpc_rendezvous::Instance::Default,
+        Some(&daemon.data_dir),
+        None,
+    );
+    let public = owner
+        .call::<shekyl_rpc_client::wire::RpcBundleShow>(
+            &shekyl_rpc_types::kinds::NoParams,
+            shekyl_rpc_transport::local::CALL_WITHIN,
+        )
+        .unwrap();
+    let bundle = root.join("daemon.bundle");
+    std::fs::write(
+        &bundle,
+        shekyl_rpc_transport::channel::bundle_text(&public.bundle.0),
+    )
+    .unwrap();
+    let key_file = root.join("client.key");
+    let key = shekyl_rpc_transport::channel::create_client_key(&key_file).unwrap();
+    owner
+        .call::<shekyl_rpc_client::wire::RpcClientAdd>(
+            &shekyl_rpc_types::wire::rpc::ClientCeiling {
+                fingerprint: shekyl_rpc_types::hash::HashHex::from_bytes(
+                    *key.public().fingerprint().as_bytes(),
+                ),
+                ceiling: vec![shekyl_rpc_types::wire::rpc::CeilingWord::Wallet],
+            },
+            shekyl_rpc_transport::local::CALL_WITHIN,
+        )
+        .unwrap();
+    std::fs::write(
+        config.path(),
+        format!(
+            "daemon-bundle-file = {}\nrpc-key-file = {}\n",
+            serde_json::json!(bundle),
+            serde_json::json!(key_file)
+        ),
+    )
+    .unwrap();
     let dir = tempfile::tempdir().expect("tempdir");
     let password = write_password(dir.path());
     let seed = dir.path().join("seed");
     let wallets = dir.path().join("wallets");
-    let (code, stdout, stderr) = run(&[
-        "--json",
-        "--network",
-        "testnet",
-        "--daemon-address",
-        &address,
-        "--wallet-dir",
-        wallets.to_str().unwrap(),
-        "create",
-        "wallet",
-        "--seed-out",
-        seed.to_str().unwrap(),
-        "--password-file",
-        password.to_str().unwrap(),
-    ]);
+    let (code, stdout, stderr) = run_config(
+        &[
+            "--json",
+            "--network",
+            "testnet",
+            "--daemon-endpoint",
+            &address,
+            "--wallet-dir",
+            wallets.to_str().unwrap(),
+            "--wallet-password-file",
+            password.to_str().unwrap(),
+            "wallet",
+            "create",
+            "wallet",
+            "--mnemonic-file",
+            seed.to_str().unwrap(),
+        ],
+        &config,
+    );
     assert_eq!(code, 0, "{stderr}\n{stdout}");
 
     let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/scripts/daemon_session.txt");
-    let (code, stdout, stderr) = run(&[
-        "--json",
-        "--script",
-        script.to_str().unwrap(),
-        "--network",
-        "testnet",
-        "--daemon-address",
-        &address,
-        "--wallet-dir",
-        wallets.to_str().unwrap(),
-        "--wallet",
-        "wallet",
-        "--password-file",
-        password.to_str().unwrap(),
-    ]);
+    let (code, stdout, stderr) = run_config(
+        &[
+            "--json",
+            "--script-file",
+            script.to_str().unwrap(),
+            "--network",
+            "testnet",
+            "--daemon-endpoint",
+            &address,
+            "--wallet-dir",
+            wallets.to_str().unwrap(),
+            "--wallet-file",
+            wallets.join("wallet.wallet").to_str().unwrap(),
+            "--wallet-password-file",
+            password.to_str().unwrap(),
+        ],
+        &config,
+    );
     drop(daemon);
 
     let rows = lines(&stdout);
@@ -412,21 +547,15 @@ fn daemon_script_drives_balance_refresh_and_a_refused_send() {
             .any(|row| row["command"] == "chain" && row["ok"] == true),
         "chain against the daemon\n{stderr}\n{stdout}"
     );
-    // The script's last line is a refused send, and it is why the process
-    // exits 1. The daemon holds only genesis, so the wallet has no synced
-    // block to build against, and the build says so before it reads the
-    // recipient: the pattern's `<recipient>` placeholder is never decoded
-    // here. The code is the assertion. `ok == false` alone would also pass
-    // on a refusal that never reached the wallet's state. This test does
-    // not reach the balance: that needs a mined block, and a daemon the
-    // wallet accepts mines at the network's real difficulty.
+    // The script intentionally leaves its recipient placeholder unexpanded.
+    // A transport or enrollment fault must not pass as the wallet's refusal.
     assert_eq!(code, 1, "{stderr}\n{stdout}");
     let send = rows.last().expect("send");
     assert_eq!(send["command"], "send");
     assert_eq!(send["ok"], false, "{send}");
     assert_eq!(
         send["error"]["code"],
-        i64::from(shekyl_wallet_rpc::WalletRpcErrorCode::WalletNotSynced.as_i32()),
+        i64::from(shekyl_wallet_rpc::WalletRpcErrorCode::InvalidRecipient.as_i32()),
         "{send}"
     );
 }

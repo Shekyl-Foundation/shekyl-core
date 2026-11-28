@@ -1,6 +1,8 @@
 ---
 description: Foundation hosts are shared by concurrent agents. Claim a host in shekyl-dev's usage ledger before using it, probe it before trusting the ledger, and never disturb another agent's claimed work — a long-running test is a quiet claim.
 alwaysApply: true
+scope: estate
+repos: [core, gui, prism]
 ---
 
 # Shared-estate coordination

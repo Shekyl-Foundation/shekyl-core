@@ -48,7 +48,7 @@ pub const EXIT_FEE_HEADROOM_RATE: u64 = 600;
 /// rounds up to the fee lattice, as every paid fee does. At today's limit
 /// that is `148,388 × 600`, or `89,033,000` atomic.
 ///
-/// **Bounds for safe adjustment** (rule 75). Must satisfy
+/// **Bounds for safe adjustment** (rule 175). Must satisfy
 /// `0 < EXIT_FEE_RESERVE_ATOMIC < rung`, the rung the archival bond floor
 /// (asserted below and, against the floor, in `shekyl-engine-core`).
 /// Re-grounded against the tiling cover model (`ARCHIVAL_COVER_DRAW.md`,

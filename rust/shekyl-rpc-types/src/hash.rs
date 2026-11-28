@@ -16,7 +16,7 @@
 //! a transaction identity, two Merkle-ish roots, and a proof-of-work hash —
 //! so typing the wire field as any one of them (`BlockHash`, say) would
 //! recreate on the wire exactly the confusion `shekyl-types`' `hash32!`
-//! newtypes exist to prevent. Rule 18 already settles this: *RPC* wire
+//! newtypes exist to prevent. Rule 118 already settles this: *RPC* wire
 //! structs store the raw bytes and convert at their edge. (The consensus
 //! header in `shekyl-wire` types those fields — `previous` is `BlockHash`,
 //! `curve_tree_root` is `CurveTreeRoot`, `section_root` is

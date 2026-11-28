@@ -15,7 +15,7 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use shekyl_rpc_client::{wire, Rpc, RpcMethod};
-use shekyl_rpc_transport::HttpRpc;
+use shekyl_rpc_transport::local::{LocalRpc, LocalTarget};
 use shekyl_rpc_types::kinds::{Count, Height, NoParams};
 use shekyl_rpc_types::wire::block::{BlockSelect, GenerateCount, HeaderSelect};
 use shekyl_rpc_types::wire::shared::{Selector, Slot};
@@ -93,7 +93,7 @@ fn tx_show_reads_the_wallet_or_the_daemon() {
     );
     let printed = body_line(&body).expect("a base64 body line");
     let decoded = decode_body(printed);
-    let wire = daemon_body_bytes(&daemon.url, &found.held);
+    let wire = daemon_body_bytes(&daemon.owner, &found.held);
     assert_eq!(
         decoded, wire,
         "--body's base64 is the bytes the daemon returned"
@@ -117,9 +117,7 @@ fn a_failed_wallet_read_does_not_ask_the_daemon() {
         .build()
         .expect("runtime");
     runtime.block_on(async {
-        let rpc = HttpRpc::with_custom_timeout(daemon.url.clone(), Duration::from_secs(30))
-            .await
-            .expect("rpc client");
+        let rpc = LocalRpc::within(daemon.owner.clone(), Duration::from_secs(30));
         await_ready(&rpc, &daemon.logs).await;
     });
     drop(runtime);
@@ -132,7 +130,7 @@ fn a_failed_wallet_read_does_not_ask_the_daemon() {
             .expect("the dead socket still constructs a session");
     session.set_open("wallet");
     let client = crate::daemon::DaemonClient::new(
-        shekyl_rpc_transport::DaemonTarget::address(daemon.url.as_str()),
+        shekyl_rpc_transport::DaemonTarget::Owner(daemon.owner.clone()),
         None,
         Network::Regtest,
     )
@@ -171,9 +169,7 @@ fn section_13_words_answer_a_regtest_daemon() {
         .build()
         .expect("runtime");
     runtime.block_on(async {
-        let rpc = HttpRpc::with_custom_timeout(daemon.url.clone(), Duration::from_secs(30))
-            .await
-            .expect("rpc client");
+        let rpc = LocalRpc::within(daemon.owner.clone(), Duration::from_secs(30));
         await_ready(&rpc, &daemon.logs).await;
         await_template(&rpc).await;
     });
@@ -358,7 +354,7 @@ fn section_13_words_answer_a_regtest_daemon() {
 
     let marks = daemon.marks();
     let wrong = crate::daemon::DaemonClient::new(
-        shekyl_rpc_transport::DaemonTarget::address(daemon.url.as_str()),
+        shekyl_rpc_transport::DaemonTarget::Owner(daemon.owner.clone()),
         None,
         Network::Mainnet,
     )
@@ -405,15 +401,15 @@ fn decode_body_ok(line: &str) -> bool {
         .is_ok_and(|bytes| !bytes.is_empty())
 }
 
-fn daemon_body_bytes(url: &str, id: &str) -> Vec<u8> {
-    let rpc =
-        shekyl_rpc_transport::SyncDaemon::connect(url.to_owned(), None, Duration::from_secs(30))
-            .expect("daemon client");
+fn daemon_body_bytes(rpc: &LocalTarget, id: &str) -> Vec<u8> {
     let reply = rpc
-        .call::<wire::TxList>(&wire::tx::TxListQuery {
-            id: vec![shekyl_rpc_types::hash::HashHex::from_hex(id).expect("an id")],
-            prune: false,
-        })
+        .call::<wire::TxList>(
+            &wire::tx::TxListQuery {
+                id: vec![shekyl_rpc_types::hash::HashHex::from_hex(id).expect("an id")],
+                prune: false,
+            },
+            shekyl_rpc_transport::local::CALL_WITHIN,
+        )
         .expect("tx_list");
     match reply.into_iter().next() {
         Some(Slot::Item(entry)) => entry.body.0,
@@ -429,8 +425,10 @@ struct Found {
 struct Regtest {
     child: Child,
     data_dir: PathBuf,
-    config_dir: PathBuf,
-    url: String,
+    /// The owner's socket directory: this account's, mode 0700, one per
+    /// spawn. Held until the harness drops, after the daemon is killed.
+    _socket_dir: shekyl_os_account::test_fixture::FixtureDir,
+    owner: LocalTarget,
     view_url: String,
     logs: Vec<PathBuf>,
 }
@@ -459,7 +457,7 @@ impl Regtest {
         // Made as the daemon makes a data directory: it refuses an existing
         // one other accounts can enter (`config.data-dir.exposed`).
         shekyl_os_account::create_account_dir_all(&data_dir).expect("data dir");
-        let config_dir = private_config_dir(rpc_port);
+        let socket_dir = shekyl_os_account::test_fixture::tempdir().expect("a socket directory");
         let stdout = std::fs::File::create(data_dir.join("daemon.log")).expect("stdout log");
         let stderr = stdout.try_clone().expect("stderr log");
         let mine = mine_address(&SEED);
@@ -475,22 +473,21 @@ impl Regtest {
             "--clearnet",
             "off",
             "--rpc-admin-listen",
-            &format!("127.0.0.1:{rpc_port}"),
+            "none",
             "--rpc-view-listen",
             &format!("127.0.0.1:{view_port}"),
             "--data-dir",
             data_dir.to_str().expect("utf8 data dir"),
+            // The default file is the machine's (`/etc/shekyl`), where a
+            // host's own regtest node keeps its settings.
             "--config-file",
-            config_dir
-                .join("shekyld.toml")
-                .to_str()
-                .expect("utf8 config"),
+            "none",
             "--log-file",
             data_dir.join("shekyld.log").to_str().expect("utf8 log"),
-            // The owner's socket in the private configuration directory:
-            // a harness names it (`RPC_CHANNEL.md` §7.1).
+            // The owner's socket in a private directory: a harness names
+            // it (`RPC_CHANNEL.md` §7.1).
             "--rpc-socket-dir",
-            config_dir.to_str().expect("utf8 config"),
+            socket_dir.path().to_str().expect("utf8 socket dir"),
             "--log-level",
             "info",
             "--mine-address",
@@ -501,22 +498,26 @@ impl Regtest {
         .stdin(Stdio::null());
         let child = shekyl_spawn::spawn_lock::spawn(&mut cmd).unwrap_or_else(|error| {
             drop(std::fs::remove_dir_all(&data_dir));
-            drop(std::fs::remove_dir_all(&config_dir));
             panic!("spawn shekyld: {error}");
         });
         Self {
             child,
             logs: vec![data_dir.join("shekyld.log"), data_dir.join("daemon.log")],
             data_dir,
-            config_dir,
-            url: format!("http://127.0.0.1:{rpc_port}"),
+            owner: LocalTarget::test_override(
+                Network::Regtest,
+                &shekyl_rpc_rendezvous::Instance::Default,
+                Some(socket_dir.path()),
+                None,
+            ),
+            _socket_dir: socket_dir,
             view_url: format!("http://127.0.0.1:{view_port}"),
         }
     }
 
     fn client(&self) -> crate::daemon::DaemonClient {
         crate::daemon::DaemonClient::new(
-            shekyl_rpc_transport::DaemonTarget::address(self.url.as_str()),
+            shekyl_rpc_transport::DaemonTarget::Owner(self.owner.clone()),
             None,
             Network::Regtest,
         )
@@ -525,7 +526,7 @@ impl Regtest {
 
     fn view_client(&self) -> crate::daemon::DaemonClient {
         crate::daemon::DaemonClient::new(
-            shekyl_rpc_transport::DaemonTarget::address(self.view_url.as_str()),
+            shekyl_rpc_transport::DaemonTarget::fixture_address(self.view_url.as_str()),
             None,
             Network::Regtest,
         )
@@ -584,9 +585,7 @@ impl Regtest {
     }
 
     async fn wallet_and_genesis(&self) -> Found {
-        let rpc = HttpRpc::with_custom_timeout(self.url.clone(), Duration::from_secs(180))
-            .await
-            .expect("rpc client");
+        let rpc = LocalRpc::within(self.owner.clone(), Duration::from_secs(180));
         await_ready(&rpc, &self.logs).await;
         await_template(&rpc).await;
 
@@ -673,7 +672,6 @@ impl Drop for Regtest {
         drop(self.child.kill());
         drop(self.child.wait());
         drop(std::fs::remove_dir_all(&self.data_dir));
-        drop(std::fs::remove_dir_all(&self.config_dir));
     }
 }
 
@@ -709,7 +707,7 @@ fn this_spawn_announced(logs: &[PathBuf]) -> bool {
     })
 }
 
-async fn await_ready(rpc: &HttpRpc, logs: &[PathBuf]) {
+async fn await_ready(rpc: &LocalRpc, logs: &[PathBuf]) {
     let deadline = Instant::now() + Duration::from_secs(60);
     let mut last = String::new();
     while Instant::now() < deadline {
@@ -736,7 +734,7 @@ async fn await_ready(rpc: &HttpRpc, logs: &[PathBuf]) {
     panic!("daemon RPC never became ready: {last}\n{tail}");
 }
 
-async fn await_template(rpc: &HttpRpc) {
+async fn await_template(rpc: &LocalRpc) {
     let deadline = Instant::now() + Duration::from_secs(60);
     let mut last = String::new();
     while Instant::now() < deadline {
@@ -751,62 +749,4 @@ async fn await_template(rpc: &HttpRpc) {
 
 fn file_len(path: &Path) -> u64 {
     std::fs::metadata(path).map(|meta| meta.len()).unwrap_or(0)
-}
-
-/// A directory only this account can enter, holding one empty configuration
-/// file. The daemon refuses a file with a directory above it that another
-/// account could write, which rules out the data directory under `TMPDIR`.
-fn private_config_dir(rpc_port: u16) -> PathBuf {
-    let parent = config_base().join(".shekyl-regtest");
-    let dir = parent.join(format!("tx-show-{rpc_port}"));
-    drop(std::fs::remove_dir_all(&dir));
-    let mut builder = std::fs::DirBuilder::new();
-    builder.recursive(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt;
-        builder.mode(0o700);
-    }
-    builder.create(&dir).expect("private config dir");
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    drop(
-        options
-            .open(dir.join("shekyld.toml"))
-            .expect("empty config file"),
-    );
-    dir
-}
-
-fn config_base() -> PathBuf {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        // The effective uid, as the daemon's own ownership check reads it
-        // (`shekyl-daemon-config`'s `file.rs`); `/proc/self` is Linux-only.
-        let me = rustix::process::geteuid().as_raw();
-        let candidates = [
-            std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from),
-            std::env::var_os("HOME").map(PathBuf::from),
-            Some(PathBuf::from("/run")),
-        ];
-        for base in candidates.into_iter().flatten() {
-            let owned = base.ancestors().all(|dir| {
-                std::fs::metadata(dir)
-                    .map(|meta| (meta.uid() == 0 || meta.uid() == me) && meta.mode() & 0o022 == 0)
-                    .unwrap_or(false)
-            });
-            if base.is_dir() && owned {
-                return base;
-            }
-        }
-    }
-    panic!(
-        "no directory this account owns the whole way up for the daemon's empty configuration file"
-    );
 }

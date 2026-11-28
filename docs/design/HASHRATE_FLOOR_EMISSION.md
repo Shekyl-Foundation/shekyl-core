@@ -2,7 +2,7 @@
 
 **Status: PARKED (Rick, 2026-11-19).** Registered so it isn't forgotten. It is taken up only after the existing economics work is finished (EUP-4 prep, EUP-4, and the J, G, F and I rulings). No brief, measurement or model starts from this note until Rick reopens it. Nothing here is built. Ground: `dev` at `59ffce75`, read from a fresh fetch.
 
-**Identifier family:** `HF-`, registered at birth (rule 94) in [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2. No `HF-` identifier is minted yet.
+**Identifier family:** `HF-`, registered at birth (rule 194) in [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2. No `HF-` identifier is minted yet.
 
 ## 1. Rick's intent (2026-11-19)
 
@@ -57,7 +57,7 @@ reward = full_reward × min(1, D / D*)
    Stakers' storage costs don't fall when hashrate does, so the second deserves a look.
 2. **The tail.** Does the factor apply to the tail emission? If it does, the long-run security floor can be cut. If it doesn't, the rule fades out by design as the curve flattens.
 3. **What else reads the reward.** The fee floor is `R·C·w_ref/M²` and the block-size penalty is a share of the reward. If both read the gated reward, fees and the cost of block growth fall when hashrate falls, which makes spam cheapest when the chain is weakest. Recommended: both read the full curve's reward, and only the payout is gated.
-4. **Other networks.** `D*` is data per network (rule 71). Regtest and testnet need a value that leaves their rewards usable, and it must be data, never a branch.
+4. **Other networks.** `D*` is data per network (rule 171). Regtest and testnet need a value that leaves their rewards usable, and it must be data, never a branch.
 5. **The restated predictability row.** It assumes the release rails. This rule adds a second way emission can slow, with no lower bound in V1. The row needs a line for it.
 6. **Its place among the economies.** Hashrate follows price and can't be faked for less than it earns, so this is a demand-linked emission signal that passes the test the transaction count failed. It only works downward. It could be a fourth candidate beside the three on the whole-system page.
 

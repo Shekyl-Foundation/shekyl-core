@@ -13,7 +13,7 @@ Every `file:line` in this document was read at that commit; re-locate before
 citing at any other sha.
 **Identifier family:** `CEN-` (consensus census), registered in
 [`IMPLEMENTATION_INDEX.md`](../design/IMPLEMENTATION_INDEX.md) §2 in the commit that
-lands this document (rule 94). Two token forms, both registered: `CEN-1`
+lands this document (rule 194). Two token forms, both registered: `CEN-1`
 names the census work item itself (this document; the effort the
 2026-08-30 ruling authorized), and `CEN-<subsystem letter><n>` — optionally
 with a letter suffix for a row split after first numbering (`CEN-F4`,
@@ -123,7 +123,7 @@ The census must be re-runnable at a later sha and diffable. The procedure:
 
 7. **Behavioral statements** come from the code read at the pinned sha —
    never from Monero documentation, Monero source, or memory of Monero
-   behavior (rules 10/60: the codebases are siblings; Monero is not an
+   behavior (rules 110/60: the codebases are siblings; Monero is not an
    upstream).
 
 To re-run: repeat 1–3 at the new sha, diff the visited-function list, then
@@ -493,7 +493,7 @@ first assumption (the RK convention). Behavioral statements in §4 follow the
    (5519) rejects only `timestamp < median`. The doc also claims the rule was
    "preserved unchanged" from the inherited validator — the inherited
    comparison is the non-strict one, so the doc mis-states the comparison it
-   preserved. Rule 94: code wins for the row (CEN-C2); whether Shekyl *wants*
+   preserved. Rule 194: code wins for the row (CEN-C2); whether Shekyl *wants*
    strict is the DAA round's question.
 4. **`ARCHIVAL_CREDIT_WIRE.md` §3's enforcement-status paragraph is stale.**
    It names `Blockchain::check_attestation_root` (no longer in the tree) and

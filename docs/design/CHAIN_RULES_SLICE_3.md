@@ -15,7 +15,7 @@ Template: [`CHAIN_RULES_CRATE.md`](CHAIN_RULES_CRATE.md) §7.5.1; predecessors
 [`CHAIN_RULES_SLICE_1.md`](../completed/CHAIN_RULES_SLICE_1.md),
 [`CHAIN_RULES_SLICE_2.md`](../completed/CHAIN_RULES_SLICE_2.md). Parent plan:
 [`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) §7.5 table 3 (*"slice 3 — after
-4.A/4.B"*). Cites `26-sub-pr-design-discipline.mdc`. The living contract is
+4.A/4.B"*). Cites `126-sub-pr-design-discipline.mdc`. The living contract is
 [`CHAIN_RULES_CRATE.md`](CHAIN_RULES_CRATE.md); do not implement from this
 file. Owner: the DRS-E6 lane.
 
@@ -56,7 +56,7 @@ this section exists so they do not.
 Consequences the framing fixes directly: the anchor table is **consts
 shipped with the binary** (Q6 — *"trusted with the binary"* excludes an
 operator-editable carrier; a `config/*.json` is a different mechanism with a
-different trust model, and rule 71's data-not-control-flow is a property the
+different trust model, and rule 171's data-not-control-flow is a property the
 shape has, not the reason for it); `Trust` is the pipeline input (Q1), and
 `BelowAnchor`'s meaning when slice 6 lands it is **already written** at
 `:293` — band 1's skeleton, not an ad-hoc skip list; and the rows this slice
@@ -134,7 +134,7 @@ Row-count check: 3 = the `pending` entries at `census.rs:297`–`:299`.
 - **F10 — the mode decision is due now by the contract's own clause, but its effect has no subject until slice 6.** §13: *"decide **before** `validate` acquires callers beyond the store tests and the E2 driver — the signature is one parameter today and every later caller is a retrofit"*. The E2 driver is the caller, it is being written in #806, and `validate` has **one** production call site (`connector.rs:271`). Yet the mode's *effect* — proof rows not run — has nothing to act on (4.I `implemented 0 / enforced 19`), and its stated falsifier (*"a band-1 sync test that connects a skeleton block under `RuleSet::GENESIS` and is refused"*) cannot even be written: nothing refuses a skeleton today, and `Candidate` (`block.rs:95`) holds full `Transaction`s, so a skeleton block has **no type**. That last point is a slice-6 / `PDM-Q6` finding this pre-flight surfaces and does not resolve: band-1 needs a candidate shape before it needs a trust posture. The resolution the defaults take (§4.1): settle the **parameter** now in its final shape — it is what E1 needs anyway — and let it grow the posture arm when there is a row to skip, with constructors so no caller is retrofitted.
 - **F11 — one predicate, two C++ arms.** The main-chain arm guards `check_block` with `is_in_checkpoint_zone(height)` (`checkpoints.cpp:68`: `height ≤ last anchor`), which is redundant with `check_block`'s own `find` (`:75`); the alt arm calls `check_block` unguarded. Behaviour is identical — equality at exactly the anchored heights — so the Rust predicate is one function and the zone test is not a rule (it is the C++ avoiding a map lookup). `is_in_checkpoint_zone` **is** load-bearing elsewhere: `PDM-Q5`'s band 1 is *"height ≤ C"*, the same predicate; it lands as `ReleaseAnchors::covers(height)` for `Trust` to use, not as a rule.
 - **F12 — E1 refuses as `form` in C++ (`reject_block_form`) but is view-bound in Rust.** The equality needs the connecting height, which only the view knows; the stateless stage cannot evaluate it. It joins the `judge_block!` list in census order (A2, B5, C1, C2, D1, **E1**), `Locus::Block`.
-- **F13 — the C++ holder for E5 exists and is named.** `tests/core_tests/checkpoint_conflict_rollback.cpp :: gen_checkpoint_conflict_rollback` (registered `chaingen_main.cpp:128`), plus `tests/unit_tests/checkpoints.cpp` for E2's three arms and `checkpoint_uniformity.cpp` for rule 71 across networks. Relevant to §8 Q4: if E5 is held until the Rust writer wires the remedy, the hold has a citable test in the `held_by_cxx` form. **UPDATE 2026-10-28:** those three C++ files are deleted with the store flip. The holders are the Rust anchor table and the alt-rule tests.
+- **F13 — the C++ holder for E5 exists and is named.** `tests/core_tests/checkpoint_conflict_rollback.cpp :: gen_checkpoint_conflict_rollback` (registered `chaingen_main.cpp:128`), plus `tests/unit_tests/checkpoints.cpp` for E2's three arms and `checkpoint_uniformity.cpp` for rule 171 across networks. Relevant to §8 Q4: if E5 is held until the Rust writer wires the remedy, the hold has a citable test in the `held_by_cxx` form. **UPDATE 2026-10-28:** those three C++ files are deleted with the store flip. The holders are the Rust anchor table and the alt-rule tests.
 
 ---
 
@@ -147,7 +147,7 @@ Row-count check: 3 = the `pending` entries at `census.rs:297`–`:299`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Anchor { pub height: BlockHeight, pub hash: BlockHash }
 
-/// The release-carried anchor table for one network — rule-71 DATA, the
+/// The release-carried anchor table for one network — rule-171 DATA, the
 /// `RuleSchedule::for_network` shape. Strictly ascending by height (a
 /// `const fn well_formed` refuses a table that is not, at compile time, as
 /// `RuleSchedule::well_formed` does). Empty on every network today, exactly
@@ -240,7 +240,7 @@ was that no rule reads the identity, and E1 does.
 
 Commit plan (rules crate first; the signature commit sequenced per Q2):
 
-1. `anchors.rs`: `Anchor`, `ReleaseAnchors` (+ `for_network`, `well_formed` compile gate, `EMPTY`, `for_tests`), tests, rule-71 uniformity test (the three public tables are identical today and the test says so *as data*).
+1. `anchors.rs`: `Anchor`, `ReleaseAnchors` (+ `for_network`, `well_formed` compile gate, `EMPTY`, `for_tests`), tests, rule-171 uniformity test (the three public tables are identical today and the test says so *as data*).
 2. B6 to the head of `validate` (F8); `BlockContext.hash`; `ValidatedBlock::derive(hash, …)`; refute the stale doc clause.
 3. `Trust` + `validate(…, trust: &Trust)`; every in-tree caller (store fixtures/tests, harness) passes `&Trust::full(&ReleaseAnchors::EMPTY)`; **`connector.rs:271` if #806 has merged** (Q2).
 4. E1 rule + fixtures; registry `E1 implemented(crate::rules::anchors::E1)`.
@@ -343,7 +343,7 @@ type holds `&'static [Anchor]`, which is the point — no runtime table).
 - **Round 0 RULED (2026-09-20).** All seven on the defaults, with the
   reframing that decides them written into §0: this slice houses `PDM-Q5`'s
   anchor model; it does not port 4.E. Q6's reason is the ruling's *"trusted
-  with the binary"*, not rule 71. Q1 inherits `BelowAnchor`'s semantics from
+  with the binary"*, not rule 171. Q1 inherits `BelowAnchor`'s semantics from
   `PDM-Q5` `:293` (band 1's skeleton). Q2's E5 wiring goes to FOLLOWUPS
   (owner DRS-E2), not in-PR. E2's subsumption names both blockers.
 
@@ -426,13 +426,13 @@ type holds `&'static [Anchor]`, which is the point — no runtime table).
   **RULED: yes** — a "why absent" discriminator has no subject until slice 6
   gives it one.
 - **Q6 — the anchor table's home.** Rust consts in `shekyl-chain-rules`
-  beside `RuleSchedule` (`for_network`, rule-71 data), or `config/*.json`
+  beside `RuleSchedule` (`for_network`, rule-171 data), or `config/*.json`
   through the genesis tool's pin machinery? **Default: consts** — the table
   is consensus-adjacent release data with a compile-time well-formedness
   gate, like the schedule, and it is empty; a `config/` carrier is a
   release-tooling question for the first checkpoint release
   (`PDM-Q5`'s item), not for the type.
-  **RULED: consts — and `PDM-Q5` is the reason, not rule 71.** *Release-
+  **RULED: consts — and `PDM-Q5` is the reason, not rule 171.** *Release-
   carried* means shipped with the binary. A `config/*.json` an operator can
   edit is a different mechanism with a different trust model: it would let
   an operator set their own anchor, which is exactly what *"trusted with the

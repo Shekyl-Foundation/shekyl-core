@@ -73,7 +73,10 @@ fn run_child_if_requested() {
     .iter()
     .map(std::ffi::OsString::from)
     .collect();
-    let status = shekyl_daemon::run::main(
+    // The default configuration file is the machine's on Unix
+    // (`/etc/shekyl`), whatever the platform says, and a host that runs a
+    // regtest node keeps its settings there. This daemon reads none of it.
+    let status = shekyl_daemon::run::main_loading(
         &args,
         &Platform {
             home: Some(dir),
@@ -81,6 +84,7 @@ fn run_child_if_requested() {
             session_dir: None,
             service_rendezvous: None,
         },
+        shekyl_daemon_config::load_default_file_unread,
     );
     std::process::exit(status);
 }
@@ -160,7 +164,9 @@ fn wait_for_owner(daemon: &mut Running, dir: &Path) -> (LocalTarget, String) {
         if let Some(status) = daemon.child.try_wait().expect("the child") {
             panic!("the {} ended: {status}\n{}", daemon.what, daemon.stderr());
         }
-        if let Ok(bundle) = owner.call::<wire::RpcBundleShow>(&NoParams) {
+        if let Ok(bundle) =
+            owner.call::<wire::RpcBundleShow>(&NoParams, shekyl_rpc_transport::local::CALL_WITHIN)
+        {
             let text = shekyl_rpc_transport::channel::bundle_text(&bundle.bundle.0);
             return (owner, text);
         }
@@ -300,10 +306,13 @@ fn enroll_dial_call_revoke_and_a_refused_call_after() {
     };
     let admin = enroll::run(&cli, &Enroll::KeyCreate).expect("rpc key create");
     owner
-        .call::<wire::RpcClientAdd>(&ClientCeiling {
-            fingerprint: HashHex::from_hex(&admin).expect("a fingerprint"),
-            ceiling: vec![CeilingWord::Enroll, CeilingWord::View],
-        })
+        .call::<wire::RpcClientAdd>(
+            &ClientCeiling {
+                fingerprint: HashHex::from_hex(&admin).expect("a fingerprint"),
+                ceiling: vec![CeilingWord::Enroll, CeilingWord::View],
+            },
+            shekyl_rpc_transport::local::CALL_WITHIN,
+        )
         .expect("the owner enrolls the administrator");
 
     // The tunnel's key.
@@ -523,7 +532,13 @@ fn enroll_dial_call_revoke_and_a_refused_call_after() {
         std::thread::sleep(POLL);
     };
     if let Some(refused) = refused {
-        assert_eq!(refused, "The node revoked this client's enrollment.");
+        assert!(
+            refused.starts_with("The node revoked this client's enrollment.")
+                && refused.contains(&fingerprint)
+                && refused.contains("rpc client add")
+                && refused.contains("wallet"),
+            "{refused}"
+        );
     }
     let deadline = Instant::now() + Duration::from_secs(30);
     let ended = loop {

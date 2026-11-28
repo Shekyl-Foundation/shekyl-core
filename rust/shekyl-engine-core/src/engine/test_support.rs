@@ -968,6 +968,15 @@ pub(crate) fn make_synthetic_block(height: u64, parent_hash: BlockHash) -> Scann
     }
 }
 
+/// The node a test's scan task is started with when the test never lets the
+/// dispatch driver sign a stake at its due block: nothing answers on it, so
+/// a due plan's fill waits as `NodeUnreachable` (a temporary reason). A test
+/// that signs a stake drives `Engine::sign_bond_at_due` itself, with the real
+/// node.
+pub(crate) fn node_never_reached() -> shekyl_rpc_transport::DaemonTarget {
+    shekyl_rpc_transport::DaemonTarget::address("http://127.0.0.1:1")
+}
+
 /// Canonical [`PFundingOutputRecord`] test fixture — delegates to the
 /// feature-gated `__test_helpers` builder, which owns the full field list
 /// (one owner: a field added to the record is applied there once, and the
@@ -1095,7 +1104,7 @@ use tempfile::TempDir;
 /// wallet's daemon target (`first_stake`'s fill): paths under test refuse
 /// before anything reads it.
 pub(crate) fn dummy_node() -> shekyl_rpc_transport::DaemonTarget {
-    shekyl_rpc_transport::DaemonTarget::address("http://127.0.0.1:1")
+    shekyl_rpc_transport::DaemonTarget::fixture_address("http://127.0.0.1:1")
 }
 
 /// A `DaemonClient` that never connects: paths under test short-circuit

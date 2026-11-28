@@ -7,6 +7,7 @@
 //! the sync-over-async persistence drive.
 
 use shekyl_address::Network;
+use shekyl_crypto_pq::address_derivation_freeze::address_derivation_manifest_self_check;
 use shekyl_crypto_pq::wallet_envelope::WalletEnvelopeError;
 use shekyl_engine_file::{SafetyOverrides, WalletFileError};
 
@@ -37,6 +38,51 @@ pub(super) fn map_wallet_file_error(err: WalletFileError, expected: Network) -> 
             expected,
         },
         other => OpenError::Io(IoError::WalletFile(other)),
+    }
+}
+
+/// Refuse when this binary's address-derivation corpus does not hash to its
+/// pin, naming the platform the binary was built for.
+///
+/// Called first on create, restore and open, before any derivation. It costs
+/// about 0.6 ms on the floor device, 1.5 ms at worst from a cold page cache
+/// (decision log, 2026-11-23), so it runs at every open.
+pub(super) fn check_address_derivation() -> Result<(), OpenError> {
+    #[cfg(test)]
+    let forced_failure = DERIVATION_CHECK_FAILS.with(std::cell::Cell::get);
+    #[cfg(not(test))]
+    let forced_failure = false;
+
+    if forced_failure || address_derivation_manifest_self_check().is_err() {
+        return Err(OpenError::DerivationSelfCheckFailed {
+            platform: format!("{} {}", std::env::consts::OS, std::env::consts::ARCH),
+        });
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+thread_local! {
+    static DERIVATION_CHECK_FAILS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// While held, [`check_address_derivation`] fails on this thread. The corpus
+/// is compiled in, so a test has no other way to make the real check fail.
+#[cfg(test)]
+pub(super) struct DerivationCheckFails;
+
+#[cfg(test)]
+impl DerivationCheckFails {
+    pub(super) fn new() -> Self {
+        DERIVATION_CHECK_FAILS.with(|fails| fails.set(true));
+        Self
+    }
+}
+
+#[cfg(test)]
+impl Drop for DerivationCheckFails {
+    fn drop(&mut self) {
+        DERIVATION_CHECK_FAILS.with(|fails| fails.set(false));
     }
 }
 

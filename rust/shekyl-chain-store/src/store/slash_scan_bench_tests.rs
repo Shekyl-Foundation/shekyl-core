@@ -104,7 +104,7 @@
 //!
 //! What ARW-Q1 reads is the **ratio** — the slashing judge against the
 //! ordinary one — because both sides run the same code on the same machine
-//! and the floor device (rule 76) scales both; §3.1 records the figures
+//! and the floor device (rule 176) scales both; §3.1 records the figures
 //! with the machine they were taken on. ARW-Q1 reopens if a run on the
 //! floor device shows the slashing connect dominating the ordinary one,
 //! which is also how the §3.1 reading is falsified. It stays ignored for

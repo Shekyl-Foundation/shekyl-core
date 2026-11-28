@@ -40,7 +40,7 @@ pub(crate) use shekyl_types::{BlockCount, PSlot};
 /// How many slots past the current cursor `assemble()` pre-derives into the
 /// held set (`ARCHIVAL_BOND_CONSTRUCTION.md` §10.2, Model D).
 ///
-/// # Rationale and bounds (`75-system-autonomy.mdc`)
+/// # Rationale and bounds (`175-system-autonomy.mdc`)
 ///
 /// `k` is the one tuning knob of Model D. The derive-forward set at open is
 /// `{persisted bonded slots} ∪ {cursor ..= cursor + k}`: the bonded slots are
@@ -75,7 +75,7 @@ pub(crate) const ARCHIVAL_PERSONA_LOOKAHEAD: u32 = 2;
 /// steady-state cost of the window is a map load. The one-time derivation
 /// (~W PQ keygens) is paid at wallet create / first open after upgrade — a
 /// moment that already runs full PQ account keygen, sized to stay small at
-/// the rule-76 device floor.
+/// the rule-176 device floor.
 ///
 /// - **Width.** A restore-from-seed recovers at most `W` slots of staking
 ///   history per open+rescan cycle (`ceil(depth / W)` cycles for deeper
@@ -379,6 +379,21 @@ impl RetirementWitness {
             shekyl_archival_retention::archival_params(),
         )
         .then_some(Self { p_canonical_id })
+    }
+
+    /// Build a witness for a persona whose planned stake ended without a
+    /// bond (`ARCHIVAL_BOND_POST_DELAY.md` BD-Q3 as ruled 2026-11-26).
+    /// `drained` is produced only by
+    /// [`PendingPostBlock::drained_plans`](shekyl_engine_state::PendingPostBlock::drained_plans),
+    /// so the value is the predicate: the scan covers the funding block, the
+    /// slot holds no live funding, and no drain is in flight. The persona
+    /// never bonded, so it has no claim window and no `Release` to owe. The
+    /// actor's funded-gate still refuses a slot that gained funding after
+    /// that read.
+    pub(crate) fn from_drained(drained: &shekyl_engine_state::DrainedEndedPlan) -> Self {
+        Self {
+            p_canonical_id: drained.persona(),
+        }
     }
 }
 
@@ -687,6 +702,11 @@ pub(crate) enum StakeEngineError {
          bond request will not help until it does"
     )]
     RngDegeneracy,
+
+    /// The daemon named its own remedy while the bond was being read.
+    /// Nothing was persisted.
+    #[error("{0}")]
+    Daemon(shekyl_rpc_client::DaemonFault),
 
     /// The [`PersonaHandle`] and [`PersistedBondTicket`](crate::engine::stake_persist::PersistedBondTicket) passed to [`PlanBondPost`](crate::engine::stake_engine::persona::PlanBondPost)
     /// name different persona slots. A ticket witnesses the durable persist for a

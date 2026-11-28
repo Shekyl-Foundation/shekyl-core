@@ -3,6 +3,10 @@ description: Every GUI feature must enumerate failure modes as part of design, n
 globs:
   - rust/shekyl-cli/**
   - rust/shekyl-wallet*/**
+  - src/**
+  - src-tauri/src/**
+scope: estate
+repos: [core, gui]
 ---
 
 # Failure-Mode UX as First-Class Scope

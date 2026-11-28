@@ -8,7 +8,8 @@
 //! The daemon keeps four files across boots and nothing else. Guards, keys
 //! and the onion stay in the per-boot directory, with one exception: a
 //! persistent onion (`tor-onion-key-file`) keeps its guards too, in Tor's
-//! `state` file, in a directory of that onion's own ([`GuardState`];
+//! `state` file and the guard manager's state file, in a directory of that
+//! onion's own ([`GuardState`];
 //! `TSR-Q2` and `TSR-Q8` as amended, Rick, 2026-11-21). A file is copied by reading
 //! the descriptor that was opened, never by trusting the path and never by
 //! hard link: Tor appends to `cached-microdescs.new` in place, so a link
@@ -159,8 +160,9 @@ pub const GUARD_STATE_PREFIX: &str = "tor-guard-state-";
 /// per-boot directory at launch, and back after a clean stop of a Tor that
 /// bootstrapped, by the descriptor opened, a link or an oversize file
 /// counting as missing. Stock Tor keeps its second-layer guards in memory
-/// only, so those are still drawn again at every start; keeping them is the
-/// next increment's.
+/// only, so the guard manager pins and keeps them, its state file in this
+/// same directory (`TSR-W1`). Only `state` is ever copied in or out; the
+/// manager's file stays here.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GuardState {
     path: PathBuf,
@@ -180,6 +182,19 @@ impl GuardState {
     #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// Create this directory owner-only, or accept it when it already is a
+    /// real directory. The guard manager's own state file is kept here too
+    /// (`TSR-W1`), beside Tor's `state`, so it is there before the first
+    /// pin's save.
+    ///
+    /// # Errors
+    ///
+    /// The directory cannot be made, or the name is a symbolic link or not
+    /// a directory.
+    pub fn ensure(&self) -> io::Result<()> {
+        ensure_directory(&self.path)
     }
 
     /// Copy the kept `state` into `data_dir`, a fresh per-boot directory.

@@ -51,7 +51,7 @@
 # tor = "managed"
 
 # The operator's Tor SOCKS endpoint; required with tor = operator.
-# tor-socks = "127.0.0.1:11029"
+# tor-socks = "<address>:<port>"
 
 # The SOCKS username for tor-socks.
 # tor-socks-username = "<secret>"
@@ -60,11 +60,11 @@
 # tor-socks-password = "<secret>"
 
 # This node's onion service and virtual port, on the operator's Tor.
-# tor-onion = "<56 characters>.onion:11021"
+# tor-onion = "<56 characters>.onion:12021"
 
 # The local endpoint the operator's Tor forwards tor-onion to; required
 # with it.
-# tor-onion-listen = "127.0.0.1:11029"
+# tor-onion-listen = "<address>:<port>"
 
 # This node's persistent onion: Tor's own hs_ed25519_secret_key; tor =
 # managed only. Unset, the managed Tor's onion is new at every boot.
@@ -76,7 +76,7 @@
 # tor-file = "/path"
 
 # A SOCKS proxy for clearnet dials.
-# clearnet-socks = "127.0.0.1:11029"
+# clearnet-socks = "<address>:<port>"
 
 # The SOCKS username for clearnet-socks.
 # clearnet-socks-username = "<secret>"
@@ -87,11 +87,11 @@
 # The clearnet listen endpoints; `none` is dial-only on clearnet. Beside
 # `clearnet off`, `none` confirms it.
 # Default: 0.0.0.0 and the network's p2p port.
-# clearnet-listen = ["127.0.0.1:11029"]
+# clearnet-listen = ["0.0.0.0:12021"]
 
 # The clearnet endpoints peers can reach this node at; at most one per
 # address family. Beside `clearnet off`, `none` confirms it.
-# clearnet-advertise = ["<public-address>:11021"]
+# clearnet-advertise = ["<public-address>:12021"]
 
 # Accept peers at private addresses, for a private test network.
 # p2p-local = true
@@ -148,7 +148,7 @@
 # The plaintext full-access listeners, loopback only; `none` is no admin
 # listener.
 # Default: 127.0.0.1 and the network's rpc port.
-# rpc-admin-listen = ["127.0.0.1:11029"]
+# rpc-admin-listen = ["127.0.0.1:12029"]
 
 # The plaintext view listeners, loopback only; an address with no port
 # takes the network's view port.

@@ -59,6 +59,7 @@ use std::collections::BTreeSet;
 
 use shekyl_curve_tree::AssembleInput;
 use shekyl_engine_state::pscan_state::{PFundingOutputRecord, PScanState};
+use shekyl_engine_state::PendingPostBlock;
 use shekyl_standoff::EXIT_FEE_RESERVE_ATOMIC;
 use shekyl_tx_builder::{LeafEntry, TreeContext};
 use shekyl_types::{BlockHeight, GlobalOutputIndex, PCanonicalId};
@@ -205,48 +206,66 @@ impl From<DrainSelectError> for DrainError {
     }
 }
 
-/// Witness that a persona's **terminal exit is already public on-chain**:
-/// its confirmed `Release` sits in the sealed P-scan state's
-/// [`pending_releases`](PScanState::pending_releases) — the same authoritative
-/// "no future `Release` is owed" signal the dispatch seam's reserve exemption
-/// reads.
+/// Witness that a persona **owes no exit**, so its drain may sweep it to zero
+/// with no exit-fee reserve. Two facts make that true, each with its own
+/// constructor:
 ///
-/// Private field + the one fallible constructor, so a
-/// [`DrainIntent::TerminalSweep`] is **unconstructable for a live persona**
-/// at the type level (the `load_seal_basis` unconstructable-pair pattern):
-/// the witness makes façade-level misuse a compile error, while the
-/// AUTHORITATIVE check stays the dispatch seam's own basis re-resolution —
-/// a witness minted from one seal read can be stale by the seam's, and the
+/// - its terminal `Release` is public on-chain: the confirmed exit sits in
+///   the sealed P-scan state's
+///   [`pending_releases`](PScanState::pending_releases)
+///   ([`Self::for_released`]);
+/// - its planned stake ended without a bond (`ARCHIVAL_BOND_POST_DELAY.md`
+///   BD-Q3 as ruled 2026-11-26): it never bonded, so no `Release` can ever be
+///   owed, and its funding is drained to the principal
+///   ([`Self::for_ended_plan`]).
+///
+/// Private field + fallible constructors, so a [`DrainIntent::TerminalSweep`]
+/// is **unconstructable for a live persona** at the type level (the
+/// `load_seal_basis` unconstructable-pair pattern): the witness makes
+/// façade-level misuse a compile error, while the AUTHORITATIVE check stays
+/// the dispatch seam's own basis re-resolution
+/// ([`SealBasis::owes_no_exit`](super::pscan::seal_basis::SealBasis::owes_no_exit))
+/// — a witness minted from one seal read can be stale by the seam's, and the
 /// seam refuses the divergence rather than trusting the token
 /// (`submit_drain`).
 #[derive(Clone, Copy)]
-pub(crate) struct TerminalExitObserved {
+pub(crate) struct NoExitOwed {
     p_canonical_id: PCanonicalId,
 }
 
-impl TerminalExitObserved {
+impl NoExitOwed {
     /// Mint the witness iff `p_canonical_id`'s terminal `Release` has been
     /// observed confirmed on-chain. `None` for a live persona — the caller
     /// has no sweep to request.
-    pub(crate) fn for_persona(pscan: &PScanState, p_canonical_id: PCanonicalId) -> Option<Self> {
+    pub(crate) fn for_released(pscan: &PScanState, p_canonical_id: PCanonicalId) -> Option<Self> {
         pscan
             .pending_releases()
             .contains_key(&p_canonical_id)
             .then_some(Self { p_canonical_id })
     }
 
-    /// The exited persona the witness names.
+    /// Mint the witness iff `p_canonical_id`'s planned stake ended without a
+    /// bond and its drain is owed. `None` otherwise.
+    pub(crate) fn for_ended_plan(
+        pending: &PendingPostBlock,
+        p_canonical_id: PCanonicalId,
+    ) -> Option<Self> {
+        pending
+            .has_ended_plan_for(&p_canonical_id)
+            .then_some(Self { p_canonical_id })
+    }
+
+    /// The persona the witness names.
     pub(crate) fn p_canonical_id(&self) -> PCanonicalId {
         self.p_canonical_id
     }
 }
 
-impl std::fmt::Debug for TerminalExitObserved {
-    /// The exit itself is public on-chain, but the id still follows the
-    /// persona-key no-clear-`Debug` discipline of the state it was minted
-    /// from.
+impl std::fmt::Debug for NoExitOwed {
+    /// The id follows the persona-key no-clear-`Debug` discipline of the
+    /// state it was minted from.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("TerminalExitObserved(<redacted persona>)")
+        f.write_str("NoExitOwed(<redacted persona>)")
     }
 }
 
@@ -256,7 +275,7 @@ impl std::fmt::Debug for TerminalExitObserved {
 /// validated by the F-D1 amount stage. The `TerminalSweep` arm is
 /// `collect_unstaked`'s — no caller amount exists; the pass's payment is an
 /// output of selection (`Σ selected − fee`,
-/// [`select_for_sweep`]), reachable only under a [`TerminalExitObserved`]
+/// [`select_for_sweep`]), reachable only under a [`NoExitOwed`]
 /// witness. Exactness is the sweep's purpose: the funded retirement gate
 /// needs the slot at zero, and a shaped or user-guessed amount leaves dust
 /// forever (the `unstake_facade` finding).
@@ -265,9 +284,10 @@ pub(crate) enum DrainIntent {
     /// Move exactly this user-requested amount to the principal; the
     /// residual returns to `P` as change.
     Payment(AtomicUnits),
-    /// Sweep the exited persona's pool to the principal, one capped pass at
-    /// a time, zero change by construction.
-    TerminalSweep(TerminalExitObserved),
+    /// Sweep the pool of a persona that owes no exit (exited, or whose plan
+    /// ended without a bond) to the principal, one capped pass at a time,
+    /// zero change by construction.
+    TerminalSweep(NoExitOwed),
 }
 
 /// What one orchestrated drain moved — the output twin of [`DrainIntent`].
@@ -736,7 +756,7 @@ fn scoped_records(
 /// 4. **Assemble paths** — every membership path against ONE reference
 ///    snapshot ([`CurveTreeHandle::assemble_tx`]), zipped into
 ///    [`FundingInputContext`]s + a shared [`TreeContext`] (the exact
-///    `assemble_bond_post` shape).
+///    `sign_bond_at_due` shape).
 /// 5. **Hand off** — [`StakeEngineHandle::assemble_drain`]; derivation,
 ///    proving, and signing stay inside the actor, and the reply returns
 ///    unbroadcast.
@@ -891,7 +911,7 @@ pub(crate) async fn orchestrate_drain(
 
     // 4. Assemble every membership path against ONE reference snapshot, then
     //    zip records↔paths into the funding contexts (the exact
-    //    `assemble_bond_post` shape — one shared TreeContext, per-input
+    //    `sign_bond_at_due` shape — one shared TreeContext, per-input
     //    leaf chunk + layers).
     let assemble_inputs: Vec<AssembleInput> = selected
         .iter()

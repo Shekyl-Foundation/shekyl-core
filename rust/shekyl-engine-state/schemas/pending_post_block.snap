@@ -17,6 +17,517 @@
         }
       },
       {
+        "name": "plans",
+        "ty": {
+          "name": "Vec<T>",
+          "ty": {
+            "Seq": {
+              "name": "PendingBondPlan",
+              "ty": {
+                "Struct": [
+                  {
+                    "name": "p_slot",
+                    "ty": {
+                      "name": "PSlot",
+                      "ty": {
+                        "NewtypeStruct": {
+                          "name": "u32",
+                          "ty": "U32"
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "name": "persona",
+                    "ty": {
+                      "name": "PCanonicalId",
+                      "ty": {
+                        "NewtypeStruct": {
+                          "name": "[T; N]",
+                          "ty": {
+                            "Tuple": [
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "name": "posture",
+                    "ty": {
+                      "name": "PlannedPosture",
+                      "ty": {
+                        "Enum": [
+                          {
+                            "name": "SupportCompleteTree",
+                            "ty": "UnitVariant"
+                          },
+                          {
+                            "name": "Market",
+                            "ty": {
+                              "StructVariant": [
+                                {
+                                  "name": "shard_ids",
+                                  "ty": {
+                                    "name": "Vec<T>",
+                                    "ty": {
+                                      "Seq": {
+                                        "name": "u64",
+                                        "ty": "U64"
+                                      }
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  {
+                    "name": "draw",
+                    "ty": {
+                      "name": "BlockCount",
+                      "ty": {
+                        "NewtypeStruct": {
+                          "name": "u64",
+                          "ty": "U64"
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "name": "requested_at",
+                    "ty": {
+                      "name": "ChainCount",
+                      "ty": {
+                        "NewtypeStruct": {
+                          "name": "u64",
+                          "ty": "U64"
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "name": "funding_gindexes",
+                    "ty": {
+                      "name": "Vec<T>",
+                      "ty": {
+                        "Seq": {
+                          "name": "GlobalOutputIndex",
+                          "ty": {
+                            "NewtypeStruct": {
+                              "name": "u64",
+                              "ty": "U64"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "name": "funded_through",
+                    "ty": {
+                      "name": "BlockHeight",
+                      "ty": {
+                        "NewtypeStruct": {
+                          "name": "u64",
+                          "ty": "U64"
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "name": "wait",
+                    "ty": {
+                      "name": "Option<T>",
+                      "ty": {
+                        "Option": {
+                          "name": "PlanWait",
+                          "ty": {
+                            "Enum": [
+                              {
+                                "name": "NodeUnreachable",
+                                "ty": "UnitVariant"
+                              },
+                              {
+                                "name": "NodeSyncing",
+                                "ty": "UnitVariant"
+                              },
+                              {
+                                "name": "WalletBehind",
+                                "ty": "UnitVariant"
+                              },
+                              {
+                                "name": "FeeAboveFunding",
+                                "ty": "UnitVariant"
+                              },
+                              {
+                                "name": "NodeNotLocal",
+                                "ty": "UnitVariant"
+                              },
+                              {
+                                "name": "NodeMismatch",
+                                "ty": "UnitVariant"
+                              },
+                              {
+                                "name": "StoreFailed",
+                                "ty": "UnitVariant"
+                              },
+                              {
+                                "name": "AssemblyFailed",
+                                "ty": "UnitVariant"
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      },
+      {
+        "name": "ended_plans",
+        "ty": {
+          "name": "Vec<T>",
+          "ty": {
+            "Seq": {
+              "name": "EndedPlan",
+              "ty": {
+                "Struct": [
+                  {
+                    "name": "p_slot",
+                    "ty": {
+                      "name": "PSlot",
+                      "ty": {
+                        "NewtypeStruct": {
+                          "name": "u32",
+                          "ty": "U32"
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "name": "persona",
+                    "ty": {
+                      "name": "PCanonicalId",
+                      "ty": {
+                        "NewtypeStruct": {
+                          "name": "[T; N]",
+                          "ty": {
+                            "Tuple": [
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "name": "ending",
+                    "ty": {
+                      "name": "PlanEnding",
+                      "ty": {
+                        "Enum": [
+                          {
+                            "name": "SpentElsewhere",
+                            "ty": "UnitVariant"
+                          },
+                          {
+                            "name": "Withdrawn",
+                            "ty": "UnitVariant"
+                          },
+                          {
+                            "name": "Unbondable",
+                            "ty": "UnitVariant"
+                          },
+                          {
+                            "name": "WaitedOut",
+                            "ty": "UnitVariant"
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  {
+                    "name": "funded_through",
+                    "ty": {
+                      "name": "BlockHeight",
+                      "ty": {
+                        "NewtypeStruct": {
+                          "name": "u64",
+                          "ty": "U64"
+                        }
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      },
+      {
         "name": "posts",
         "ty": {
           "name": "Vec<T>",
@@ -193,9 +704,42 @@
                     }
                   },
                   {
-                    "name": "bond_post_offset_blocks",
+                    "name": "posture",
                     "ty": {
-                      "name": "BlockCount",
+                      "name": "PlannedPosture",
+                      "ty": {
+                        "Enum": [
+                          {
+                            "name": "SupportCompleteTree",
+                            "ty": "UnitVariant"
+                          },
+                          {
+                            "name": "Market",
+                            "ty": {
+                              "StructVariant": [
+                                {
+                                  "name": "shard_ids",
+                                  "ty": {
+                                    "name": "Vec<T>",
+                                    "ty": {
+                                      "Seq": {
+                                        "name": "u64",
+                                        "ty": "U64"
+                                      }
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  {
+                    "name": "due",
+                    "ty": {
+                      "name": "ChainCount",
                       "ty": {
                         "NewtypeStruct": {
                           "name": "u64",
@@ -205,9 +749,9 @@
                     }
                   },
                   {
-                    "name": "anchor_t0",
+                    "name": "funded_through",
                     "ty": {
-                      "name": "ChainCount",
+                      "name": "BlockHeight",
                       "ty": {
                         "NewtypeStruct": {
                           "name": "u64",
@@ -411,6 +955,53 @@
                                     }
                                   ]
                                 }
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "name": "wait",
+                    "ty": {
+                      "name": "Option<T>",
+                      "ty": {
+                        "Option": {
+                          "name": "PlanWait",
+                          "ty": {
+                            "Enum": [
+                              {
+                                "name": "NodeUnreachable",
+                                "ty": "UnitVariant"
+                              },
+                              {
+                                "name": "NodeSyncing",
+                                "ty": "UnitVariant"
+                              },
+                              {
+                                "name": "WalletBehind",
+                                "ty": "UnitVariant"
+                              },
+                              {
+                                "name": "FeeAboveFunding",
+                                "ty": "UnitVariant"
+                              },
+                              {
+                                "name": "NodeNotLocal",
+                                "ty": "UnitVariant"
+                              },
+                              {
+                                "name": "NodeMismatch",
+                                "ty": "UnitVariant"
+                              },
+                              {
+                                "name": "StoreFailed",
+                                "ty": "UnitVariant"
+                              },
+                              {
+                                "name": "AssemblyFailed",
+                                "ty": "UnitVariant"
                               }
                             ]
                           }
@@ -1995,6 +2586,18 @@
                           },
                           {
                             "name": "SpentElsewhere",
+                            "ty": "UnitVariant"
+                          },
+                          {
+                            "name": "Withdrawn",
+                            "ty": "UnitVariant"
+                          },
+                          {
+                            "name": "Unbondable",
+                            "ty": "UnitVariant"
+                          },
+                          {
+                            "name": "WaitedOut",
                             "ty": "UnitVariant"
                           }
                         ]

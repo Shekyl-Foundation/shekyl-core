@@ -7,7 +7,7 @@ by `scripts/ci/check_store_invariant_register.py` (§4).
 **Identifier family:** `SI-1…SI-N`, registered in
 [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2 at birth.
 **Owner:** the `shekyl-chain-store` crate. A row's `Status` cell is written
-only by the increment that builds it (rule 94 §6).
+only by the increment that builds it (rule 194 §6).
 
 ---
 

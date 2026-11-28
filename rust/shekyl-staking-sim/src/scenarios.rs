@@ -168,7 +168,7 @@ pub struct SimConfig {
     /// is below the sustainable purse the market thins and the oldest tail goes under
     /// (the fee market / adaptive share / floor must close the gap).
     pub budget_floor: f64,
-    /// **Adaptive archival reward-share servo** (`75-system-autonomy.mdc`, `burn.rs`
+    /// **Adaptive archival reward-share servo** (`175-system-autonomy.mdc`, `burn.rs`
     /// template): when on, the effective purse is raised above the decayed base toward
     /// `budget_ceiling` in proportion to the observed deep retrieval shortfall — fees
     /// flow to archival automatically when coverage slips, no manual reset. Off ⇒ the

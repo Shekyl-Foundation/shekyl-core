@@ -29,7 +29,7 @@ then one seal input of four gating the remaining §4 UPDATE inputs. That
 gating is **entirely void now** — no seal act, no inputs, no §14.4
 verdict (§13).** Per
 `05-system-thinking.mdc` (specification first) and
-`26-sub-pr-design-discipline.mdc` (cited: consensus-critical sub-PR
+`126-sub-pr-design-discipline.mdc` (cited: consensus-critical sub-PR
 with design rounds before implementation; the pre-flight pass applies
 between the rounds' closure and the first production commit).
 
@@ -749,7 +749,7 @@ finalization without rewrite. CI wires it into the existing
 ## 6. Surface enumeration (implementation scope, grep-anchored)
 
 The eventual implementation PR's complete surface, enumerated in
-advance (criterion-3 shape from `07-consensus-atomic-cutovers.mdc`,
+advance (criterion-3 shape from `107-consensus-atomic-cutovers.mdc`,
 adopted here as evidence discipline; whether that rule's exception is
 *invoked* is a PR-time decision — the current expectation is that the
 implementation fits the standard 5-day/10-commit guidance and does
@@ -769,7 +769,7 @@ not need it):
 | Count-pass boundary + decode tests | `tests/unit_tests/archival_substrate_lmdb.cpp` | §11.8 M3-1/M3-2: filter boundary (below/equal/above `H_close`, equality counts) + malformed-row loud abort — the cases the Rust KAT structurally cannot reach |
 | Docs | `ARCHIVAL_CONSENSUS_STATE.md`, `REWARD_EMISSION_LEG.md`, `docs/FOLLOWUPS.md`, `docs/CHANGELOG.md`, `docs/design/IMPLEMENTATION_INDEX.md` | Gate section + cross-references |
 
-Pre-flight (per `26-sub-pr-design-discipline.mdc`) re-checks this
+Pre-flight (per `126-sub-pr-design-discipline.mdc`) re-checks this
 enumeration against the substrate at the audit pin before the first
 production commit; growth beyond it during implementation is scope
 creep and reopens the round.
@@ -1600,9 +1600,9 @@ mechanically:
   factors into).
 - `REWARD_EMISSION_LEG.md` §4–§5 (the zero-tolerance compare the gate
   is inherited by).
-- `26-sub-pr-design-discipline.mdc` (process frame; pre-flight pass
+- `126-sub-pr-design-discipline.mdc` (process frame; pre-flight pass
   before production commits).
-- `07-consensus-atomic-cutovers.mdc` (surface-enumeration evidence
+- `107-consensus-atomic-cutovers.mdc` (surface-enumeration evidence
   discipline; exception not invoked at spec time).
 
 ---

@@ -31,7 +31,7 @@ use shekyl_types::{BlockHeight, SettlementEpoch};
 /// schedule off the rule set in force
 /// (`shekyl_chain_rules::RuleSet::settlement_schedule`) — the genesis
 /// constant on every issued set, a regtest lever's value on a levered set
-/// — and so never reads a process's environment (rule 71; DRS-E4 `ARW-15`).
+/// — and so never reads a process's environment (rule 171; DRS-E4 `ARW-15`).
 /// The C++ daemon, the FFI shims and the wallet, which hold no rule set,
 /// read [`Self::effective`]: the process-latched schedule the daemon arms
 /// at startup on FAKECHAIN only (`constants::arm_settlement_epoch_override_for_regtest`).

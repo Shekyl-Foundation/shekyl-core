@@ -22,7 +22,7 @@ license.workspace = true
 [dependencies]
 # The network id: `Trust` derives it from the genesis pin, and the spend
 # signature's hash binds it (NETWORK_IDENTITY.md NI-Q4). Data, never a
-# network the rules branch on (rule 71).
+# network the rules branch on (rule 171).
 shekyl-network = { path = "../shekyl-network" }
 # Chain identities and the recorded facts a rule reads: BlockHeight,
 # BlockHash, TxHash, KeyImage, CurveTreeRoot.
@@ -41,7 +41,7 @@ shekyl-wire = { path = "../shekyl-wire" }
 # consumer. No store.
 shekyl-fcmp = { path = "../shekyl-fcmp" }
 # `Network`, the one nettype enum in the workspace: it selects a
-# `RuleSchedule` (rule 71 — data, never control flow). Default features only;
+# `RuleSchedule` (rule 171 — data, never control flow). Default features only;
 # `serde` stays off.
 shekyl-address = { path = "../shekyl-address" }
 # The 4.C/4.D bodies (LWMA-1, MTP/FTL, check_hash) and the difficulty

@@ -191,7 +191,7 @@ impl View {
 /// key (`INPUT_GRAMMAR.md` IG-Q87, IG-Q109).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Enroll {
-    /// `rpc client add <fingerprint> --ceiling <word>...`.
+    /// `rpc client add <fingerprint> <word>` or a repeated `--ceiling <word>`.
     ClientAdd {
         fingerprint: String,
         ceiling: Vec<shekyl_rpc_types::wire::rpc::CeilingWord>,
@@ -235,6 +235,8 @@ pub enum ResolvedCommand {
     // -- Lifecycle --
     Create {
         filename: String,
+        /// `--mnemonic-file`: the words go to this new file, not the screen.
+        mnemonic_file: Option<std::path::PathBuf>,
     },
     Open {
         filename: String,
@@ -242,7 +244,10 @@ pub enum ResolvedCommand {
     Close,
     Restore {
         filename: String,
-        seed_words: Vec<String>,
+        /// `--mnemonic-file`: the words come from this file, not the prompt.
+        mnemonic_file: Option<std::path::PathBuf>,
+        /// `--wallet-restore-height`.
+        restore_height: Option<u64>,
     },
     Refresh,
     Status,

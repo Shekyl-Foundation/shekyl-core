@@ -39,14 +39,28 @@ const TEST_SEED: [u8; 32] = [7u8; 32];
 /// recovery — the recipient only sees the resulting ciphertext.
 const TEST_TX_KEY_SECRET: [u8; 32] = [11u8; 32];
 
-/// Test-only: derive `D + m_i*G` spend public key bytes for a claim index.
-fn derived_spend_pk_for_test(
-    view_scalar: &Zeroizing<Scalar>,
-    spend_public: &EdwardsPoint,
-    idx_le: [u8; 4],
-) -> [u8; 32] {
-    let m = output_spend_offset_scalar(view_scalar, &idx_le);
-    (spend_public + (&m * ED25519_BASEPOINT_TABLE))
+/// First claim index past the primary. V3.0 claims only index 0
+/// (`PRIMARY_CLAIM_INDEX_LE` in `shekyl_crypto_pq::output_claim`).
+const NON_PRIMARY_CLAIM_INDEX: u32 = 1;
+
+/// Spend-public bytes for an output paid to `D + m_i·G`.
+///
+/// `m_i` is `output_spend_offset_scalar`. The point is computed from this
+/// wallet's keys for the one test that pays to a non-primary index.
+/// `LocalKeys` does not store it.
+fn spend_pk_at_claim_index(keys: &LocalKeys, index: u32) -> [u8; 32] {
+    use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
+    use curve25519_dalek::edwards::CompressedEdwardsY;
+    use shekyl_crypto_pq::output_claim::output_spend_offset_scalar;
+
+    let view_scalar = Zeroizing::new(Scalar::from_bytes_mod_order(
+        *keys.keys.view_sk.as_canonical_bytes(),
+    ));
+    let spend_public = CompressedEdwardsY(*keys.keys.spend_pk.as_canonical_bytes())
+        .decompress()
+        .expect("spend_pk from account_from_seed decompresses");
+    let offset = output_spend_offset_scalar(&view_scalar, &index.to_le_bytes());
+    (spend_public + (&offset * ED25519_BASEPOINT_TABLE))
         .compress()
         .to_bytes()
 }
@@ -268,11 +282,7 @@ async fn try_claim_output_for_derived_spend_point_returns_not_mine() {
     // FA-2: outputs paid to `D + m_i*G` for `i ≠ 0` (not bare `D`)
     // surface as `NotMine` — V3.0 claims only the primary address.
     let keys = LocalKeys::from_test_seed(TEST_SEED);
-    let derived_spend_pk = derived_spend_pk_for_test(
-        &keys.derived.view_scalar,
-        &keys.derived.spend_public,
-        7u32.to_le_bytes(),
-    );
+    let derived_spend_pk = spend_pk_at_claim_index(&keys, NON_PRIMARY_CLAIM_INDEX);
 
     let constructed = construct_output(
         shekyl_crypto_pq::TxKey::seeded(TEST_TX_KEY_SECRET)

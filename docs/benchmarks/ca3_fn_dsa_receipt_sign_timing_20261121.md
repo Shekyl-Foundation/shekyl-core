@@ -207,8 +207,8 @@ the commit that carries this record:
     `cargo build -v` carrying `--cfg 'feature="no_avx2"'`. The AVX2 build's
     line must not carry it.
 - **The floor device: the second Raspberry Pi 4 the maintainer provides**
-  (Cortex-A72, rule 76), not the Pi under the cover-traffic lane's claim.
-  It is the 4 GB board, the floor rule 76 names (the other Pi 4 has 8 GB),
+  (Cortex-A72, rule 176), not the Pi under the cover-traffic lane's claim.
+  It is the 4 GB board, the floor rule 176 names (the other Pi 4 has 8 GB),
   running from its SD card with no SSD. The run's 0.8 GB fits it.
   - Target `aarch64-unknown-linux-gnu`, with no rustflags (NEON path).
   - Built on the device from the fresh clone with `-j 2`, as RT-P4's floor
@@ -284,7 +284,7 @@ before that.
 ### The floor device: PASS
 
 **The attempt.** One attempt, on the second Raspberry Pi 4 (the 4 GB board,
-rule 76's floor), under a quiet claim, made by the crypto-audit lane.
+rule 176's floor), under a quiet claim, made by the crypto-audit lane.
 - **Source:** a fresh recursive clone of `d0dfabb5a4`, the commit that
   carries this registration, with `git status` clean.
 - **Build:** on the device at `-j 2`, 02:50:19 to 03:08:12Z, untimed.

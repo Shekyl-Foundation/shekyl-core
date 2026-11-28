@@ -27,7 +27,7 @@ shekyl-version = { path = "../shekyl-version" }
 # the wallet RPC (SV-D).
 shekyl-shard-visual = { path = "../shekyl-shard-visual" }
 # The outbound-endpoint disclosure (`network_posture`) and the host extractor
-# `--rpc-url` validation shares with it; already in this binary's graph
+# `wallet-rpc-endpoint` validation shares with it; already in this binary's graph
 # through shekyl-wallet-rpc.
 shekyl-rpc-transport = { path = "../shekyl-rpc-transport" }
 # `SyncDaemon`'s error. The shell reads a connection failure from it.
@@ -51,7 +51,6 @@ shekyl-os-account = { path = "../shekyl-os-account" }
 # (`paths::wallet_dir_in`), named once beside the wallet files it holds.
 shekyl-engine-file = { path = "../shekyl-engine-file" }
 shekyl-rpc-rendezvous = { path = "../shekyl-rpc-rendezvous" }
-clap = { version = "4", features = ["derive"] }
 rustyline = "15"
 tokio = { version = "1", features = ["full"] }
 # Derives the request shapes in `rpc_client::params`, whose borrowed `&str`
@@ -62,9 +61,6 @@ serde = { workspace = true }
 serde_json = "1"
 zeroize = { workspace = true }
 rpassword = "7"
-# The wallet-RPC session's HTTP agent. The daemon client is
-# `SyncDaemon` and does not use this.
-ureq = { version = "3", default-features = false, features = ["rustls", "socks-proxy"] }
 tracing = "0.1"
 shekyl-logging = { path = "../shekyl-logging" }
 # Already locked through shekyl-logging. A direct edge so the status line
@@ -105,12 +101,6 @@ shekyl-daemon-rpc = { path = "../shekyl-daemon-rpc" }
 # `tx show`'s regtest: a wallet that holds a coinbase, against a real daemon.
 shekyl-engine-core = { path = "../shekyl-engine-core" }
 shekyl-address = { path = "../shekyl-address" }
-
-# The regtest's configuration directory must be owned by this account the
-# whole way up, the daemon's rule; the account is the effective uid, read as
-# the daemon reads it (`rustix::process::geteuid`, unix only).
-[target.'cfg(unix)'.dev-dependencies]
-rustix = { version = "1", features = ["process"] }
 
 [lints]
 workspace = true

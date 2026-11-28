@@ -282,7 +282,7 @@ pub fn ml_kem_chacha_seed_from_d_z(d_z: &[u8; 64]) -> Zeroizing<[u8; 32]> {
 /// The decap key is returned as the typed [`MlKem768DecapKey`]
 /// wrapper. The wrapper carries `Zeroize + ZeroizeOnDrop`; consumers
 /// receive the secret already inside the typed-wrapper discipline of
-/// `.cursor/rules/18-type-placement.mdc` rather than as raw bytes
+/// `.cursor/rules/118-type-placement.mdc` rather than as raw bytes
 /// they must individually wrap. Per `35-secure-memory.mdc`'s hand-off
 /// section (a producer returns the typed wrapper, not raw bytes),
 /// this keeps the decap-key flow within `Zeroize` coverage from

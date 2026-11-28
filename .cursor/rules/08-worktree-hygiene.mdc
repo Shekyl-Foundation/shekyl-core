@@ -1,6 +1,8 @@
 ---
 description: Worktree hygiene. The tested tree and the shipped tree are the same object, by construction, not by inspection.
 alwaysApply: true
+scope: estate
+repos: [core, gui, prism]
 ---
 
 # Worktree hygiene — the tested tree is the shipped tree

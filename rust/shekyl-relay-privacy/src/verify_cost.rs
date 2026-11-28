@@ -26,7 +26,7 @@
 //! speed. Derive them on a fast machine and the result is anonymity that
 //! correlates with operator hardware — silently, because below-spec nodes
 //! miss timing windows with no feedback channel (rule
-//! `76-device-provisioning-floor`). The floor is **Raspberry Pi 4 Model B**
+//! `176-device-provisioning-floor`). The floor is **Raspberry Pi 4 Model B**
 //! (§80.4), so every cell on the spec path carries [`Provenance`] and must be
 //! [`Provenance::MeasuredPi4`] — asserted by test, not review (§87.2). The
 //! x86 arm exists to detect workload changes (§84.2); it derives nothing.
@@ -63,7 +63,7 @@ use crate::basis::{AdmissibleBasis, DerivationMs};
 /// standing in for a value the spec machine owes: `175` (a 2019 laptop
 /// comment), `peers = 8` (a 2015 server graph), `F` (an instrument at degree
 /// 8), and §80.3's own first pricing (x86 × 5.56 presented as "measured").
-/// Rule 76.4 forbids it in prose — **values and increments** are measured on
+/// Rule 176.4 forbids it in prose — **values and increments** are measured on
 /// the floor device, never scaled to it (§85.5 measured the marginal ratio at
 /// 5.98× against the totals' 5.56×, so a scaled increment under-provisions
 /// the tail rows by ~7.5 %). As a field with an assertion on top, the
@@ -79,7 +79,7 @@ pub enum Provenance {
     /// to detect a workload change, never to derive a spec value.
     MeasuredX86,
     /// **Not measured on any machine**: an x86 total multiplied by a factor,
-    /// present only to bracket a decision. Never a spec value (rule 76.4).
+    /// present only to bracket a decision. Never a spec value (rule 176.4).
     ScaledFromX86,
 }
 
@@ -829,7 +829,7 @@ mod tests {
                 Provenance::MeasuredPi4,
                 "spec cell ({n_in}-in, depth {depth}) is not a spec-machine \
                  measurement; a scaled or x86 row is a diagnostic wearing a \
-                 spec value's clothes (§84.2, rule 76.4)"
+                 spec value's clothes (§84.2, rule 176.4)"
             );
             populated += 1;
         }

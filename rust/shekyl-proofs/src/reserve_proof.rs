@@ -11,10 +11,15 @@
 //! output is unspent.
 //!
 //! ```text
-//! Wire format: 69 + 192*N bytes
+//! Wire format: reserve_proof_size(N) = 69 + 192*N bytes
 //!   header: version[1] + schnorr[64] + output_count[4]
 //!   per-output: ho[32] + y[32] + k_amount[32] + key_image[32] + dleq(c[32]+s[32])
 //! ```
+//!
+//! Those two sizes are the sums of the fields, and [`reserve_proof_size`] is
+//! the only length a proof can verify at. Opening refuses a declared count
+//! other than the chain list before that length: the declared count does not
+//! choose how long the proof must be.
 //!
 //! The verifier reads `enc_amount` from the blockchain, NOT from the proof.
 //! This is load-bearing for soundness (see FCMP_PLUS_PLUS.md section 21).
@@ -57,8 +62,51 @@ pub const RESERVE_MESSAGE: IdDomain<3> = IdDomain::new(b"shekyl/reserve-proof-me
 pub const RESERVE_DLEQ_CONTEXT: IdDomain<3> =
     IdDomain::new(b"shekyl/reserve-proof-dleq-context-v1");
 
-const PER_OUTPUT_SIZE: usize = 192; // ho[32]+y[32]+k_amount[32]+key_image[32]+dleq[64]
-const HEADER_SIZE: usize = 69; // version[1]+sig[64]+count[4]
+/// Width of one scalar or compressed point on this proof (`ho`, `y`,
+/// `k_amount`, the key image). One width for the family; the record is
+/// their concatenation plus the DLEQ.
+const FIELD_LEN: usize = 32;
+
+const VERSION_LEN: usize = 1;
+const VERSION_AT: usize = 0;
+const SIG_AT: usize = VERSION_AT + VERSION_LEN;
+/// Little-endian `u32` width of the declared output count.
+const OUTPUT_COUNT_LEN: usize = core::mem::size_of::<u32>();
+const OUTPUT_COUNT_AT: usize = SIG_AT + schnorr::SIG_LEN;
+
+const HO_LEN: usize = FIELD_LEN;
+const HO_AT: usize = 0;
+const Y_LEN: usize = FIELD_LEN;
+const Y_AT: usize = HO_AT + HO_LEN;
+const K_AMOUNT_LEN: usize = FIELD_LEN;
+const K_AMOUNT_AT: usize = Y_AT + Y_LEN;
+const KEY_IMAGE_LEN: usize = FIELD_LEN;
+const KEY_IMAGE_AT: usize = K_AMOUNT_AT + K_AMOUNT_LEN;
+const DLEQ_LEN: usize = DleqProof::SIZE;
+const DLEQ_AT: usize = KEY_IMAGE_AT + KEY_IMAGE_LEN;
+
+const PER_OUTPUT_SIZE: usize = HO_LEN + Y_LEN + K_AMOUNT_LEN + KEY_IMAGE_LEN + DLEQ_LEN;
+const HEADER_SIZE: usize = VERSION_LEN + schnorr::SIG_LEN + OUTPUT_COUNT_LEN;
+
+/// The published wire. The sums above are what the code uses; these pins
+/// are the contract a field-width edit has to meet on purpose.
+const PUBLISHED_HEADER_SIZE: usize = 69;
+const PUBLISHED_PER_OUTPUT_SIZE: usize = 192;
+
+const _: () = assert!(HEADER_SIZE == PUBLISHED_HEADER_SIZE);
+const _: () = assert!(PER_OUTPUT_SIZE == PUBLISHED_PER_OUTPUT_SIZE);
+const _: () = assert!(OUTPUT_COUNT_AT + OUTPUT_COUNT_LEN == HEADER_SIZE);
+const _: () = assert!(DLEQ_AT + DLEQ_LEN == PER_OUTPUT_SIZE);
+const _: () = assert!(OUTPUT_COUNT_LEN == 4);
+
+/// Byte length of a reserve proof for `output_count` outputs.
+///
+/// The header plus one per-output record per output. This is the only
+/// length a verifier accepts for a chain list of that length. The
+/// generator and the opener both call it; neither re-derives the sum.
+pub const fn reserve_proof_size(output_count: usize) -> usize {
+    HEADER_SIZE + output_count * PER_OUTPUT_SIZE
+}
 
 // ── Per-output entry ────────────────────────────────────────────────
 
@@ -93,11 +141,14 @@ fn write_per_output(
     dleq_proof: &DleqProof,
     buf: &mut Vec<u8>,
 ) {
-    buf.extend_from_slice(&ps.ho);
-    buf.extend_from_slice(&ps.y);
-    buf.extend_from_slice(&ps.k_amount);
-    buf.extend_from_slice(key_image.as_bytes());
-    buf.extend_from_slice(&dleq_proof.to_bytes());
+    let start = buf.len();
+    buf.resize(start + PER_OUTPUT_SIZE, 0);
+    let record = &mut buf[start..];
+    record[HO_AT..Y_AT].copy_from_slice(&ps.ho);
+    record[Y_AT..K_AMOUNT_AT].copy_from_slice(&ps.y);
+    record[K_AMOUNT_AT..KEY_IMAGE_AT].copy_from_slice(&ps.k_amount);
+    record[KEY_IMAGE_AT..DLEQ_AT].copy_from_slice(key_image.as_bytes());
+    record[DLEQ_AT..PER_OUTPUT_SIZE].copy_from_slice(&dleq_proof.to_bytes());
 }
 
 // ── Schnorr ─────────────────────────────────────────────────────────
@@ -183,11 +234,11 @@ pub fn generate_reserve_proof(
     let message = assemble_proof_message(network_id, address_bytes, user_message, &per_output_blob);
     let sig = sign_reserve(&b_scalar, &b_point, &message);
 
-    let mut proof = Vec::with_capacity(HEADER_SIZE + n * PER_OUTPUT_SIZE);
-    proof.push(CURRENT_PROOF_VERSION);
-    proof.extend_from_slice(&sig);
-    proof.extend_from_slice(&(n as u32).to_le_bytes());
-    proof.extend_from_slice(&per_output_blob);
+    let mut proof = vec![0u8; reserve_proof_size(n)];
+    proof[VERSION_AT] = CURRENT_PROOF_VERSION;
+    proof[SIG_AT..OUTPUT_COUNT_AT].copy_from_slice(&sig);
+    proof[OUTPUT_COUNT_AT..HEADER_SIZE].copy_from_slice(&(n as u32).to_le_bytes());
+    proof[HEADER_SIZE..].copy_from_slice(&per_output_blob);
 
     Ok(proof)
 }
@@ -236,11 +287,114 @@ pub struct ReserveOnChainOutput {
     pub enc_amount: [u8; 8],
 }
 
+/// One per-output record, split at the field offsets the writer used.
+struct OutputWire {
+    ho: [u8; HO_LEN],
+    y: [u8; Y_LEN],
+    k_amount: [u8; K_AMOUNT_LEN],
+    key_image: [u8; KEY_IMAGE_LEN],
+    dleq: [u8; DLEQ_LEN],
+}
+
+impl OutputWire {
+    fn read(record: &[u8]) -> Self {
+        Self {
+            ho: read_at(record, HO_AT),
+            y: read_at(record, Y_AT),
+            k_amount: read_at(record, K_AMOUNT_AT),
+            key_image: read_at(record, KEY_IMAGE_AT),
+            dleq: read_at(record, DLEQ_AT),
+        }
+    }
+}
+
+fn read_at<const N: usize>(bytes: &[u8], at: usize) -> [u8; N] {
+    let mut out = [0u8; N];
+    out.copy_from_slice(&bytes[at..at + N]);
+    out
+}
+
+/// The count field of a proof whose header is already known to be present.
+fn declared_output_count(proof_bytes: &[u8]) -> usize {
+    let mut raw = [0u8; OUTPUT_COUNT_LEN];
+    raw.copy_from_slice(&proof_bytes[OUTPUT_COUNT_AT..HEADER_SIZE]);
+    u32::from_le_bytes(raw) as usize
+}
+
+/// A reserve proof opened against a chain list of a known length.
+///
+/// Constructing one is the format refusal. The signature and the body are
+/// then what the cryptographic checks read, and a body shorter than one
+/// record per chain output cannot be represented here.
+struct OpenedReserveProof<'a> {
+    signature: [u8; schnorr::SIG_LEN],
+    body: &'a [u8],
+}
+
+impl<'a> OpenedReserveProof<'a> {
+    /// Refuse a declared count other than `chain_count` before the byte length.
+    ///
+    /// The only length that can verify is [`reserve_proof_size`] of the
+    /// chain list. The declared count does not choose that length. Reserve
+    /// proofs compare with equality, so a length derived from the declared
+    /// count is a second predicate a short proof can satisfy on its own
+    /// (a header whose count is zero) and then never leave.
+    fn open(proof_bytes: &'a [u8], chain_count: usize) -> Result<Self, ProofError> {
+        if proof_bytes.len() < HEADER_SIZE {
+            return Err(ProofError::InvalidFormat(
+                "proof too short for header".into(),
+            ));
+        }
+
+        let version = proof_bytes[VERSION_AT];
+        if version != CURRENT_PROOF_VERSION {
+            return Err(ProofError::InvalidFormat(format!(
+                "unsupported proof version {version}, expected {CURRENT_PROOF_VERSION}"
+            )));
+        }
+
+        let declared_count = declared_output_count(proof_bytes);
+        if declared_count != chain_count {
+            return Err(ProofError::InvalidFormat(format!(
+                "proof has {declared_count} outputs but {chain_count} on-chain outputs provided"
+            )));
+        }
+
+        let expected_len = reserve_proof_size(chain_count);
+        if proof_bytes.len() != expected_len {
+            return Err(ProofError::InvalidFormat(format!(
+                "proof length {}, expected {expected_len} for {declared_count} outputs",
+                proof_bytes.len(),
+            )));
+        }
+
+        let mut signature = [0u8; schnorr::SIG_LEN];
+        signature.copy_from_slice(&proof_bytes[SIG_AT..OUTPUT_COUNT_AT]);
+        Ok(Self {
+            signature,
+            body: &proof_bytes[HEADER_SIZE..],
+        })
+    }
+
+    fn record(&self, index: usize) -> &[u8] {
+        let start = index * PER_OUTPUT_SIZE;
+        let end = start + PER_OUTPUT_SIZE;
+        debug_assert!(
+            end <= self.body.len(),
+            "open() returns one record per chain output"
+        );
+        &self.body[start..end]
+    }
+}
+
 /// Verify a reserve proof.
 ///
 /// Returns per-output verification results including key images and
 /// decrypted amounts. The caller is responsible for checking each
 /// key_image against the spent pool.
+///
+/// Format refusal happens while the proof is opened against the chain
+/// list's length, before the signature or any DLEQ.
 ///
 /// # Arguments
 /// - `proof_bytes`: the serialized proof blob
@@ -256,73 +410,27 @@ pub fn verify_reserve_proof(
     spend_pubkey: &[u8; 32],
     on_chain_outputs: &[ReserveOnChainOutput],
 ) -> Result<Vec<VerifiedReserveOutput>, ProofError> {
-    if proof_bytes.len() < HEADER_SIZE {
-        return Err(ProofError::InvalidFormat(
-            "proof too short for header".into(),
-        ));
-    }
-
-    let version = proof_bytes[0];
-    if version != CURRENT_PROOF_VERSION {
-        return Err(ProofError::InvalidFormat(format!(
-            "unsupported proof version {version}, expected {CURRENT_PROOF_VERSION}"
-        )));
-    }
-
-    let mut sig = [0u8; 64];
-    sig.copy_from_slice(&proof_bytes[1..65]);
-
-    let output_count = u32::from_le_bytes(proof_bytes[65..69].try_into().unwrap()) as usize;
-
-    let expected_len = HEADER_SIZE + output_count * PER_OUTPUT_SIZE;
-    if proof_bytes.len() != expected_len {
-        return Err(ProofError::InvalidFormat(format!(
-            "proof length {}, expected {expected_len} for {output_count} outputs",
-            proof_bytes.len(),
-        )));
-    }
-
-    if output_count != on_chain_outputs.len() {
-        return Err(ProofError::InvalidFormat(format!(
-            "proof has {output_count} outputs but {} on-chain outputs provided",
-            on_chain_outputs.len(),
-        )));
-    }
-
-    let per_output_blob = &proof_bytes[HEADER_SIZE..];
+    let opened = OpenedReserveProof::open(proof_bytes, on_chain_outputs.len())?;
 
     let b_point = CompressedEdwardsY(*spend_pubkey)
         .decompress()
         .ok_or(ProofError::InvalidFormat("invalid spend pubkey".into()))?;
 
-    let message = assemble_proof_message(network_id, address_bytes, user_message, per_output_blob);
+    let message = assemble_proof_message(network_id, address_bytes, user_message, opened.body);
 
-    if !reserve_holds(&b_point, &message, &sig) {
+    if !reserve_holds(&b_point, &message, &opened.signature) {
         return Err(ProofError::SignatureFailed);
     }
 
-    let mut results = Vec::with_capacity(output_count);
+    let mut results = Vec::with_capacity(on_chain_outputs.len());
 
     for (i, on_chain) in on_chain_outputs.iter().enumerate() {
-        let offset = i * PER_OUTPUT_SIZE;
-        let chunk = &per_output_blob[offset..offset + PER_OUTPUT_SIZE];
+        let wire = OutputWire::read(opened.record(i));
 
-        let mut ho = [0u8; 32];
-        let mut y_bytes = [0u8; 32];
-        let mut k_amount = [0u8; 32];
-        let mut key_image = [0u8; 32];
-        let mut dleq_bytes = [0u8; 64];
-
-        ho.copy_from_slice(&chunk[0..32]);
-        y_bytes.copy_from_slice(&chunk[32..64]);
-        k_amount.copy_from_slice(&chunk[64..96]);
-        key_image.copy_from_slice(&chunk[96..128]);
-        dleq_bytes.copy_from_slice(&chunk[128..192]);
-
-        let ho_scalar: Scalar = Option::from(Scalar::from_canonical_bytes(ho)).ok_or(
+        let ho_scalar: Scalar = Option::from(Scalar::from_canonical_bytes(wire.ho)).ok_or(
             ProofError::InvalidFormat(format!("non-canonical ho at output {i}")),
         )?;
-        let y_scalar: Scalar = Option::from(Scalar::from_canonical_bytes(y_bytes)).ok_or(
+        let y_scalar: Scalar = Option::from(Scalar::from_canonical_bytes(wire.y)).ok_or(
             ProofError::InvalidFormat(format!("non-canonical y at output {i}")),
         )?;
 
@@ -341,13 +449,13 @@ pub fn verify_reserve_proof(
         let p = expected_o - y_scalar * *T_LAZY;
 
         let ki_point =
-            CompressedEdwardsY(key_image)
+            CompressedEdwardsY(wire.key_image)
                 .decompress()
                 .ok_or(ProofError::InvalidFormat(format!(
                     "invalid key image at index {i}"
                 )))?;
 
-        let dleq_proof = DleqProof::from_bytes(&dleq_bytes);
+        let dleq_proof = DleqProof::from_bytes(&wire.dleq);
         let dleq_msg = assemble_dleq_context(
             network_id,
             address_bytes,
@@ -361,15 +469,15 @@ pub fn verify_reserve_proof(
             )));
         }
 
-        let mut amount_bytes = [0u8; 8];
-        for j in 0..8 {
-            amount_bytes[j] = on_chain.enc_amount[j] ^ k_amount[j];
+        let mut amount_bytes = on_chain.enc_amount;
+        for (masked, mask) in amount_bytes.iter_mut().zip(wire.k_amount) {
+            *masked ^= mask;
         }
         let amount = u64::from_le_bytes(amount_bytes);
 
         results.push(VerifiedReserveOutput {
             output_index: i,
-            key_image: KeyImage::from_canonical_bytes(key_image),
+            key_image: KeyImage::from_canonical_bytes(wire.key_image),
             amount,
         });
     }
@@ -377,7 +485,96 @@ pub fn verify_reserve_proof(
     Ok(results)
 }
 
-/// Compute the expected proof size for a reserve proof.
-pub const fn reserve_proof_size(output_count: usize) -> usize {
-    HEADER_SIZE + output_count * PER_OUTPUT_SIZE
+#[cfg(test)]
+mod tests {
+    use shekyl_network::Network;
+
+    use super::*;
+
+    fn one_output() -> [ReserveOnChainOutput; 1] {
+        [ReserveOnChainOutput {
+            output_key: [0u8; FIELD_LEN],
+            commitment: [0u8; FIELD_LEN],
+            enc_amount: [0u8; 8],
+        }]
+    }
+
+    /// The format error `verify_reserve_proof` returns. These refusals all
+    /// happen before the signature, so the network id is not consulted;
+    /// testnet is the id the round-trip proofs are made under.
+    fn format_error(proof: &[u8], on_chain: &[ReserveOnChainOutput]) -> String {
+        verify_reserve_proof(
+            &Network::Testnet.network_id(),
+            proof,
+            b"addr",
+            b"msg",
+            &[0u8; FIELD_LEN],
+            on_chain,
+        )
+        .expect_err("format refusal happens before the signature")
+        .to_string()
+    }
+
+    fn header_claiming(count: u32) -> Vec<u8> {
+        let mut header = vec![0u8; HEADER_SIZE];
+        header[VERSION_AT] = CURRENT_PROOF_VERSION;
+        header[OUTPUT_COUNT_AT..HEADER_SIZE].copy_from_slice(&count.to_le_bytes());
+        header
+    }
+
+    /// This bites a swapped refusal order: a header whose declared count is
+    /// not the chain list is refused for the count, even though its bytes
+    /// are also the wrong length.
+    ///
+    /// It does NOT cover a body whose length is `reserve_proof_size` of a
+    /// lying count, and it does NOT cover a matching count with a short
+    /// body. Those are the two tests below.
+    #[test]
+    fn a_header_whose_count_is_not_the_chain_list_is_refused_for_the_count() {
+        let text = format_error(&header_claiming(99), &one_output());
+        assert_eq!(
+            text,
+            "invalid proof format: proof has 99 outputs but 1 on-chain outputs provided"
+        );
+    }
+
+    /// This bites deletion of the length refusal on the path that would
+    /// otherwise slice a per-output record past the header. A declared
+    /// count equal to the chain list, and a body shorter than one record,
+    /// is refused for its length.
+    ///
+    /// It does NOT cover the count refusal, and it does NOT by itself keep
+    /// the two checks in order: with the count already equal, either order
+    /// names the length.
+    #[test]
+    fn a_matching_count_with_a_short_body_is_refused_for_its_length() {
+        let text = format_error(&header_claiming(1), &one_output());
+        let expected = reserve_proof_size(1);
+        assert_eq!(
+            text,
+            format!(
+                "invalid proof format: proof length {HEADER_SIZE}, expected {expected} for 1 outputs"
+            )
+        );
+    }
+
+    /// This bites a count check that only runs for a short header. A proof
+    /// whose length is `reserve_proof_size` of its declared count, and whose
+    /// declared count is not the chain list, is refused for the count and
+    /// does not reach the signature.
+    ///
+    /// It does NOT cover a swapped order. Both orders refuse this proof for
+    /// the count, because the length matches the lie. It does NOT cover the
+    /// signature or the per-output checks: the body is zeros.
+    #[test]
+    fn a_well_sized_lie_is_refused_for_the_count() {
+        let mut proof = vec![0u8; reserve_proof_size(2)];
+        proof[VERSION_AT] = CURRENT_PROOF_VERSION;
+        proof[OUTPUT_COUNT_AT..HEADER_SIZE].copy_from_slice(&2u32.to_le_bytes());
+        let text = format_error(&proof, &one_output());
+        assert_eq!(
+            text,
+            "invalid proof format: proof has 2 outputs but 1 on-chain outputs provided"
+        );
+    }
 }

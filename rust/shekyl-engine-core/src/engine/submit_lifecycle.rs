@@ -294,7 +294,7 @@ struct RescanTarget {
 /// lacks the spend) at which the F40-R2 breaker trips
 /// (`DAEMON_SUBMIT_VERDICT.md` §7.2, F40-R2).
 ///
-/// **Default rationale (rule 75).** The breaker bounds a lying daemon's
+/// **Default rationale (rule 175).** The breaker bounds a lying daemon's
 /// work-amplification and alerts the operator; it is not a one-off-race
 /// detector. One fruitless re-scan can be a benign transient (the
 /// executor observed the claim a tick before refresh cleared the lock);

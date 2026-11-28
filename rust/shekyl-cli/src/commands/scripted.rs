@@ -3,25 +3,27 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Non-interactive wallet lifecycle for scripting / automation (WI-RPC-2a).
+//! The file-backed wallet lifecycle (`INPUT_GRAMMAR.md` §12.2).
 //!
-//! The interactive REPL `create` / `restore` verbs prompt on the TTY and show
-//! the seed once on screen — automation (Ansible, CI) cannot drive that. These
-//! subcommands are the deliberate, auditable alternative: the password comes
-//! from a file or stdin, and `create` writes the one-time seed backup to an
-//! explicit `--seed-out` path — owner-only from its first instant: `0600` on
-//! Unix, an owner-only DACL set at `CreateFile` on Windows
-//! (`WINDOWS_WALLET_SUPPORT.md` WP-D8) — instead of a terminal or a redirect.
-//! This is the ONLY sanctioned way for the seed to reach a file — the
-//! interactive path refuses non-TTY output rather than leak it.
+//! The prompt's `wallet create` and `wallet restore` ask on the terminal and
+//! show the seed once on screen, which automation cannot drive. With
+//! `--mnemonic-file` the recovery words go to or come from a file instead:
+//! `wallet create` writes a new file that is owner-only from its first
+//! instant (`0600` on Unix, an owner-only DACL set at `CreateFile` on
+//! Windows, `WINDOWS_WALLET_SUPPORT.md` WP-D8), and `wallet restore` refuses
+//! one another account can read. This is the ONLY sanctioned way for the
+//! seed to reach a file: the prompt path refuses non-TTY output rather than
+//! leak it. The password comes from `wallet-password-file`, or the hidden
+//! prompt at a terminal.
 
 use std::fs::File;
 #[cfg(unix)]
 use std::fs::OpenOptions;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
+use shekyl_options::{Code, Diagnostic, Source};
 use zeroize::Zeroizing;
 
 use crate::outcome::{refusal, CommandFailed, CommandResult, Presentation};
@@ -29,85 +31,188 @@ use crate::rpc_client::{params, RpcSession};
 
 type BoxErr = Box<dyn std::error::Error>;
 
-/// What `create --seed-out` tells a script. The seed itself stays in the file.
+/// Who may read a password or recovery-words file, as a refusal names them:
+/// the configuration file's rule for a file holding a secret.
+#[cfg(unix)]
+const SECRET_FILE_READERS: &str =
+    "this account and root (0600, or 0640 with a group only this account is in)";
+#[cfg(windows)]
+const SECRET_FILE_READERS: &str = "this account, SYSTEM and Administrators";
+
+/// The longest password or recovery-words file read. Recovery words are
+/// a few hundred bytes, and a file past this is not one of these.
+const SECRET_FILE_BYTES_MAX: u64 = 64 * 1024;
+
+/// What `wallet create --mnemonic-file` tells a script. The words stay in
+/// the file.
 #[derive(Debug, Serialize)]
 pub struct CreatedWallet {
     pub name: String,
-    pub seed_out: String,
+    /// The file the words were written to. Absent when they were shown on
+    /// the screen, which happens inside the create and is wiped before this
+    /// receipt is returned.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub backup_file: Option<String>,
 }
 
-/// What `restore --seed-file` tells a script.
+/// What `wallet restore --mnemonic-file` tells a script.
 #[derive(Debug, Serialize)]
 pub struct RestoredWallet {
     pub name: String,
+    /// The first block scanned. `0` scans from genesis.
+    pub restore_height: u64,
 }
 
-/// `shekyl-cli create <name> --seed-out <path>` — non-interactive create.
-#[derive(clap::Args)]
-pub struct CreateArgs {
-    /// Wallet name (file created under --wallet-dir).
-    pub name: String,
-    /// Write the one-time seed backup to this path. Created 0600 and refuses
-    /// to overwrite an existing file. Required — the server never re-exposes
-    /// the seed, so it must be captured now.
-    #[arg(long, value_name = "PATH")]
-    pub seed_out: PathBuf,
-    /// Read the wallet password from this file (a single trailing newline is
-    /// stripped). Mutually exclusive with --password-stdin.
-    #[arg(long, value_name = "PATH")]
-    pub password_file: Option<PathBuf>,
-    /// Read the wallet password from stdin (one line).
-    #[arg(long)]
-    pub password_stdin: bool,
+/// Where `wallet-password-file` says the password is.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PasswordSource {
+    /// A file only this account can read.
+    File(PathBuf),
+    /// One line of standard input.
+    Stdin,
 }
 
-/// `shekyl-cli restore <name> --seed-file <path>` — non-interactive restore.
-#[derive(clap::Args)]
-pub struct RestoreArgs {
-    /// Wallet name (file created under --wallet-dir).
-    pub name: String,
-    /// Read the seed backup from this file — a BIP-39 mnemonic
-    /// (mainnet/stagenet) or a 32-byte raw seed as hex (testnet), i.e. exactly
-    /// what `create --seed-out` wrote.
-    #[arg(long, value_name = "PATH")]
-    pub seed_file: PathBuf,
-    /// Rescan floor: the block height the wallet existed at (default 0 =
-    /// scan from genesis).
-    #[arg(long)]
-    pub restore_height: Option<u64>,
-    /// Read the wallet password from this file (a single trailing newline is
-    /// stripped). Mutually exclusive with --password-stdin.
-    #[arg(long, value_name = "PATH")]
-    pub password_file: Option<PathBuf>,
-    /// Read the wallet password from stdin (one line).
-    #[arg(long)]
-    pub password_stdin: bool,
+impl PasswordSource {
+    /// Read the password into a wiped buffer. A single trailing newline
+    /// (`\n` or `\r\n`) is stripped, the common shape of a piped line, and
+    /// no other whitespace, so a password may hold spaces.
+    ///
+    /// # Errors
+    ///
+    /// The file is missing, another account can read it, it is not text, or
+    /// standard input has no line left.
+    pub fn read(&self) -> Result<Zeroizing<String>, CommandFailed> {
+        let mut password = match self {
+            Self::File(path) => read_secret_text(path, "wallet-password-file")?,
+            Self::Stdin => {
+                let mut line = Zeroizing::new(String::new());
+                let read = std::io::stdin()
+                    .read_line(&mut line)
+                    .map_err(|e| refusal(format!("cannot read the password from stdin: {e}")))?;
+                if read == 0 {
+                    return Err(refusal(
+                        "wallet-password-file is stdin, and standard input has no line left",
+                    ));
+                }
+                line
+            }
+        };
+        strip_one_trailing_newline(&mut password);
+        Ok(password)
+    }
+}
+
+/// The text of a secret file, refused with a typed code when anyone but
+/// this account can read it. Checked and read through one handle, so the
+/// file judged is the file read.
+pub(crate) fn read_secret_text(
+    path: &Path,
+    option: &str,
+) -> Result<Zeroizing<String>, CommandFailed> {
+    let shown = path.display().to_string();
+    let unreadable = |error: String| {
+        refusal(
+            Diagnostic::new(Code::FileUnreadable, Source::Machine)
+                .option(option)
+                .param("path", shown.clone())
+                .param("error", error)
+                .render(),
+        )
+    };
+    let file = match File::open(path) {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(refusal(
+                Diagnostic::new(Code::FileMissing, Source::Cli)
+                    .option(option)
+                    .param("path", shown)
+                    .render(),
+            ));
+        }
+        Err(e) => return Err(unreadable(e.to_string())),
+    };
+    if let Some(principal) = shekyl_daemon_config::file::secret_file_reader(&file, path) {
+        return Err(refusal(
+            Diagnostic::new(Code::FileSecretReadable, Source::Machine)
+                .option(option)
+                .param("path", shown)
+                .param("principal", principal)
+                .param("permitted", SECRET_FILE_READERS)
+                .render(),
+        ));
+    }
+    // Sized up front: a buffer that grew would leave a copy of the secret in
+    // the allocation it left, which `Zeroizing` never sees.
+    let capacity = usize::try_from(SECRET_FILE_BYTES_MAX).map_or(usize::MAX, |max| max + 1);
+    let mut bytes = Zeroizing::new(Vec::with_capacity(capacity));
+    file.take(SECRET_FILE_BYTES_MAX + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| unreadable(e.to_string()))?;
+    if bytes.len() as u64 > SECRET_FILE_BYTES_MAX {
+        return Err(unreadable(format!(
+            "it is longer than {SECRET_FILE_BYTES_MAX} bytes"
+        )));
+    }
+    match std::str::from_utf8(&bytes) {
+        Ok(text) => Ok(Zeroizing::new(text.to_owned())),
+        // Never what the bytes were.
+        Err(_) => Err(unreadable("it is not UTF-8 text".to_owned())),
+    }
+}
+
+/// The password for a file-backed create or restore: the named source, or
+/// the hidden prompt at a terminal.
+pub(crate) fn new_wallet_password(
+    presentation: &Presentation,
+    source: Option<&PasswordSource>,
+) -> Result<Zeroizing<String>, CommandFailed> {
+    if let Some(source) = source {
+        return source.read();
+    }
+    if !presentation.interactive() {
+        return Err(refusal(
+            "a password source is required: set wallet-password-file to a file or stdin",
+        ));
+    }
+    let password = super::read_password("New wallet password: ")?;
+    let confirm = super::read_password("Confirm password: ")?;
+    if password != confirm {
+        return Err(refusal("Passwords do not match."));
+    }
+    Ok(password)
 }
 
 fn local(error: impl std::fmt::Display) -> CommandFailed {
     refusal(error.to_string())
 }
 
-/// Create a wallet and write its one-time seed backup to `--seed-out`.
+/// Create a wallet and write its one-time recovery words to `mnemonic_file`.
 ///
 /// The caller prints the result. This function does not.
-pub fn run_create(rpc: &RpcSession, args: &CreateArgs) -> CommandResult<CreatedWallet> {
-    let password = read_password_source(args.password_file.as_deref(), args.password_stdin)?;
+pub fn run_create(
+    rpc: &RpcSession,
+    presentation: &Presentation,
+    source: Option<&PasswordSource>,
+    name: &str,
+    mnemonic_file: &Path,
+) -> CommandResult<CreatedWallet> {
+    super::require_closed(rpc)?;
+    let password = new_wallet_password(presentation, source)?;
 
-    // The wallet directory first: the seed-out file may be named inside it
-    // (`--seed-out <wallet-dir>/seed.txt`), and a failure here leaves no
-    // reserved file to clean up while its handle is open.
+    // The wallet directory first: the file may be named inside it, and a
+    // failure here leaves no reserved file to clean up while its handle is
+    // open.
     rpc.make_wallet_dir()?;
-    // Reserve the seed-out file BEFORE creating the wallet (O_EXCL, 0600): if
-    // this fails we have created nothing, so there is no wallet whose backup we
+    // Reserve the file BEFORE creating the wallet (O_EXCL, 0600): if this
+    // fails we have created nothing, so there is no wallet whose backup we
     // then cannot store. If create_wallet later fails, the empty file is
     // removed on the error path below.
-    let mut seed_file = open_seed_out(&args.seed_out).map_err(local)?;
+    let mut seed_file = open_seed_out(mnemonic_file).map_err(local)?;
 
     let result = rpc.call(
         "create_wallet",
         params::NamedPassword {
-            name: &args.name,
+            name,
             password: &password,
         },
     );
@@ -116,10 +221,11 @@ pub fn run_create(rpc: &RpcSession, args: &CreateArgs) -> CommandResult<CreatedW
     let val = match result {
         Ok(v) => v,
         Err(e) => {
-            drop(std::fs::remove_file(&args.seed_out));
+            drop(std::fs::remove_file(mnemonic_file));
             return Err(rpc.report("Failed to create wallet", &e));
         }
     };
+    rpc.set_open(name);
 
     // Mainnet/stagenet return a BIP-39 mnemonic; testnet a raw seed as hex.
     let backup = Zeroizing::new(
@@ -130,126 +236,54 @@ pub fn run_create(rpc: &RpcSession, args: &CreateArgs) -> CommandResult<CreatedW
             .to_owned(),
     );
     if let Err(e) = write_seed(&mut seed_file, &backup) {
-        drop(std::fs::remove_file(&args.seed_out));
+        drop(std::fs::remove_file(mnemonic_file));
         return Err(local(format!(
             "failed to write seed to {}: {e}",
-            args.seed_out.display()
+            mnemonic_file.display()
         )));
     }
 
     Ok(CreatedWallet {
-        name: args.name.clone(),
-        seed_out: args.seed_out.display().to_string(),
+        name: name.to_owned(),
+        backup_file: Some(mnemonic_file.display().to_string()),
     })
 }
 
 pub(crate) fn show_created_wallet(created: &CreatedWallet) {
+    let Some(path) = &created.backup_file else {
+        // Shown on the screen before this receipt existed. The words are
+        // already wiped.
+        return;
+    };
     crate::out_line!(
-        "Created wallet '{}'. Seed written to {} (mode 0600) — protect or delete it.",
+        "Created wallet '{}'. Seed written to {path} (mode 0600) — protect or delete it.",
         created.name,
-        created.seed_out
     );
 }
 
-/// Restore a wallet from a seed file. The caller prints the result.
+/// Restore a wallet from a recovery-words file. The caller prints the
+/// result.
 ///
 /// The receipt is the wallet name, copied before the password and the
 /// seed are read. The function that holds those secrets returns only
 /// success or failure, so the printed value is not assembled while
 /// either secret is live.
-pub fn run_restore(rpc: &RpcSession, args: &RestoreArgs) -> CommandResult<RestoredWallet> {
-    let name = args.name.clone();
-    post_restore(rpc, args)?;
-    Ok(RestoredWallet { name })
-}
-
-fn post_restore(rpc: &RpcSession, args: &RestoreArgs) -> CommandResult<()> {
-    let password = read_password_source(args.password_file.as_deref(), args.password_stdin)?;
-    let seed = Zeroizing::new(std::fs::read_to_string(&args.seed_file).map_err(|e| {
-        local(format!(
-            "cannot read seed file {}: {e}",
-            args.seed_file.display()
-        ))
-    })?);
-
-    rpc.make_wallet_dir()?;
-    let result = rpc.call(
-        "restore_wallet",
-        params::Restore {
-            name: &args.name,
-            password: &password,
-            mnemonic: seed.trim(),
-            restore_height: args.restore_height.unwrap_or(0),
-        },
-    );
-    drop(password);
-    drop(seed);
-
-    match result {
-        Ok(_) => Ok(()),
-        Err(e) => Err(rpc.report("Failed to restore wallet", &e)),
-    }
-}
-
-pub(crate) fn show_restored_wallet(restored: &RestoredWallet) {
-    crate::out_line!("Restored wallet '{}'.", restored.name);
-}
-
-/// Print a file-backed create or restore through the shared printer.
-pub fn present_create(presentation: &Presentation, rpc: &RpcSession, args: &CreateArgs) -> bool {
-    crate::outcome::present(
+pub fn run_restore(
+    rpc: &RpcSession,
+    presentation: &Presentation,
+    source: Option<&PasswordSource>,
+    name: &str,
+    mnemonic_file: &Path,
+    restore_height: Option<u64>,
+) -> CommandResult<RestoredWallet> {
+    super::lifecycle::restore_wallet(
+        rpc,
         presentation,
-        "create",
-        run_create(rpc, args),
-        show_created_wallet,
+        source,
+        name,
+        Some(mnemonic_file),
+        restore_height,
     )
-}
-
-pub fn present_restore(presentation: &Presentation, rpc: &RpcSession, args: &RestoreArgs) -> bool {
-    crate::outcome::present(
-        presentation,
-        "restore",
-        run_restore(rpc, args),
-        show_restored_wallet,
-    )
-}
-
-pub fn read_password_file(path: &std::path::Path) -> Result<Zeroizing<String>, CommandFailed> {
-    read_password_source(Some(path), false)
-}
-
-/// Read a password from a file or stdin into a wiped buffer. Exactly one
-/// source must be given. A single trailing newline (`\n` or `\r\n`) is
-/// stripped — the common shape of `echo "$PW" > file` or a piped line — but no
-/// other whitespace, so a password may contain leading, internal, or
-/// (non-newline) trailing spaces.
-fn read_password_source(
-    file: Option<&Path>,
-    stdin: bool,
-) -> Result<Zeroizing<String>, CommandFailed> {
-    match (file, stdin) {
-        (Some(_), true) => Err(refusal(
-            "--password-file and --password-stdin are mutually exclusive",
-        )),
-        (None, false) => Err(refusal(
-            "a password source is required: pass --password-file <path> or --password-stdin",
-        )),
-        (Some(path), false) => {
-            let mut s = Zeroizing::new(std::fs::read_to_string(path).map_err(|e| {
-                refusal(format!("cannot read password file {}: {e}", path.display()))
-            })?);
-            strip_one_trailing_newline(&mut s);
-            Ok(s)
-        }
-        (None, true) => {
-            let mut s = Zeroizing::new(String::new());
-            std::io::stdin()
-                .read_line(&mut s)
-                .map_err(|e| refusal(format!("cannot read password from stdin: {e}")))?;
-            strip_one_trailing_newline(&mut s);
-            Ok(s)
-        }
-    }
 }
 
 fn strip_one_trailing_newline(s: &mut String) {
@@ -270,7 +304,7 @@ fn open_seed_out(path: &Path) -> Result<File, BoxErr> {
 /// Open `path` as a new owner-only (0600) file with O_EXCL semantics: refuse
 /// to overwrite an existing file and refuse to follow a symlink on the final
 /// component. The one file-creation shape for everything the CLI writes out
-/// (`--seed-out`, `address --out`); `what` names the file class in the error.
+/// (`--mnemonic-file`, `address --file`); `what` names the file class in the error.
 #[cfg(unix)]
 pub(crate) fn open_owner_only_excl(path: &Path, what: &str) -> Result<File, BoxErr> {
     use std::os::unix::fs::OpenOptionsExt;
@@ -311,6 +345,61 @@ fn write_seed(file: &mut File, seed: &str) -> Result<(), std::io::Error> {
 #[cfg(test)]
 mod tests {
     use super::strip_one_trailing_newline;
+    #[cfg(unix)]
+    use super::{read_secret_text, PasswordSource};
+
+    /// A password or recovery-words file another account can read is
+    /// refused with the typed code, naming the file and not its contents;
+    /// a private one is read with one trailing newline off. Red edit: drop
+    /// the `secret_file_reader` check, and the 0644 file is read.
+    #[cfg(unix)]
+    #[test]
+    fn a_secret_file_another_account_can_read_is_refused() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("pw");
+        std::fs::write(&path, "hunter2\n").expect("write");
+
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).expect("chmod");
+        let refused = format!(
+            "{:?}",
+            PasswordSource::File(path.clone())
+                .read()
+                .expect_err("a world-readable file")
+        );
+        assert!(refused.contains("config.file.secret-readable"), "{refused}");
+        assert!(refused.contains("pw"), "{refused}");
+        assert!(!refused.contains("hunter2"), "{refused}");
+
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+        let password = PasswordSource::File(path).read().expect("a private file");
+        assert_eq!(password.as_str(), "hunter2");
+    }
+
+    /// A missing file and an oversized one are refused by name, and neither
+    /// is taken for an empty password.
+    #[cfg(unix)]
+    #[test]
+    fn a_missing_or_oversized_secret_file_is_refused() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let missing = format!(
+            "{:?}",
+            read_secret_text(&dir.path().join("none"), "wallet-password-file")
+                .expect_err("a missing file")
+        );
+        assert!(missing.contains("config.file.missing"), "{missing}");
+
+        let long = dir.path().join("long");
+        let size = usize::try_from(super::SECRET_FILE_BYTES_MAX).expect("fits") + 1;
+        std::fs::write(&long, vec![b'a'; size]).expect("write");
+        std::fs::set_permissions(&long, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+        let oversized = format!(
+            "{:?}",
+            read_secret_text(&long, "wallet-password-file").expect_err("an oversized file")
+        );
+        assert!(oversized.contains("longer than"), "{oversized}");
+    }
 
     #[test]
     fn strips_exactly_one_trailing_newline() {

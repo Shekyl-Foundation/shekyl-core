@@ -7,10 +7,10 @@ forbidden, not merely occupied, so the kept leg stays on the vin. The carrier ha
 a **shape and a placement**; see §3.1.
 **Scope:** where the pass record's kept and pruned parts live in the tx wire.
 **Blocks:** the response-format round (framing depends on this answer).
-**Process:** [`26-sub-pr-design-discipline`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
+**Process:** [`126-sub-pr-design-discipline`](../../.cursor/rules/126-sub-pr-design-discipline.mdc)
 — consensus-shaped, genesis-frozen, so design closure precedes any cut.
 Disposition IDs in this round are **`CR-D1` … `CR-Dn`**, registered at birth
-per [`94-tracking-index`](../../.cursor/rules/94-tracking-index.mdc).
+per [`194-tracking-index`](../../.cursor/rules/194-tracking-index.mdc).
 
 This document **opened** the round on 2026-08-17 and now **carries its ruling**.
 The two are kept in one file deliberately: the findings that moved the framing
@@ -303,13 +303,13 @@ swap: "one band member crossed over" and "the finding is retired" are different
 claims, and only the first is established.
 
 **Why it lands here rather than in its own round, correcting an earlier call.**
-This was first held out under [rule 19](../../.cursor/rules/19-validation-surface-discipline.mdc)
+This was first held out under [rule 119](../../.cursor/rules/119-validation-surface-discipline.mdc)
 on the reasoning that an economics re-verdict should not ride in on a
-byte-layout review. That over-applied the rule. Rule 19 asks whether a bundle
+byte-layout review. That over-applied the rule. Rule 119 asks whether a bundle
 *collapses* two validation surfaces or *conflates* two under a topic — and the
 constant and CR-D2's arithmetic are **the same surface**: both are "did we count
 the segment opening correctly?", checked by one reviewer with one body of
-knowledge. That is rule 19's **bundle** case. Leaving a known-wrong constant
+knowledge. That is rule 119's **bundle** case. Leaving a known-wrong constant
 live in the tree while a doc described it as wrong would have been debt with a
 note attached, which is what rules 15/16 say not to ship pre-genesis.
 
@@ -423,7 +423,7 @@ catch whoever appends next.** The test lands with this round whichever option
 wins.
 
 **It is C++, and that is deliberate under
-[`20-rust-vs-cpp-policy`](../completed/RULE_20_RUST_VS_CPP.md).** The
+[`RULE_20_RUST_VS_CPP`](../completed/RULE_20_RUST_VS_CPP.md).** The
 invariant is a property of the **C++ serializer's ordering**. A Rust test in
 `shekyl-wire` would catch nothing, because a future C++ append is invisible to
 it — the test must live where the defect can be introduced. This is a
@@ -444,7 +444,7 @@ vacuously ([a seal is not coverage](../../.cursor/rules/50-testing.mdc)).
 ## 5. What this round does not decide
 
 - **The response format — now unblocked, and it is next.** Its framing depended
-  on this answer, which §3.1 supplies; it is its own PR ([rule 19](../../.cursor/rules/19-validation-surface-discipline.mdc)
+  on this answer, which §3.1 supplies; it is its own PR ([rule 119](../../.cursor/rules/119-validation-surface-discipline.mdc)
   — hash-equivalence and preimage/domain-separation are independent validation
   surfaces, and "coupled through the framing" is topic adjacency, not a shared
   surface).

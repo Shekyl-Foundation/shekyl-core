@@ -12,11 +12,16 @@ use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
+mod common;
+
 /// Start the CLI with `--tor-file tor_file` and return what it said, having
 /// asserted that it refused before its session started.
 fn refused_start(scratch: &Path, tor_file: &Path) -> String {
+    let config = common::offline_channel_config();
     let mut child = Command::new(env!("CARGO_BIN_EXE_shekyl-cli"))
-        .args(["--network", "stagenet", "--daemon-address", "127.0.0.1:1"])
+        .arg("--config-file")
+        .arg(config.path())
+        .args(["--network", "stagenet", "--daemon-endpoint", "127.0.0.1:1"])
         .arg("--wallet-dir")
         .arg(scratch.join("wallets"))
         .arg("--tor-file")

@@ -3543,11 +3543,9 @@ name = "shekyl-cli"
 version = "3.1.0"
 dependencies = [
  "base64 0.22.1",
- "clap",
  "hex",
  "proptest",
  "rpassword",
- "rustix",
  "rustyline",
  "serde",
  "serde_json",
@@ -3582,7 +3580,6 @@ dependencies = [
  "time",
  "tokio",
  "tracing",
- "ureq",
  "zeroize",
 ]
 
@@ -4003,11 +4000,11 @@ dependencies = [
  "shekyl-p-loopback",
  "shekyl-p-serve",
  "shekyl-p-store",
- "shekyl-p-transport",
  "shekyl-p2p-transport",
  "shekyl-proofs",
  "shekyl-relay",
  "shekyl-rpc-client",
+ "shekyl-rpc-rendezvous",
  "shekyl-rpc-transport",
  "shekyl-rpc-types",
  "shekyl-runtime",
@@ -4547,6 +4544,7 @@ dependencies = [
  "shekyl-network",
  "shekyl-onion-v3",
  "shekyl-p2p-session",
+ "shekyl-p2p-transport",
  "shekyl-peer-policy",
  "shekyl-peerlist",
  "shekyl-relay",
@@ -4588,6 +4586,7 @@ dependencies = [
  "shekyl-miner",
  "shekyl-network",
  "shekyl-p2p-session",
+ "shekyl-p2p-transport",
  "shekyl-peer-policy",
  "shekyl-pow-randomx",
  "shekyl-runtime",
@@ -4859,6 +4858,7 @@ dependencies = [
  "serde_json",
  "shekyl-address",
  "shekyl-network",
+ "shekyl-options",
  "shekyl-os-account",
  "shekyl-rpc-channel",
  "shekyl-rpc-client",
@@ -5148,10 +5148,8 @@ dependencies = [
 name = "shekyl-tor-control-wallet"
 version = "3.1.0"
 dependencies = [
- "getrandom 0.2.17",
  "kameo",
  "shekyl-onion-key",
- "shekyl-os-account",
  "shekyl-p-transport",
  "shekyl-spawn",
  "shekyl-tor-control-client",
@@ -5320,7 +5318,6 @@ version = "3.1.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
- "clap",
  "curve25519-dalek",
  "hex",
  "http",
@@ -5332,10 +5329,12 @@ dependencies = [
  "shekyl-address",
  "shekyl-crypto-pq",
  "shekyl-curve-primitives",
+ "shekyl-daemon-config",
  "shekyl-engine-core",
  "shekyl-engine-file",
  "shekyl-engine-state",
  "shekyl-logging",
+ "shekyl-options",
  "shekyl-os-account",
  "shekyl-process",
  "shekyl-rpc-client",

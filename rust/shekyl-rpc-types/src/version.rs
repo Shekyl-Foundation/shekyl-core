@@ -110,7 +110,13 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 4;
 /// Rick, 2026-11-21): a directory holds this onion's descriptor at a counter
 /// above any this node published, so another Tor holding its key publishes
 /// it. A 4.8 reader decodes it as an onion cause it does not know.
-pub const CORE_RPC_VERSION_MINOR: u32 = 9;
+///
+/// 4.10: the onion's causes `guards-refused` and `guards-unfilled`
+/// (`TOR_SUPERVISOR.md` §4.4, `TSR-W1`; IG-Q114): an onion that keeps its
+/// second-layer guards is not published until they are pinned, and the
+/// status says why when a pin did not take. A 4.9 reader decodes either as
+/// an onion cause it does not know.
+pub const CORE_RPC_VERSION_MINOR: u32 = 10;
 /// `MAKE_CORE_RPC_VERSION(major, minor)` = `(major << 16) | minor`.
 pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERSION_MINOR;
 
@@ -124,15 +130,15 @@ pub fn core_rpc_version_string(packed: u32) -> String {
 mod tests {
     use super::*;
 
-    /// `MAKE_CORE_RPC_VERSION(4, 9)` is `(4 << 16) | 9` = 262153. Each bump
+    /// `MAKE_CORE_RPC_VERSION(4, 10)` is `(4 << 16) | 10` = 262154. Each bump
     /// moves this pin; the packing does not change (RK-D25).
     #[test]
     fn core_rpc_version_packs_major_over_minor() {
-        assert_eq!(CORE_RPC_VERSION, 262_153);
-        assert_eq!(CORE_RPC_VERSION, (4 << 16) | 9);
+        assert_eq!(CORE_RPC_VERSION, 262_154);
+        assert_eq!(CORE_RPC_VERSION, (4 << 16) | 10);
         assert_eq!(CORE_RPC_VERSION_MAJOR, 4);
-        assert_eq!(CORE_RPC_VERSION_MINOR, 9);
-        assert_eq!(core_rpc_version_string(CORE_RPC_VERSION), "4.9");
+        assert_eq!(CORE_RPC_VERSION_MINOR, 10);
+        assert_eq!(core_rpc_version_string(CORE_RPC_VERSION), "4.10");
         assert_eq!(core_rpc_version_string((3 << 16) | 70), "3.70");
     }
 }

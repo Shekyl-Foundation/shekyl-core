@@ -1,9 +1,9 @@
 # Reward emission vin — implementation plan (sub-PR sequence)
 
 **Status:** design plan, pre-flight complete (2026-06-13). Authored under
-[`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
+[`126-sub-pr-design-discipline.mdc`](../../.cursor/rules/126-sub-pr-design-discipline.mdc)
 (multi-round, consensus-critical, FFI boundary) and
-[`07-consensus-atomic-cutovers.mdc`](../../.cursor/rules/07-consensus-atomic-cutovers.mdc)
+[`107-consensus-atomic-cutovers.mdc`](../../.cursor/rules/107-consensus-atomic-cutovers.mdc)
 (evaluated in §4 — exception does **not** apply; standard splitting governs).
 **Currency-check (2026-07-01):** PR-E0 has since **LANDED** — the F-S1 substrate fix (full-bond writer `put_archival_bond_value` + retention `claimed_epochs.rs` / `reward_arithmetic.rs`, §1.5 / §3). **PR-E1/E2/E3 remain the gated live front** (the C-1 ML-DSA hard gate = PR-E3 step 8). The 2026-06-13 readiness block below is the point-in-time record from before PR-E0 merged. The Round-0 substrate
 re-audit (A2 audit-against-actual-code) is recorded in §1; **Design Round 1**
@@ -49,9 +49,9 @@ disagreement is a plan bug (`05-system-thinking.mdc`).
 
 ## 0.1 Architecture: Rust-first, push the FFI boundary forward
 
-This is a Rust rewrite (`10-shekyl-first.mdc`, `20-rust-vs-cpp-policy.mdc`).
+This is a Rust rewrite (`110-shekyl-first.mdc`, `RULE_20_RUST_VS_CPP.md`).
 The emission vin is **all new consensus code**, and every one of its
-load-bearing surfaces is squarely on the Rust side of the rule-20 test:
+load-bearing surfaces is squarely on the Rust side of the `RULE_20_RUST_VS_CPP` test:
 
 - **Parses untrusted input** — the vin deserializer and field validation.
 - **Defines a cryptographic contract** — membership-only backing + the ML-DSA
@@ -74,7 +74,7 @@ and the `claimed_epochs_check_and_set` dedup core. The emission verify joins
 that family as `shekyl_emission_vin_verify`; it does not add a parallel C++
 verification path in `blockchain.cpp`.
 
-**What necessarily stays C++ (rule-20 C++-if: touches epee/LMDB/Boost):**
+**What necessarily stays C++ (`RULE_20_RUST_VS_CPP` C++-if: touches epee/LMDB/Boost):**
 the `transaction` / `txin_v` envelope, epee wire serialization, the LMDB
 tables, and the mempool. The `txin_archival_reward_emission` **variant member
 + wire transport** must exist in C++ because the tx object is C++. The
@@ -104,7 +104,7 @@ de-risk the Stage-5 transition. This is the `16-architectural-inheritance.mdc`
 "leave the file in good shape after my edit" discipline applied to the daemon
 — **not** a `15-deletion-and-debt.mdc` "while we're here" expansion: PR scope
 stays the emission vin, and unrelated daemon migration is a separate planning
-activity (`20-rust-vs-cpp-policy.mdc`).
+activity (`RULE_20_RUST_VS_CPP.md`).
 
 ---
 
@@ -589,7 +589,7 @@ stubbed, consensus would accept an *unauthed* emission — the exact hole. So:
 | **E1** | membership-only wrapper + ML-DSA vin-auth primitive + C ABIs (wrap **built** `FcmpMembershipOnly` [`shekyl-fcmp-proofs/lib.rs:360`] / `hash_pqc_public_key` [`shekyl-crypto-pq/derivation.rs:58`]) | inert | Q7 for the seam; the two primitives are **buildable-now** (no snapshot-ABI dep) |
 | **E2** | `txin_archival_reward_emission` codec (Rust-owned encode/parse/validate) + C++ transport shim | **inert on BOTH paths** — unwhitelisted → rejected at block verify **and** mempool insertion | Q1 (auth count → wire freeze) |
 | **E3** | `shekyl_emission_vin_verify` **verify body, steps 1–7**; KAT-tested at the Rust layer; **not on the consensus dispatch** (still unwhitelisted) | inert on chain | design cluster: **M-2, Q9, Q10, Q7** |
-| **C-1** | **the activating cut** — ML-DSA gate (mints the `AuthVerified` witness) **+** add emission to `check_inputs_types_supported` **+** C++ shim dispatch (`check_tx_inputs` → marshal → Rust verify → apply) | **consensus now accepts *authed* emission** | `07-consensus-atomic-cutovers`; merge blocker = ML-DSA present + tested; most-scrutinized, isolated from codec mechanics |
+| **C-1** | **the activating cut** — ML-DSA gate (mints the `AuthVerified` witness) **+** add emission to `check_inputs_types_supported` **+** C++ shim dispatch (`check_tx_inputs` → marshal → Rust verify → apply) | **consensus now accepts *authed* emission** | `107-consensus-atomic-cutovers`; merge blocker = ML-DSA present + tested; most-scrutinized, isolated from codec mechanics |
 | **E4 / E5** | delete `stake_claim`/`C_stake` (after C-1) / constants + KAT + audit-scope + docs | — | E4 merge gate = **emission accepted-and-applied on regtest through the real C-1 path** (below) |
 
 **Mempool/relay inertness (source-verified, dev 2026-07-01).** The whitelist runs on *both*
@@ -687,7 +687,7 @@ validation, in a `shekyl-*` crate (e.g. `shekyl-archival-retention` or a new
 `shekyl-emission` module), spec §5.3 fields (`P_pubkey` hybrid canonical
 bytes, `holdings`, `settlement_epochs`, `work_claim` = `WorkEpochClaim` /
 `ShardWorkEntry`, `MembershipOnlyBacking`, loud reward fields). Untrusted-input
-parse → Rust (rule 20). Exposed via FFI for C++ to (de)serialize through if
+parse → Rust (`RULE_20_RUST_VS_CPP`). Exposed via FFI for C++ to (de)serialize through if
 needed, with a frozen canonical byte layout (A1).
 
 **C++ (thin transport only):** `txin_archival_reward_emission` struct in
@@ -812,7 +812,7 @@ close the `FCMP_MEMBERSHIP_ONLY.md` §9 carries; `CHANGELOG.md`.
 
 ---
 
-## 4. `07-consensus-atomic-cutovers.mdc` analysis
+## 4. `107-consensus-atomic-cutovers.mdc` analysis
 
 **Evaluated; exception does NOT apply — the work splits per `06-branching.mdc`.**
 Criterion 1 (consensus-rule boundary) is met (new accepted txin type, new

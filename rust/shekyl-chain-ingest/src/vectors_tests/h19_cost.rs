@@ -6,7 +6,7 @@
 //! CEN-H19's verification cost on the Rust path, at the captured chains'
 //! own densities.
 //!
-//! A measurement, not a gate: wall time on a shared box (rule 76 — shape
+//! A measurement, not a gate: wall time on a shared box (rule 176 — shape
 //! data, not a floor). Run in release:
 //! `cargo test --release -p shekyl-chain-ingest --features pipeline --lib
 //! h19_batch_cost_at_the_captured_densities -- --ignored --nocapture`.

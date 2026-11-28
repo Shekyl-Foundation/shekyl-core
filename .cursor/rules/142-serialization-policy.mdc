@@ -1,0 +1,332 @@
+---
+description: Every on-disk wire-format change to a persisted Rust block must be paired with a version-constant bump in the same commit. The schema-snapshot CI enforces this mechanically for the wallet crates (postcard schema snapshots, one constant per block) and for rust/shekyl-chain-store (canonical-codec fixture snapshots, one SCHEMA_VERSION for the store).
+globs:
+  - rust/shekyl-engine-state/**
+  - rust/shekyl-engine-file/**
+  - rust/shekyl-chain-store/**
+  - rust/shekyl-peerlist/**
+scope: core
+---
+
+# Serialization policy
+
+## Two ratchets, one workflow
+
+The wallet and the daemon chain store are both gated by
+[`schema-snapshot.yml`](../../.github/workflows/schema-snapshot.yml), by
+different mechanisms shaped to what each persists:
+
+| Tree | What is snapshotted | Snapshot dir | Version constant | Regenerate |
+|---|---|---|---|---|
+| `rust/shekyl-engine-state/**` | the `postcard_schema::Schema` of each persisted block | `rust/shekyl-engine-state/schemas/*.snap` | one per block (table below) | `UPDATE_SNAPSHOTS=1 cargo test -p shekyl-engine-state schema_snapshot` |
+| `rust/shekyl-chain-store/**` | the fixture **encodings** of each `codec::Canonical` impl, the **table catalogue** (name, shape, key/value type per `schema.rs` definition), and the **property-cell catalogue** (key, scope, value-codec name per `property_cells!` row) | `rust/shekyl-chain-store/schemas/*.snap` | `SCHEMA_VERSION` in `src/codec/schema_version.rs`, for the whole consensus store file | `UPDATE_SNAPSHOTS=1 cargo test -p shekyl-chain-store codec::snapshot_tests` |
+| the pool file (`rust/shekyl-chain-store/src/pool/`) | the pool record's fixture encoding, the pool version cell's, and the pool file's **table catalogue** | `rust/shekyl-chain-store/pool_schemas/*.snap` | `POOL_SCHEMA_VERSION` in `src/pool/schema_version.rs`, for the pool file alone | the same command |
+
+The chain store snapshots bytes rather than a type schema because its codecs
+are hand-written fixed-width encodings, not serde derives, and because the
+same bytes are the state digest's fold input
+([`DAEMON_REDB_STORE.md`](../../docs/design/DAEMON_REDB_STORE.md) §11.1(b)):
+a codec move is a consensus-oracle move, so the gate pins the output, not the
+declaration. Two catalogues cover the rest of §11.1(b), where layout moves
+without any codec's bytes moving: `schemas/tables.snap` (a table added,
+removed or re-keyed — an old binary trips over it at `open_table`) and
+`schemas/properties.snap` (a `properties` cell added, re-keyed, re-scoped
+or re-typed — a new `ChainState` cell is digest-domain growth even when its
+value codec already has a fixture). It has **one** version constant because
+the store rebuilds rather than migrates (§11.1(a)) — any snapshot change
+under `rust/shekyl-chain-store/schemas/` requires `SCHEMA_VERSION` to be
+**numerically greater** at the PR head than at its base, with no per-codec
+registry to keep in sync. Meta-tests in
+[`snapshot_tests.rs`](../../rust/shekyl-chain-store/src/codec/snapshot_tests.rs)
+hold the gate's own subject (rule 47): every `impl Canonical for` in the crate
+has a snapshot and vice versa, every fixture encodes to its codec's
+`FIXED_WIDTH`, every `TableDefinition` / `MultimapTableDefinition` in
+`schema.rs` is inside the `tables!` invocation the table catalogue is emitted
+from, every `key: "…"` in `property.rs` is a `PROPERTY_CELLS` row, the
+assertion is armed unless `UPDATE_SNAPSHOTS` is set (in which case exactly
+one test fails loudly), and the workflow file still runs this module by name
+and reads `SCHEMA_VERSION` with the declaration grammar the source uses.
+
+**A codec snapshot's input is constructed inline, never a shared fixture.**
+The snapshot's subject is the encoding. Build its input from a fixture some
+other crate owns and the subject becomes the fixture: every legitimate change
+to that fixture reads as a codec change, the paired-bump gate above demands a
+`SCHEMA_VERSION` bump for a codec nobody touched, and someone under time
+pressure supplies it — the version has now moved for a fixture edit, which
+is the one thing the gate exists to make impossible. A snapshot fixture
+may *use* shared constants (a point, a hash) whose value no rule will
+ever move. It may not use a shared transaction or block, which rules move.
+
+Persisted blocks in Rust — today the six inside
+`rust/shekyl-engine-state/` (`WalletLedger`, `LedgerBlock`,
+`BookkeepingBlock`, `TxMetaBlock`, `SyncStateBlock`, `StakingBlock`), and any
+future block type that lands on disk — carry an explicit **version constant**
+whose sole job is to let a binary reject a file whose wire format it
+cannot read. Changing the wire format without bumping the constant is
+a silent data-corruption hazard: an older binary can accept a newer
+file, decode fields into the wrong slots, and produce wrong balances,
+wrong subaddresses, or wrong sync state with no error reported.
+
+The mid-rewire hardening pass (commit 4, see
+[`docs/MID_REWIRE_HARDENING.md`](../../docs/MID_REWIRE_HARDENING.md)
+§3.4) converts this discipline from cultural invariant into mechanical
+check via `postcard-schema` snapshots. This rule is the prose
+counterpart: a reviewer looking at a PR diff can check it by eye, and
+the CI enforces it on every landing.
+
+## Funds-first tier placement
+
+Before this rule's version-pairing even applies, you have to know a field
+belongs in a persisted (tier-4) block at all. New wallet-tunable state is
+placed by a **funds-first** decision order — the funds question is asked
+*first*, before "is it user-tunable?":
+
+1. **Does resetting this field to its default lose or endanger funds?** →
+   **Tier 4: a sealed `shekyl-engine-state` block** — which this rule governs
+   (strict version, snapshot-pinned, refuse-to-load). Stop here.
+2. Network-fixed with no legitimate per-wallet variance? → Tier 1
+   (`NetworkSafetyConstants`), plus a session override where a session may
+   need to deviate.
+3. A property of the machine running the wallet? → an option of that process,
+   never stored with a wallet. A front end's display or behaviour? → that
+   front end's own configuration.
+
+There is no advisory per-wallet settings file: the `<base>.prefs.toml` tier was
+deleted (Rick, 2026-11-21), so a setting a wallet carries is tier 4. The
+placement is specified in [`docs/WALLET_SETTINGS.md`](../../docs/WALLET_SETTINGS.md)
+§1; tier 4 (sealed blocks) is the layer whose version-pairing this rule enforces.
+The trap this order exists to prevent: a user-chosen, persistent,
+funds-load-bearing field (`staking_enabled`, `p_slot`, the bonded set) filed
+anywhere a reset to default can reach, which endangers funds. Such fields are
+tier 4 — which is exactly why `StakingBlock` carries a version constant in the
+table below.
+
+## The pairing
+
+Each persisted block owns exactly one version constant. A PR that
+changes a block's **on-disk wire format** must also change that
+constant's declaration line. The pairings are:
+
+| Block                    | Version constant                  | Source file                                             |
+|--------------------------|-----------------------------------|---------------------------------------------------------|
+| `WalletLedger`           | `WALLET_LEDGER_FORMAT_VERSION`    | `rust/shekyl-engine-state/src/wallet_ledger.rs`         |
+| `LedgerBlock`            | `LEDGER_BLOCK_VERSION`            | `rust/shekyl-engine-state/src/ledger_block.rs`          |
+| `BookkeepingBlock`       | `BOOKKEEPING_BLOCK_VERSION`       | `rust/shekyl-engine-state/src/bookkeeping_block.rs`     |
+| `TxMetaBlock`            | `TX_META_BLOCK_VERSION`           | `rust/shekyl-engine-state/src/tx_meta_block.rs`         |
+| `SyncStateBlock`         | `SYNC_STATE_BLOCK_VERSION`        | `rust/shekyl-engine-state/src/sync_state_block.rs`      |
+| `StakingBlock`           | `STAKING_BLOCK_VERSION`           | `rust/shekyl-engine-state/src/staking_block.rs`         |
+
+`WalletLedger` carries both the bundle-level `format_version` **and**
+every inner block's `block_version`. A change that only affects one
+inner block bumps that block's constant; a change that restructures
+the bundle envelope bumps `WALLET_LEDGER_FORMAT_VERSION`; a change
+that does both bumps both.
+
+The chain store's pairing is one row, deliberately:
+
+| Store | Version constant | Source file |
+|---|---|---|
+| every `codec::Canonical` impl in `shekyl-chain-store` | `SCHEMA_VERSION` | `rust/shekyl-chain-store/src/codec/schema_version.rs` |
+
+The peer lists' address file is the third tree, and the smallest:
+
+| File | Version constant | Source file |
+|---|---|---|
+| the address file `shekyl-peerlist` writes (`schemas/address_file.snap` pins a fixture set's encoding) | `ADDRESS_FILE_VERSION` | `rust/shekyl-peerlist/src/address_file.rs` |
+
+A file of any other version is dropped whole, not migrated: the lists
+refill from the compiled seeds and from peers. The same workflow enforces
+the pairing — a changed `.snap` under `rust/shekyl-peerlist/schemas/`
+requires `ADDRESS_FILE_VERSION` to be numerically greater at the PR head.
+Regenerate with
+`UPDATE_SNAPSHOTS=1 cargo test -p shekyl-peerlist address_file::snapshot`.
+
+`SCHEMA_VERSION` is sealed into a fresh store's first transaction and any
+other value on reopen is a refusal, not a migration. Its declaration carries
+a History list; the bump edits the list in the same commit (rule 91's
+"a constant's doc is part of the edit"), and a meta-test checks the current
+value has an entry.
+
+## What counts as a wire-format change
+
+Any of these, on any persisted block, requires a constant bump:
+
+1. **Adding a field.**
+2. **Removing a field.**
+3. **Renaming a field** (including via `#[serde(rename = "…")]`).
+4. **Reordering fields.** Postcard is positional at the wire; two
+   fields of the same type can swap places on the disk without a Rust
+   type error, which is exactly the failure mode this rule exists to
+   catch.
+5. **Changing a field's type** to one that produces different wire
+   bytes. Examples: `u32` → `u64`, `[u8; 32]` → `Vec<u8>`, `Option<T>`
+   → `T` (drops the `0x00 | 0x01` tag byte).
+6. **Changing a `#[serde(with = "…")]` helper** to one that emits a
+   different wire representation.
+
+These are **not** wire-format changes and do not require a bump:
+
+- Doc-comment edits.
+- Adding or removing `#[derive(Debug)]`, `#[derive(Clone)]`, or any
+  other non-serde derive.
+- Refactoring the in-memory representation in a way that the serde
+  impl compensates for (but if `#[serde(with = "…")]` changes as part
+  of the refactor, see point 6 above).
+- Adding a `#[serde(skip)]` annotation **only** if the field was never
+  serialized in a released version. Adding `#[serde(skip)]` to a
+  previously-serialized field **is** a wire-format change: older files
+  still contain the bytes, and the new binary would misalign while
+  reading them.
+
+## Mechanical enforcement
+
+Two tests + two CI jobs enforce this policy, landed in commits 4 and
+5 of the hardening pass. The two halves cover complementary failure
+modes: the schema snapshot catches wire-format drift, and the
+zeroize-field grep catches in-memory secret-wipe drift that the
+snapshot structurally cannot see (since `Zeroizing<[u8; 32]>` and
+`[u8; 32]` produce byte-identical postcard output).
+
+### Schema snapshot (commit 4 — §3.4)
+
+1. `cargo test -p shekyl-engine-state schema_snapshot` — asserts the
+   derived `postcard_schema::Schema` of every persisted block matches
+   the committed `.snap` under
+   `rust/shekyl-engine-state/schemas/`. Any drift — add, remove,
+   rename, reorder, type change — fails with a unified diff naming
+   the offending field.
+2. `UPDATE_SNAPSHOTS=1 cargo test -p shekyl-engine-state schema_snapshot`
+   — the intentional regeneration path. Run this after a deliberate
+   schema change.
+3. `.github/workflows/schema-snapshot.yml` — on every PR into `dev`,
+   asserts (1) and additionally cross-checks the PR diff: if any
+   `.snap` file changed, the paired source file must be in the diff
+   **and** the `pub const <NAME>:` declaration line must appear on
+   either side of that file's unified diff. PRs that change a `.snap`
+   without bumping the paired constant fail the workflow with a
+   GitHub annotation on the offending file.
+
+### Chain-store codec snapshot (DRS-E1 increment 2)
+
+The same workflow, the same shape, one tree over:
+
+1. `cargo test -p shekyl-chain-store codec::snapshot_tests` — for each
+   `codec::Canonical` impl, encodes a fixed fixture set and asserts
+   the hex matches the committed `.snap` under
+   `rust/shekyl-chain-store/schemas/`; also asserts each fixture
+   decodes back to itself and encodes to exactly `FIXED_WIDTH` bytes.
+   Renders `schema::catalogue()` against `tables.snap` and
+   `PROPERTY_CELLS` against `properties.snap`. Drift fails with a
+   unified diff and the rebuild-not-migrate instructions.
+2. `UPDATE_SNAPSHOTS=1 cargo test -p shekyl-chain-store codec::snapshot_tests`
+   — regenerates. The `codec_snapshot_assertions_are_armed` test fails
+   under this variable on purpose, so a CI run with it set cannot pass.
+3. The workflow's bump job: if any `.snap` under the chain-store
+   `schemas/` directory is in the PR diff, the value of
+   `SCHEMA_VERSION` parsed from `src/codec/schema_version.rs` at the
+   PR head must be greater than the value parsed at the PR base (or
+   the file must be born in the PR). A rewrite of the declaration line
+   that leaves the number alone does not pass.
+
+The pool file is the crate's second file and has its own number
+(`DRS_E1_SPOOL.md` `SPL-Q8`): its snapshots live in the sibling
+`pool_schemas/`, and a change there requires `POOL_SCHEMA_VERSION`
+(`src/pool/schema_version.rs`) to increase, by the same rule. The pool
+file is discardable, so a mismatch recreates it rather than refusing: a
+pool-only change never forces a chain rebuild. Each `snapshotted_codecs!`
+row names its file, and the meta-tests hold each directory to exactly its
+own codecs and catalogues.
+
+### Zeroizing-field grep (commit 5 — §3.5)
+
+4. `scripts/ci/check_zeroize.sh` — walks `shekyl-engine-state/src/`
+   (production code only; `#[cfg(test)]` modules and multi-line
+   function-signature parameters are excluded via paren-depth
+   tracking) and emits every `[u8; N]` or `Vec<u8>` field
+   declaration. Each hit must either (a) carry a `Zeroizing<...>` /
+   `SecretKey<...>` wrapper on the same line, or (b) appear verbatim
+   in `rust/shekyl-engine-state/.zeroize-allowlist`.
+5. `.github/workflows/zeroize-check.yml` — runs the script on PRs
+   that touch the wallet-state source tree, the allowlist, the
+   script, or the workflow. Missing entries (new unwrapped field)
+   and stale entries (allowlisted field removed without also
+   removing the line) both fail with pinpoint messages — the file
+   cannot rot with ghost entries that would silently re-admit a
+   future field of the same spelling.
+
+The two checks together: commit 4 ensures the wire shape doesn't
+change without a version bump; commit 5 ensures the in-memory
+secret-wipe contract doesn't regress while the wire shape stays
+stable. Either alone is insufficient; together they cover the two
+distinct migration hazards.
+
+## Procedure for an intentional schema change
+
+1. Edit the Rust struct(s) in the normal way.
+2. Run `cargo test -p shekyl-engine-state schema_snapshot` and
+   observe the failure diff. Confirm the diff is what you meant.
+3. Run `UPDATE_SNAPSHOTS=1 cargo test -p shekyl-engine-state schema_snapshot`
+   to regenerate the `.snap` files for the affected blocks.
+4. Bump the paired version constant(s) in the same commit. A one-step
+   bump (`N` → `N+1`) is normally sufficient; larger jumps are
+   reserved for coordinated multi-field migrations and must be
+   justified in the commit message.
+5. If the block is read back in by an older code path (e.g. a
+   migration loader), update that path to handle the old version
+   alongside the new one. This is the actual work; the snapshot just
+   keeps you honest.
+6. Commit. CI will re-run the snapshot assertion and the pairing
+   check; both should pass.
+
+## Why a mirror-struct pattern appears in two places
+
+`TransferDetails` (in `src/transfer.rs`) and `TxSecretKey` (in
+`src/tx_meta_block.rs`) have fields that use `#[serde(with = "…")]`
+helpers the `postcard_schema::Schema` derive cannot introspect: the
+derive reads the declared Rust type, not the serde-helper-rewritten
+wire type. Both types implement `Schema` via a compile-only mirror
+struct (`TransferDetailsSchema`, `TxSecretKeySchema`) whose fields use
+wire-native types (`Vec<u8>` for length-prefixed byte sequences) —
+wire-identical to the originals, but with a derivable schema. The
+pattern is local to each file, reviewable at the call site, and keeps
+the snapshot mechanism honest without coupling us to an upstream
+`postcard-schema` release cadence.
+
+If you add a new persisted field whose type is not natively
+`Schema`-able (e.g. an FCMP++ proof type, a curve25519-dalek
+`EdwardsPoint`, a ML-KEM ciphertext), extend the enclosing block's
+mirror struct the same way — add a matching field of wire-native type
+— rather than patching the derive.
+
+## Escape hatch
+
+None. There is no allowlist and no override. A persisted block that
+does not carry a version constant does not exist in Shekyl
+wallet-state; a wire-format change without a bump does not land.
+Policy deviations require an amendment to
+[`docs/MID_REWIRE_HARDENING.md`](../../docs/MID_REWIRE_HARDENING.md)
+§3.4 landing as a prerequisite PR.
+
+## Rationale
+
+- Wallets live for years. A one-off wire change that slips past
+  review will be read by a binary from three years ago running on
+  someone's cold-storage laptop, and there is no recall.
+- The cost of the check is ~70 lines of Rust (the snapshot module)
+  plus a ~170-line workflow. The cost of a missed change is a user
+  opening a wallet into corrupted balances with no error message.
+- Mechanical checks outlive the humans who wrote them. "Remember to
+  bump the constant" is a cultural invariant that erodes; "CI rejects
+  your PR" is one that does not.
+
+## Envelope version vs payload version — name them apart
+
+A format has two version numbers with different jobs, and they must not
+share a name or a field: the **envelope/armoring version** (the prefix a
+parser dispatches on — never fed into any signed preimage) and the
+**payload/layout version** (the canonical byte inside the signed or
+persisted bytes — the security or schema boundary). SM-R-5 is the
+precedent: `shekylmsgsig1.`'s `1` is envelope; `layout_version` is the
+preimage's `sig_format_version`, one value appearing twice by
+construction. A name that could mean either (`version`, `v`) is the bug
+vector; qualify every version identifier with which of the two it is.

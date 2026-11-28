@@ -18,7 +18,7 @@ consequence in §7 carries a named trigger and is a proposal, not a
 change.
 
 Identifier family: `FL-*` (registered in
-[`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) at birth, rule 94).
+[`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) at birth, rule 194).
 Convention, because the family token is one case-flip from a rung symbol:
 rung symbols always appear backticked as `Fl` / `Fn` / `Fm` / `Fh`; family
 tokens are always `FL-` followed by a digit or section letter.
@@ -415,7 +415,7 @@ by FL-R17.
   floor is relay/admission policy, not block validity.** Changing the ladder
   is therefore not a chain-splitting consensus change; but a floor/ladder
   divergence fragments mempools and dead-letters wallets (FL-V5), so the
-  cutover is coordinated even though it is not rule-07 atomic.
+  cutover is coordinated even though it is not rule-107 atomic.
 
 ### FL-V3 — Rung consumers: three of four rungs reachable; two unreconciled mappings; one dead fallback ladder
 
@@ -1199,7 +1199,7 @@ unpredictability. The race is the one with teeth, so it was measured.
 ladder's floor rung clamped up to the relay floor at quote time (§5.2) —
 is compared against the floor at admission `L` blocks later, applying
 `check_fee`'s 2% buffer. Lags are stated: **1** (built and broadcast
-inside a block), **3** ≈ 6 min (FCMP++ proving at the rule-76 device
+inside a block), **3** ≈ 6 min (FCMP++ proving at the rule-176 device
 floor, human confirmation, Dandelion++ stem embargo), **25** ≈ 50 min (a
 signing session left open), and **100** — the protocol's own ceiling,
 `FCMP_REFERENCE_BLOCK_MAX_AGE`, past which no conforming transaction can
@@ -1522,7 +1522,7 @@ future parameter change pushes reachable `C` below 0.5.
   the pace at which default traffic can grow the median indefinitely.
   Being in the 1/M² family, the growth it funds tapers naturally as the
   median rises: default traffic cannot runaway-expand the chain
-  (rule-75 self-regulation without a knob). Default on three grounds:
+  (rule-175 self-regulation without a knob). Default on three grounds:
   failure-mode UX (rule 82 — the default must not stall exactly when
   the network is busy, which economy-as-default would), bounded cost
   (4× the admission floor at every median), and shipped behavior (the
@@ -1553,7 +1553,7 @@ registered 50/40/10 remains the pre-signature reference.
 | W5 | Exhaustion-era spammer (post-mining-era, `R = 0`) | Expands every block to the 2× cap for free | Estimate quotes fees from a reward that no longer exists ([20,80,320,4000] vs true [0,0,0,0]); penalty prices nothing; growth governed only by the 1.7×/window clamp and a 1-atomic floor | RESOLVED at round 8: FL-R12′'s signed composition (`paid = max(M_r·curve, TAIL)·penalty(x)`) keeps the penalty biting at the tail permanently — expansion to the cap costs the full `TAIL` at `x = 1` | ~~FL-D1~~ closed as answered (§9) |
 | W6 | Quiet-chain wallet (honest) | Pays served economy rung | Overpays ~1.2–1.5×, or — if the ladder were naively corrected without FL-C6 — bounces off the relay floor entirely (three of six states) | Clamp guarantees relayability; overpayment bounded at measured 1.5× worst case until CEN-M3 re-derives the floor | FL-D2 |
 | W7 | Fee-tier count vs **single-tier** — **CLOSED ON THE MERITS at review round 7, rationale REPLACED at the maintainer's direction**: the round-2 argument ("a single price cannot do both jobs") defeated only the *static* single rate and is retired — a future reviewer would notice; the round-5 state-computed candidate was evaluated and rejected at FL-R17 | Observer holds an off-chain anchor and filters the height window by public fields (§1.11's corrected model) | **The durable rationale:** under FCMP++ the fee field **partitions the global set but cannot link** — no on-chain primitive relates two transactions, so the per-transaction cost is bounded by the inverse usage share (×1.25 default / ×6.7 / ×20 at the operative shares, applied once per anchored transaction) and nothing amplifies it across a history | Selectable urgency is a widely used feature whose removal would buy a small constant factor | **A bounded, non-amplifiable per-transaction cost is what a proportionality judgment handles, not what the lexicographic priority order was written for** (maintainer, round 7). Reopeners live on FL-R17: FL-C4b's registered < 5% mechanism, and any change introducing an on-chain linkage primitive |
-| W8 | Miner fee-rank ordering leak (minted at review round 5; **exists TODAY under any multi-rate ladder, independent of FL-R17's outcome**) | Fee-sorted inclusion order: block position reveals fee rank, so miners publish a partial ordering of user urgency every block | Standing finding against the current and proposed ladders alike | The sharper half is what becomes **possible**, not what stops leaking: under a ladder a miner has a *legitimate* reason to order by fee, so inclusion order cannot be constrained without breaking the fee market — under a single rate there is none, which turns deterministic/hash-ordered inclusion from an unenforceable exhortation ("miners should not discriminate") into a **checkable rule** a node can verify. This argument survives a dispute about the bit-count. Rule-71-adjacent surface, not a freebie | Disposition: FL-R17 signed (a), so the checkable-rule opportunity is not taken — the leak STANDS under three tiers as **FL-D7** (deferral with reopeners) |
+| W8 | Miner fee-rank ordering leak (minted at review round 5; **exists TODAY under any multi-rate ladder, independent of FL-R17's outcome**) | Fee-sorted inclusion order: block position reveals fee rank, so miners publish a partial ordering of user urgency every block | Standing finding against the current and proposed ladders alike | The sharper half is what becomes **possible**, not what stops leaking: under a ladder a miner has a *legitimate* reason to order by fee, so inclusion order cannot be constrained without breaking the fee market — under a single rate there is none, which turns deterministic/hash-ordered inclusion from an unenforceable exhortation ("miners should not discriminate") into a **checkable rule** a node can verify. This argument survives a dispute about the bit-count. Rule-171-adjacent surface, not a freebie | Disposition: FL-R17 signed (a), so the checkable-rule opportunity is not taken — the leak STANDS under three tiers as **FL-D7** (deferral with reopeners) |
 
 ## §7 What changes downstream (proposals with triggers — RK-5 lane untouched)
 
@@ -1611,8 +1611,8 @@ ride each row.
 | FL-R20 | **The relay floor tracks `C`: `F(h) = R·C(h)·w_ref/M²`, raw, one formula for every regime (`C < 1` lowers it), 720-block SMA operand, 0.95 deleted.** Still relay policy; `kept_by_block` exempt; Q9 (no consensus fee floor) untouched. §11.2 | **RULED in-channel 2026-09-09/10** | none — FL-D2's CEN-M3 routing discharged (§11.2 FL-R21) |
 | FL-R21 | **Quantizers deleted:** `quantize_pow2_ceil`, `fee_correction_quantized`, hysteresis step/fold/settled, `MIN_REPRESENTABLE_C`, the `fees[0]` clamp, `round_money_up_2` on the served path, the §10 instrument. FL-R3 CLOSED premise-refuted; FL-R6 identity; FL-D2 CLOSED; FL-D6/D8 moot; FL-R3-STORE demoted; §10 closed as record. §11.2 | **RULED in-channel 2026-09-09** ("What are we making this so complicated for?") | none |
 | FL-R22 | **Wallet pays exactly the served rung — no pad, fixed or drawn.** Path recorded: random pad proposed (FL-C1 overrule quoted) → withdrawn on the failure-mode analysis ("The safety argument won me over"; FL-C1 stands, premise refuted) → fixed pad → superseded by FL-R23. Temporal link of a deterministic fee accepted as inherent ("ALWAYS going to have a temporal link"). §11.2 | **RULED in-channel 2026-09-10** | none |
-| FL-R23 | **Lookback-min admission:** `fee ≥ mask_round_up(weight · min{F(h′−k) : 0 ≤ k ≤ G})`, `G` = 5 (hot-session gap 0–2 + network height spread 2 + 1 slack; the identity is per receiving node — review A-1 2026-09-10 corrected the first draft's `G` = 3). A quote at `F(h)` inside the gap is admitted by identity; the 2 % buffer and 0.95 deleted (weight model is byte-exact, §11.1 item 9). Cost = grace = worst `G`-block rise (FL-E3). Predicate lands in Rust behind FFI (rule 20). §11.2 | **RULED in-channel 2026-09-10** ("I agree with the math"); **spec amended at review 2026-09-10 (A-1 `G` = 5 per-node; A-2 weight-gate property test + `RELAY_ADMISSION_SLACK_BP` = 0 pin; A-3 reopening clause: reopens if any per-block-response operand enters `F`)** | none — relay policy |
-| FL-R24 | **SMA resolution for the floor operand:** (i) integer `tx_count_sum/720` as shipped — the 1/V tick is a grace cost under FL-R23, a quote-quality question only; (ii) exact `(tx_count_sum, baseline·720)` via the scale-invariant ratio functions — floor-only breaks FL-V1 by ≤ one tick; reward-and-floor is a consensus change to `M_r`'s operand (own row, rule 07). Decision rule pre-registered §11.5 FL-E3. §11.2 | **RULED in-channel 2026-09-10 ("accepted/agree"): (ii) exact SMA for reward AND floor** — the FL-E3 rule fired (integer tick 307 bp at age 30, §11.7) | **consensus row** (change to `M_r`'s operand resolution; pre-genesis; opened by the implementing PR, rule 07 evaluated there) |
+| FL-R23 | **Lookback-min admission:** `fee ≥ mask_round_up(weight · min{F(h′−k) : 0 ≤ k ≤ G})`, `G` = 5 (hot-session gap 0–2 + network height spread 2 + 1 slack; the identity is per receiving node — review A-1 2026-09-10 corrected the first draft's `G` = 3). A quote at `F(h)` inside the gap is admitted by identity; the 2 % buffer and 0.95 deleted (weight model is byte-exact, §11.1 item 9). Cost = grace = worst `G`-block rise (FL-E3). Predicate lands in Rust behind FFI (`RULE_20_RUST_VS_CPP`). §11.2 | **RULED in-channel 2026-09-10** ("I agree with the math"); **spec amended at review 2026-09-10 (A-1 `G` = 5 per-node; A-2 weight-gate property test + `RELAY_ADMISSION_SLACK_BP` = 0 pin; A-3 reopening clause: reopens if any per-block-response operand enters `F`)** | none — relay policy |
+| FL-R24 | **SMA resolution for the floor operand:** (i) integer `tx_count_sum/720` as shipped — the 1/V tick is a grace cost under FL-R23, a quote-quality question only; (ii) exact `(tx_count_sum, baseline·720)` via the scale-invariant ratio functions — floor-only breaks FL-V1 by ≤ one tick; reward-and-floor is a consensus change to `M_r`'s operand (own row, rule 107). Decision rule pre-registered §11.5 FL-E3. §11.2 | **RULED in-channel 2026-09-10 ("accepted/agree"): (ii) exact SMA for reward AND floor** — the FL-E3 rule fired (integer tick 307 bp at age 30, §11.7) | **consensus row** (change to `M_r`'s operand resolution; pre-genesis; opened by the implementing PR, rule 107 evaluated there) |
 | FL-R25 | **The fourth fee slot is DELETED, not bridged.** FL-V3 (cycle 1) found slot 2 reachable only through `FeePriority::Elevated` — *"the `Elevated` priority, as defined by Monero"* — with **zero production callers, the GUI included**: wire-served and dead. The round's response was to build the RK-5 bridge (slot 2 mirrors slot 1) so a transliterated `Elevated` caller would pay the standard rate and stay in the largest anonymity set, then a contract test to assert the bridge holds, and round 19 then had to ask which slot the priority formula occupies. **Three artifacts protecting one dead enum variant, and the anonymity set the bridge protected had no members.** The premise also fails on its own terms: we are not wire-compatible with Monero — different address format, transaction format and proof system — so nothing that speaks Monero's RPC can reach this chain. The slot existed because ArticMine's 2021 ladder produced four numbers. **RK-5 REOPENED under rule 21** (our own pre-genesis ruling; its premise was that something consumes four slots, and nothing does) and discharged by deletion: `fees.resize(3)`, `FeeTiers([u64; 3])`, `FeeTier::Medium` and `FeePriority::Elevated` deleted, `fee_tier_for` collapsed to a bijection, the `chain_facts` pod and its vectors cut to three, the #640 contract test asserting three ascending tiers with no mirror clause, and both `get_fee_estimate` oracle vectors **regenerated, not edited**. Rules 60 and 15; pre-genesis, daemon and wallet ship together, no deployed network to skew. **§11.6 item 4's `fees[2] = 2RC/M` was never a slip — the wire was.** One behaviour change, named: priority `3` reached the bridge slot at the standard rate and now reaches `High`. | **RULED in-channel 2026-09-11** | minted at round 19, landed before PR B |
 | FL-R26 | **`grace_blocks` is DELETED from the estimate path and the RPC — not zeroed.** FL-R20's un-gracing (ruled 2026-09-11) makes the served ladder a function of chain state alone: `Mlw` is the un-graced long-term effective median, so `grace_blocks` moves no rung. What it used to buy was a lookahead — zeroes inserted into the long-term window pulled `M` down and the quote UP, so a quote survived the next few blocks — and **FL-R23 does that job exactly rather than probabilistically**, which is the same argument that withdrew the fixed pad (FL-R22): every economy user paid the premium forever for protection the lookback already gives by identity. It was redundant on *every* rung, not only slot 0: grace protected quotes taken AT the floor, and a standard quote is `4F`. **A tunable with no effect is worse than no tunable**, so the parameter goes rather than being pinned at zero. **Measured while implementing, and it sharpens the ruling: the lookahead was already all but inert in production.** `grace_blocks` is capped at `CRYPTONOTE_REWARD_BLOCKS_WINDOW` = 100 against a `CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_WINDOW_SIZE` = 100 000 window, so the zeroes move the median by at most 100 ranks in 100 000 — and on a locally flat weight distribution, by nothing at all. Restoring the graced shape verbatim left both a floor-pinned fixture and a 5 000-block high-median fixture **bit-for-bit unchanged**; `fee_2021_scaling.grace_blocks_do_not_move_the_served_ladder` therefore pins the mechanism at a window equal to the grace cap, where the zeroes saturate, and says so in its own comment. **Wire change** (`grace_blocks` is an RPC parameter), so it carries a `CORE_RPC_VERSION` bump and belongs with the RK-5 wire lane or PR C — explicitly **not** PR B. **Reopener (rule 21), cross-referenced to FL-R19:** if a long-gap construction path ever lands — cold signing, offline signing, multisig — `G` = 5 may not cover the quote-to-broadcast gap, at which point the lookahead question returns. FL-R19's sizing premise was voided on "there is no offline signing" (decision log 2026-09-07); **this row is where that premise is re-examined if that changes**, and a lookahead restored here would need FL-R19's binding constraint (fixed, deterministic, never per-wallet) rather than the inherited zero-insertion shape. | **RULED in-channel 2026-09-11** (with the un-graced `M`: *"the right end state is `grace_blocks` deleted from the estimate path and from the RPC — not zeroed, deleted"*) | not PR B — wire change; queued with the RK-5 lane / PR C |
 | FL-R27 | **The fee lattice is a Rust constant, off the wire:** `shekyl_economics::FEE_QUANTIZATION_MASK` (1 000 atomic units, from `DISPLAY_DECIMAL_POINT` and the fee's six decimal places) and `quantized_fee`, the one rounding relay admission and the wallet both call; `relay_floor_admits(fee, weight, floors)` takes neither the mask nor the slack; the C++ mask, its three hand-offs and `get_fee_estimate.quantization_mask` deleted at `CORE_RPC_VERSION` 3.57. One fact had four sources, and a per-daemon mask is a per-daemon fingerprint (FL-C1). Relay policy, not chain identity. §11.2 | **RULED in-channel 2026-10-16** (PR C, #1096) | none — CEN-M3's formula text updated by PR C |
@@ -1653,8 +1653,8 @@ opened 2026-09-09 (§10.12). This round
 exists because FL-R3 was RULED at review round 17 — the hysteresis band
 **stays** and FL-R3 closes by **restoring it to the served path** — and
 the ruling put the restoration on the time-grid branch rather than
-leaving it to the implementing PR. Rule 26
-(`26-sub-pr-design-discipline`) is cited: the surface is
+leaving it to the implementing PR. Rule 126
+(`126-sub-pr-design-discipline`) is cited: the surface is
 consensus-adjacent, crosses the FFI, and is designed before it is cut.
 
 ### §10.0 Jurisdiction — what this round may and may not decide
@@ -1779,7 +1779,7 @@ not a walk, so the other per-height input to `C` does not enter the cost
 table. And the FFI already carries an array-marshal shape to inherit
 (`shekyl_tree_hash(const uint8_t* ptr, size_t count, uint8_t* out)`),
 so §10.7's single call mints no new boundary convention and inherits
-that shape's rule-40 discipline.
+that shape's `RULE_40_FFI_DISCIPLINE` discipline.
 
 **Named blocker, per rule 22.** If the single-scan shape cannot meet
 C10-3's budget, FL-R3's restoration is BLOCKED on the storage-lane cheap
@@ -1841,7 +1841,7 @@ on the C++ side and the Rust owner would hold only one step. That is the
 FL-R12′ shape inverted.
 
 So: **Rust folds, C++ marshals.** One call carrying the bounded
-per-height inputs, matching #640's marshal-only shape, under rule 40 (no
+per-height inputs, matching #640's marshal-only shape, under `RULE_40_FFI_DISCIPLINE` (no
 panic across the ABI; length-checked, total at the boundary). The
 instrument's grid arm calls the **same** fold function — which makes
 constraint (2) true by construction rather than by review, and is the
@@ -2208,7 +2208,7 @@ uint64_t shekyl_fee_grid_anchor(uint64_t height);
  * or count > P (a fold longer than one cell is not this function).
  * count == 1 returns shekyl_fee_correction_quantized(…, prev_cq = 0)
  * for the anchor height — the identity the KAT pins. No panic across
- * the ABI (rule 40): every derivation clamps as fee_correction_quantized
+ * the ABI (`RULE_40_FFI_DISCIPLINE`): every derivation clamps as fee_correction_quantized
  * does today, and hysteresis_step is total. */
 int shekyl_fee_correction_grid_fold(uint64_t anchor_height,
                                     const uint64_t* tx_volume_avg,
@@ -2224,7 +2224,7 @@ The array-marshal shape is `shekyl_tree_hash`'s (§10.4). Memoisation of
 the fold, if any, is keyed `(top_hash, h)` exactly like `get_tx_volume_avg`'s
 (§10.6) and counts for nothing in C10-3.
 
-**Implementing-PR pre-flight (rule 26), written now so it is not
+**Implementing-PR pre-flight (rule 126), written now so it is not
 reconstructed then.** (i) Re-verify the call-site lines and the store
 surface at PR open — both are cited by line here and lines move. (ii) Gates:
 the anchor-identity KAT above; a pinned trace vector on which the FFI fold
@@ -2610,7 +2610,7 @@ nothing about correctness or purity, because the cache is keyed by block
 hash and can be discarded freely. What it does **not** prove is that the
 first quote after a restart is fast: that quote pays the cold figure once
 (`W × 720` or `(K+1) × 720` parses), and the register would then owe a
-separate **restart-latency bound at the rule-76 device floor** — either
+separate **restart-latency bound at the rule-176 device floor** — either
 measured on a Pi 4, or made moot by FL-R3-STORE, whose O(1) row read
 collapses both columns. Recommended shape if the column moves: C10-3 judged
 on the memo column *and* a named cold-restart budget carried as owed, not
@@ -2762,7 +2762,7 @@ taken from another document's prose.
 ### §11.2 Rulings
 
 Maintainer rulings, in-channel, recorded verbatim where quoted. Row
-identifiers continue §8's FL-R series (registered at birth, rule 94).
+identifiers continue §8's FL-R series (registered at birth, rule 194).
 
 **FL-R20 — The relay floor tracks `C`.** `F(h) = R(h)·C(h)·w_ref/M(h)²`
 with `C` **raw** — no snap, no band, no rounding — and **one formula for
@@ -2835,7 +2835,7 @@ argued and two were reversed:
   the gap could have been taken at, a quote at exactly `F(h)` is admitted
   by identity, and the wallet's overhead is zero. A pad sized from a
   simulation is a constant pinned forever against dynamics that may
-  differ; the lookback is exact whatever the dynamics (rule 75: no
+  differ; the lookback is exact whatever the dynamics (rule 175: no
   tunable where an identity is available).
 - *Temporal linkability, accepted as inherent.* A deterministic fee on a
   drifting floor does date the quote to within the gap. The maintainer's
@@ -2903,7 +2903,7 @@ may sit below the current floor by `F(h′)/min_k F(h′−k) − 1`, which is t
 floor's worst rise over `G` blocks and is what FL-E3 measures. Every node
 derives the `G+1` floors from the chain, so the rule is deterministic and
 remains relay policy. The predicate is new logic and lands in Rust behind
-an FFI entry point per rule 20; the C++ marshals `G+1` floors and the
+an FFI entry point per `RULE_20_RUST_VS_CPP`; the C++ marshals `G+1` floors and the
 fee. Rejected alternative: `fee ≥ F(h′)/(1+s_max)` with `s_max` a measured
 slew bound — same effect, but a constant from a simulation where an
 identity was available; rejected on the same ground as (c).
@@ -2919,7 +2919,7 @@ are scale-invariant, so no new economics code): removes the tick entirely.
 Applied to the floor alone it introduces a second operand and breaks the
 FL-V1 identity by up to one tick; applied to the reward as well it is a
 **consensus change** to `M_r`'s operand — pre-genesis, its own row, and a
-rule-07 evaluation (a constant-like change to a consensus operand; likely
+rule-107 evaluation (a constant-like change to a consensus operand; likely
 indivisible). Pre-registered decision rule at §11.5 FL-E3/FL-R24.
 
 **FL-R19 — RE-RULED, superseded by FL-R23.** The 2026-09-06 (b) ruling
@@ -2989,7 +2989,7 @@ reopening condition):
 
 Instrument: `shekyl-economics-sim --fee-floor`
 (`rust/shekyl-economics-sim/src/fee_floor.rs`), committed **before** this
-run per rule 26. It measures raw `C` along Poisson-driven traces
+run per rule 126. It measures raw `C` along Poisson-driven traces
 (stationary at `V` ∈ {40, 50, 500}; 720-block ramps 50↔500; and
 **instantaneous steps** 40→500, 50→500, 500→50 — the worst case a linear
 ramp cannot show) and FL-C7's loop through the FL-R20 served map, each
@@ -3087,7 +3087,7 @@ predicate and a repo-wide deletion in one diff (review 2026-09-10):
   where the floored operand (40, `M_r` = 0.80 — the lower rail) paid
   819 200 000 000; at 35 640 (49.5 vs 49) 1 013 760 000 000 vs
   1 003 520 000 000; `burn_pct` 225 000 vs 223 606 and 248 746 vs
-  247 487. **Rule 07, evaluated:** (1) *consensus-rule boundary* — the
+  247 487. **Rule 107, evaluated:** (1) *consensus-rule boundary* — the
   operand feeds `M_r` and `b`, so the paid reward and the burn split
   differ between a floored and an exact node on any block whose window
   mean is fractional, and each rejects the other's coinbase; (2)
@@ -3135,7 +3135,7 @@ predicate and a repo-wide deletion in one diff (review 2026-09-10):
   view — tested against the captured chains, **wired in at the DRS-X store
   flip**, which deletes the C++ ring.
 
-*Daemon (`blockchain.cpp`, `tx_pool.cpp`), Rust-forward per rule 20:*
+*Daemon (`blockchain.cpp`, `tx_pool.cpp`), Rust-forward per `RULE_20_RUST_VS_CPP`:*
 
 1. `get_current_fee_per_byte(h)` → `F(h) = R·C(h)·w_ref/M²` via a raw
    `shekyl_fee_correction` FFI export (replacing
@@ -3279,7 +3279,7 @@ reward and the floor with no new arithmetic (`calc_release_multiplier` /
 `M_r` and the floor's `C` disagree by up to a tick and breaks the FL-V1
 identity for a saving of nothing. **Recommended: exact SMA for the
 operand, reward and floor together — a pre-genesis consensus row, opened
-by the implementing PR, rule 07 evaluated there** (a change to a
+by the implementing PR, rule 107 evaluated there** (a change to a
 consensus operand's resolution; a flag has no meaning, so the four
 criteria are expected to hold). Until that row lands the integer arm is
 what ships, and under FL-R23 it is safe — its tick costs miners ≤ 3 % for
@@ -3375,3 +3375,43 @@ decimals stay until EUP-5 rules the size. The loop is correct for any mask.
 `--stage2` prints the step in basis points of that year's mean ordinary
 fee. Year 1 on the baseline is 0.0084 bp. Where the fee prints 0.0001 SKL
 the step is 169.4915 bp, above the 50 bp bar FL-V12 uses.
+
+### The rate's minimum of one atomic unit per weight unit — OPEN, owed to EUP-5
+
+This is a second grain, separate from the lattice above. The lattice is a
+step of 1,000 atomic on the total fee. This one is on the rate:
+`relay_fee_floor` (`rust/shekyl-economics/src/fee/relay.rs`) divides
+`R·C·w_ref/M²` down to whole atomic units per weight unit and floors the
+result at 1 (`.max(1)`).
+
+- **The truncation** is FL-V12's quantizer. It is a requirement on the
+  floor-basis round, EUP-5 G, which must state the rate's resolution.
+- **The floor of 1** is this item. The code gives a reason for a non-zero
+  floor ("a zero floor admits everything, and a failed block reward is not
+  an admission"). Neither the code nor any record gives a reason for its
+  size: §11.6 kept `max(1)` as inherited. One atomic unit per weight unit
+  is the smallest non-zero value the unit can hold.
+
+**What it does late in the chain.** `R` and `C` decay (FL-V11), so `F`
+comes down to the floor. On the nightly slice (A-honest, gross, N = 90,
+seed 1;
+[`ECONOMICS_SIM_PRODUCTION_REBASE.md`](ECONOMICS_SIM_PRODUCTION_REBASE.md)
+§5.38.1), the Economy rung sits at 1 to 3 atomic units per weight unit from
+about year 100. At year 135 it is 1, and the Standard rung is 4. From there
+the fee no longer follows `C`: holding the stakers' share at 15 % lowers `C`
+by 15 % and leaves the year-135 fee where it was. In the tail era, the floor
+acts as a fixed fee floor in atomic units per weight unit, independent of the
+reward, the median and `C`.
+
+**What depends on it.** The tail criterion
+([`ECONOMY_UMBRELLA_PLAN.md`](ECONOMY_UMBRELLA_PLAN.md) §3.2, 3, and §4) holds
+the tail at maturity to at least `k` times the per-block fee revenue: the
+miner's net, the 95th-percentile block, `k` = 1 provisional. At maturity that
+revenue is the floor's, so the criterion's right-hand side is set by
+`max(1)`, and so is the ratio of the asymptote read off it. §3.2, 4 rules that
+fees are decoupled from the reward and gives the basis to FL-R13's round in
+EUP-5 G. One of that round's arms is a fixed atomic amount per byte, which is
+what the floor already is at the end of the curve.
+
+**The design question for EUP-5:** is the floor of one atomic unit per
+weight unit an intended permanent minimum fee, or an accident of the unit?

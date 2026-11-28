@@ -30,10 +30,10 @@ condition fired, §5), row 11's docs riding it; no PR-c.** Round 0 RULED
 2026-10-04 (implementation opened with PR-a commit 1); pre-flight written
 2026-10-03 against `dev` @ `01a4494f1a` (post-#939, the serve-credit
 verifier's Round 0; post-#942, CEN-J2; post-#937, DRS-E4 archived).
-*Records-was:* this banner read "No implementation has begun; rule 26 halts
+*Records-was:* this banner read "No implementation has begun; rule 126 halts
 implementation, not the pre-flight record" until 2026-10-05, five landed
 rows after it stopped being true. Registered before
-implementation (rule 94 §5): the DRS-E6 row in
+implementation (rule 194 §5): the DRS-E6 row in
 [`DAEMON_REDB_STORE.md`](../design/DAEMON_REDB_STORE.md) and the doc row in
 [`IMPLEMENTATION_INDEX.md`](../design/IMPLEMENTATION_INDEX.md) §7 name this file. No
 identifier family is minted here: the slice's rows are the census's
@@ -41,7 +41,7 @@ identifier family is minted here: the slice's rows are the census's
 ruling, kept as a numbered line so nothing re-uses it) scoped to this
 document as the earlier slices' were, and the one disposition it makes
 against a `CEN-` row is recorded on that row. Process per
-`26-sub-pr-design-discipline.mdc`, cited as the pre-flight's shape:
+`126-sub-pr-design-discipline.mdc`, cited as the pre-flight's shape:
 substrate re-read at the pin, the expectation table written before the
 second commit, artifact execution before a budget becomes a gate.
 
@@ -246,7 +246,7 @@ round with a cross-crate cutover inside it; a 26-row slice that carries one
 is how slice 6 reached seventeen commits.
 
 SCV §3 (`:257–266`) then says the thing that moves two more rows: *the
-validation surface is one (rule 19): J3, J7, J8, J9 and J10 change together
+validation surface is one (rule 119): J3, J7, J8, J9 and J10 change together
 with J1/J2's wire*. J3's pair-epoch dedup and J7's `≤ H_close` / seal-on-chain
 window are the beacon mechanism's rows as much as J8's fire height is
 (superseded by `SO-D8b` and `SO-D8a` respectively — SCV §3's first two
@@ -741,7 +741,7 @@ J15's test can be written against, not as a pointer to input 3.
   reading, and the `RuleSet::reorg_cap()`-not-the-setting pin. The census is the registry of consensus rules, and a rule's
   text changing by ruling is recorded on the rule.
 - **Alternative: mint `CEN-J27`** for it, so the predicate has its own
-  coverage bit. Not a new family (rule 94 §1 is about prefixes); it is a
+  coverage bit. Not a new family (rule 194 §1 is about prefixes); it is a
   new row in 4.J, which SO-D8 §8 also plans to add to at Slice C.
 
 **Q5** rules it. Either way the FOLLOWUPS row closes with this slice.
@@ -777,7 +777,7 @@ attestation_witness`, `KV_SERIALIZE_OPT`). The C++ passes
   recompute over `None` must equal the header's root on every corpus
   block, or B4 refuses the corpus — which is the empty-root arm's test.
 - **(b)** carry the witness inside the block type the validator takes. Rule
-  42 says no: the witness is not persisted block bytes and the hash
+  142 says no: the witness is not persisted block bytes and the hash
   excludes it.
 - **(c)** land the empty-root arm only and leave the record arm with its
   producer. Rejected as the default: the verify body is landed Rust, the
@@ -965,7 +965,7 @@ went onto PR-a without anyone re-ruling it, and the body said rows 1–3
 for two rows' worth of commits. The failure was not the scope — it was
 that nothing checked the branch against the ruling, the same class as a
 PR body lagging its branch, one level up. The check that was missing is
-now rule 26 A4's: *a PR whose scope was ruled carries the ruling's row
+now rule 126 A4's: *a PR whose scope was ruled carries the ruling's row
 range in its body, and a commit that lands outside that range updates
 the line or re-rules the split.* #953's scope line reads rows 1–5 with
 this ruling and its reason, so the next reader does not find a three-row
@@ -1119,9 +1119,9 @@ and `4.B 6 / 7` as derived; `4.I 18 / 20`.
 | 3 | 2026-10-04 | **§5 row 3 — J4, J5, J6 (PR-a commits 6–7).** The first rules of the slice: `rules/tx_bond.rs`, `judge_serve_credit_bond` in `validate::tx_against` after `judge_reference`, one `bond_record` read per serve-credit vin, the C++ arm's order; `implemented 97 → 100 / 151` (gate). The seven driver pins shed three: L7 → J4, J5 at `E_join`, J6 inside the interval — all three flipped as row 2 named them. **Found before the rule, at the fixtures:** the fold's L7 arm admits a same-block join + credit because its `post` read sees the block's own joins; the C++ reads the DB before the block, and the fixtures in three crates (the rules crate's serve-credit shapes, the store's `credited` chain, the driver's join scenario) all carried a credit in the join's block or epoch — commit 6 moved them, commit 7 landed the rule (§5.1: 2 by split, not retry). Row 2's measurement ran one direction — what the driver produces — and missed what the validator reads against; rule 16's direction variant, producer-ward, one slice after slice 6 failed it consumer-ward. The rule's entry is reshaped to name the axis rather than the instance, so the next sweep has a question to fail. **Recorded forward:** J7 (Slice C) requires the credited epoch's seal on chain, so the fixtures that now credit `E_join + 1` inside `E_join` will need their chains advanced when J7 lands — Slice C's fixture work, named here so it is not read as a J4–J6 red; and a new pin for J8 — a credit for a shard the slash removed connects once the interval is closed. Harness: `TxShape::reads_bond_state` (the sanity gate stops at `tx_form` for bond-reading shapes; the mock has no bonds by policy); the I17/I18 vacuity tests call `judge_signatures` directly, since the whole pass now refuses J4 on a record-less view. L7's J4 arm and the writer's SI-15 arm (`ARW-9`) are belts beneath a rule now; both stay, each saying so |
 | 5 | 2026-10-04 | **§5 row 5 — J14, J16, J18 (PR-a commit 13).** The three kind verifies as callers of the retention crate's bodies, in one sequence per bond-post vin — `judge_bond_post_key` renamed `judge_bond_post`, J13 interleaved per kind in the C++ arm's order (JoinMarket J14 → J13; Release J13 over the record → J16; Reinstate J18 → J13); `implemented 103 → 106 / 151`. J16's operands read first time: the two last-served gathers (per held shard on a compact record, every served shard on a complete tree), the slash watermark, the connecting height's epoch off the rule set — the first transaction rule to read a parameter off it. Seven driver pins flipped L7 → J14/J16/J18 as rows 2 and 4 named them; two driver negatives added that no rules-crate fixture can shape (J14's under-bonded two-shard join; J16's Release inside the cooldown), and on review (2026-10-05) J16's **accept over a served anchor** — the operand `release_terms_hold` gathers, not the vacuous `None` of a never-served persona, which was the only driven accept at the row's landing: the two serving operands lift at one height (the fold settles the anchor in its deadline block, the next block opens the cooldown's boundary epoch), so the witness is a one-block pair — refused J16 at the deadline, the record's `Update` to zero one block later, and no re-slash of the persona in the ~40 blocks between. **Found at the pins, after the rule:** two G10 witnesses (the driver's join-and-release block; the mutation family's `DuplicateBondPost`, a twinned Release) read *"G10 runs before the transition"* as *G10 refuses the pair*; the slot loop runs before G10, and with J16 in it the release refuses on the missing record first — the C++'s order too (`check_tx_inputs` at `:5643`, the duplicate pass at `:5805`), so the pair never reached G10 in either implementation. Re-derived as two joins for one `P`; the pair pinned as J16's, the posed text kept. §5.1 row 5 measured **1** against the legs the re-pricing named: the fixture assumption held, the operand retry was not needed, and the leg the row did find — the pins — was not among them. `retention_vin` has a second copy in the submit verifier, named as the one that deletes when the pool adopts `tx_against` |
 | 5 (review) | 2026-10-05 | **§5 row 5 on review (PR-a commits 15–16).** J16's accept over a served anchor driven as a one-block pair at the cooldown's boundary (the fold settles the anchor in its deadline block; the next opens epoch `E + RELEASE_COOLDOWN_EPOCHS`), the only driven accept before it being the vacuous `None` of a never-served persona; the G10 pair premise swept to the retention crate's `bond_post_block_unique` doc and `ARCHIVAL_BOND_GATE4.md`; `retention_vin`'s second copy filed with a grep falsifier. **Row 6 opened and did not begin:** SO-D8 §8.0 input 4 on `dev` (`cd51261ab2`) still reads *ruled and unbuilt* with no signature and no height semantics — the precondition §3.4 names is unmet, and the sentence is SO-D8's to write, not this slice's. Found at the open: PR-a carries rows 1–5 against Q7's rows 1–3 (§5, the disclosure paragraph); row 6's four legs priced in §5.1 |
-| 6 (open) | 2026-10-05 | **Q7 re-ruled (a): #953 lands as rows 1–5**, recorded as *the ruling held for one PR and then stopped being applied* — the missing check (the body carries the ruled range; a commit outside it updates the line or re-rules) is now rule 26 A4's; #953 is its precedent, recorded here (the rules carry checks, not incident logs — #959). **SO-D8 asked for its sentence** (§3.4): the signature to confirm or refuse, and what `at` is for Slice C's call — which block's view, which side of a same-block slash. **Reorder proposed** (§5): PR-b = rows 7–10, PR-c = row 6 when the sentence exists; Q7's sequence kept. #953 marked ready for review at the commit carrying this row (docs-only over the clone-verified `512e4c3cf5`); the merge word is the maintainer's |
+| 6 (open) | 2026-10-05 | **Q7 re-ruled (a): #953 lands as rows 1–5**, recorded as *the ruling held for one PR and then stopped being applied* — the missing check (the body carries the ruled range; a commit outside it updates the line or re-rules) is now rule 126 A4's; #953 is its precedent, recorded here (the rules carry checks, not incident logs — #959). **SO-D8 asked for its sentence** (§3.4): the signature to confirm or refuse, and what `at` is for Slice C's call — which block's view, which side of a same-block slash. **Reorder proposed** (§5): PR-b = rows 7–10, PR-c = row 6 when the sentence exists; Q7's sequence kept. #953 marked ready for review at the commit carrying this row (docs-only over the clone-verified `512e4c3cf5`); the merge word is the maintainer's |
 | 5 (review, arm) | 2026-10-05 | **The bond-post classifier is one type.** `BondArm::of` (`archival/arm.rs`) is what `judge_bond_post` and the fold's `apply_input` both call, so they cannot disagree about the arm. An unnamed kind is CEN-L7 inside `tx_against`, at the post's vin, and the four post rows are not recorded for it; the fold's L7 arm stays the belt for a transition that skipped the sequence. A missing `pqc_auths` slot refuses on J13 at the point that arm reads the slot — after the arm's non-slot check, in the C++ order — instead of falling through as a covered pass. The rules `retention_vin` takes the classified arm; the pool's `retention_vin` takes a caller-supplied kind and is not the same function (FOLLOWUPS). The driver's admission file split into the corpus table, the levered slash chain (one chain, a phase a failure can name), and the hint chain; the shared height and refusal shape live in `archival_driver`. |
-| 6 (ruled) | 2026-10-06 | **PR-b is rows 6–10 (§5).** The 2026-10-05 reorder's condition — *the sentence exists* — fired with #975 (`dev` `e0fb3eaa80`, SO-D8 §8.0 input 4: `closed_and_final(view, shard, at, reorg_cap)`; `at` the last height read, J15 passing the parent; the archival fold alone, no slash side). Recorded as the deferral's falsifier firing, not a plan change; CEN-J15's row carries the predicate as its first clause; FOLLOWUPS `:216`'s owner names PR-b. Opened as PR-b commit 1 off `e0fb3eaa80`, body reading rows 6–10 from this commit (rule 26 A4) |
+| 6 (ruled) | 2026-10-06 | **PR-b is rows 6–10 (§5).** The 2026-10-05 reorder's condition — *the sentence exists* — fired with #975 (`dev` `e0fb3eaa80`, SO-D8 §8.0 input 4: `closed_and_final(view, shard, at, reorg_cap)`; `at` the last height read, J15 passing the parent; the archival fold alone, no slash side). Recorded as the deferral's falsifier firing, not a plan change; CEN-J15's row carries the predicate as its first clause; FOLLOWUPS `:216`'s owner names PR-b. Opened as PR-b commit 1 off `e0fb3eaa80`, body reading rows 6–10 from this commit (rule 126 A4) |
 | 6 (landed) | 2026-10-06 | **§5 row 6 — J15 and `closed_and_final` (PR-b, PR #983).** The predicate in `archival/close.rs` and the row in `judge_bond_post` (J14 → J15 → J13; per shard: closed and final at the parent, priced at the last settled epoch — `None` refuses, Q4 — then viability through the retention crate; a complete tree gathers nothing); `implemented 106 → 107 / 151`; the unit set reds in both directions. **Found at the pins, after the rule:** the corpus is not a witness for this row — `emission-claim`'s market bond joins `SHARD_ID` on a chain with no closed shard, and J15 refuses it at 98. Ruled on the finding (maintainer): *if a shard isn't closed, it isn't available*; `W` stays 3 000 000 everywhere, no nettype lever, no C++ change; the capture pins what was true at capture and replays through 97 saying why (`vectors_tests::PREDATES`, the sufficiency tests' `Red::Suspended` — which exposed that J15's refusal had been counted as a cascade for every family witnessed there); the C++ gather registered *permissive, not divergent* beside `DEL-008`; the generator's premise corrected; fixtures whose subject was not the holding join complete trees. §3.2 item 3's parity claim refuted with the posed text kept; rows 8–9's gate cells carry it. **Red by the rule:** four driven tests whose subject is a compact holding wait on a `close_shard()` step — sized: 1.7 s per driven spend, coinbases add nothing to the fold, ≈ 230 spends to close shard 0, the live lane. §5.1 row 6 measured 2 on the priced legs and 4 on the corpus, a leg no row had named |
 | 7 (landed) | 2026-10-06 | **§5 row 7 — the driver's emission claim (PR-b, PR #983, `93395f4621` `3912556a76` `4995a2de40`).** `emission_assembly::assemble_emission_claim` re-makes the handler's steps behind the `harness` feature; the live-lane pin connects one claim and pays the persona; the byte-identity test in `shekyl-engine-core` holds the driver's bytes equal to the engine's for one shape — the Q3 condition met, no mismatch found. §5.1 row 7 measured 3 by scope split |
 | 8 (landed) | 2026-10-06 | **§5 row 8 — J19, J20, J22, J24 (PR-b, PR #983, `33e5fbe5fb`).** Four `TxRule`s in `tx_form`'s last band; J22's body located as `TxPrefix::hash` on `shekyl-wire`; the emission fixtures learned the persona; `implemented 107 → 111 / 151`. Measured 1, as priced |
@@ -1192,7 +1192,7 @@ Each had a default; the ruling is on its question, the date once here.
   2026-10-06 (§3.4).
 - **Q6 — the witness door for B4** (§3.5). *Default:* a parameter on
   `validate`, `None` the empty set. *Alternatives:* (b) inside the block
-  type (rule 42 refuses); (c) the empty arm only. **RULED: the door, with
+  type (rule 142 refuses); (c) the empty arm only. **RULED: the door, with
   the default's value AMENDED.** `None` as the empty set conflates *not
   supplied* with *none exist*, and `/get_blocks_by_height.bin` never
   populates the sidecar, so every captured chain's `None` is the former.

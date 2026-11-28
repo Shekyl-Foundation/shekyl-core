@@ -35,6 +35,8 @@ libc = "0.2"
 
 [dev-dependencies]
 shekyl-levin = { path = "../shekyl-levin" }
+# The initiator's half of the clearnet channel, for a test that dials the node.
+shekyl-p2p-transport = { path = "../shekyl-p2p-transport" }
 tempfile = "3"
 tokio = { version = "1", default-features = false, features = ["macros", "net", "rt-multi-thread", "sync", "time", "io-util"] }
 

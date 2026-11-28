@@ -1,4 +1,4 @@
-# RT-W9 — the channel itself: rule-26 pre-flight
+# RT-W9 — the channel itself: rule-126 pre-flight
 
 **Status:** CLOSED-as-record — **archived 2026-10-25.** RT-W9 landed
 2026-10-25. This pre-flight owns no open residue. Do not implement from
@@ -118,7 +118,7 @@ a feature that exposes raw keys if someone enables it in production, which
 the gate exists to stop and which the clatter gate already shows how to
 check.
 
-**RULED 2026-10-11: (a) — SUPERSEDED 2026-10-12.** Rule 26 B2 rejects a
+**RULED 2026-10-11: (a) — SUPERSEDED 2026-10-12.** Rule 126 B2 rejects a
 public test-only API with no production caller. The `c5-bench` feature is
 a benchmark hook, not an exception, and it is not reused for keys.
 
@@ -181,7 +181,7 @@ test-support crate, is one more crate for sixty lines.
 
 **RULED 2026-10-11: as recommended, under the test-support feature —
 SUPERSEDED 2026-10-12.** That feature is a public test-only entry with no
-production caller, which rule 26 B2 forbids. Moving clatter into
+production caller, which rule 126 B2 forbids. Moving clatter into
 `shekyl-rpc-channel` is not the repair: the clatter gate allows exactly
 one manifest to name it, the cross-check crate, and forbids any crate
 from depending on that crate.

@@ -93,8 +93,6 @@ pub struct ClearnetPlan {
     pub listen: Vec<SocketAddr>,
     /// The operator's SOCKS proxy for outbound clearnet, with its pair.
     pub proxy: Option<Proxy>,
-    /// Whether the clearnet channel is encrypted (the `dev` lever).
-    pub encrypt: bool,
     /// This node's own clearnet addresses, as advertised.
     pub own: Vec<NetworkAddress>,
 }
@@ -154,7 +152,6 @@ mod tests {
             clearnet: (listen > 0).then(|| ClearnetPlan {
                 listen: vec![at; listen],
                 proxy: None,
-                encrypt: false,
                 own: Vec::new(),
             }),
             tor,
