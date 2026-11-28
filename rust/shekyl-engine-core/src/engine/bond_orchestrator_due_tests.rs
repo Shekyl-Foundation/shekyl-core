@@ -103,12 +103,12 @@ async fn a_due_reference_is_the_named_one_while_the_wallet_has_reached_it() {
     let wallet_tip = BlockHeight::from_raw(ingested);
     let claimed_tip = BlockHeight::from_raw(ingested + 1);
     let canonical = select_reference_height(claimed_tip).expect("a long enough chain");
-    let from_wallet = anchored_reference_block(&tree, wallet_tip, hash)
+    let (from_wallet, _) = anchored_reference_block(&tree, wallet_tip, hash)
         .await
         .expect("the wallet's own anchor");
     assert_eq!(from_wallet.height.to_raw() + 1, canonical.to_raw());
 
-    let named = reference_block_at(&tree, canonical, hash)
+    let (named, _) = reference_block_at(&tree, canonical, hash)
         .await
         .expect("a reference the wallet has reached is used as named");
     assert_eq!(named.height, canonical);

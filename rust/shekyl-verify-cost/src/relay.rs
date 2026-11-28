@@ -25,7 +25,7 @@
 //! `k` is drawn at random rather than derived from a revealed hybrid public
 //! key (`PqcKeyScalar::from_pqc_public_key`); and there is no transaction
 //! around it for `tx_form` to judge. Building one at the synthetic depths
-//! 3..=7 would need the wallet builder's coordination
+//! 3 and deeper would need the wallet builder's coordination
 //! (`shekyl-tx-builder`), which draws from `OsRng` and so cannot give the
 //! drift gate a byte-identical fixture.
 
@@ -45,7 +45,7 @@ use shekyl_fcmp::proof::{
 };
 use shekyl_fcmp::tree::{
     hash_grow_helios, hash_grow_selene, helios_hash_init, helios_point_to_selene_scalar,
-    selene_hash_init, selene_point_to_helios_scalar,
+    selene_hash_init, selene_point_to_helios_scalar, HELIOS_CHUNK_WIDTH,
 };
 use shekyl_fcmp::PqcKeyScalar;
 use shekyl_fcmp_proofs::SELENE_FCMP_GENERATORS;
@@ -111,8 +111,25 @@ pub enum ChunkLayout {
     /// All inputs adjacent in one leaf chunk — the §72 control.
     Shared,
     /// One input per leaf chunk, `n` siblings at the Helios layer — production
-    /// topology for unrelated spends.
+    /// topology for unrelated spends. The Helios layer holds at most
+    /// [`HELIOS_CHUNK_WIDTH`] chunks under one node, so past that many inputs
+    /// they are dealt round-robin and share chunks, as they must in a depth-2
+    /// tree; at or below it every input has its own chunk. At depth 3 and
+    /// deeper a real tree could fan those inputs out at layer 2 instead. Layout does
+    /// not move verification time: on the floor device (2026-11-27) the two
+    /// layouts' medians at depth 2 agree within 1 % at every count from 1 to
+    /// 18, so the cells past the width time the shape a fanned-out tree would.
     Spread,
+}
+
+/// The leaf chunks a [`ChunkLayout::Spread`] fixture holds: input `i` in
+/// chunk `i % width`, with `width` the lesser of `n_in` and
+/// [`HELIOS_CHUNK_WIDTH`], the most children one layer-1 node takes.
+fn spread_chunks(n_in: usize) -> Vec<Vec<usize>> {
+    let width = n_in.min(HELIOS_CHUNK_WIDTH);
+    (0..width)
+        .map(|c| (c..n_in).step_by(width).collect())
+        .collect()
 }
 
 /// Build a verifiable `n_in`-input, `n_out`-output admission fixture.
@@ -140,9 +157,9 @@ pub fn build_fixture<R: RngCore + CryptoRng>(
         "Spread needs the Helios layer to hold the sibling chunks; depth 1 has none"
     );
     assert!(
-        (1..=7).contains(&tree_depth),
-        "depth 1 is sub-production; 2 is the production minimum; 3..=7 are the \
-         capacity tiers (§72) and are PROJECTIONS -- synthesized trees under \
+        (1..=shekyl_curve_generators::MAX_TREE_DEPTH).contains(&tree_depth),
+        "depth 1 is sub-production; 2 is the production minimum; 3 up to the \
+         derived maximum depth are PROJECTIONS -- synthesized trees under \
          genesis-era conditions, not measurements of a tree that exists"
     );
     let signable_tx_hash = [0xABu8; 32];
@@ -197,7 +214,9 @@ pub fn build_fixture<R: RngCore + CryptoRng>(
     //
     // Spread: `n_in` chunks of one output each, so the Helios layer carries
     // `n_in` siblings and each input walks a distinct path — the arrangement a
-    // wallet spending unrelated outputs actually produces.
+    // wallet spending unrelated outputs actually produces. The layer-1 node
+    // takes at most `HELIOS_CHUNK_WIDTH` children, so a larger `n_in` deals
+    // its inputs over that many chunks.
     let leaf_selene_for = |idxs: &[usize]| -> <Selene as Ciphersuite>::G {
         let mut terms = Vec::with_capacity(4 * idxs.len());
         for (slot, &idx) in idxs.iter().enumerate() {
@@ -239,8 +258,9 @@ pub fn build_fixture<R: RngCore + CryptoRng>(
     // below. Each layer above the leaf contributes a 1-wide branch chunk on its
     // own curve, which is what `prove` walks.
     //
-    // Depths 3..=7 are PROJECTIONS: they synthesize the capacity tiers (§72)
-    // under genesis-era conditions rather than measuring a tree that exists.
+    // Depths 3 and deeper are PROJECTIONS: they synthesize the capacity tiers
+    // (§72; through the derived maximum for the block sweep) under
+    // genesis-era conditions rather than measuring a tree that exists.
     // Labelled here as well as at the table (§81.2) so the number carries its
     // status wherever it is read.
     let (tree_root, c1_layers, c2_layers, per_input_chunk): (
@@ -258,11 +278,14 @@ pub fn build_fixture<R: RngCore + CryptoRng>(
     } else {
         let chunks: Vec<Vec<usize>> = match layout {
             ChunkLayout::Shared => vec![all.clone()],
-            ChunkLayout::Spread => all.iter().map(|&i| vec![i]).collect(),
+            ChunkLayout::Spread => spread_chunks(n_in),
         };
         let owner: Vec<Vec<usize>> = match layout {
             ChunkLayout::Shared => vec![all.clone(); n_in],
-            ChunkLayout::Spread => all.iter().map(|&i| vec![i]).collect(),
+            ChunkLayout::Spread => all
+                .iter()
+                .map(|&i| chunks[i % chunks.len()].clone())
+                .collect(),
         };
 
         // Layer 1 (Helios) over the leaf chunk(s).
@@ -412,4 +435,30 @@ pub fn membership_verify(f: &AdmissionFixture) -> Result<bool, VerifyError> {
         f.tree_depth,
         f.signable_tx_hash,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{spread_chunks, HELIOS_CHUNK_WIDTH};
+
+    /// Every input sits in exactly one chunk, no more chunks than one
+    /// layer-1 node takes, and every input has its own chunk until there
+    /// are more inputs than that. The cost benches prove every cell before
+    /// timing it; this keeps the dealing itself under `cargo test`.
+    #[test]
+    fn spread_chunks_fit_one_helios_node() {
+        for n_in in 1..=3 * HELIOS_CHUNK_WIDTH {
+            let chunks = spread_chunks(n_in);
+            assert_eq!(chunks.len(), n_in.min(HELIOS_CHUNK_WIDTH), "{n_in}");
+            let mut seen: Vec<usize> = chunks.iter().flatten().copied().collect();
+            seen.sort_unstable();
+            assert_eq!(seen, (0..n_in).collect::<Vec<_>>(), "{n_in}");
+            for (c, chunk) in chunks.iter().enumerate() {
+                assert!(chunk.iter().all(|&i| i % chunks.len() == c), "{n_in}");
+                if n_in <= HELIOS_CHUNK_WIDTH {
+                    assert_eq!(chunk.len(), 1, "{n_in}");
+                }
+            }
+        }
+    }
 }

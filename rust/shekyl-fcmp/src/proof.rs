@@ -13,7 +13,8 @@
 //! being a public function of the key.
 
 use crate::leaf::PqcKeyScalar;
-use crate::{MAX_INPUTS, MAX_TREE_DEPTH};
+use crate::MAX_TREE_DEPTH;
+use shekyl_curve_generators::{fcmp_fits_generators, ProofLayers};
 use thiserror::Error;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
@@ -55,11 +56,38 @@ pub use crate::batch_weights::{
     FCMP_MEMBERSHIP_ONLY_BATCH_WEIGHTS_CUSTOMIZATION, FCMP_PP_BATCH_WEIGHTS_CUSTOMIZATION,
 };
 
+/// Whether `inputs` is past what the generator tables prove at `layers`.
+///
+/// The one bound the prover and both verifiers read, so a proof that can be
+/// built can be verified. Consensus refuses far earlier, at the input cap;
+/// this is the proof system's own limit. `inputs` is an untrusted count.
+/// `layers` is already a [`ProofLayers`]: a depth outside the formula is
+/// refused by name before this runs.
+fn exceeds_generators(inputs: usize, layers: ProofLayers) -> bool {
+    !fcmp_fits_generators(inputs, layers)
+}
+
+/// The layer count a prove call was given, or the depth error.
+fn prove_layers(tree_depth: u8) -> Result<ProofLayers, ProveError> {
+    ProofLayers::new(tree_depth).ok_or(ProveError::TreeDepth(tree_depth))
+}
+
+/// The layer count a verify call was given. Zero and past the maximum are
+/// [`VerifyError::TreeDepthTooLarge`]'s neighbours: zero has its own arm only
+/// when a caller distinguishes it, and both are outside [`ProofLayers`].
+fn verify_layers(tree_depth: u8) -> Result<ProofLayers, VerifyError> {
+    ProofLayers::new(tree_depth).ok_or(VerifyError::TreeDepthTooLarge(tree_depth))
+}
+
 /// Errors during FCMP++ proof construction.
 #[derive(Debug, Error)]
 pub enum ProveError {
-    #[error("too many inputs: {0} exceeds maximum {MAX_INPUTS}")]
+    #[error("too many inputs: {0} exceed what the generators prove at this tree depth")]
     TooManyInputs(usize),
+
+    /// The layer count is outside [`ProofLayers`].
+    #[error("tree depth {0} is outside the layers a proof can use")]
+    TreeDepth(u8),
 
     #[error("empty inputs")]
     EmptyInputs,
@@ -530,7 +558,8 @@ fn prove_inner<R: RngCore + CryptoRng>(
     if inputs.is_empty() {
         return Err(ProveError::EmptyInputs);
     }
-    if inputs.len() > MAX_INPUTS {
+    let layers = prove_layers(tree_depth)?;
+    if exceeds_generators(inputs.len(), layers) {
         return Err(ProveError::TooManyInputs(inputs.len()));
     }
 
@@ -734,7 +763,8 @@ fn prove_membership_only_inner<R: RngCore + CryptoRng>(
     if inputs.is_empty() {
         return Err(ProveError::EmptyInputs);
     }
-    if inputs.len() > MAX_INPUTS {
+    let layers = prove_layers(tree_depth)?;
+    if exceeds_generators(inputs.len(), layers) {
         return Err(ProveError::TooManyInputs(inputs.len()));
     }
 
@@ -836,7 +866,8 @@ pub fn prove_with_sal(
     if sal_pairs.is_empty() {
         return Err(ProveError::EmptyInputs);
     }
-    if sal_pairs.len() > MAX_INPUTS {
+    let layers = prove_layers(tree_depth)?;
+    if exceeds_generators(sal_pairs.len(), layers) {
         return Err(ProveError::TooManyInputs(sal_pairs.len()));
     }
     if sal_pairs.len() != original_outputs.len()
@@ -973,12 +1004,11 @@ pub fn verify(
     signable_tx_hash: TxSignableHash,
 ) -> Result<bool, VerifyError> {
     let num_inputs = proof.num_inputs as usize;
-    // Self-defending arity cap (mirrors `verify_membership_only`): a crafted
-    // `proof.num_inputs` sizes the batch verifiers, so an out-of-range value
-    // drives large allocations/CPU. A valid proof never has 0 inputs nor
-    // exceeds `MAX_INPUTS`; `DeserializationFailed` (code 1) matches the FFI's
-    // existing invalid-parameters mapping, so no error-code surface changes.
-    if num_inputs == 0 || num_inputs > MAX_INPUTS {
+    // Depth first, by name. Then the untrusted input count, before anything
+    // is sized by it. `DeserializationFailed` (code 1) is the invalid-count
+    // mapping.
+    let layers = verify_layers(tree_depth)?;
+    if num_inputs == 0 || exceeds_generators(num_inputs, layers) {
         return Err(VerifyError::DeserializationFailed);
     }
     if key_images.len() != num_inputs {
@@ -1002,14 +1032,11 @@ pub fn verify(
     if proof.tree_depth != tree_depth {
         return Err(VerifyError::InvalidTreeRoot);
     }
-    if tree_depth > MAX_TREE_DEPTH {
-        return Err(VerifyError::TreeDepthTooLarge(tree_depth));
-    }
 
-    let layers = tree_depth as usize;
+    let layer_count = usize::from(layers.get());
 
-    let tree = deserialize_tree_root(tree_root.as_bytes(), layers).ok_or_else(|| {
-        tracing::debug!(layers, "deserialize_tree_root failed");
+    let tree = deserialize_tree_root(tree_root.as_bytes(), layer_count).ok_or_else(|| {
+        tracing::debug!(layers = layer_count, "deserialize_tree_root failed");
         VerifyError::InvalidTreeRoot
     })?;
 
@@ -1056,11 +1083,11 @@ pub fn verify(
         .collect();
 
     let mut rest = proof.data.as_slice();
-    let fcmp_pp = FcmpPlusPlus::read(pseudo_outs, layers, &mut rest).map_err(|e| {
-        tracing::debug!(proof_len = proof.data.len(), layers, error = %e, "FcmpPlusPlus::read failed");
+    let fcmp_pp = FcmpPlusPlus::read(pseudo_outs, layer_count, &mut rest).map_err(|e| {
+        tracing::debug!(proof_len = proof.data.len(), layers = layer_count, error = %e, "FcmpPlusPlus::read failed");
         VerifyError::DeserializationFailed
     })?;
-    refuse_trailing_bytes(rest, proof.data.len(), layers)?;
+    refuse_trailing_bytes(rest, proof.data.len(), layer_count)?;
 
     let mut ed_verifier = multiexp::BatchVerifier::new(num_inputs);
     let mut c1_verifier = generalized_bulletproofs::Generators::batch_verifier();
@@ -1073,7 +1100,7 @@ pub fn verify(
             &mut c1_verifier,
             &mut c2_verifier,
             tree,
-            layers,
+            layer_count,
             signable_tx_hash,
             per_input,
         )
@@ -1108,7 +1135,7 @@ pub fn verify(
 /// # Errors
 /// [`VerifyError::InputCountMismatch`] (pseudo-outs **or** pqc-key count vs proof input
 /// count), [`VerifyError::InvalidTreeRoot`], [`VerifyError::TreeDepthTooLarge`],
-/// [`VerifyError::DeserializationFailed`] (also `proof.num_inputs == 0` or `> MAX_INPUTS`),
+/// [`VerifyError::DeserializationFailed`] (also `proof.num_inputs == 0` or past the generators' capacity at the depth),
 /// [`VerifyError::UpstreamError`], or [`VerifyError::BatchVerificationFailed`].
 /// Never [`VerifyError::KeyImageCountMismatch`] — this path has no key images.
 pub fn verify_membership_only(
@@ -1120,12 +1147,10 @@ pub fn verify_membership_only(
     signable_tx_hash: TxSignableHash,
 ) -> Result<bool, VerifyError> {
     let num_inputs = proof.num_inputs as usize;
-    // Self-defending arity cap: a crafted `proof.num_inputs` sizes the batch verifiers, so an
-    // out-of-range value drives large allocations/CPU. A valid proof never has 0 inputs (all
-    // provers reject empty) nor exceeds `MAX_INPUTS`, so reject before allocating. Independent
-    // of the FFI's own `po_count` cap — this holds for any Rust caller. `DeserializationFailed`
-    // (code 1) matches the FFI's mapping for the same out-of-range condition.
-    if num_inputs == 0 || num_inputs > MAX_INPUTS {
+    // Depth first, by name. Then the untrusted input count, before anything
+    // is sized by it.
+    let layers = verify_layers(tree_depth)?;
+    if num_inputs == 0 || exceeds_generators(num_inputs, layers) {
         return Err(VerifyError::DeserializationFailed);
     }
     if pseudo_outs.len() != num_inputs {
@@ -1143,14 +1168,11 @@ pub fn verify_membership_only(
     if proof.tree_depth != tree_depth {
         return Err(VerifyError::InvalidTreeRoot);
     }
-    if tree_depth > MAX_TREE_DEPTH {
-        return Err(VerifyError::TreeDepthTooLarge(tree_depth));
-    }
 
-    let layers = tree_depth as usize;
+    let layer_count = usize::from(layers.get());
 
-    let tree = deserialize_tree_root(tree_root.as_bytes(), layers).ok_or_else(|| {
-        tracing::debug!(layers, "deserialize_tree_root failed");
+    let tree = deserialize_tree_root(tree_root.as_bytes(), layer_count).ok_or_else(|| {
+        tracing::debug!(layers = layer_count, "deserialize_tree_root failed");
         VerifyError::InvalidTreeRoot
     })?;
 
@@ -1177,16 +1199,16 @@ pub fn verify_membership_only(
     .rng();
 
     let mut rest = proof.data.as_slice();
-    let fcmp_mo = FcmpMembershipOnly::read(pseudo_outs, layers, &mut rest).map_err(|e| {
+    let fcmp_mo = FcmpMembershipOnly::read(pseudo_outs, layer_count, &mut rest).map_err(|e| {
         tracing::debug!(
             proof_len = proof.data.len(),
-            layers,
+            layers = layer_count,
             error = %e,
             "FcmpMembershipOnly::read failed"
         );
         VerifyError::DeserializationFailed
     })?;
-    refuse_trailing_bytes(rest, proof.data.len(), layers)?;
+    refuse_trailing_bytes(rest, proof.data.len(), layer_count)?;
 
     let mut ed_verifier = multiexp::BatchVerifier::new(num_inputs);
     let mut c1_verifier = generalized_bulletproofs::Generators::batch_verifier();
@@ -1199,7 +1221,7 @@ pub fn verify_membership_only(
             &mut c1_verifier,
             &mut c2_verifier,
             tree,
-            layers,
+            layer_count,
             signable_tx_hash,
             pqc_key_points,
         )
@@ -1327,6 +1349,37 @@ fn deserialize_tree_root(bytes: &[u8; 32], layers: usize) -> Option<TreeRoot<Sel
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The most inputs the generator tables prove at `tree_depth`.
+    fn most_provable_inputs(layers: ProofLayers) -> usize {
+        (1..)
+            .take_while(|&n| !exceeds_generators(n, layers))
+            .last()
+            .expect("the generators prove one input at every legal depth")
+    }
+
+    /// The bound is the generators' at each legal depth, and a count past it
+    /// does not fit. A depth outside [`ProofLayers`] is not a depth.
+    #[test]
+    fn the_one_bound_is_the_generators_capacity() {
+        for depth in crate::MIN_SPEND_LAYERS..=MAX_TREE_DEPTH {
+            let layers = ProofLayers::known(depth);
+            let most = most_provable_inputs(layers);
+            assert!(fcmp_fits_generators(most, layers));
+            assert!(!fcmp_fits_generators(most + 1, layers));
+        }
+        for hostile in [usize::try_from(u32::MAX).expect("fits"), usize::MAX] {
+            assert!(
+                exceeds_generators(hostile, ProofLayers::known(2)),
+                "{hostile}"
+            );
+        }
+        assert!(ProofLayers::new(u8::MAX).is_none());
+        assert!(!fcmp_fits_generators(
+            most_provable_inputs(ProofLayers::known(MAX_TREE_DEPTH)) + 1,
+            ProofLayers::known(MAX_TREE_DEPTH),
+        ));
+    }
 
     /// A random `PL-D3` leaf commitment: `k`, `K = k·G_k`, `r`, `CM = K + r·J`,
     /// and `CM.x` as the Selene leaf scalar.
@@ -1587,14 +1640,15 @@ mod tests {
 
     #[test]
     fn prove_rejects_too_many_inputs() {
-        let inputs: Vec<ProveInput> = (0..9).map(|_| dummy_prove_input()).collect();
+        let count = most_provable_inputs(ProofLayers::known(8)) + 1;
+        let inputs: Vec<ProveInput> = (0..count).map(|_| dummy_prove_input()).collect();
         let result = prove(
             &inputs,
             &CurveTreeRoot::from_bytes([0; 32]),
             8,
             TxSignableHash::from_bytes([0; 32]),
         );
-        assert!(matches!(result, Err(ProveError::TooManyInputs(9))));
+        assert!(matches!(result, Err(ProveError::TooManyInputs(n)) if n == count));
     }
 
     /// `pad_branch_chunk` zero-pads short chunks (the partial-chunk fix) but
@@ -1883,7 +1937,7 @@ mod tests {
     /// deserialization (so dummy inputs suffice here — the cap fires first).
     #[test]
     fn full_verify_rejects_out_of_range_num_inputs() {
-        for bad in [0usize, MAX_INPUTS + 1] {
+        for bad in [0usize, most_provable_inputs(ProofLayers::ONE) + 1] {
             let proof = ShekylFcmpProof {
                 data: Vec::new(),
                 num_inputs: u32::try_from(bad).expect("test bad-count fits u32"),
@@ -1979,10 +2033,12 @@ mod tests {
             );
         }
 
-        // Arity cap: a crafted `num_inputs` (0 or > MAX_INPUTS) must reject as
-        // DeserializationFailed before sizing the batch verifiers — self-defending, independent
-        // of the FFI's `po_count` cap.
-        for bad in [0usize, crate::MAX_INPUTS + 1] {
+        // Arity cap: a crafted `num_inputs` (0 or past the generators' capacity) must reject
+        // as DeserializationFailed before sizing the batch verifiers.
+        for bad in [
+            0usize,
+            most_provable_inputs(ProofLayers::known(tree_depth)) + 1,
+        ] {
             let mut tampered = mo.proof.clone();
             tampered.num_inputs = u32::try_from(bad).expect("test bad-count fits u32");
             let r = verify_membership_only(
@@ -2152,7 +2208,9 @@ mod tests {
 
     #[test]
     fn prove_rejects_max_plus_one_inputs() {
-        let inputs: Vec<ProveInput> = (0..=MAX_INPUTS).map(|_| dummy_prove_input()).collect();
+        let inputs: Vec<ProveInput> = (0..=most_provable_inputs(ProofLayers::known(8)))
+            .map(|_| dummy_prove_input())
+            .collect();
         let result = prove(
             &inputs,
             &CurveTreeRoot::from_bytes([0; 32]),
@@ -2164,7 +2222,9 @@ mod tests {
 
     #[test]
     fn prove_at_max_inputs_count() {
-        let inputs: Vec<ProveInput> = (0..MAX_INPUTS).map(|_| dummy_prove_input()).collect();
+        let inputs: Vec<ProveInput> = (0..most_provable_inputs(ProofLayers::known(8)))
+            .map(|_| dummy_prove_input())
+            .collect();
         let result = prove(
             &inputs,
             &CurveTreeRoot::from_bytes([0; 32]),
@@ -2173,7 +2233,7 @@ mod tests {
         );
         assert!(
             !matches!(result, Err(ProveError::TooManyInputs(_))),
-            "MAX_INPUTS should be accepted (may fail for other reasons)"
+            "the generators' capacity should be accepted (may fail for other reasons)"
         );
     }
 

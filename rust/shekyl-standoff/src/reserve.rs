@@ -18,34 +18,36 @@
 //! consulted or narrowed by it (`ARCHIVAL_COVER_DRAW.md` §1.9 DQ4). Kept in
 //! this crate — the single source for `P`-lane wallet-side amount
 //! constants, beside the cover draw. The cover draw's bound is the archival
-//! bond floor, a consensus parameter this crate does not read, so the sizing
-//! relation between the reserve and that bound is asserted in
-//! `shekyl-engine-core`, the one site that sees both.
+//! bond floor, which this crate does not read, so the sizing relation between
+//! the reserve and that bound is asserted in `shekyl-engine-core`, the one
+//! site that sees both.
 
-/// The exit-fee reserve in atomic units (1 SKL = 1_000_000_000 atomic).
+use shekyl_economics::quantized_fee;
+use shekyl_wire::transaction::TX_WEIGHT_LIMIT;
+
+/// The weight every `P`-lane spend quotes its fee over, so that the lane's
+/// transactions pay one fee whatever their shape.
 ///
-/// **Pinned: `0.05 SKL = 50_000_000 atomic`** — one pessimistically-priced
-/// `Release` fee. Derivation (`ARCHIVAL_DRAIN_SEND_FD2.md` DS-4,
-/// `ARCHIVAL_BOND_CONSTRUCTION.md` §7.2):
+/// It is the consensus weight limit. A `JoinMarket` post carries up to
+/// `MAX_HOLDINGS_SHARDS` shard ids, so a legal post can fill the limit, and a
+/// fee quoted over anything lighter could undercut the daemon's per-byte floor
+/// on a legal spend.
+pub const P_LANE_WEIGHT_CEILING: usize = TX_WEIGHT_LIMIT;
+
+/// The fee rate, in atomic units per weight byte, the exit-fee reserve is
+/// priced at. **Assumption** (`ICD-R10`,
+/// `docs/design/CEN_I4_INPUT_CAP_DERIVATION.md`).
+pub const EXIT_FEE_HEADROOM_RATE: u64 = 600;
+
+/// The exit-fee reserve in atomic units (1 SKL = 1_000_000_000 atomic): one
+/// `Release` fee at [`EXIT_FEE_HEADROOM_RATE`], computed from the weight limit
+/// (`ICD-R10`; `ARCHIVAL_DRAIN_SEND_FD2.md` DS-4,
+/// `ARCHIVAL_BOND_CONSTRUCTION.md` §7.2).
 ///
-/// - **Worst-case `Release` weight.** A `Release` spends the typed `P` pool
-///   (cover + earnings) and pays out; bound by `MAX_INPUTS = 8` inputs, two
-///   outputs, `MAX_TREE_DEPTH = 24`. The dominant term is the FCMP++ proof
-///   (`FCMP_PROOF_SIZE_KAT[8][24] = 33_600` bytes); with the per-input
-///   KEM/PQC-auth and per-output CT/KEM framing the full structural weight is
-///   **80,456 bytes** — computed, not estimated, by engine-core's
-///   `p_lane_weight_ceiling_bytes()` (the same bound the P-lane floor fee is
-///   quoted over), and tied back to this constant by the
-///   `p_lane_ceiling_covers_the_heaviest_legal_shape` test. An earlier
-///   revision hand-estimated "well under ~64,000" here; the computed model
-///   corrected it upward.
-/// - **Pessimistic rate.** The economy floor rate is daemon-derived and
-///   historically ~1 atomic/weight-byte; this reserve provisions
-///   `>= 600 atomic/weight-byte` of head-room (`80_456 × 600 ≈ 48.3M < 50M`),
-///   covering a fee market ~600× above any observed floor. The engine-core
-///   ceiling test pins this 600 bound: a weight-model regeneration that grows
-///   the ceiling past `50M / 600` turns it red, forcing this derivation to be
-///   re-run rather than silently under-covering.
+/// A `Release` pays the lane's one fee, quoted over [`P_LANE_WEIGHT_CEILING`],
+/// so that weight is what the reserve prices, and not the `Release`'s own. The
+/// product rounds up to the fee lattice, as every paid fee does. At today's
+/// limit that is `148,614 × 600`, or `89,169,000` atomic.
 ///
 /// **Bounds for safe adjustment** (rule 175). Must satisfy
 /// `0 < EXIT_FEE_RESERVE_ATOMIC < rung`, the rung the archival bond floor
@@ -55,10 +57,9 @@
 /// cover draw to a derived bond amount — uniform over `[1, rung)`,
 /// spreading every funded bond across a rung so no tx is identifiable as a
 /// bond by amount — but the draw has an exclusive upper bound and **no floor**,
-/// so the old absolute "a fresh pool always clears the reserve" guarantee is
-/// gone. The bound is now a **corner-fraction bound**: the reserve is a small
-/// fraction (`1/15`) of the draw's range, so the protocol-drawn cover alone
-/// clears the reserve with probability `1 − reserve/RUNG ≈ 93.3%` (an optional
+/// so a fresh pool is not guaranteed to clear the reserve. The bound is a
+/// **corner-fraction bound**: the reserve is a small fraction (about `1/8.4`)
+/// of the draw's range, so the protocol-drawn cover alone clears the reserve with probability `1 − reserve/RUNG ≈ 88.1%` (an optional
 /// user top-up at funding time shrinks the corner further), and the
 /// below-reserve corner (until earnings accrue or a top-up) strands nothing —
 /// a cover-only pool has no earnings worth draining, the reserve releases at
@@ -68,14 +69,18 @@
 /// blocked-fresh-drain fraction proportionally (`reserve/RUNG`). **Lowering**
 /// it risks an underfunded terminal `Release` under a fee spike — mitigated,
 /// not fatal, by the same §7.2 destitute-corner escape.
-pub const EXIT_FEE_RESERVE_ATOMIC: u64 = 50_000_000;
+pub const EXIT_FEE_RESERVE_ATOMIC: u64 =
+    match quantized_fee(P_LANE_WEIGHT_CEILING as u64, EXIT_FEE_HEADROOM_RATE) {
+        Some(fee) => fee,
+        None => panic!("the exit-fee reserve does not fit in u64"),
+    };
 
 // The dominance relation (`ARCHIVAL_BOND_CONSTRUCTION.md` §7.2, re-grounded
 // after `ARCHIVAL_COVER_DRAW.md` retired the runway floor) — the reserve
 // strictly below one cover rung, the tiling draw's exclusive upper bound — is
 // asserted where the rung is visible: `shekyl-engine-core`'s
 // `the_exit_fee_reserve_is_below_one_cover_rung`, against the archival bond
-// floor. This crate reads no consensus constant.
+// floor.
 
 /// The reserve is nonzero (a zero reserve would silently disable the spend-time
 /// floor for every live-persona mid-life constructor).

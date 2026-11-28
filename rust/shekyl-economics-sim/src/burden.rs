@@ -29,7 +29,7 @@
 //! (`SHT-Q2`; `ARCHIVAL_SHARD_COUNT_CUTOVER.md` §F step 3).
 
 use shekyl_tx_weight::{
-    predict_archival_len, predict_weight, InputCount, OutputCount, MAX_TREE_DEPTH,
+    predict_archival_len, predict_weight, InputCount, OutputCount, ProofLayers, MAX_TREE_DEPTH,
 };
 use shekyl_types::{shard_of, ArchivalLength, SHARD_LENGTH};
 
@@ -84,7 +84,11 @@ pub fn normal_tx_shape() -> (InputCount, OutputCount) {
 #[must_use]
 pub fn normal_tx_archival_bytes(chain_leaves: u64) -> u64 {
     let (n_in, n_out) = normal_tx_shape();
-    predict_archival_len(n_in, n_out, tree_depth_for_leaves(chain_leaves)) as u64
+    predict_archival_len(
+        n_in,
+        n_out,
+        ProofLayers::known(tree_depth_for_leaves(chain_leaves)),
+    ) as u64
 }
 
 /// Fee of one ordinary (1-in / 2-out) transaction when the curve tree holds
@@ -103,7 +107,12 @@ pub(crate) fn ordinary_tx_fee(chain_leaves: u64, rate: PerByteRate) -> Option<u6
 #[must_use]
 pub(crate) fn ordinary_tx_weight(chain_leaves: u64, fee_atomic: u64) -> u64 {
     let (n_in, n_out) = normal_tx_shape();
-    predict_weight(n_in, n_out, tree_depth_for_leaves(chain_leaves), fee_atomic) as u64
+    predict_weight(
+        n_in,
+        n_out,
+        ProofLayers::known(tree_depth_for_leaves(chain_leaves)),
+        fee_atomic,
+    ) as u64
 }
 
 /// Outputs the honest chain has added, in fold order.

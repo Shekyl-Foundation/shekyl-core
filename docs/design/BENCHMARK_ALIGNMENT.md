@@ -803,7 +803,12 @@ with them, through the production derivation (`DAEMON_RELAY_PRIVACY.md`
 §97's register). The masks-and-proof term stays at §85.3's figures until
 BA-T10's floor run, which re-times the door's sequence after `PL-D3` and
 includes the depth sweep. The overdue budget for a node's own
-transaction follows the derivation; no literal holds it.
+transaction follows the derivation; no literal holds it. **The door's
+sequence was re-timed on the floor on 2026-11-27** at every legal shape,
+depths 2 to 7 (`CEN_I4_INPUT_CAP_DERIVATION.md` §8.1): the modal cell is
+147.99 ms, the clearnet hop 199 ms, the Tor hop 1774 ms, the embargo draws'
+means unchanged, the wallet wait 2411 s. BA-T10's block-verify depth sweep
+is still owed.
 
 **Why the Rust range proof read 2.56× C++, and what it reads now
 (ruled 2026-11-08, landed in #1319).** The verifier evaluated `Â` with a

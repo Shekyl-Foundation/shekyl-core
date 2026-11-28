@@ -123,7 +123,7 @@ pub(crate) use actor::persona_canonical_id;
 pub(crate) use bond::AssembledBondPost;
 pub(crate) use claim::{AssembleEmissionClaim, AssembledEmissionClaim};
 pub(crate) use handle::StakeEngineHandle;
-pub(crate) use helpers::prepare_funding_inputs;
+pub(crate) use helpers::{prepare_funding_inputs, split_across_minimum_outputs};
 
 // `derive_funding_key_image` crosses the boundary for exactly one consumer,
 // `pscan/arm1_fire.rs`, which carries this same gate — so the re-export states

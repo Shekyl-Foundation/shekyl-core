@@ -513,7 +513,7 @@ const SITES: &[Site] = &[
         "inputs exceed {MAX_FCMP_INPUTS}",
         Face::Memory,
         CenRow::I4,
-        i4_nine_inputs,
+        i4_one_past_the_cap,
         "",
     ),
     rule(

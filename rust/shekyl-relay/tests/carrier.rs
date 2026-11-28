@@ -25,6 +25,7 @@ use std::thread;
 
 use shekyl_levin::NewTransactions;
 use shekyl_p2p_session::harness::Wire;
+use shekyl_relay_privacy::params::carrier::{MAX_FRAGMENTS, WINDOW_BYTES};
 use shekyl_transport_layer::{CloseCause, CloseKind, DialEnd, DialFailure, Reached, Retry};
 use support::{
     blob, carrier_rig, carrier_rig_from, discard_the_carrier, id_of, new_transactions, Build, Rig,
@@ -40,9 +41,9 @@ fn read_all(rig: &Rig, wires: &mut [&mut Wire]) -> Vec<NewTransactions> {
 }
 
 /// A blob the carrier cannot take: its 2002 frames to more than
-/// `MAX_FRAGMENTS` (5) windows of 20,480 bytes, which the carrier refuses.
+/// [`MAX_FRAGMENTS`] windows of [`WINDOW_BYTES`], which the carrier refuses.
 fn oversize(tag: u8) -> Vec<u8> {
-    vec![tag; 110_000]
+    vec![tag; MAX_FRAGMENTS as usize * WINDOW_BYTES + WINDOW_BYTES / 2]
 }
 
 /// The batches that carry `blob`.
@@ -255,8 +256,8 @@ fn a_transaction_already_in_the_carrier_is_not_enqueued_twice() {
 /// (Replaces the C++ `a_batch_the_carrier_partly_refuses_splits_without_double_counting`,
 /// its stem half.)
 ///
-/// The refusal is by size, the realistic one: a transaction over five
-/// windows cannot be carried. The ordinary wire must carry only that one;
+/// The refusal is by size, the realistic one: a transaction over
+/// [`MAX_FRAGMENTS`] windows cannot be carried. The ordinary wire must carry only that one;
 /// sending the whole batch there would put the carried transaction on the
 /// clear wire as well, and record it before any window of it went out.
 ///

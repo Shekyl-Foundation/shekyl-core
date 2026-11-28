@@ -799,13 +799,18 @@ pub fn tx_form(tx: &Transaction, slot: TxSlot, _rule_set: &RuleSet) -> Verdict<R
     //    `check_outs_valid` (H7) and before `check_money_overflow` (H9).
     //    I20 is `TxScope::Coinbase` and records as vacuous on every listed
     //    slot.
+    //    I4 (the input cap) sits immediately before H3 (`ICD-R11`), so a
+    //    transaction over the cap is named by the cap. It hides nothing: the
+    //    cap is the weight limit's own maximum, so every transaction I4
+    //    refuses is also over H3, and H3 already runs ahead of the shape rows.
+    //    The cheaper check runs first.
     // 2. Class shape (H20–H22), then H19's BP+ layout. A transaction that
     //    fails its shape and an input-path row is named by the shape: a
     //    proof-less bond post is H21, not "fewer than two outputs". That is
-    //    also where the C++ caller runs these arms
-    //    (`ver_non_input_consensus`, then `ver_mixed_ct_semantics`, then
-    //    `check_tx_inputs`). Pulling I1 or I4 ahead of H21 would hide the
-    //    class failure. H19's verification half is `form`'s block fold
+    //    also where the C++ caller ran these arms. I1 stays in band 3 for
+    //    this reason: a transaction under two outputs is not implied by any
+    //    band-1 row, so pulling I1 ahead of H21 would hide the class failure.
+    //    H19's verification half is `form`'s block fold
     //    (`rules::range_proof`), which records the row once the batch has
     //    decided, so this call stays unrecorded: a pass here is the layout
     //    alone.
@@ -819,15 +824,12 @@ pub fn tx_form(tx: &Transaction, slot: TxSlot, _rule_set: &RuleSet) -> Verdict<R
     //    emission statics J19, J20, J22, J24 (the vin's parse, the slot's
     //    key, the signable hash and the reward commit set, after H22 has
     //    required the shape — the C++ emission arm's byte-only checks, in
-    //    its order; `rules::tx_emission`). The cap does not have to precede
-    //    the shape rules to bound proof work: `form` runs the H19 batch after
-    //    every slot's `tx_form`, and I15 runs in `form` (`judge_proofs`),
-    //    so I4 has already refused.
-    judge_tx!(cx, coverage; H1, H3, H4, H7, I19, I20, H9, H10, H11, H14, H15, H16, H17, H18);
+    //    its order; `rules::tx_emission`).
+    judge_tx!(cx, coverage; H1, I4, H3, H4, H7, I19, I20, H9, H10, H11, H14, H15, H16, H17, H18);
     judge_tx!(cx, coverage; H21, H22);
     rules::run_tx_unrecorded::<H19>(&cx)?;
     judge_tx!(
-        cx, coverage; I1, I4, I5, I6, I8, I9, I14, I16, J11, J12, J28, J19, J20, J22, J24
+        cx, coverage; I1, I5, I6, I8, I9, I14, I16, J11, J12, J28, J19, J20, J22, J24
     );
     Ok(coverage)
 }

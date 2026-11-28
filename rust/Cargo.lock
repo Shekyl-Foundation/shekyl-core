@@ -4753,11 +4753,11 @@ name = "shekyl-relay-privacy"
 version = "3.1.0"
 dependencies = [
  "shekyl-draw-rng",
- "shekyl-fcmp",
  "shekyl-levin",
  "shekyl-relay-privacy",
  "shekyl-stats",
  "shekyl-tx-weight",
+ "shekyl-wire",
 ]
 
 [[package]]
@@ -5046,7 +5046,9 @@ dependencies = [
 name = "shekyl-standoff"
 version = "3.1.0"
 dependencies = [
+ "shekyl-economics",
  "shekyl-stats",
+ "shekyl-wire",
 ]
 
 [[package]]
@@ -5227,10 +5229,10 @@ dependencies = [
  "serde_json",
  "shekyl-bulletproofs",
  "shekyl-crypto-pq",
+ "shekyl-curve-generators",
  "shekyl-curve-io",
  "shekyl-curve-primitives",
  "shekyl-economics",
- "shekyl-fcmp",
  "shekyl-scanner",
  "shekyl-tx-builder",
  "shekyl-types",
@@ -5383,6 +5385,7 @@ dependencies = [
  "shekyl-curve-io",
  "shekyl-curve-tree",
  "shekyl-fcmp",
+ "shekyl-fcmp-proofs",
  "shekyl-network",
  "shekyl-tx-builder",
  "shekyl-types",

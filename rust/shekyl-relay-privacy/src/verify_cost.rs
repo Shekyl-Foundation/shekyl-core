@@ -8,10 +8,11 @@
 //!
 //! `hop`'s dominant measurable term is the FCMP++ verification a relay
 //! performs before forwarding (§71), and that cost is **sorted by transaction
-//! shape**: at the spec machine the pool door's sequence spans 144.3 ms
-//! (1 input, genesis tree) to 818.6 ms (8 inputs, depth-7 tree) — §85.3's
-//! membership-proof cells plus the door's signature and range-proof terms
-//! (§72.2, BA-Q9). A scalar provisioned anywhere
+//! shape**: at the spec machine the pool door's sequence spans 148.0 ms
+//! (1 input, genesis tree) to 2 456.4 ms (20 inputs, depth-7 tree) — the
+//! floor session's membership-proof cells plus the door's signature and
+//! range-proof terms (§72.2, BA-Q9; `CEN_I4_INPUT_CAP_DERIVATION.md`
+//! `ICD-R5`). A scalar provisioned anywhere
 //! on that range either over-provisions the modal transaction or
 //! under-provisions the tail, and the tail's gap *widens* with chain age
 //! (§82.3: 3.0× → 5.3× over the chain's life). So the adopted shape is a
@@ -41,15 +42,18 @@
 //! note in a design document is a hope; a table that stops answering is a
 //! deadline.
 //!
-//! # What is populated today, and what is owed
+//! # Every legal cell is measured
 //!
-//! The full 48-cell surface (`n_in ∈ 1..=8` × depth `2..=7`) is **measured on
-//! both arms** (§82, §85), but only the four corner cells are pinned in-tree
-//! (§85.3); the full grids live in the sweep's criterion artifacts on the
-//! bench hosts. Populating the remaining 44 cells is a data-recovery task,
-//! not a re-measurement (`docs/FOLLOWUPS.md`, "Relay: populate the 48-cell
-//! Pi verification surface"). Until a cell is populated it refuses — which
-//! is the same §83.3 posture the table will keep at its depth edge forever.
+//! The table holds every shape a mineable transaction can take at `n_out = 2`:
+//! `n_in = 1..=N(d)` at each depth `d` from 2 to 7, where `N(d)` is the most
+//! inputs the weight limit admits at that depth (22, 22, 22, 21, 21, 20; 128
+//! cells). Each row's length *is* its depth's legal count, so a count past it
+//! is refused by name ([`VerifyCostRefusal::NoLegalShapeAtDepth`]), never
+//! answered. All 128 were measured on the floor device in one session on one
+//! binary (`CEN_I4_INPUT_CAP_DERIVATION.md` `ICD-R5`, 2026-11-27;
+//! `docs/benchmarks/relay_admission_verify_pi4_rust_20261127T144430Z.txt`).
+//! `tests/spec_decision_matrix.rs` pins each row's length to the wire's
+//! legal-shape function and each operand to that capture.
 
 use crate::basis::{AdmissibleBasis, DerivationMs};
 
@@ -67,9 +71,9 @@ use crate::basis::{AdmissibleBasis, DerivationMs};
 /// to a thing that names its own purpose.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Provenance {
-    /// Measured **on the spec machine** — Raspberry Pi 4 Model B,
-    /// `performance` governor on all four cores, thermal margin recorded
-    /// (§73.1, §85.1).
+    /// Measured **on the spec machine** — the floor device in the
+    /// configuration `ICD-R5` names (Raspberry Pi 4 Model B Rev 1.4, 1.8 GHz,
+    /// 8 GB, `ondemand` governor), thermal margin recorded (§73.1, §85.1).
     MeasuredPi4,
     /// Measured on the reference machine. Diagnostic only (§84.2): it exists
     /// to detect a workload change, never to derive a spec value.
@@ -129,7 +133,7 @@ pub enum TreeBasis {
 pub struct VerifyCell {
     /// Verification cost in milliseconds of the pool door's sequence at this
     /// shape and `n_out = 2` (§72.2, amended 2026-11-08): the FCMP++
-    /// membership proof with the output masks (§85.3's cell), `n_in` hybrid
+    /// membership proof with the output masks (the floor session's cell), `n_in` hybrid
     /// Ed25519 + ML-DSA-65 signature verifications (CEN-I18), and the range
     /// proof as a batch of one (CEN-H19 at `TxSlot::Lone`). See
     /// [`DoorOperands`] for the sum and its sources.
@@ -197,22 +201,15 @@ pub const GENESIS_TREE_DEPTH: u32 = 2;
 /// this edge [`SpecVerifyCost::f_ms`] refuses — see the module docs.
 pub const MAX_TABLE_DEPTH: u32 = 7;
 
-/// The input-count domain the table covers: `1..=FCMP_MAX_INPUTS_PER_TX`.
+/// The input-count domain the table covers: `1..=22`, the longest row.
 ///
-/// `8` is consensus-enforced at three layers (`cryptonote_config.h`'s
-/// `FCMP_MAX_INPUTS_PER_TX`, the verify FFI, and `proof::verify` itself —
-/// §80.1), so the surface over `1..=8` **is** the specification, not a
-/// sample of it. The cross-crate pin lives in `tests/spec_decision_matrix.rs`
-/// (this crate does not depend on `shekyl-fcmp`; the dev-dependency does):
-/// `the_measured_surface_covers_the_whole_consensus_domain` asserts **this
-/// constant** against `shekyl_fcmp::MAX_INPUTS`, not just the diagnostic x86
-/// array beside it — a cap rise that moved only the array would leave
-/// `f_ms` refusing consensus-legal shapes as `InputCountOutsideDomain`, a
-/// refusal this module documents as *correct* and which would therefore read
-/// as design rather than a stale cap. If the cap moves: new cells are
-/// **measured** on the spec machine, never extrapolated (§84.2) — and until
-/// they are, the table refuses them, which is the correct interim.
-pub const MAX_TABLE_INPUTS: usize = 8;
+/// It is the consensus cap: the weight limit admits 22 inputs at the
+/// shallowest depths, and no depth admits more. `shekyl-node` asserts this
+/// constant equals the cap the wire enforces, so the table neither prices a
+/// count consensus refuses nor leaves a consensus-legal count unpriced. A
+/// count inside it that a deeper tree cannot carry is
+/// [`VerifyCostRefusal::NoLegalShapeAtDepth`].
+pub const MAX_TABLE_INPUTS: usize = 22;
 
 const DEPTH_TIERS: usize = (MAX_TABLE_DEPTH - GENESIS_TREE_DEPTH + 1) as usize;
 
@@ -222,9 +219,8 @@ const DEPTH_TIERS: usize = (MAX_TABLE_DEPTH - GENESIS_TREE_DEPTH + 1) as usize;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VerifyCostRefusal {
     /// `n_in` is outside `1..=MAX_TABLE_INPUTS`. Zero-input transactions do
-    /// not exist; above the cap is consensus-unreachable today, and if the
-    /// cap ever rises the new cells are measured, not extrapolated — a table
-    /// cannot be evaluated at 9 (§80.5).
+    /// not exist, and consensus refuses every count past the cap — a table is
+    /// not evaluated past its domain (§80.5).
     InputCountOutsideDomain {
         /// The out-of-domain input count.
         n_in: usize,
@@ -238,11 +234,12 @@ pub enum VerifyCostRefusal {
         /// The uncovered depth.
         depth: u32,
     },
-    /// The cell is inside the domain but not yet populated with a
-    /// spec-machine measurement (see the module docs: 44 of 48 cells await
-    /// recovery of the §85 sweep artifacts). Refusing is the same posture as
-    /// [`Self::DepthOutsideTable`], one measurement earlier.
-    UnpopulatedCell {
+    /// `n_in` is inside the cap, but no transaction of that many inputs fits
+    /// the weight limit at this depth (the depth's row is shorter: 21 inputs
+    /// at depths 5 and 6, 20 at depth 7). Consensus refuses such a
+    /// transaction by weight (CEN-H3), so there is no cost to price, and the
+    /// shallower row beside it is not this shape's cost.
+    NoLegalShapeAtDepth {
         /// The requested input count.
         n_in: usize,
         /// The requested depth.
@@ -254,7 +251,9 @@ pub enum VerifyCostRefusal {
 /// guarantee is provisioned to.
 #[derive(Debug)]
 pub struct SpecVerifyCost {
-    cells: [[Option<VerifyCell>; DEPTH_TIERS]; MAX_TABLE_INPUTS],
+    /// One row per depth, genesis first; a row's length is its depth's legal
+    /// input count and `row[n_in - 1]` is that shape's cell.
+    rows: [&'static [VerifyCell]; DEPTH_TIERS],
 }
 
 /// The node's own symmetric-crypto cost over a message of `msg_bytes`, on the
@@ -279,8 +278,8 @@ const fn node_crypto_ms(msg_bytes: u32) -> f64 {
 
 mod door;
 use door::{
-    DoorInputCount, DoorOperands, PI4_MASKS_AND_PROOF_1IN_D2_MS, PI4_MASKS_AND_PROOF_1IN_D7_MS,
-    PI4_MASKS_AND_PROOF_8IN_D2_MS, PI4_MASKS_AND_PROOF_8IN_D7_MS,
+    DoorOperands, PI4_MASKS_AND_PROOF_D2_MS, PI4_MASKS_AND_PROOF_D3_MS, PI4_MASKS_AND_PROOF_D4_MS,
+    PI4_MASKS_AND_PROOF_D5_MS, PI4_MASKS_AND_PROOF_D6_MS, PI4_MASKS_AND_PROOF_D7_MS,
 };
 
 const fn pi4(millis: f64, basis: TreeBasis, msg_bytes: u32) -> VerifyCell {
@@ -317,8 +316,8 @@ const PI4_AES_BYTES_PER_SEC: f64 = 138_993_660.0;
 /// A populated cell must be a plausible per-hop verification cost: positive,
 /// finite, and under ten seconds. `millis > 0.0` is `false` for NaN, and the
 /// upper bound excludes `+inf` along with any figure that could not be a
-/// verification measurement (the deepest cell is 818.6 ms; ten
-/// seconds is two orders of headroom, not a tuning bound).
+/// verification measurement (the costliest cell is 2 456.4 ms; ten
+/// seconds is four times that, not a tuning bound).
 const fn cell_is_plausible(millis: f64) -> bool {
     millis > 0.0 && millis < 10_000.0
 }
@@ -332,70 +331,118 @@ const fn cell_is_plausible(millis: f64) -> bool {
 // the same §83.3 device the table already uses: the mistake requires a
 // visible edit, and here it cannot even build.
 const _: () = {
-    let mut n = 0;
-    while n < MAX_TABLE_INPUTS {
-        let mut d = 0;
-        while d < DEPTH_TIERS {
-            if let Some(cell) = SPEC_VERIFY_COST.cells[n][d] {
-                assert!(
-                    cell_is_plausible(cell.millis),
-                    "a populated verification-cost cell is not a plausible \
-                     measurement (NaN, non-positive, infinite, or >= 10 s)"
-                );
-            }
-            d += 1;
+    let mut d = 0;
+    while d < DEPTH_TIERS {
+        let row = SPEC_VERIFY_COST.rows[d];
+        assert!(
+            row.len() <= MAX_TABLE_INPUTS,
+            "a depth's row is longer than the table's input domain"
+        );
+        let mut n = 0;
+        while n < row.len() {
+            assert!(
+                cell_is_plausible(row[n].millis),
+                "a populated verification-cost cell is not a plausible \
+                 measurement (NaN, non-positive, infinite, or >= 10 s)"
+            );
+            n += 1;
         }
-        n += 1;
+        d += 1;
     }
 };
 
-/// The adopted table (§80), populated with the spec machine's pinned cells.
+/// Wire bytes of each depth's `NOTIFY_NEW_TRANSACTIONS` at `n_in = 1..=N(d)`,
+/// `n_out = 2` ([`VerifyCell::msg_bytes`]): transaction plus Levin envelope,
+/// fee varint at its widest. Derived from the wire model, not measured;
+/// `tests/carrier_window.rs` checks every one against
+/// `predict_size_and_weight` and a real `notify`.
+const MSG_BYTES_D2: [u32; 22] = [
+    13_311, 21_297, 27_297, 34_513, 38_913, 45_617, 52_321, 58_897, 64_513, 69_361, 75_809, 82_129,
+    88_449, 94_897, 101_217, 107_538, 113_026, 119_218, 124_066, 130_130, 136_450, 142_642,
+];
+const MSG_BYTES_D3: [u32; 22] = [
+    13_695, 20_465, 28_065, 33_937, 39_937, 46_769, 52_257, 58_833, 64_449, 71_025, 77_473, 84_049,
+    89_281, 95_729, 102_178, 108_498, 113_986, 120_306, 126_754, 133_074, 139_522, 145_714,
+];
+const MSG_BYTES_D4: [u32; 22] = [
+    14_335, 21_745, 28_513, 34_513, 40_641, 47_601, 53_217, 59_921, 65_665, 72_369, 78_945, 85_650,
+    91_010, 97_586, 104_162, 110_610, 116_226, 122_674, 129_250, 135_698, 142_274, 148_594,
+];
+const MSG_BYTES_D5: [u32; 21] = [
+    14_719, 22_257, 27_937, 35_281, 40_449, 47_409, 54_369, 61_201, 67_073, 72_817, 79_521, 86_226,
+    92_930, 99_634, 106_338, 112_914, 118_658, 125_234, 131_938, 137_426, 144_002,
+];
+const MSG_BYTES_D6: [u32; 21] = [
+    15_359, 22_065, 28_001, 35_345, 41_729, 47_857, 54_945, 61_777, 68_866, 74_738, 80_738, 87_442,
+    94_274, 101_106, 107_938, 114_514, 121_346, 128_178, 135_010, 140_626, 147_330,
+];
+const MSG_BYTES_D7: [u32; 20] = [
+    14_783, 21_617, 28_513, 35_153, 42_497, 48_753, 55_969, 62_097, 69_186, 76_146, 82_274, 89_106,
+    96_066, 103_026, 109_986, 115_858, 122_818, 129_650, 136_610, 143_314,
+];
+
+/// One depth's row: cell `i` is the `(i + 1)`-input shape, its door
+/// sequence composed from that shape's masks-and-proof term.
+const fn row<const N: usize>(
+    masks_and_proof_ms: [f64; N],
+    msg_bytes: [u32; N],
+    basis: TreeBasis,
+) -> [VerifyCell; N] {
+    let mut cells = [pi4(0.0, basis, 0); N];
+    let mut i = 0;
+    while i < N {
+        cells[i] = pi4(
+            DoorOperands::at(masks_and_proof_ms[i], i + 1).millis(),
+            basis,
+            msg_bytes[i],
+        );
+        i += 1;
+    }
+    cells
+}
+
+const ROW_D2: [VerifyCell; 22] = row(PI4_MASKS_AND_PROOF_D2_MS, MSG_BYTES_D2, TreeBasis::Genesis);
+const ROW_D3: [VerifyCell; 22] = row(
+    PI4_MASKS_AND_PROOF_D3_MS,
+    MSG_BYTES_D3,
+    TreeBasis::SynthesizedProjection,
+);
+const ROW_D4: [VerifyCell; 22] = row(
+    PI4_MASKS_AND_PROOF_D4_MS,
+    MSG_BYTES_D4,
+    TreeBasis::SynthesizedProjection,
+);
+const ROW_D5: [VerifyCell; 21] = row(
+    PI4_MASKS_AND_PROOF_D5_MS,
+    MSG_BYTES_D5,
+    TreeBasis::SynthesizedProjection,
+);
+const ROW_D6: [VerifyCell; 21] = row(
+    PI4_MASKS_AND_PROOF_D6_MS,
+    MSG_BYTES_D6,
+    TreeBasis::SynthesizedProjection,
+);
+const ROW_D7: [VerifyCell; 20] = row(
+    PI4_MASKS_AND_PROOF_D7_MS,
+    MSG_BYTES_D7,
+    TreeBasis::SynthesizedProjection,
+);
+
+/// The adopted table (§80): every legal shape at `n_out = 2`, measured on the
+/// floor device.
 ///
-/// Each cell is [`DoorOperands::millis`] over the `PI4_*` operands. The
-/// membership-proof terms are §85.3's measurements: Pi 4 Model B,
-/// `performance` on all four cores, verify-check exit 0 on every fixture (no
-/// cell times a reject path), thermal max 69.6 °C against the 80 °C
-/// soft-throttle. The signature terms are the 2026-09-05 floor capture's
-/// ([`door::PI4_HYBRID_SIG_1IN_MS`]). The range-proof terms are the 2026-11-08
-/// capture's ([`door::PI4_RANGE_PROOF_LONE_1IN_2OUT_MS`]), the verifier that folds
-/// `Â` into the batch (§72.2). Depth-7 cells are synthesized-tree projections
-/// per §81.2 and labelled so. The published sums are pinned in
-/// `tests/spec_decision_matrix.rs`, which recomputes them from a second
-/// transcription of these operands.
-pub const SPEC_VERIFY_COST: SpecVerifyCost = {
-    const NONE: Option<VerifyCell> = None;
-    const EMPTY_ROW: [Option<VerifyCell>; DEPTH_TIERS] = [NONE; DEPTH_TIERS];
-    let mut cells = [EMPTY_ROW; MAX_TABLE_INPUTS];
-    // n_in = 1 (the modal shape): genesis and depth-7 endpoints.
-    // msg_bytes is NOTIFY_NEW_TRANSACTIONS + tx, including the 29-byte Levin
-    // header (PWD-B5). Enforced by tests/carrier_window.rs against notify().
-    // Re-derived 2026-09-14 under `PL-D3` (`FCMP_SPEND_LINKABILITY.md` §6.2:
-    // 64-byte `0x07` entries and the proof's opening leg moved every shape);
-    // The masks-and-proof terms are still §85.3's pre-`PL-D3` measurements.
-    // The floor-device re-measurement of the door's whole sequence is owed
-    // (rule 176; §12.1 of the round doc; BA-T10).
-    cells[0][0] = Some(pi4(
-        DoorOperands::at(PI4_MASKS_AND_PROOF_1IN_D2_MS, DoorInputCount::One).millis(),
-        TreeBasis::Genesis,
-        13_311,
-    ));
-    cells[0][DEPTH_TIERS - 1] = Some(pi4(
-        DoorOperands::at(PI4_MASKS_AND_PROOF_1IN_D7_MS, DoorInputCount::One).millis(),
-        TreeBasis::SynthesizedProjection,
-        14_783,
-    ));
-    // n_in = 8 (the consensus maximum): the tail §75's sorting is about.
-    cells[7][0] = Some(pi4(
-        DoorOperands::at(PI4_MASKS_AND_PROOF_8IN_D2_MS, DoorInputCount::Eight).millis(),
-        TreeBasis::Genesis,
-        58_897,
-    ));
-    cells[7][DEPTH_TIERS - 1] = Some(pi4(
-        DoorOperands::at(PI4_MASKS_AND_PROOF_8IN_D7_MS, DoorInputCount::Eight).millis(),
-        TreeBasis::SynthesizedProjection,
-        62_097,
-    ));
-    SpecVerifyCost { cells }
+/// Each cell is [`DoorOperands::millis`] over the floor session's operands
+/// (`door.rs`): the masks-and-proof term at that shape, `n_in` hybrid
+/// signature verifications and the lone range proof, all from one session on
+/// one binary (`ICD-R5`, 2026-11-27). The session ran with the node stopped
+/// and no login during the bench; the core temperature stayed between 49.7
+/// and 58.9 °C against the 80 °C soft-throttle. Every fixture verified before
+/// it was timed, so no cell times a reject path. Depths 3 to 7 are
+/// synthesized-tree projections per §81.2 and labelled so.
+/// `tests/spec_decision_matrix.rs` recomputes every cell from the committed
+/// capture.
+pub const SPEC_VERIFY_COST: SpecVerifyCost = SpecVerifyCost {
+    rows: [&ROW_D2, &ROW_D3, &ROW_D4, &ROW_D5, &ROW_D6, &ROW_D7],
 };
 
 impl SpecVerifyCost {
@@ -449,22 +496,22 @@ impl SpecVerifyCost {
         if depth < GENESIS_TREE_DEPTH || depth > MAX_TABLE_DEPTH {
             return Err(VerifyCostRefusal::DepthOutsideTable { depth });
         }
-        match self.cells[n_in - 1][(depth - GENESIS_TREE_DEPTH) as usize] {
-            Some(cell) => Ok(cell),
-            None => Err(VerifyCostRefusal::UnpopulatedCell { n_in, depth }),
+        let row = self.rows[(depth - GENESIS_TREE_DEPTH) as usize];
+        if n_in > row.len() {
+            return Err(VerifyCostRefusal::NoLegalShapeAtDepth { n_in, depth });
         }
+        Ok(row[n_in - 1])
     }
 
     /// The populated cells, for the §87.2 provenance assertion and for
     /// instruments that report the surface. Order: `n_in` major, depth minor.
     pub fn populated(&self) -> impl Iterator<Item = (usize, u32, VerifyCell)> + '_ {
-        self.cells.iter().enumerate().flat_map(|(i, row)| {
+        (1..=MAX_TABLE_INPUTS).flat_map(move |n_in| {
             // Rows are DEPTH_TIERS long and DEPTH_TIERS is derived from this
-            // exact range, so the zip is total by construction — no index
-            // arithmetic, no cast.
+            // exact range, so the zip is total by construction.
             (GENESIS_TREE_DEPTH..=MAX_TABLE_DEPTH)
-                .zip(row.iter())
-                .filter_map(move |(depth, cell)| cell.map(|c| (i + 1, depth, c)))
+                .zip(self.rows.iter())
+                .filter_map(move |(depth, row)| row.get(n_in - 1).map(|c| (n_in, depth, *c)))
         })
     }
 }
@@ -479,8 +526,8 @@ impl SpecVerifyCost {
 /// **hardware**, so it cannot reintroduce the sorting the table and the Pi
 /// floor remove (§86.1 — recorded here per §87.4 because a check that only
 /// ever convicts is a worry, not an instrument; transit is its first
-/// acquittal). It is also dominated at the tail: 835 ms of verification
-/// against ~50 of transit at the 8-input depth-7 cell.
+/// acquittal). It is also dominated at the tail: about 2.5 s of verification
+/// against ~50 of transit at the 20-input depth-7 cell.
 ///
 /// > **Narrowed 2026-08-20 (§94.5).** This previously read "not of the
 /// > sender's hardware *or the transaction's shape*". **Only the hardware
@@ -587,7 +634,7 @@ pub const fn transit_ms_for_connector(connector: MeasuredConnector) -> Derivatio
 /// anonymity path to *"ten times clearnet latency"*, `hop = 1750 ms`, as its
 /// worst case. This constant is that hop less the membership-proof cell it
 /// was swept beside (1750 − 124.5 = 1625.5 → 1625); paired with the door's
-/// whole sequence (§72.2, BA-Q9) the Tor hop is 1770 ms.
+/// whole sequence (§72.2, BA-Q9) the Tor hop is 1774 ms.
 ///
 /// **§63.2's conclusion is retired and its sweep is not, and the distinction is
 /// the whole reason this citation is usable.** What §63.2 concluded — that the
@@ -649,8 +696,8 @@ const _: () = assert!(ANON_ZONE_TRANSIT_ASSUMPTION_MS == 1_625.0);
 ///
 /// # Errors
 ///
-/// Propagates the table's refusal — an unpopulated or out-of-domain cell
-/// must not silently become a hop value (§83.3).
+/// Propagates the table's refusal — a shape the table does not price must
+/// not silently become a hop value (§83.3).
 pub fn adopted_hop_ms(n_in: usize, depth: u32) -> Result<DerivationMs, VerifyCostRefusal> {
     adopted_hop_ms_with_transit(n_in, depth, ADOPTED_TRANSIT)
 }
@@ -676,8 +723,8 @@ pub fn adopted_hop_ms(n_in: usize, depth: u32) -> Result<DerivationMs, VerifyCos
 ///
 /// # Errors
 ///
-/// Propagates the table's refusal — an unpopulated or out-of-domain cell must
-/// not silently become a hop value (§83.3).
+/// Propagates the table's refusal — a shape the table does not price must not
+/// silently become a hop value (§83.3).
 pub fn adopted_hop_ms_with_transit(
     n_in: usize,
     depth: u32,
@@ -698,8 +745,8 @@ pub fn adopted_hop_ms_with_transit(
 }
 
 /// The basis of every populated verification cell: measured by the Rust
-/// verifier on the floor device (`Provenance::MeasuredPi4`, §85.3). The
-/// depth-7 cells are projections against a synthesized tree
+/// verifier on the floor device (`Provenance::MeasuredPi4`, `ICD-R5`). The
+/// depth-3 to depth-7 cells are projections against a synthesized tree
 /// (`TreeBasis::SynthesizedProjection`), which is a statement about the
 /// tree, not about the path the number was taken on.
 pub const VERIFICATION_FLOOR_BASIS: AdmissibleBasis = AdmissibleBasis::RustPath;
@@ -729,27 +776,39 @@ mod tests {
                 depth: MAX_TABLE_DEPTH + 1
             }),
         );
-        // Inside the domain, cell not yet populated: same posture, one
-        // measurement earlier. 4-in at depth 4 is measured (§82) but its
-        // artifact is not yet recovered in-tree — it must refuse, not
-        // borrow the 8-in row above it or the genesis column beside it.
+        // Inside the cap, but no legal shape at this depth: 22 inputs fit the
+        // weight limit at depth 2 and not at depth 7. The depth-7 answer must
+        // refuse, not borrow its own 20-input cell or the genesis column.
         assert_eq!(
-            SPEC_VERIFY_COST.f_ms(4, 4),
-            Err(VerifyCostRefusal::UnpopulatedCell { n_in: 4, depth: 4 }),
+            SPEC_VERIFY_COST.f_ms(MAX_TABLE_INPUTS, MAX_TABLE_DEPTH),
+            Err(VerifyCostRefusal::NoLegalShapeAtDepth {
+                n_in: MAX_TABLE_INPUTS,
+                depth: MAX_TABLE_DEPTH
+            }),
         );
-        // Outside the consensus input domain: a table cannot be evaluated
-        // at 9 (§80.5).
         assert_eq!(
-            SPEC_VERIFY_COST.f_ms(9, GENESIS_TREE_DEPTH),
-            Err(VerifyCostRefusal::InputCountOutsideDomain { n_in: 9 }),
+            SPEC_VERIFY_COST.f_ms(21, MAX_TABLE_DEPTH),
+            Err(VerifyCostRefusal::NoLegalShapeAtDepth {
+                n_in: 21,
+                depth: MAX_TABLE_DEPTH
+            }),
+        );
+        assert!(SPEC_VERIFY_COST.f_ms(20, MAX_TABLE_DEPTH).is_ok());
+        // Outside the consensus input domain: a table cannot be evaluated
+        // one past the cap (§80.5).
+        assert_eq!(
+            SPEC_VERIFY_COST.f_ms(MAX_TABLE_INPUTS + 1, GENESIS_TREE_DEPTH),
+            Err(VerifyCostRefusal::InputCountOutsideDomain {
+                n_in: MAX_TABLE_INPUTS + 1
+            }),
         );
         assert_eq!(
             SPEC_VERIFY_COST.f_ms(0, GENESIS_TREE_DEPTH),
             Err(VerifyCostRefusal::InputCountOutsideDomain { n_in: 0 }),
         );
         // And the refusal propagates through the hop composition — an
-        // unpopulated cell must not become a hop value by addition.
-        assert!(adopted_hop_ms(4, 4).is_err());
+        // unpriced shape must not become a hop value by addition.
+        assert!(adopted_hop_ms(MAX_TABLE_INPUTS, MAX_TABLE_DEPTH).is_err());
     }
 
     /// §87.2: every cell on the spec path is measured on the spec machine.
@@ -757,8 +816,8 @@ mod tests {
     ///
     /// This bites against a cell landing with [`Provenance::MeasuredX86`] or
     /// [`Provenance::ScaledFromX86`]; it does NOT check the numbers are
-    /// *correct* Pi measurements — that is what pinning them against §85.3
-    /// in the price-list gate is for. The enum deliberately admits the
+    /// *correct* Pi measurements — that is what pinning them against the
+    /// floor capture in the price-list gate is for. The enum deliberately admits the
     /// non-Pi variants so that recording a diagnostic cell is possible and
     /// this assertion is a real gate rather than a tautology.
     #[test]
@@ -774,7 +833,10 @@ mod tests {
             );
             populated += 1;
         }
-        assert_eq!(populated, 4, "the in-tree surface is the four §85.3 pins");
+        assert_eq!(
+            populated, 128,
+            "the table is every legal shape at depths 2 to 7: 22 + 22 + 22 + 21 + 21 + 20"
+        );
     }
 
     /// §81.2: a synthesized-tree number must say so at the value, or a
@@ -793,28 +855,28 @@ mod tests {
     }
 
     /// The adopted modal hop is the priced value: the modal cell's door
-    /// sequence (144.31 ms: 124.5 membership proof and masks, 0.97 one hybrid
-    /// signature, 18.84 the lone range proof), plus 0.96 ms of node crypto
+    /// sequence (147.99 ms: 128.06 membership proof and masks, 1.01 one hybrid
+    /// signature, 18.92 the lone range proof), plus 0.96 ms of node crypto
     /// over its 13,311 B message, plus the 50 ms transit assumption, is
-    /// 195.27 ms, 195. If a table cell or the transit assumption moves, this
+    /// 198.95 ms, 199. If a table cell or the transit assumption moves, this
     /// pin moves with the §80.2 price list, deliberately.
     ///
     /// The inherited `175` it replaced was ~80 ms of Monero-era verification
     /// plus one ocean crossing (§71.3); the masks-and-proof cell alone plus
-    /// the same crossing reproduced it, and the door's two further terms
+    /// the same crossing comes close to it, and the door's two further terms
     /// (§72.2) are the 20 ms between them.
     #[test]
-    fn the_adopted_modal_hop_is_the_priced_195() {
+    fn the_adopted_modal_hop_is_the_priced_199() {
         assert_eq!(
             adopted_hop_ms(1, GENESIS_TREE_DEPTH).map(DerivationMs::ms),
-            Ok(195)
+            Ok(199)
         );
-        // And the tail endpoint at genesis: 425.86 ms door sequence
-        // (399.2 + 8 × 0.97228 + 18.882) + 4.24 ms node crypto over that
-        // shape's 58,897 B message + 50 ms transit = 480.10.
+        // And the consensus tail at genesis, 22 inputs: 1 332.34 ms door
+        // sequence (1 291.1 + 22 × 1.0145 + 18.919) + 10.26 ms node crypto
+        // over that shape's 142,642 B message + 50 ms transit = 1 392.60.
         assert_eq!(
-            adopted_hop_ms(8, GENESIS_TREE_DEPTH).map(DerivationMs::ms),
-            Ok(480)
+            adopted_hop_ms(MAX_TABLE_INPUTS, GENESIS_TREE_DEPTH).map(DerivationMs::ms),
+            Ok(1393)
         );
     }
 
@@ -880,12 +942,14 @@ mod tests {
     /// per-shape from that shape's own message — so the numbers below cannot
     /// drift silently even though no bar guards them.
     ///
-    /// For the record, like-for-like at the four populated cells: 0.66 %
-    /// (1-in, genesis), 0.65 % (1-in, depth 7), **0.995 %** (8-in at genesis
-    /// depth, the worst), 0.55 % (8-in, depth 7). The worst cell is
-    /// max-inputs-at-min-depth because verification grows faster with depth
-    /// than message size does, so the cheapest verification pairs with an
-    /// already-large message — and it is a shape that exists today.
+    /// For the record, like-for-like: 0.65 % (1-in, genesis), 0.53 % (1-in,
+    /// depth 7), **0.96 %** (4-in at genesis depth, the worst), 0.96 % (8-in,
+    /// genesis), 0.77 % (22-in, genesis), 0.42 % (20-in, depth 7). The worst
+    /// cell is at genesis depth because verification grows faster with depth
+    /// than message size does. Along the input axis the proof's cost moves in
+    /// padding steps while the message grows by every input, so the worst
+    /// fraction sits on a shape just below a step (4 inputs) — and it is a
+    /// shape that exists today.
     ///
     /// What edit reds this: changing `NODE_CRYPTO_PASSES`,
     /// `PI4_AES_BYTES_PER_SEC`, or any cell's `msg_bytes` without updating the
@@ -901,13 +965,13 @@ mod tests {
         }
         assert_eq!(
             (worst.0, worst.1),
-            (8, GENESIS_TREE_DEPTH),
-            "the worst crypto fraction should be max-inputs at min-depth"
+            (4, GENESIS_TREE_DEPTH),
+            "the worst crypto fraction should be 4 inputs at genesis depth"
         );
         assert!(
-            (0.0097..0.0101).contains(&worst.2),
+            (0.0095..0.0098).contains(&worst.2),
             "worst-cell crypto fraction is {:.4} — outside the recorded \
-             0.995 % band, so the arithmetic moved",
+             0.96 % band, so the arithmetic moved",
             worst.2
         );
     }

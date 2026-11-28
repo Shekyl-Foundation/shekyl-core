@@ -26,11 +26,10 @@
 //! were wrong by 1.55x and 5.9x. Nothing could go red, because nothing
 //! connected them to a transaction. That is the gap this closes.
 
-use shekyl_fcmp::MAX_INPUTS;
 use shekyl_levin::{notify, NewTransactions, PortableMap as _, NOTIFY_NEW_TRANSACTIONS};
 use shekyl_relay_privacy::params::{carrier, inherited};
 use shekyl_tx_weight::{
-    predict_size_and_weight, InputCount, OutputCount, MAX_OUTPUTS, MAX_TREE_DEPTH,
+    legal_shapes_at, predict_size_and_weight, InputCount, OutputCount, ProofLayers, SpendLayers,
 };
 
 /// The Dandelion++ epoch the carrier is provisioned against, in seconds.
@@ -46,11 +45,11 @@ const PROVISIONED_EPOCH_SECS: u32 = 300;
 /// The fee is `u64::MAX` so the varint that carries it is at its widest: the
 /// window is a bound, and a bound taken at a plausible fee would be one a
 /// large fee could cross.
-fn message_bytes(n_in: usize, n_out: usize, depth: u8) -> usize {
+fn message_bytes(n_in: usize, n_out: usize, layers: ProofLayers) -> usize {
     let (tx_bytes, _) = predict_size_and_weight(
         InputCount::clamped(n_in),
         OutputCount::clamped(n_out),
-        depth,
+        layers,
         u64::MAX,
     );
     let msg = NewTransactions {
@@ -59,6 +58,20 @@ fn message_bytes(n_in: usize, n_out: usize, depth: u8) -> usize {
         dandelionpp_fluff: false,
     };
     notify(NOTIFY_NEW_TRANSACTIONS, &msg.store().expect("store")).len()
+}
+
+/// The largest message any transaction consensus can mine produces, over every
+/// legal shape and depth. A cap-sized spend at the deepest tree is over the
+/// weight limit, so the corner of the count limits is not a message.
+fn structural_max_message() -> usize {
+    SpendLayers::each()
+        .flat_map(|layers| {
+            legal_shapes_at(layers)
+                .map(move |(n_in, n_out)| (n_in.get(), n_out.get(), layers.as_proof()))
+        })
+        .map(|(n_in, n_out, layers)| message_bytes(n_in, n_out, layers))
+        .max()
+        .expect("consensus admits a shape")
 }
 
 /// The window holds the modal transaction whole at EVERY tree depth.
@@ -75,7 +88,7 @@ fn message_bytes(n_in: usize, n_out: usize, depth: u8) -> usize {
 /// timing-observable drift a fixed window exists to prevent.
 #[test]
 fn the_window_holds_the_modal_transaction_at_max_tree_depth() {
-    let needed = message_bytes(1, 2, MAX_TREE_DEPTH);
+    let needed = message_bytes(1, 2, SpendLayers::DEEPEST.as_proof());
     assert!(
         needed <= carrier::WINDOW_BYTES,
         "the modal transaction at MAX_TREE_DEPTH needs {needed} B of window \
@@ -95,11 +108,11 @@ fn the_window_holds_the_modal_transaction_at_max_tree_depth() {
 /// max over the window; equality is what makes 20 unable to hide.
 ///
 /// What edit reds this: raising or lowering `carrier::MAX_FRAGMENTS` without
-/// a matching window or wire-size change, shrinking the window, or raising
-/// `MAX_INPUTS` / `MAX_OUTPUTS` / `MAX_TREE_DEPTH`.
+/// a matching window or wire-size change, shrinking the window, or a change to
+/// what consensus can mine (the weight limit, the input cap, the depth).
 #[test]
 fn the_fragment_cap_is_ceil_of_the_structural_max_over_the_window() {
-    let structural_max = message_bytes(MAX_INPUTS, MAX_OUTPUTS, MAX_TREE_DEPTH);
+    let structural_max = structural_max_message();
     let needs = structural_max.div_ceil(carrier::WINDOW_BYTES);
     assert_eq!(
         u32::try_from(needs).expect("fragment count is small"),
@@ -196,7 +209,7 @@ fn the_window_at_the_worst_posture_stays_under_the_bandwidth_ceiling() {
         node_bytes / mean_ms,
     );
 
-    let structural_max = message_bytes(MAX_INPUTS, MAX_OUTPUTS, MAX_TREE_DEPTH);
+    let structural_max = structural_max_message();
     let whole_tx_bytes = (structural_max as u64) * channels * 1_000;
     assert!(
         whole_tx_bytes > ceiling * mean_ms,
@@ -225,7 +238,11 @@ fn every_verify_cell_carries_its_shapes_real_message_size() {
     let mut checked = 0;
     let mut moved = Vec::new();
     for (n_in, depth, cell) in SPEC_VERIFY_COST.populated() {
-        let real = message_bytes(n_in, 2, u8::try_from(depth).expect("table depth is small"));
+        let real = message_bytes(
+            n_in,
+            2,
+            ProofLayers::known(u8::try_from(depth).expect("table depth is small")),
+        );
         if usize::try_from(cell.msg_bytes).expect("pinned size is small") != real {
             moved.push(format!(
                 "verify-cost cell ({n_in}, {depth}) pins {} B but the shape really \
@@ -238,7 +255,10 @@ fn every_verify_cell_carries_its_shapes_real_message_size() {
     // Every moved cell in one report: a wire change moves them together, and
     // f_ms derives its node-crypto term from each pin.
     assert!(moved.is_empty(), "{}", moved.join("\n"));
-    assert_eq!(checked, 4, "the in-tree surface is the four §85.3 pins");
+    assert_eq!(
+        checked, 128,
+        "the table is every legal shape at depths 2 to 7, each with its pinned size"
+    );
 }
 
 /// The substitution-cover ceiling is the open-link count, and the peak is

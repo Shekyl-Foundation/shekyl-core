@@ -8,10 +8,10 @@ repository.workspace = true
 description = "Structural transaction-weight predictor (byte-mirror of shekyl_wire::Transaction::write) + bounded input/output counts. Hoisted from shekyl-engine-core so the wallet fee path and shekyl-economics-sim share one single-sourced weight model (docs/design/ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md §12.3 D-1)."
 
 [dependencies]
-# MAX_INPUTS / MAX_TREE_DEPTH from their UPSTREAM home (never via tx-builder's
-# re-export — that would invert the arrow this crate exists to keep clean).
-shekyl-fcmp = { path = "../shekyl-fcmp" }
-# Tx wire layout constants + the canonical Bp+ clawback formula + MAX_OUTPUTS.
+# MAX_TREE_DEPTH from its UPSTREAM home (never via tx-builder's re-export —
+# that would invert the arrow this crate exists to keep clean).
+shekyl-curve-generators = { path = "../shekyl-curve-generators" }
+# The weight model, the input cap and MAX_OUTPUTS.
 shekyl-wire = { path = "../shekyl-wire" }
 # The wire block/tx hash surface is typed (`BlockHash`; RTN-7); the weight
 # fixtures build `Ct::Fcmp` directly.

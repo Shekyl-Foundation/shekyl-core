@@ -26,6 +26,7 @@ use shekyl_tx_builder::{
     open_spend, sign_transaction_with_terms, tx_prefix_hash_from_parts_with_extra, AuthSlots,
     InputTerm, OutputTerm, SpendLayout, TreeContext,
 };
+use shekyl_tx_weight::MIN_NON_COINBASE_OUTPUTS;
 use shekyl_types::{GlobalOutputIndex, PCanonicalId, SigningPayloadHash};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::Input;
@@ -52,8 +53,8 @@ pub(crate) struct BondPostAssembleArgs<'a> {
     pub tree_ctx: TreeContext,
     /// Canonical weight-priced fee.
     pub fee: u64,
-    /// The two confidential output amounts (daemon `vout.size() < 2` rejects).
-    pub amounts: [u64; 2],
+    /// The confidential output amounts, at the consensus minimum count.
+    pub amounts: [u64; MIN_NON_COINBASE_OUTPUTS],
     /// Cleartext terms on the input side of the CT balance (Release debit).
     pub extra_input_terms: Vec<InputTerm>,
     /// Cleartext terms on the output side of the CT balance (JoinMarket credit).

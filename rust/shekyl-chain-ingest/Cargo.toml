@@ -88,7 +88,7 @@ harness = [
     "shekyl-chain-rules/harness",
     "dep:shekyl-crypto-pq",
     "dep:shekyl-tx-builder",
-    "dep:shekyl-curve-generators",
+
     "dep:curve25519-dalek",
     "dep:zeroize",
 ]
@@ -115,7 +115,7 @@ forge = [
     "shekyl-chain-rules/harness",
     "dep:shekyl-crypto-pq",
     "dep:shekyl-tx-builder",
-    "dep:shekyl-curve-generators",
+
     "dep:curve25519-dalek",
     "dep:zeroize",
     "dep:shekyl-harness-wallet",
@@ -224,6 +224,9 @@ shekyl-units = { path = "../shekyl-units" }
 # Block / Transaction parsing and hashing — the corpus verifies every record
 # against the header's list (RD-F15).
 shekyl-wire = { path = "../shekyl-wire" }
+# `k·G` for the input-cap mutation. Already in the graph through shekyl-wire;
+# named here because `mutation` calls it.
+shekyl-curve-generators = { path = "../shekyl-curve-generators" }
 thiserror = { workspace = true }
 # The graded-run artifact and the extracted register are JSON (RD-Q6:
 # drs_artifact.py's schema discipline; the register comes from the coverage
@@ -295,7 +298,6 @@ shekyl-genesis-tool = { path = "../shekyl-genesis-tool", optional = true }
 # the driver. Optional here, enabled by `harness` alone.
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq", optional = true }
 shekyl-tx-builder = { path = "../shekyl-tx-builder", optional = true }
-shekyl-curve-generators = { path = "../shekyl-curve-generators", optional = true }
 curve25519-dalek = { version = "4", default-features = false, features = ["alloc"], optional = true }
 zeroize = { workspace = true, optional = true }
 

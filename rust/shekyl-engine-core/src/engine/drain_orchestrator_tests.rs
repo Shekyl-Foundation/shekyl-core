@@ -98,6 +98,7 @@ fn plan_drain_selects_largest_first_and_returns_change() {
         BlockHeight::from_raw(REF),
         AtomicUnits::from_raw(90),
         &BTreeSet::new(),
+        shekyl_tx_builder::MAX_INPUTS,
     )
     .expect("affordable and coverable");
 
@@ -125,6 +126,7 @@ fn plan_drain_never_plans_against_or_selects_a_reserved_output() {
         BlockHeight::from_raw(REF),
         AtomicUnits::from_raw(90),
         &reserved,
+        shekyl_tx_builder::MAX_INPUTS,
     );
     assert_eq!(err, Err(DrainError::Unaffordable));
 
@@ -134,6 +136,7 @@ fn plan_drain_never_plans_against_or_selects_a_reserved_output() {
         BlockHeight::from_raw(REF),
         AtomicUnits::from_raw(50),
         &reserved,
+        shekyl_tx_builder::MAX_INPUTS,
     )
     .expect("50 <= 60 net spendable");
     assert!(
@@ -151,6 +154,7 @@ fn plan_drain_rejects_zero_target() {
         BlockHeight::from_raw(REF),
         AtomicUnits::from_raw(0),
         &BTreeSet::new(),
+        shekyl_tx_builder::MAX_INPUTS,
     );
     assert_eq!(err, Err(DrainError::EmptyRequest));
 }
@@ -167,6 +171,7 @@ fn plan_drain_rejects_target_over_spendable_scalar() {
         BlockHeight::from_raw(REF),
         AtomicUnits::from_raw(101),
         &BTreeSet::new(),
+        shekyl_tx_builder::MAX_INPUTS,
     );
     assert_eq!(err, Err(DrainError::Unaffordable));
 }
@@ -249,6 +254,7 @@ fn live_unaffordable_target_defers_to_the_planner_not_the_reserve() {
         BlockHeight::from_raw(REF),
         AtomicUnits::from_raw(pool + 1),
         &BTreeSet::new(),
+        shekyl_tx_builder::MAX_INPUTS,
     );
     assert_eq!(err, Err(DrainError::Unaffordable));
 }

@@ -243,8 +243,10 @@ impl FcmpPlusPlus {
         FcmpPlusPlus { inputs, fcmp }
     }
 
-    /// The size of a FCMP++ proof.
-    pub fn proof_size(inputs: usize, layers: usize) -> usize {
+    /// The size of a FCMP++ proof. A `const fn`: the transaction weight model
+    /// in `shekyl-wire` computes the input cap from it at compile time.
+    #[must_use]
+    pub const fn proof_size(inputs: usize, layers: usize) -> usize {
         // Per input: the partial input tuple plus a full SAL leg. The per-leg sizes
         // are owned by their respective types, so this stays correct if a leg's
         // field set changes.

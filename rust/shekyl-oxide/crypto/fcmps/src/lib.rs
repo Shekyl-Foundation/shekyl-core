@@ -271,7 +271,7 @@ where
     /// The proof size for a FCMP proving for so many inputs in a tree with so many layers.
     ///
     /// This assumes points and scalars are each encoded as 32 bytes for all relevant curves.
-    pub fn proof_size(inputs: usize, layers: usize) -> usize {
+    pub const fn proof_size(inputs: usize, layers: usize) -> usize {
         let mut proof_elements = 16; // AI, AO, AS, tau_x, u, t_caret, a, b for each BP
 
         let (c1_padded_pow_2, c2_padded_pow_2) = Self::ipa_rows(inputs, layers);

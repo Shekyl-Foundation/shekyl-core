@@ -158,7 +158,6 @@ Relay: the `F'` region and §15's launch condition are one condition, and neithe
 Fleet: arm readouts must record the per-sample series, not a pooled summary — an instrument fix, not a data gap.
 Relay: `full_travel_probability`'s cross-check holds `fluff_return_ms` fixed, and `F'` is the axis the region derivation moves.
 Relay: `F'` may be per-POSTURE even though §89.2 correctly refused per-ZONE.
-Relay: populate the 48-cell Pi verification surface, then consume it per shape.
 Carry an anonymity-zone peer's endpoint in the handshake, and delete the `unknown()` sentinel with it.
 Sweep the tree for comparison tests built only from separately-constructed operands, adding an alias limb where one is missing.
 Extend PWD-B1's bucket to *every* dispatch — invoke and notify — and derive its four parameters.

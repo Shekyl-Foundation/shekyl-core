@@ -55,12 +55,12 @@ use shekyl_economics::{
     burn::calc_burn_pct_at, price_emission, CirculatingSupply, ClosedShardCount, EconomicParams,
     EmissionInputs, PaidEmission, RelayPolicy,
 };
-use shekyl_tx_weight::predict_weight;
+use shekyl_tx_weight::{predict_weight, ProofLayers};
 use shekyl_types::SHARD_LENGTH;
 
 use crate::block_space::ListedBodies;
 use crate::calibration::{
-    all_shapes, required_price, stuffer_cost_per_shard_atomic, stuffer_shape,
+    all_shapes, required_price, spend_layers, stuffer_cost_per_shard_atomic, stuffer_shape,
     tree_depth_for_leaves, PerByteRate, Shape,
 };
 use crate::engine::SimParams;
@@ -511,7 +511,7 @@ impl<'a> Block<'a> {
         // The search key is the body, not the shape that produced it. The
         // shape walk stays in builder order, so a tie keeps the earlier shape.
         let mut seen = HashSet::new();
-        for shape in all_shapes() {
+        for shape in all_shapes(spend_layers(self.depth)) {
             let Some(body) = StuffingBody::from_shape(shape, self.depth, floor) else {
                 continue;
             };
@@ -637,7 +637,13 @@ impl StuffingBody {
             Some(rate) => shape.tx_fee_atomic(depth, rate)?,
             None => 0,
         };
-        let weight = u64::try_from(predict_weight(shape.n_in, shape.n_out, depth, fee)).ok()?;
+        let weight = u64::try_from(predict_weight(
+            shape.n_in,
+            shape.n_out,
+            ProofLayers::known(depth),
+            fee,
+        ))
+        .ok()?;
         if weight == 0 {
             return None;
         }
@@ -1339,7 +1345,7 @@ mod tests {
     ) -> PricedPacking {
         let mut best: Option<PricedPacking> = None;
         let mut seen = HashSet::new();
-        for shape in all_shapes() {
+        for shape in all_shapes(spend_layers(block.depth)) {
             let Some(body) = StuffingBody::from_shape(shape, block.depth, floor) else {
                 continue;
             };
@@ -1363,31 +1369,15 @@ mod tests {
         best.expect("a body fits")
     }
 
-    /// A block whose bodies were built at two weights: one light body
-    /// paying the least per weight, and the rest at the ordinary weight.
-    /// Dropping the light body frees too little room for any stuffing body,
-    /// so the cheapest-per-weight prefix pays its fee for nothing on its way
-    /// to the bodies that do free room. Every miner column's search matches
-    /// every choice of drops cohort by cohort, and the prefix does not.
-    #[test]
-    fn mixed_build_weights_are_searched_by_class_not_by_prefix() {
-        let params = SimParams::default();
-        let economic = params.economic();
-        let mut last = block_at(1_000, &params);
-        let ordinary = last.listed[0];
-        let light_weight = 1_000;
-        // 95 % of the ordinary rate: the cheapest per weight.
-        let light_fee = u64::try_from(
-            u128::from(ordinary.fee) * u128::from(light_weight) * 95
-                / (u128::from(ordinary.weight) * 100),
-        )
-        .expect("fits");
-        // One heavy body carries what the light one does not, so the
-        // listing's weight and fees stay the fill's.
-        last.listed = vec![
+    /// The listing [`mixed_build_weights_are_searched_by_class_not_by_prefix`]
+    /// builds: one light body at `light_fee`, the ordinary bodies, and one
+    /// heavy body carrying what the light one does not, so the listing's
+    /// weight and fees stay the fill's whatever the light fee.
+    fn mixed_listing(ordinary: ListedBodies, light_fee: u64) -> Vec<ListedBodies> {
+        vec![
             ListedBodies {
                 fee: light_fee,
-                weight: light_weight,
+                weight: MIXED_LIGHT_WEIGHT,
                 count: 1,
             },
             ListedBodies {
@@ -1396,31 +1386,119 @@ mod tests {
             },
             ListedBodies {
                 fee: 2 * ordinary.fee - light_fee,
-                weight: 2 * ordinary.weight - light_weight,
+                weight: 2 * ordinary.weight - MIXED_LIGHT_WEIGHT,
                 count: 1,
             },
-        ];
-        let block = Block::new(&last, economic, shekyl_economics::relay_policy());
-        assert_eq!(block.honest_bodies().classes.len(), 3, "three weights");
-        let floor = params.fee.admission_rate(&block.at);
-        let every = every_drop(&last.listed);
-        let prefixes = prefix_drops(&last.listed);
+        ]
+    }
+
+    const MIXED_LIGHT_WEIGHT: u64 = 1_000;
+
+    /// What is kept when `light` light bodies and `ordinary` ordinary
+    /// bodies of a [`mixed_listing`] are dropped, the heavy body kept.
+    fn mixed_kept(listed: &[ListedBodies], light: u64, ordinary: u64) -> Kept {
+        let (l, o, h) = (&listed[0], &listed[1], &listed[2]);
+        Kept {
+            dropped: light + ordinary,
+            weight: (l.count - light) * l.weight + (o.count - ordinary) * o.weight + h.weight,
+            fees: (l.count - light) * l.fee + (o.count - ordinary) * o.fee + h.fee,
+        }
+    }
+
+    /// A block whose bodies were built at two weights: one light body
+    /// paying the least per weight, and the rest at the ordinary weight.
+    /// Every miner column's search matches every choice of drops cohort by
+    /// cohort, and the cheapest-per-weight prefix does not.
+    ///
+    /// The prefix drops the light body first, so it overstates the attack
+    /// exactly when that drop does not pay for itself: when the reward a
+    /// dropped byte frees, at the cheapest packing, is less than the light
+    /// body's fee per weight. The freed reward per byte is the block's, so
+    /// the fixture measures it and prices the light body between it and the
+    /// ordinary rate, then asserts that dropping the light body alone at the
+    /// cheapest packing raises the cost. A fixed rate held only while the
+    /// stuffing bodies were small: at the derived cap the freed reward is
+    /// within 3 % of the ordinary rate and above 95 % of it.
+    #[test]
+    fn mixed_build_weights_are_searched_by_class_not_by_prefix() {
+        let params = SimParams::default();
+        let economic = params.economic();
+        let mut last = block_at(1_000, &params);
+        let ordinary = last.listed[0];
+        let per_byte = |a: &PricedPacking, b: &PricedPacking| {
+            cost_per_byte_ord(a.block_cost, a.block_bytes, b.block_cost, b.block_bytes)
+        };
         for kind in AttackKind::ALL {
             let Approach::Miner(terms) = kind.terms() else {
                 continue;
             };
-            let floor = terms.pay_floor.then_some(floor);
-            let search = block.cheapest_packing(floor, terms.recovery);
-            let exhaustive = cheapest_over(&block, &every, floor, terms.recovery);
-            let prefix = cheapest_over(&block, &prefixes, floor, terms.recovery);
-            let per_byte = |packing: &PricedPacking, other: &PricedPacking| {
-                cost_per_byte_ord(
-                    packing.block_cost,
-                    packing.block_bytes,
-                    other.block_cost,
-                    other.block_bytes,
+            // Any light fee measures the freed reward: the block's weight
+            // and fees do not move with it.
+            let probe_fee = u64::try_from(
+                u128::from(ordinary.fee) * u128::from(MIXED_LIGHT_WEIGHT)
+                    / u128::from(ordinary.weight),
+            )
+            .expect("fits");
+            last.listed = mixed_listing(ordinary, probe_fee);
+            let block = Block::new(&last, economic, shekyl_economics::relay_policy());
+            let floor = terms
+                .pay_floor
+                .then_some(params.fee.admission_rate(&block.at));
+            let at = |light: u64, drops: u64| {
+                cheapest_over(
+                    &block,
+                    &[mixed_kept(&last.listed, light, drops)],
+                    floor,
+                    terms.recovery,
                 )
             };
+            // The cheapest packing that keeps the light body.
+            let drops = (0..=last.listed[1].count)
+                .reduce(|held, d| {
+                    if at(0, d).beats(&at(0, held)) {
+                        d
+                    } else {
+                        held
+                    }
+                })
+                .expect("a drop count");
+            let (kept, gone) = (at(0, drops), at(1, drops));
+            assert_eq!(
+                (kept.block_bytes, kept.stuffed),
+                (gone.block_bytes, gone.stuffed),
+                "{kind:?}: the light body's room changes no stuffing"
+            );
+            let freed = i128::try_from(kept.block_cost).expect("fits")
+                - i128::try_from(gone.block_cost).expect("fits")
+                + i128::from(probe_fee);
+            let freed = u64::try_from(freed).expect("dropping a body frees reward");
+            let ordinary_fee = ordinary.fee * MIXED_LIGHT_WEIGHT / ordinary.weight;
+            assert!(
+                freed < ordinary_fee,
+                "{kind:?}: a dropped byte frees {freed} per {MIXED_LIGHT_WEIGHT} bytes, \
+                 at least the ordinary rate {ordinary_fee}, so no light body can be the \
+                 cheapest per weight and not worth dropping"
+            );
+            last.listed = mixed_listing(ordinary, (freed + ordinary_fee) / 2);
+            let block = Block::new(&last, economic, shekyl_economics::relay_policy());
+            assert_eq!(block.honest_bodies().classes.len(), 3, "three weights");
+            let at = |light: u64| {
+                cheapest_over(
+                    &block,
+                    &[mixed_kept(&last.listed, light, drops)],
+                    floor,
+                    terms.recovery,
+                )
+            };
+            assert_eq!(
+                per_byte(&at(1), &at(0)),
+                Ordering::Greater,
+                "{kind:?}: dropping the light body alone raises the cost"
+            );
+            let search = block.cheapest_packing(floor, terms.recovery);
+            let exhaustive =
+                cheapest_over(&block, &every_drop(&last.listed), floor, terms.recovery);
+            let prefix = cheapest_over(&block, &prefix_drops(&last.listed), floor, terms.recovery);
             assert_eq!(
                 per_byte(&search, &exhaustive),
                 Ordering::Equal,

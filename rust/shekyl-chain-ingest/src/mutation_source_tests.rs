@@ -349,14 +349,17 @@ fn the_last_representable_height_is_yielded_and_another_event_is_a_fault() {
     assert!(source.next().expect("clean end").is_none());
 }
 
-/// [`EXTRA_KEY_IMAGES`] are what they claim: `k·G` for `k` in `2..=9`,
-/// each canonical, torsion-free and not the identity, all distinct.
+/// The extra key images are `k·G` for `k` from 2, one per input the cap
+/// admits: canonical, torsion-free, not the identity, all distinct.
 #[test]
 fn the_extra_images_are_k_times_g() {
     use curve25519_dalek::constants::ED25519_BASEPOINT_POINT;
     use curve25519_dalek::edwards::CompressedEdwardsY;
     use curve25519_dalek::scalar::Scalar;
-    for (k, bytes) in (2u64..).zip(crate::mutation::EXTRA_KEY_IMAGES) {
+    use shekyl_wire::transaction::MAX_FCMP_INPUTS;
+    let images: Vec<[u8; 32]> = crate::mutation::extra_key_images().collect();
+    assert_eq!(images.len(), MAX_FCMP_INPUTS);
+    for (k, bytes) in (2u64..).zip(images.iter().copied()) {
         let point = CompressedEdwardsY(bytes)
             .decompress()
             .unwrap_or_else(|| panic!("{k}·G decodes"));
@@ -364,8 +367,8 @@ fn the_extra_images_are_k_times_g() {
         assert_eq!(point.compress().to_bytes(), bytes, "{k}·G is canonical");
         assert!(point.is_torsion_free(), "{k}·G is torsion-free");
     }
-    let mut seen = crate::mutation::EXTRA_KEY_IMAGES.to_vec();
+    let mut seen = images;
     seen.sort_unstable();
     seen.dedup();
-    assert_eq!(seen.len(), crate::mutation::EXTRA_KEY_IMAGES.len());
+    assert_eq!(seen.len(), MAX_FCMP_INPUTS);
 }

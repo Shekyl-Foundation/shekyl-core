@@ -63,8 +63,8 @@ use shekyl_crypto_pq::output::EncryptedOutputField;
 use shekyl_scanner::extra::Extra;
 use shekyl_tx_builder::{encode_final_tx, PqcAuth, WireEncodeInput};
 use shekyl_tx_weight::{
-    fcmp_proof_size, predict_archival_len, predict_weight, InputCount, OutputCount, MAX_OUTPUTS,
-    MAX_TREE_DEPTH,
+    fcmp_proof_size, predict_archival_len, predict_weight, InputCount, OutputCount, ProofLayers,
+    MAX_OUTPUTS, MAX_TREE_DEPTH,
 };
 use shekyl_wire::transaction::{PQC_HYBRID_SINGLE_KEY_LEN, PQC_HYBRID_SINGLE_SIG_LEN};
 use shekyl_wire::Transaction;
@@ -72,7 +72,7 @@ use shekyl_wire::Transaction;
 /// `MAX_INPUTS` is crate-internal to `shekyl-tx-weight` on purpose (it comes
 /// from `shekyl-fcmp`, its upstream home). Read it from that home, not from a
 /// re-export, for the same reason the crate itself does.
-const MAX_INPUTS: usize = shekyl_fcmp::MAX_INPUTS;
+const MAX_INPUTS: usize = shekyl_wire::transaction::MAX_FCMP_INPUTS;
 
 /// Distinct filler byte for index `i`. Weight depends only on field LENGTHS,
 /// never on their contents, so these bytes carry no meaning beyond being
@@ -160,7 +160,10 @@ fn built(n_in: usize, n_out: usize, layers: u8, fee: u64, bp: &Bulletproof) -> B
         reference_block: shekyl_types::BlockHash::from_bytes([0xAB; 32]),
         // The one stubbed term. Length from the table; the table is anchored by
         // real proving in the KATs named in this file's header.
-        fcmp_proof: vec![0xCC; fcmp_proof_size(InputCount::clamped(n_in), layers)],
+        fcmp_proof: vec![
+            0xCC;
+            fcmp_proof_size(InputCount::clamped(n_in), ProofLayers::known(layers))
+        ],
         pqc_auths: (0..n_in)
             .map(|_| PqcAuth {
                 auth_version: shekyl_tx_builder::PQC_AUTH_VERSION,
@@ -200,13 +203,13 @@ fn predict_weight_and_archival_len_equal_built_over_the_shape_space() {
                     weight: predict_weight(
                         InputCount::clamped(n_in),
                         OutputCount::clamped(n_out),
-                        layers,
+                        ProofLayers::known(layers),
                         fee,
                     ),
                     archival_len: predict_archival_len(
                         InputCount::clamped(n_in),
                         OutputCount::clamped(n_out),
-                        layers,
+                        ProofLayers::known(layers),
                     ),
                 };
                 let built = built(n_in, n_out, layers, fee, &bps[n_out - 1]);
@@ -253,7 +256,7 @@ fn predict_weight_equals_built_weight_across_every_fee_varint_boundary() {
             let predicted = predict_weight(
                 InputCount::clamped(n_in),
                 OutputCount::clamped(n_out),
-                layers,
+                ProofLayers::known(layers),
                 fee,
             );
             let built = built(n_in, n_out, layers, fee, &bps[n_out - 1]).weight;

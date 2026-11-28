@@ -134,7 +134,7 @@ fn test_too_many_inputs() {
         AtomicUnits::ZERO,
         &dummy_tree(),
     );
-    assert!(matches!(result, Err(TxBuilderError::TooManyInputs(_))));
+    assert!(matches!(result, Err(TxBuilderError::TooManyInputs { .. })));
 }
 
 #[test]
@@ -478,6 +478,35 @@ fn dummy_tree_at_depth(depth: u8) -> TreeContext {
     }
 }
 
+/// A count within the cap but past what the weight limit admits at this depth
+/// is refused before signing, with the depth's own limit.
+#[test]
+fn a_count_past_the_per_depth_limit_is_refused() {
+    let depth = shekyl_fcmp::MAX_TREE_DEPTH;
+    let limit = shekyl_wire::transaction::weight::max_inputs_at(
+        shekyl_wire::transaction::weight::NonCoinbaseOutputs::FEWEST,
+        shekyl_curve_generators::SpendLayers::DEEPEST,
+    );
+    assert!(limit < MAX_INPUTS);
+    let inputs: Vec<SpendInput> = (0..=limit).map(|_| dummy_spend_input(100)).collect();
+    let result = sign_transaction(
+        &shekyl_network::HARNESS_NETWORK_ID,
+        PrefixHash::from_bytes([0u8; 32]),
+        &inputs,
+        &dummy_outputs(100),
+        AtomicUnits::ZERO,
+        &dummy_tree_at_depth(depth),
+    );
+    assert!(
+        matches!(
+            result,
+            Err(TxBuilderError::TooManyInputs { count, limit: reported })
+                if count == limit + 1 && reported == limit
+        ),
+        "{result:?}"
+    );
+}
+
 #[test]
 fn validate_accepts_all_legal_depths() {
     for depth in 1..=shekyl_fcmp::MAX_TREE_DEPTH {
@@ -599,8 +628,8 @@ fn validate_rejects_swapped_c1_c2_alternation() {
 fn extra_output_term_raises_required_total() {
     use shekyl_ct_balance::{InputTerm, OutputTerm};
     // input=100, output=100, fee=0 is exactly sufficient with no extra terms.
-    let input = dummy_spend_input_at_depth(1);
-    let tree = dummy_tree_at_depth(1);
+    let input = dummy_spend_input_at_depth(shekyl_fcmp::MIN_SPEND_LAYERS);
+    let tree = dummy_tree_at_depth(shekyl_fcmp::MIN_SPEND_LAYERS);
     assert!(validate_inputs(
         std::slice::from_ref(&input),
         &dummy_outputs(100),

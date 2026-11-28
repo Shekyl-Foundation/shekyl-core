@@ -73,7 +73,9 @@ use super::drain_assembly::{AssembleDrain, AssembledDrain, DrainDestination};
 use super::drain_select::{
     select_for_drain, select_for_sweep, DrainCandidate, DrainSelectError, SweepSelectError,
 };
+use super::output_selector::{input_limit_at, selection_layers};
 use super::stake_engine::{PersonaHandle, StakeEngineError, StakeEngineHandle};
+use shekyl_tx_weight::NonCoinbaseOutputs;
 
 /// The drain-path `P`-balance surface: a single aggregate spendable scalar
 /// (F-D2 core-side). Carries no per-output/per-epoch breakdown by
@@ -143,8 +145,8 @@ pub enum DrainError {
     #[error("the spendable outputs cannot cover the drain amount")]
     InsufficientSpendable,
     /// The amount is affordable against the aggregate scalar but needs more
-    /// inputs than one drain transaction can spend
-    /// (`shekyl_tx_builder::MAX_INPUTS`) — a fragmented pool. Reachable
+    /// inputs than one drain transaction can spend at the reference tree's
+    /// depth — a fragmented pool. Reachable
     /// through [`plan_drain`] (unlike [`Self::InsufficientSpendable`]): the
     /// affordability check reads the whole spendable sum, while selection is
     /// capped. User-actionable: lower the amount and drain in more passes.
@@ -435,9 +437,10 @@ pub fn plan_drain(
     reference_height: BlockHeight,
     target: AtomicUnits,
     reserved: &BTreeSet<GlobalOutputIndex>,
+    max_inputs: usize,
 ) -> Result<DrainPlan, DrainError> {
     let operands = project_drain_operands(records, reference_height, reserved)?;
-    plan_from_operands(&operands, reference_height, target)
+    plan_from_operands(&operands, reference_height, target, max_inputs)
 }
 
 /// Run the amount + select stages over already-projected [`DrainOperands`] —
@@ -449,9 +452,10 @@ fn plan_from_operands(
     operands: &DrainOperands,
     reference_height: BlockHeight,
     target: AtomicUnits,
+    max_inputs: usize,
 ) -> Result<DrainPlan, DrainError> {
     let amount = choose_drain_amount(DrainRequest { target }, operands.balance.spendable)?;
-    let selection = select_for_drain(&operands.candidates, amount, reference_height)?;
+    let selection = select_for_drain(&operands.candidates, amount, reference_height, max_inputs)?;
     let change = selection
         .input_total
         .checked_sub(amount.get())
@@ -766,12 +770,14 @@ pub(crate) async fn orchestrate_drain(
     // 1. Anchor one ReferenceBlock via the ordinary send-path procedure
     //    (shared with the bond path — never a hand-rolled `tip − age`, WI-2
     //    F-6). Its refusals are scalar-free; render them into the drain arm.
-    let reference = anchored_reference_block(ctx.tree, ctx.chain_tip, block_hash_at)
+    let (reference, tree_depth) = anchored_reference_block(ctx.tree, ctx.chain_tip, block_hash_at)
         .await
         .map_err(|e| DrainOrchestrationError::ReferenceUnanchorable {
             detail: e.to_string(),
         })?;
     let reference_height = reference.height;
+    // A drain is transfer-shaped with two outputs in both regimes (T-DS-6).
+    let max_inputs = input_limit_at(NonCoinbaseOutputs::FEWEST, selection_layers(tree_depth));
 
     // 2. Scope to the persona's own unreserved records, then plan per the
     //    intent: the F-D1 planner (project → amount → select) for a payment
@@ -814,8 +820,12 @@ pub(crate) async fn orchestrate_drain(
             // surfaces its own arm.
             enforce_exit_reserve(scoped_spendable, target, ctx.retired)?;
 
-            let plan =
-                plan_from_operands(&operands, reference_height, AtomicUnits::from_raw(target))?;
+            let plan = plan_from_operands(
+                &operands,
+                reference_height,
+                AtomicUnits::from_raw(target),
+                max_inputs,
+            )?;
             (plan, DrainMoved::Payment(payment))
         }
         DrainIntent::TerminalSweep(_witness) => {
@@ -830,6 +840,7 @@ pub(crate) async fn orchestrate_drain(
                 &operands.candidates,
                 AtomicUnits::from_raw(ctx.fee),
                 reference_height,
+                max_inputs,
             )
             .map_err(DrainError::from)?;
             // The remainder is summed over the slot's UNfiltered records —

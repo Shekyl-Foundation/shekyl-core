@@ -22,6 +22,7 @@ use shekyl_curve_tree::{
 use shekyl_engine_file::WalletFile;
 use shekyl_engine_state::pending_post_block::{PendingBondPlan, PlannedPosture, SealAdmission};
 use shekyl_rpc_transport::DaemonTarget;
+use shekyl_standoff::P_LANE_WEIGHT_CEILING;
 use shekyl_types::{BlockHeight, GlobalOutputIndex, PSlot};
 use shekyl_units::AtomicUnits;
 use tokio::sync::RwLock;
@@ -41,51 +42,6 @@ use super::pscan::start::{
     load_pscan_state_for_engine, pending_post_store_for_engine, WalletFilePendingSealStore,
 };
 use shekyl_engine_state::PendingPostBlock;
-
-/// Structural weight ceiling for the `P`-lane fee derivation: the maximum
-/// predicted weight of any legal `P`-lane spend — up to
-/// [`shekyl_tx_builder::MAX_INPUTS`] funding inputs, up to two outputs
-/// (payment/bond + change), any tree depth up to
-/// [`shekyl_tx_weight::MAX_TREE_DEPTH`], worst-case fee varint. A fee baked
-/// at assembly over this weight clears the daemon's per-byte floor even as
-/// estimates move (overpaying is a miner transfer, never a conservation
-/// term), and every `P`-lane spend quoting the same ceiling keeps the fee
-/// uniform across the lane's tx shapes.
-///
-/// Until 2026-08-26 this was a hardcoded `32 * 1024`, sized for the
-/// single-input bond post — but the drain path spends up to `MAX_INPUTS`
-/// funding outputs, and the depth-24 8-input FCMP++ proof **alone** is
-/// 33,600 bytes, so a legal multi-input drain weighed more than the ceiling
-/// and its quoted fee undercut the daemon's per-byte floor (a relay
-/// refusal, and — until the drain lifecycle driver lands — a sealed record
-/// bricking that persona's drain lane). The exit-fee reserve derivation
-/// (`shekyl-standoff` `reserve.rs`) prices its pessimistic `Release` over
-/// this same structural shape; its headroom arithmetic is derived against
-/// this computed ceiling (currently 80,456 bytes), and the ceiling test
-/// ties the two so a KAT-table regeneration that grows the ceiling forces
-/// the reserve derivation to be re-run.
-pub(crate) fn p_lane_weight_ceiling_bytes() -> usize {
-    static CEILING: std::sync::LazyLock<usize> = std::sync::LazyLock::new(|| {
-        let mut max = 0;
-        for n_in in 1..=shekyl_tx_builder::MAX_INPUTS {
-            // The proof-size table is non-monotonic in depth, so scan every
-            // legal (inputs, outputs, depth) cell rather than assuming the
-            // corner shape is the heaviest.
-            for n_out in 1..=2 {
-                for tree_depth in 1..=shekyl_tx_weight::MAX_TREE_DEPTH {
-                    max = max.max(super::tx_fee_model::predict_weight(
-                        super::tx_fee_model::InputCount::clamped(n_in),
-                        super::tx_fee_model::OutputCount::clamped(n_out),
-                        tree_depth,
-                        u64::MAX,
-                    ));
-                }
-            }
-        }
-        max
-    });
-    *CEILING
-}
 
 /// Bond fee for the first-stake post, from one daemon fee snapshot.
 ///
@@ -122,8 +78,7 @@ fn bond_fee_from_estimates(
 }
 
 /// The canonical `P`-lane floor fee from one daemon fee snapshot: validated
-/// economy tier over the [`p_lane_weight_ceiling_bytes`] structural weight
-/// ceiling. **The single fee decision for every `P`-lane spend** — the bond
+/// economy tier over [`P_LANE_WEIGHT_CEILING`], the weight limit. **The single fee decision for every `P`-lane spend** — the bond
 /// post (via [`bond_fee_from_estimates`]) and the WI-RPC-5 drain façade
 /// ([`drain_to_principal`](super::drain_facade)) both quote this function, so
 /// the P-lane fee-uniformity CONTRACT PIN is one body, not two derivations
@@ -141,7 +96,7 @@ pub(crate) fn p_lane_floor_fee(
     // daemon-supplied number.
     Ok(AtomicUnits::from_raw(super::tx_fee_model::fee_from_weight(
         &estimates.economy(),
-        p_lane_weight_ceiling_bytes(),
+        P_LANE_WEIGHT_CEILING,
     )))
 }
 
@@ -180,6 +135,10 @@ fn funding_refusal_detail(e: &BondAssemblyError) -> String {
         // headroom itself is a public constant and survives.
         BondAssemblyError::TooManyFundingInputs { max, .. } => format!(
             "persona funding is fragmented across more than {max} spendable              outputs — more than one bond post can carry"
+        ),
+        BondAssemblyError::OutputsUnfillable { minimum, .. } => format!(
+            "persona funding leaves too little to fill the {minimum} nonzero outputs a \
+             transaction requires; fund the persona and retry"
         ),
         BondAssemblyError::OutputNotYetDrained { .. } => {
             "a persona funding output is not yet drained into the reference tree; \
@@ -246,6 +205,7 @@ pub(super) fn post_assembly_failure(e: StakeEngineError) -> FirstStakeError {
 fn preflight_error(e: &BondAssemblyError) -> FirstStakeError {
     match e {
         BondAssemblyError::InsufficientFunding { .. }
+        | BondAssemblyError::OutputsUnfillable { .. }
         | BondAssemblyError::NoSpendableFunding
         | BondAssemblyError::ReferenceResyncing { .. }
         | BondAssemblyError::OutputNotYetDrained { .. } => {
@@ -529,7 +489,7 @@ pub(crate) async fn anchored_reference_block(
     curve_tree: &CurveTreeHandle,
     chain_tip: shekyl_types::BlockHeight,
     block_hash_at: impl FnOnce(shekyl_types::BlockHeight) -> Option<BlockHash>,
-) -> Result<ReferenceBlock, BondAssemblyError> {
+) -> Result<(ReferenceBlock, u8), BondAssemblyError> {
     let covered_through = curve_tree
         .ingested_tip_height()
         .await
@@ -553,7 +513,7 @@ pub(crate) async fn anchored_reference_block(
 }
 
 /// The [`ReferenceBlock`] at a named `reference_height`: its curve-tree root
-/// and block hash. The wallet's tree and ledger need only have reached that
+/// and block hash, with the tree's depth there. The wallet's tree and ledger need only have reached that
 /// block, not the tip it was named for: a due post is signed at the
 /// canonical reference for the daemon-claimed tip (BD-Q3), and a wallet one
 /// block behind that tip still holds the reference.
@@ -561,7 +521,7 @@ pub(crate) async fn reference_block_at(
     curve_tree: &CurveTreeHandle,
     reference_height: shekyl_types::BlockHeight,
     block_hash_at: impl FnOnce(shekyl_types::BlockHeight) -> Option<BlockHash>,
-) -> Result<ReferenceBlock, BondAssemblyError> {
+) -> Result<(ReferenceBlock, u8), BondAssemblyError> {
     let covered_through = curve_tree
         .ingested_tip_height()
         .await
@@ -571,7 +531,7 @@ pub(crate) async fn reference_block_at(
             detail: "curve tree has not reached the reference",
         });
     }
-    let (curve_tree_root, _depth) = curve_tree
+    let (curve_tree_root, tree_depth) = curve_tree
         .reference_root_and_depth(reference_height)
         .await
         .map_err(|err| BondAssemblyError::build("reference root and depth", format!("{err:?}")))?;
@@ -579,11 +539,14 @@ pub(crate) async fn reference_block_at(
         block_hash_at(reference_height).ok_or(BondAssemblyError::ReferenceResyncing {
             detail: "reference-height block hash missing from ledger",
         })?;
-    Ok(ReferenceBlock {
-        height: reference_height,
-        curve_tree_root: CurveTreeRoot::from_bytes(curve_tree_root),
-        block_hash,
-    })
+    Ok((
+        ReferenceBlock {
+            height: reference_height,
+            curve_tree_root: CurveTreeRoot::from_bytes(curve_tree_root),
+            block_hash,
+        },
+        tree_depth,
+    ))
 }
 
 #[allow(private_bounds)] // same Engine-trait privacy posture as start_pscan_with
@@ -762,7 +725,7 @@ where
         pruning_landed: &SpentRecordsDurablyPruned,
         own: &[GlobalOutputIndex],
     ) -> Result<(FundingSelection, ReferenceBlock, u64), BondAssemblyError> {
-        let reference = match at {
+        let (reference, _tree_depth) = match at {
             // Anchored ReferenceBlock via the ordinary procedure (WI-2 F-6).
             SweepReference::FromWalletTip(chain_tip) => {
                 anchored_reference_block(curve_tree, chain_tip, tip_hash_at).await?

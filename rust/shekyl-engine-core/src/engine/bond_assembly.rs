@@ -319,18 +319,14 @@ pub(crate) struct FundingSelection {
 /// The funding-input headroom every consumer of [`sweep_funding_outputs`]
 /// has: [`shekyl_tx_builder::MAX_INPUTS`] **minus the one non-funding vin**
 /// each of those transactions appends. The consensus cap
-/// (`FCMP_MAX_INPUTS_PER_TX`, `blockchain.cpp`) bounds `tx.vin.size()` —
-/// the WHOLE vin — and every retention-family tx this sweep funds carries
+/// (`shekyl_wire::transaction::MAX_FCMP_INPUTS`, CEN-I4) bounds the whole
+/// `vin`, and every retention-family transaction this sweep funds carries
 /// exactly one vin that is not a funding spend: the bond post's bond vin,
 /// the exit's `Release` vin, the claim's emission vin. A selection of
 /// `MAX_INPUTS` funding records therefore assembles a `MAX_INPUTS + 1`-vin
-/// transaction — rejected on every public network, and (since E6 slice 6
-/// commit 2 made the Rust I4 unconditional, rule 171) refused by the Rust
-/// validator on FAKECHAIN too, so a regtest walk through `shekyl-chain-rules`
-/// *does* observe the boundary; only the C++ daemon's cap stays gated off
-/// there until E4 retires it. The drain does NOT take this constant: a drain is
-/// transfer-shaped with no extra vin, so its selector caps at the full
-/// [`shekyl_tx_builder::MAX_INPUTS`].
+/// transaction, which the validator refuses. The drain does not take this
+/// constant: a drain is transfer-shaped with no extra vin, so its selector
+/// caps at the full [`shekyl_tx_builder::MAX_INPUTS`].
 pub(crate) const MAX_RETENTION_FUNDING_INPUTS: usize = shekyl_tx_builder::MAX_INPUTS - 1;
 
 /// What [`sweep_funding_outputs`] does when the eligible set exceeds
@@ -575,24 +571,25 @@ mod tests {
         )
     }
 
-    /// The headroom's VALUE, pinned absolutely — every other test in this
-    /// family measures relative to the constant, so this is the one that
-    /// goes red if the `- 1` is dropped (a bite proved the relative tests
-    /// cannot see it). 7 = the genesis-frozen consensus vin cap
-    /// (`FCMP_MAX_INPUTS_PER_TX` = 8, mirrored as
-    /// `shekyl_fcmp::MAX_INPUTS`) minus the ONE non-funding vin every
-    /// retention-family tx carries. Re-pinning either side is a consensus
-    /// decision, not a constant bump.
+    /// The headroom is the consensus cap minus the one non-funding vin.
+    /// Every other test in this family measures relative to the constant, so
+    /// this is the one that goes red if the `- 1` is dropped. The cap is the
+    /// weight limit's derivation, so the headroom is not a second literal.
     #[test]
     fn vin_headroom_is_the_consensus_cap_minus_the_retention_vin() {
-        assert_eq!(MAX_RETENTION_FUNDING_INPUTS, 7);
-        assert_eq!(shekyl_tx_builder::MAX_INPUTS, 8);
+        assert_eq!(
+            MAX_RETENTION_FUNDING_INPUTS + 1,
+            shekyl_tx_builder::MAX_INPUTS
+        );
+        assert_eq!(
+            shekyl_tx_builder::MAX_INPUTS,
+            shekyl_wire::transaction::MAX_FCMP_INPUTS
+        );
     }
 
-    /// A pool past the headroom under RefuseTooMany refuses by name BEFORE any
-    /// arithmetic — the tx carries its own non-funding vin, so an 8-record
-    /// selection is a 9-vin transaction every public network rejects
-    /// (FAKECHAIN does not enforce the cap, so no e2e can see this).
+    /// A pool past the headroom under RefuseTooMany refuses by name before any
+    /// arithmetic. The transaction carries its own non-funding vin, so one
+    /// record past the headroom is one vin over the consensus cap.
     #[test]
     fn refuse_policy_names_a_pool_past_the_vin_headroom() {
         let records: Vec<_> = (0..=MAX_RETENTION_FUNDING_INPUTS as u64)

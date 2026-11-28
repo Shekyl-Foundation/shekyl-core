@@ -242,9 +242,10 @@ where
 
         // Anchor the canonical send-path reference (reorg-safe, resync-loud);
         // only the transient arm becomes "syncing".
-        let reference = anchored_reference_block(&curve_tree, chain_tip, block_hash_at)
-            .await
-            .map_err(anchor_err_to_read_err)?;
+        let (reference, _tree_depth) =
+            anchored_reference_block(&curve_tree, chain_tip, block_hash_at)
+                .await
+                .map_err(anchor_err_to_read_err)?;
         let reference_height = reference.height;
 
         scoped_spendable(

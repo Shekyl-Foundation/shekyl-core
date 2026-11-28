@@ -1,6 +1,6 @@
 # CEN-I4 — deriving the transaction input cap (`ICD-`)
 
-**Status:** OPEN — Round 0 RULED except the fragment count (Rick, 2026-11-22; §11), docs only.
+**Status:** RULED — Round 0 (Rick, 2026-11-22), and the fragment count (2026-11-27, §11). The cutover is shekyl-core #1543.
 Consensus surface: the design is ruled here before any code moves, then one
 rule-107 cutover PR moves every consumer together. Identifier family `ICD-`
 (registered in [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2):
@@ -19,8 +19,8 @@ rule; `ICD-R7` no rounding to a padding boundary; `ICD-R8` the coupling to the
 weight limit is accepted; `ICD-R9` the maximum tree depth is 14; `ICD-R10` the
 standoff reserve is computed; `ICD-R11` the cap is checked before the weight;
 `ICD-R12` the row floors stay. **Handed to EUP-5 G (§10):** `ICD-Q6`,
-`ICD-F15`. **Still open (§11):** the cover carrier's fragment count, after the
-cover-by-shape run ends on 2026-11-24.
+`ICD-F15`. **Ruled 2026-11-27 (§11):** the cover carrier's fragment count is
+8, as derived; whether the carrier keeps fragments is cover-by-shape's.
 
 ## 0. What the cap is, and why it is decided now
 
@@ -392,17 +392,18 @@ keep the cap at 8.
 
 ### 4.1 What one invalid transaction costs, at the floor
 
-Two sources: the embargo table's door sequence (`SPEC_VERIFY_COST`, 2026-11-08
-operands, measured on the floor device) and this round's harness on the
-diagnostic Pi (§2.6, **not floor values**; that unit is about 19 % slower,
-`ICD-F12`). The 22-input row on the floor device is the cutover's
-measurement (§8).
+Two sources: the embargo table's door sequence (`SPEC_VERIFY_COST`, the
+floor session of §8.1, measured on the floor device) and this round's harness
+on the diagnostic Pi (§2.6, **not floor values**; that unit is about 19 %
+slower, `ICD-F12`). Depth 7 admits at most 20 inputs, so its last row is the
+20-input cell.
 
 | inputs | depth 2, table (floor) | depth 2, §2.6 (diagnostic, not floor) | depth 3, §2.6 (diagnostic, not floor) | depth 7, table (floor, synthesized tree) |
 | ---: | ---: | ---: | ---: | ---: |
-| 1 | 144.31 ms | 176.4 ms | 180.4 ms | 163.11 ms |
-| 8 | 425.86 ms | 524.9 ms | 720.7 ms | 818.56 ms |
-| 22 | — | 1 576.2 ms | 1 650.5 ms | owed with the new rows (§8) |
+| 1 | 147.99 ms | 176.4 ms | 180.4 ms | 199.95 ms |
+| 8 | 442.55 ms | 524.9 ms | 720.7 ms | 1 133.44 ms |
+| 20 | 1 282.11 ms | — | — | 2 456.41 ms |
+| 22 | 1 332.34 ms | 1 576.2 ms | 1 650.5 ms | no legal shape |
 
 ### 4.2 How the relay meets it today
 
@@ -702,16 +703,20 @@ wallet's per-depth limit, the sim's `all_shapes`, the GAP-7 sweep's shapes,
 and the P-lane ceiling's scan (`ICD-F11`), which then scans only legal cells.
 Nobody copies the weight limit or the output minimum.
 
-**What goes red in the sim at the cutover, and how it is regenerated.**
-EUP-4 prep 3's whole-economy table (#1476): the A-stuffed rows, the stuffed
-tail's floor, the C arms' adversary columns (C3's D2 escalation prices against
-the W9 stuffer), and the nightly slice's narration and table; and the
-narration pins that include stuffing (ESR-10, EUP-4, J×G, and any others the
-economics-sim-narrations job names). Each is regenerated in the cutover PR
-under `SHEKYL_PINNED_REGEN_DECISION`, citing a dated entry in
-[`ECONOMICS_SIM_PRODUCTION_REBASE.md`](ECONOMICS_SIM_PRODUCTION_REBASE.md). The
-full table (2 880 folds, about 14 hours on a 16-vCPU host) is an on-demand
-fleet run the sim lane runs once the cutover branch is ready.
+**What moves in the sim at the cutover, and how it is regenerated.** The sim's
+readers of the shape space are `calibration`, `miner_stuffer`, `swing`,
+`stage2`'s reports and EUP-4's stuffing floors (`window_stuffer`). What moves
+with them is the four stage2 narrations (the W9 table, ESR-7's miner envelope,
+A6's slew and flood cost, and the ROI tables built on them) and EUP-4's
+stuffing-floor lines. Each is regenerated in the cutover PR under
+`SHEKYL_PINNED_REGEN_DECISION`, citing a dated entry in
+[`ECONOMICS_SIM_PRODUCTION_REBASE.md`](ECONOMICS_SIM_PRODUCTION_REBASE.md).
+The whole-economy table does **not** move with the cap: `whole_economy.rs`
+reads none of those functions, its A-stuffed rows and adversary lines price
+the ordinary 1-in / 2-out body, and the economies narration, the ESR-10
+narrations and the J×G pin regenerate byte-identical with the shape space
+moved (the sim lane's check at #1476 `6d0ad59acc`). So the cap does not by
+itself call for a re-run of the 2 880-fold table.
 
 **Generators and depth (`ICD-R2`, `ICD-R3`):** `shekyl-curve-generators`'s
 `MAX_FCMP_INPUTS = 128` and `MAX_FCMP_LAYERS = 12` give way to the two derived
@@ -744,10 +749,13 @@ the cutover sweeps them.
 ## 8. The measurements the cutover owes
 
 - **The embargo table, every cell, on the floor device in one session
-  (`ICD-R5`).** `n_in = 1..=N(d)` at every depth tier the table covers, since a
-  cell no legal transaction fills is not measured: 22 cells at each of depths
-  2, 3 and 4, 21 at depths 5 and 6, 20 at depth 7, so 128 cells, the existing
-  ones remeasured beside the new ones. On the floor device's configuration
+  (`ICD-R5`). MEASURED 2026-11-27; §8.1.** `n_in = 1..=N(d)` at every depth
+  tier the table covers, since a cell no legal transaction fills is not
+  measured: 22 cells at each of depths 2, 3 and 4, 21 at depths 5 and 6, 20 at
+  depth 7, so 128 cells, the existing ones remeasured beside the new ones. The
+  table's domain is the cap (`MAX_TABLE_INPUTS`, 22; `shekyl-node` asserts the
+  two equal), each depth's row is as long as `N(d)`, and `f_ms` refuses a
+  count past it (`NoLegalShapeAtDepth`). On the floor device's configuration
   (§9, `ICD-R5`) and nowhere else, after its cover-by-shape run ends
   (2026-11-24T17:11Z); never scaled from x86 or from the diagnostic Pi (§80.3's
   correction; the `Provenance` test refuses a scaled cell), never mixing
@@ -770,6 +778,61 @@ the cutover sweeps them.
   23-input transaction at depth 2, refused with CEN-I4 named in a block and
   cited at the parser. At a depth where `N(d) < N`, a transaction of `N(d) + 1`
   inputs is within the cap and over the weight limit, and CEN-H3 names it.
+
+### 8.1 The floor session — measured 2026-11-27
+
+Shekyl-core `4354a1cf1d`, one build, on the floor device in `ICD-R5`'s
+configuration, with the node stopped and no login during the bench. The
+capture is
+[`relay_admission_verify_pi4_rust_20261127T144430Z.txt`](../benchmarks/relay_admission_verify_pi4_rust_20261127T144430Z.txt).
+It holds all 172 cells of `relay_admission_verify` (the 128 table cells, plus
+the depth-1 and shared-layout controls) and the door's two other terms at 1
+and 22 inputs. The core stayed between 49.7 and 58.9 °C. Every cell's 95 %
+interval is within 1.25 % of its estimate.
+
+- **The other two terms do not move with the input count.** One hybrid
+  signature verification reads 1.0121 ms at 1 input and 1.0145 ms at 22; the
+  lone range proof at 2 outputs reads 18.911 and 18.919 ms. Each cell takes
+  the larger reading, `n_in` times for the signature.
+- **The depth-2 column is the spread layout,** the production arrangement for
+  unrelated spends. The shared-layout control reads within 0.3 % of it at
+  every count.
+- **Against the four cells the table pinned before** (2026-11-08 operands,
+  their masks-and-proof terms measured before `PL-D3`): 1 input, depth 2,
+  144.31 → 147.99 ms (+2.5 %); 8 inputs, depth 2, 425.86 → 442.55 ms (+3.9 %);
+  1 input, depth 7, 163.11 → 199.95 ms (+22.6 %); 8 inputs, depth 7, 818.56 →
+  1 133.44 ms (+38.5 %).
+- **`ICD-F21` — depth 7 is a padding step, not a continuation of depth 6.**
+  At depth 7 the Selene side of the proof needs 267 rows for one input and
+  pads to 512, where depth 6 fits 256; eight inputs pad to 4 096 rows where
+  depth 6 fits 2 048 (`Fcmp::ipa_rows`). So the masks-and-proof term reads
+  180.02 ms at one input against depth 6's 144.03, and 1 106.4 against
+  783.93 at eight. The same steps run along the input axis wherever a row
+  count crosses a power of two (depth 2: 911.71 ms at 18 inputs, 1 221.2 at
+  19).
+- **What moved downstream.** The adopted modal hop is 199 ms (from 195) and
+  the Tor hop 1 774 ms (from 1 770); the clearnet embargo draw's mean stays
+  194 s. Both modal hops now sit 2 ms below their next +1 s step
+  (`tests/embargo_steps.rs`). The embargo floor's hop part is 2 587 ms on
+  clearnet and 23 062 ms on Tor, one embargo fire's 1-in-10 wait over the
+  longest transit 1 234 s, and the wallet's failed-send wait 2 411 s.
+- **The tail's embargo more than doubles.** At the decided spec the table
+  prices the 22-input genesis shape's embargo at 428, 434 and 443 s for 25,
+  50 and 100 ms of transit, against 246, 250 and 263 s for the 8-input tail
+  it priced before; the modal embargo stays 190, 194 and 200 s. The spread
+  a single modal embargo leaves uncovered across the legal shapes is now
+  about 240 s, against the ~56 s `DAEMON_RELAY_PRIVACY.md` §80.2 read at a
+  cap of 8 (`tests/spec_decision_matrix.rs`). Shipped timers still use the
+  modal shape, so on a slow stem a large spend's timer fires early more
+  often than the designed 1 in 10, and an early stem node broadcasts it,
+  shortening its stem: the cost falls on large consolidations. The table
+  assumes every hop is the floor device; real stems are mostly faster, so
+  the practical gap is smaller than 240 s. Whether timers follow the shape
+  is a named question of the relay lane's round (`ICD-R4`).
+- **The x86 diagnostic arm** (`F_X86_MS`, §84.2) is re-taken at the same
+  head over the same 22 counts, on an x86-64 laptop with the laptop unused
+  during the run (22.133 ms at one input, 214.06 ms at 22); it derives
+  nothing.
 
 ## 9. Rulings — RULED 2026-11-22 (Rick)
 
@@ -877,6 +940,13 @@ these requirements from here:
 - **The privacy cost, stated,** when a stem transaction is dropped or delayed.
 - **Tor,** which has no daemon-side accept limiter.
 - **The budget in core-time,** read from `f(n_in, depth)`.
+- **Whether the embargo follows the transaction's shape** (added 2026-11-27,
+  Rick). Every embargo timer is priced at the 1-input genesis shape, and at
+  the derived cap the table prices the largest spend's embargo at about
+  twice that (§8.1). A shape-following timer adds no observable: the input
+  count and depth are on the transaction, so a node holding it already
+  knows its shape. Decided in this round because moving verification off
+  the transport runtime changes the hop time the embargo is built from.
 
 ### `ICD-R5` — one named floor device, and every embargo cell measured on it in one session (from `ICD-F12`) — RULED
 
@@ -1129,16 +1199,17 @@ outputs. Not done.
   "≈3 % margin" was one depth's reading. No honest narration line moved. The
   instrument, `calibration::tests::stuffer_calibration_by_depth` (on demand,
   on #1476 at `85803a140c`), reruns unchanged at the cutover for the 22-input
-  figures; the 2 880-run table stays with the cutover.
+  figures. The cap does not by itself call for the 2 880-run table (§7).
 
-## 11. Still open
+## 11. Ruled after the round
 
-### The cover carrier's fragment count
+### The cover carrier's fragment count — RULED 2026-11-27 (Rick)
 
-`MAX_FRAGMENTS` becomes 8 at the derived cap (`ICD-F14`). Whether the carrier
-keeps a fragment train under cover-by-shape is that design's question, and its
-measuring run ends 2026-11-24. This round asks for it to be ruled after that
-run, with the cap's value in hand.
+`MAX_FRAGMENTS` is 8, as derived (`ICD-F14`): ⌈S_max / 20 480⌉ at the
+derived cap, a correctness bound rather than a choice. It is not a condition
+for this cutover. Whether the carrier keeps fragment trains at all is decided
+with cover-by-shape (`COVER_BY_SHAPE.md`), once its measurement is in; if the
+carrier goes, the constant goes with it.
 
 ## 12. Out of scope
 
@@ -1200,3 +1271,9 @@ the relay lane's round (`ICD-R4`).
   `ICD-F16` closes. The 360-million-year figure and the computed reserve's new
   `shekyl-standoff` dependency on the wire crate are confirmed. Open: the
   fragment count only.
+- **2026-11-27 — the floor session, the relay question, the fragment count
+  (Rick).** Every embargo cell measured on the floor device in one session
+  (§8.1, `ICD-F21`). Whether the embargo follows the transaction's shape is a
+  named question of the relay round (`ICD-R4`). The fragment count is 8, as
+  derived, and not a condition for the cutover; whether the carrier keeps
+  fragments is cover-by-shape's (§11). Nothing in this round is open.

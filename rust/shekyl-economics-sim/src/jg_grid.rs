@@ -27,7 +27,7 @@ use std::fmt;
 mod report;
 
 use serde::Serialize;
-use shekyl_tx_weight::{predict_weight, InputCount, OutputCount};
+use shekyl_tx_weight::{predict_weight, InputCount, OutputCount, ProofLayers};
 use shekyl_wire::transaction::COINBASE_RESERVE;
 
 use crate::baseline::Override;
@@ -195,7 +195,7 @@ pub(crate) fn reference_spend_weight(base: &SimParams) -> u64 {
     predict_weight(
         InputCount::clamped(2),
         OutputCount::clamped(2),
-        tree_depth_for_leaves(0),
+        ProofLayers::known(tree_depth_for_leaves(0)),
         fee,
     ) as u64
 }

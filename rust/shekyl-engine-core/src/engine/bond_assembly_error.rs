@@ -31,6 +31,21 @@ pub(crate) enum BondAssemblyError {
         required: u64,
     },
 
+    /// What is left for the outputs after the fee and the bond term cannot give
+    /// each required output one atomic unit (`ICD-F19`). Named here, before any
+    /// proving, instead of reaching the builder as a generic zero-amount
+    /// refusal. The remedy is more funding.
+    #[error(
+        "{amount} atomic units left for the outputs cannot fill the {minimum} nonzero \
+         outputs a transaction requires; fund the persona and retry"
+    )]
+    OutputsUnfillable {
+        /// The amount that had to be split.
+        amount: u64,
+        /// The consensus minimum output count.
+        minimum: usize,
+    },
+
     /// The persona's eligible funding set is **empty** at the sweep's
     /// reference height: nothing discovered, or everything is immature or
     /// reserved by in-flight posts. Structurally distinct from

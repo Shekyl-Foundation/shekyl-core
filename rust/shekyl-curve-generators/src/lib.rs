@@ -19,6 +19,7 @@ use sha3::{Digest, Keccak256};
 use curve25519_dalek::{
     constants::ED25519_BASEPOINT_POINT,
     edwards::{CompressedEdwardsY, EdwardsBasepointTable, EdwardsPoint},
+    scalar::Scalar,
     traits::{BasepointTable, Identity},
 };
 use group::{prime::PrimeGroup, GroupEncoding};
@@ -130,23 +131,158 @@ pub fn pqc_leaf_point_valid(point: &[u8; 32]) -> Option<EdwardsPoint> {
     Some(p)
 }
 
-/// The maximum amount of input tuples provable for within a single FCMP.
-// https://github.com/seraphis-migration/monero
-//  /blob/8bf178a3009ee066001189d05869445bdf4ed28c/src/cryptonote_config.h#L217
-pub const MAX_FCMP_INPUTS: usize = 128;
-/// The maximum amount of layers supported within a FCMP.
+/// The fewest FCMP++ layers a spend proves under: the leaf layer and one
+/// branch above it. An empty tree has one layer and nothing to spend.
+pub const MIN_SPEND_LAYERS: u8 = 2;
+
+/// The deepest curve tree the protocol admits (`ICD-R9`,
+/// `docs/design/CEN_I4_INPUT_CAP_DERIVATION.md`).
 ///
-/// The FCMP itself theoretically supports an unbounded amount of layers, with exponential growth
-/// in set size as additional layers are added. The size of the proof (for each input) still grows
-/// linearly with the amount of layers, requiring a sufficiently-large constant reference string.
-/// This constant is used to generate the constant reference string, and it's that which bounds the
-/// amount of layers supported.
+/// Derived in two steps. The floor is `shekyl_wire::transaction::weight::
+/// TREE_DEPTH_FLOOR`, set on the chain's own write budget. This value is then
+/// the deepest tree that needs no more generators than the floor does: past
+/// the floor the margin is free up to here, and at the ceiling the chain
+/// accepts no new outputs, so a raise is a hard fork. `shekyl-wire` computes
+/// the derivation and asserts it equals this at compile time; the constant
+/// lives here because this crate sits below the wire and sizes its tables by
+/// it.
+pub const MAX_TREE_DEPTH: u8 = 14;
+
+/// The Selene generators the protocol builds: the largest row count any legal
+/// transaction's proof needs, at any legal depth (`ICD-R2`). `shekyl-wire`
+/// computes that need from the weight limit and asserts it equals this at
+/// compile time, so a weight-limit change fails the build until this moves.
 ///
-/// Theoretically, the generators could be dynamically built/extended at runtime to remove this
-/// limit, yet this offers such a large set size it will never be reached.
-// https://github.com/seraphis-migration/monero
-//  /blob/8bf178a3009ee066001189d05869445bdf4ed28c/src/cryptonote_config.h#L222
-pub const MAX_FCMP_LAYERS: usize = 12;
+/// **Not a consensus change when it moves.** A proof over `n` padded rows uses
+/// the first `n` generators (`Generators::reduce`), and each generator's
+/// derivation string and index are frozen, so a longer or shorter table agrees
+/// with this one on every index both hold (`tests::frozen_points`).
+pub const FCMP_SELENE_GENERATORS: usize = 8192;
+
+/// The Helios generators the protocol builds; see [`FCMP_SELENE_GENERATORS`].
+pub const FCMP_HELIOS_GENERATORS: usize = 4096;
+
+/// FCMP++ layer count the size formula accepts: one layer through
+/// [`MAX_TREE_DEPTH`].
+///
+/// One layer is a tree with nothing to spend. The formula still has a length
+/// there, which a fee estimate and a synthetic proof measure. A spend that
+/// can be mined is the narrower [`SpendLayers`].
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct ProofLayers(u8);
+
+impl ProofLayers {
+    /// The one-layer tree. Nothing can be spent under it.
+    pub const ONE: Self = Self(1);
+
+    /// A layer count the formula covers.
+    #[must_use]
+    pub const fn new(layers: u8) -> Option<Self> {
+        if layers >= 1 && layers <= MAX_TREE_DEPTH {
+            Some(Self(layers))
+        } else {
+            None
+        }
+    }
+
+    /// A layer count already known to be in range.
+    ///
+    /// In a const context an out-of-range count fails the build. At runtime
+    /// it is a caller bug: an untrusted depth is [`Self::new`].
+    #[must_use]
+    pub const fn known(layers: u8) -> Self {
+        match Self::new(layers) {
+            Some(layers) => layers,
+            None => panic!("FCMP layer count is outside 1..=MAX_TREE_DEPTH"),
+        }
+    }
+
+    /// The layer count.
+    #[must_use]
+    pub const fn get(self) -> u8 {
+        self.0
+    }
+}
+
+/// FCMP++ layer count consensus can mine a spend at (`ICD-R9`).
+///
+/// Every value is a [`ProofLayers`]. The range starts at [`MIN_SPEND_LAYERS`]
+/// because an empty tree has one layer and nothing to spend.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct SpendLayers(u8);
+
+impl SpendLayers {
+    /// The shallowest tree a spend can prove under.
+    pub const SHALLOWEST: Self = Self(MIN_SPEND_LAYERS);
+
+    /// The deepest tree the protocol admits.
+    pub const DEEPEST: Self = Self(MAX_TREE_DEPTH);
+
+    /// A layer count consensus can mine a spend at.
+    #[must_use]
+    pub const fn new(layers: u8) -> Option<Self> {
+        if layers >= MIN_SPEND_LAYERS && layers <= MAX_TREE_DEPTH {
+            Some(Self(layers))
+        } else {
+            None
+        }
+    }
+
+    /// A layer count already known to be a spend depth. See [`ProofLayers::known`].
+    #[must_use]
+    pub const fn known(layers: u8) -> Self {
+        match Self::new(layers) {
+            Some(layers) => layers,
+            None => panic!("spend layer count is outside MIN_SPEND_LAYERS..=MAX_TREE_DEPTH"),
+        }
+    }
+
+    /// The layer count.
+    #[must_use]
+    pub const fn get(self) -> u8 {
+        self.0
+    }
+
+    /// This spend depth as a proof-formula depth. Infallible: every spend
+    /// depth is inside [`ProofLayers`].
+    #[must_use]
+    pub const fn as_proof(self) -> ProofLayers {
+        ProofLayers(self.0)
+    }
+
+    /// Every spend depth, shallowest first.
+    pub fn each() -> impl Iterator<Item = Self> {
+        (MIN_SPEND_LAYERS..=MAX_TREE_DEPTH).map(Self)
+    }
+}
+
+/// Compressed `k·G` on Ed25519.
+///
+/// Canonical, torsion-free, and the identity only at `k = 0`. The chain
+/// mutation that adds inputs past the cap uses `k` from 2, so each copy has
+/// its own key image and CEN-H11 holds.
+#[must_use]
+pub fn compressed_basepoint_multiple(k: u64) -> [u8; 32] {
+    (ED25519_BASEPOINT_POINT * Scalar::from(k))
+        .compress()
+        .to_bytes()
+}
+
+/// Whether a proof of `inputs` inputs over `layers` fits the generator tables.
+///
+/// The one bound the prover and the verifier both read, so a proof that can
+/// be built can be verified. `inputs` is an untrusted count: the first
+/// comparison bounds it before `ipa_rows` multiplies it, since every input
+/// needs at least one row. `layers` is already a [`ProofLayers`].
+#[must_use]
+pub const fn fcmp_fits_generators(inputs: usize, layers: ProofLayers) -> bool {
+    if inputs == 0 || inputs > FCMP_SELENE_GENERATORS {
+        return false;
+    }
+    let (selene, helios) =
+        full_chain_membership_proofs::Fcmp::<()>::ipa_rows(inputs, layers.get() as usize);
+    selene <= FCMP_SELENE_GENERATORS && helios <= FCMP_HELIOS_GENERATORS
+}
 
 /// The maximum amount of commitments provable for within a single Bulletproof(+).
 pub const MAX_BULLETPROOF_COMMITMENTS: usize = 16;
@@ -226,11 +362,6 @@ pub static SELENE_HASH_INIT: LazyLock<SelenePoint> = LazyLock::new(|| {
     // FROZEN DST
     rejection_sampling_hash_to_curve::<SelenePoint>(b"Monero Selene Hash Initializer")
 });
-
-const FCMP_GENERATORS: (usize, usize) =
-    full_chain_membership_proofs::Fcmp::<()>::ipa_rows(MAX_FCMP_INPUTS, MAX_FCMP_LAYERS);
-const FCMP_SELENE_GENERATORS: usize = FCMP_GENERATORS.0;
-const FCMP_HELIOS_GENERATORS: usize = FCMP_GENERATORS.1;
 
 /// Container struct for FCMP generators.
 pub struct FcmpGenerators<C: ciphersuite::Ciphersuite> {

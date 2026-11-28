@@ -421,7 +421,7 @@ mod tests {
         emission_share_at, relay_fee_floor, FeeCorrection, FEE_QUANTIZATION_MASK,
         RELAY_FLOOR_REFERENCE_TX_WEIGHT,
     };
-    use shekyl_tx_weight::predict_weight;
+    use shekyl_tx_weight::{predict_weight, ProofLayers};
 
     use crate::burden::normal_tx_shape;
     use crate::calibration::tree_depth_for_leaves;
@@ -466,7 +466,12 @@ mod tests {
         );
         let (n_in, n_out) = normal_tx_shape();
         let paid = standard_fee_of(FeeModel::PRODUCTION_DEFAULT, &at);
-        let weight = predict_weight(n_in, n_out, tree_depth_for_leaves(1), paid) as u64;
+        let weight = predict_weight(
+            n_in,
+            n_out,
+            ProofLayers::known(tree_depth_for_leaves(1)),
+            paid,
+        ) as u64;
         let product = weight * 4 * floor;
         assert!(paid >= product, "under-pay: {paid} < {product}");
         assert!(paid - product < FEE_QUANTIZATION_MASK);
@@ -506,7 +511,8 @@ mod tests {
         let depth = tree_depth_for_leaves(at.chain_leaves);
         for milli in [MILLI / 2, MILLI, 2 * MILLI] {
             let paid = standard_fee_of(arm(milli), &at);
-            let weight = u128::from(predict_weight(n_in, n_out, depth, paid) as u64);
+            let weight =
+                u128::from(predict_weight(n_in, n_out, ProofLayers::known(depth), paid) as u64);
             let rate = u128::from(4 * floor) * u128::from(milli) / u128::from(MILLI);
             let product = weight * rate;
             assert!(u128::from(paid) >= product, "under-pay at milli {milli}");

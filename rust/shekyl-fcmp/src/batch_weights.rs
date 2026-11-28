@@ -27,7 +27,6 @@ use rand_chacha::ChaCha20Rng;
 use rand_core::SeedableRng;
 
 use crate::proof::{KeyImage, ShekylFcmpProof};
-use crate::MAX_INPUTS;
 use shekyl_types::{CurveTreeRoot, TxSignableHash};
 
 /// The cSHAKE256 customization for a full FCMP++ verify's batch-weight seed
@@ -96,7 +95,7 @@ impl BatchWeights<'_> {
     }
 
     /// The length-framed preimage. Counts are `u32` little-endian; a count
-    /// past `u32::MAX` cannot occur under [`MAX_INPUTS`].
+    /// past `u32::MAX` cannot occur: the verifier bounds them by the generators' capacity first.
     fn preimage(&self) -> Vec<u8> {
         let le4 = |n: usize| {
             u32::try_from(n)
@@ -108,6 +107,10 @@ impl BatchWeights<'_> {
         const FRAMED_POINT: usize = 32;
         const LIST_HEADER: usize = 4;
         const POINT_LISTS: usize = 3;
+        let key_images = match self.kind {
+            BatchKind::Full { key_images } => key_images.len(),
+            BatchKind::MembershipOnly => 0,
+        };
         let mut preimage = Vec::with_capacity(
             self.proof.data.len()
                 + LIST_HEADER
@@ -116,7 +119,7 @@ impl BatchWeights<'_> {
                 + FRAMED_POINT
                 + FRAMED_POINT
                 + LIST_HEADER * POINT_LISTS
-                + FRAMED_POINT * POINT_LISTS * MAX_INPUTS,
+                + FRAMED_POINT * (key_images + self.pqc_key_points.len() + self.pseudo_outs.len()),
         );
         preimage.extend_from_slice(&le4(self.proof.data.len()));
         preimage.extend_from_slice(&self.proof.data);

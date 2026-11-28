@@ -20,6 +20,7 @@ use shekyl_tx_builder::{
     tx_prefix_hash_from_parts_with_extra, tx_signable_for, AuthSlots, InputTerm, SpendLayout,
     TreeContext,
 };
+use shekyl_tx_weight::MIN_NON_COINBASE_OUTPUTS;
 use shekyl_types::{GlobalOutputIndex, SigningPayloadHash};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::Input;
@@ -34,7 +35,8 @@ use crate::engine::emission_claim::{
 
 use super::actor::StakeEngine;
 use super::helpers::{
-    construct_vouts_to_base, derive_spend_parts, prepare_funding_inputs, ConstructedVouts,
+    construct_vouts_to_base, derive_spend_parts, prepare_funding_inputs,
+    split_across_minimum_outputs, ConstructedVouts,
 };
 use super::types::*;
 
@@ -178,8 +180,11 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
         // refusal, so the change split is plain subtraction.
         let fee = ops.fee.to_raw();
         let change = ops.fee_total.to_raw() - fee;
-        let change_lo = change / 2;
-        let change_hi = change - change_lo;
+        let [change_lo, change_hi] =
+            split_across_minimum_outputs(change).ok_or(BondAssemblyError::OutputsUnfillable {
+                amount: change,
+                minimum: MIN_NON_COINBASE_OUTPUTS,
+            })?;
 
         // ── Step 6: outputs. One LOUD reward vout (plaintext amount on the
         // wire, §5.5) paying the full mint to P's base address, plus two

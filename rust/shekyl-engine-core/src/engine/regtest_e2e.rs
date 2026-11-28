@@ -4870,7 +4870,6 @@ async fn plan_persona_stake(
     wallet: Option<StakerWallet>,
 ) -> PlannedPersonaStake {
     use super::bond_assembly::{BondAssemblyError, SpentRecordsDurablyPruned};
-    use super::bond_orchestrator::p_lane_weight_ceiling_bytes;
     use super::bond_orchestrator::FirstStakeError;
     use super::holdings_fill::{CompleteTreeFillError, MarketFillError};
     use super::pscan::start::pending_post_store_for_engine;
@@ -4906,7 +4905,7 @@ async fn plan_persona_stake(
             .expect("daemon fee estimates");
         estimates
             .economy
-            .calculate_fee_from_weight(p_lane_weight_ceiling_bytes())
+            .calculate_fee_from_weight(shekyl_standoff::P_LANE_WEIGHT_CEILING)
     };
     eprintln!("bond fee from daemon estimate: {bond_fee}");
 

@@ -91,7 +91,9 @@ use shekyl_units::AtomicUnits;
 
 use super::bond_assembly::{finalize_bond_tx, FundingInputContext, PBoundBytes};
 use super::sign_bridge::assemble_transfer_wire;
-use super::stake_engine::{prepare_funding_inputs, PersonaHandle, StakeEngineError};
+use super::stake_engine::{
+    prepare_funding_inputs, split_across_minimum_outputs, PersonaHandle, StakeEngineError,
+};
 use shekyl_tx_builder::outputs::{BuiltSpend, Payee, Recipient};
 
 use crate::engine::error::{ClassifiedFailure, PipelineFailure};
@@ -340,17 +342,14 @@ pub(super) async fn assemble_drain_tx(
             p_change_spec,
         ]
     } else {
-        // Drain-all: split `payment_amount` into two nonzero halves, both to the
-        // principal. Requires `payment_amount >= 2`; a 1-atomic net drain cannot
-        // form two nonzero outputs (refused loudly — T-DS-6 never yields a 1-out).
-        if payment_amount < 2 {
-            return Err(DrainAssemblyError::PaymentUnsplittable {
+        // Drain-all: split `payment_amount` into nonzero shares, all to the
+        // principal. A net drain too small to give each output one atomic unit
+        // is refused loudly (T-DS-6 never yields a 1-out).
+        let [second, first] = split_across_minimum_outputs(payment_amount).ok_or(
+            DrainAssemblyError::PaymentUnsplittable {
                 net: payment_amount,
-            }
-            .into());
-        }
-        let second = payment_amount / 2; // >= 1 for payment_amount >= 2
-        let first = payment_amount - second; // >= 1
+            },
+        )?;
         [
             OutSpec {
                 spend_pk: &dest.spend_pk,

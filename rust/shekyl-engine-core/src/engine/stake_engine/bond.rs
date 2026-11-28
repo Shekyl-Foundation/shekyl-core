@@ -12,6 +12,7 @@ use shekyl_archival_bond_builder::build_join_market_vin;
 use shekyl_archival_retention::id::p_canonical_id_from_hybrid_pubkey;
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, SignatureScheme as _};
 use shekyl_tx_builder::TreeContext;
+use shekyl_tx_weight::MIN_NON_COINBASE_OUTPUTS;
 use shekyl_types::SigningPayloadHash;
 
 use crate::engine::bond_assembly::{BondAssemblyError, FundingInputContext, PBoundBytes};
@@ -20,6 +21,7 @@ use super::actor::StakeEngine;
 use super::bond_post_assemble::{
     assemble_signed_bond_post, require_funding_inputs, BondPostAssembleArgs,
 };
+use super::helpers::split_across_minimum_outputs;
 use super::types::*;
 
 // ---------------------------------------------------------------------------
@@ -126,7 +128,7 @@ impl Message<AssembleBond> for StakeEngine {
 
         // ── Step 8: funding arithmetic (§3.2 balance rule, checked) ──────
         // `funding == change + fee + credit` exactly; change splits across
-        // TWO outputs (daemon prunable-tx floor: `vout.size() < 2` rejects).
+        // the consensus minimum of outputs.
         let floor = built.vin().bond_credit;
         let required = floor
             .checked_add(msg.fee)
@@ -145,8 +147,11 @@ impl Message<AssembleBond> for StakeEngine {
             .into());
         }
         let change = available - required;
-        let change_lo = change / 2;
-        let change_hi = change - change_lo;
+        let amounts =
+            split_across_minimum_outputs(change).ok_or(BondAssemblyError::OutputsUnfillable {
+                amount: change,
+                minimum: MIN_NON_COINBASE_OUTPUTS,
+            })?;
 
         // Credit policy stays here: identity-key slot, credit term on the
         // output side. The prove/sign/encode tail is shared with Release so
@@ -160,7 +165,7 @@ impl Message<AssembleBond> for StakeEngine {
                 funding: msg.funding,
                 tree_ctx: msg.tree_ctx,
                 fee: msg.fee,
-                amounts: [change_lo, change_hi],
+                amounts,
                 extra_input_terms: vec![],
                 extra_output_terms: vec![credit_term],
                 vin: built.vin(),

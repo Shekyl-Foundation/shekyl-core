@@ -25,9 +25,11 @@
 //!                                                          (harm, sorted)
 //! ```
 //!
-//! **Measured inputs:** `f` exhaustively over the consensus domain
-//! `n_in ∈ 1..=8` on x86 (§82), and the spec machine's own 1-input and
-//! 8-input cells at genesis depth (§85.3).
+//! **Measured inputs:** `f` exhaustively over the consensus domain at genesis
+//! depth on x86 (§82, the diagnostic arm), and the spec machine's own cells:
+//! every legal shape, measured on the floor device in one session
+//! (`CEN_I4_INPUT_CAP_DERIVATION.md` `ICD-R5`). The chart reads the 1-input
+//! cell and the consensus maximum at genesis depth.
 //!
 //! **Assumed input, and it is the gap:** `transit`. §71 defines `hop` as
 //! transit + verification + scheduling, and only the middle term is measured.
@@ -57,13 +59,19 @@ use shekyl_relay_privacy::verify_cost::{
 };
 
 /// Measured x86 verification cost at depth 2, `n_out = 2`, over the whole
-/// consensus domain (`FCMP_MAX_INPUTS_PER_TX = 8`; asserted against
-/// [`shekyl_fcmp::MAX_INPUTS`] below).
+/// consensus domain (asserted against
+/// [`shekyl_wire::transaction::MAX_FCMP_INPUTS`] below): the masks-and-proof
+/// term, shared layout, criterion's point estimate per count.
+///
+/// Re-taken with the floor session (`CEN_I4_INPUT_CAP_DERIVATION.md` §8.1) at
+/// the same head, `4354a1cf1d`, on an x86-64 reference laptop (Core
+/// i9-11950H, Windows 11, MSVC toolchain, mains power, unused during the run).
 ///
 /// **Diagnostic, not spec (§84.2).** The x86 arm exists to detect a workload
 /// change. Nothing on the spec path derives from it.
-const F_X86_MS: [f64; 8] = [
-    23.182, 27.513, 38.053, 43.908, 52.316, 67.801, 71.301, 73.481,
+const F_X86_MS: [f64; 22] = [
+    22.133, 26.872, 36.685, 39.501, 59.789, 62.448, 66.969, 69.464, 79.911, 110.99, 111.83, 115.36,
+    120.21, 121.29, 125.23, 130.2, 145.52, 148.99, 206.1, 211.4, 212.63, 214.06,
 ];
 
 // `Provenance` is a production type now — the table this test prices landed
@@ -75,24 +83,27 @@ const F_X86_MS: [f64; 8] = [
 /// the modal and tail genesis cells.
 const F_PI4_1IN_MS: f64 = match SPEC_VERIFY_COST.f_ms(1, GENESIS_TREE_DEPTH) {
     Ok(v) => v,
-    Err(_) => panic!("the modal genesis cell is a pinned §85.3 measurement"),
+    Err(_) => panic!("the modal genesis cell is a floor measurement"),
 };
-const F_PI4_8IN_MS: f64 = match SPEC_VERIFY_COST.f_ms(8, GENESIS_TREE_DEPTH) {
+const F_PI4_TAIL_MS: f64 = match SPEC_VERIFY_COST.f_ms(MAX_TABLE_INPUTS, GENESIS_TREE_DEPTH) {
     Ok(v) => v,
-    Err(_) => panic!("the 8-input genesis cell is a pinned §85.3 measurement"),
+    Err(_) => panic!("the consensus-maximum genesis cell is a floor measurement"),
 };
+
+/// The x86 arm's cell at the consensus maximum.
+const F_X86_TAIL_MS: f64 = F_X86_MS[MAX_TABLE_INPUTS - 1];
 
 /// One candidate minimum spec, priced at the two ends of the legal shape
 /// domain. The chart's questions — what the embargo is, and how far it spreads
 /// across shapes — are both answered by the endpoints, so a row carries the
-/// 1-input and 8-input cells rather than all eight.
+/// 1-input cell and the consensus maximum rather than every count.
 struct SpecRow {
     label: &'static str,
     /// Verification cost at 1 input, depth 2, 2 outputs (ms).
     f_1in_ms: f64,
-    /// Verification cost at 8 inputs — the consensus maximum — same cell
-    /// otherwise (ms).
-    f_8in_ms: f64,
+    /// Verification cost at the consensus maximum (`MAX_TABLE_INPUTS`
+    /// inputs), same cell otherwise (ms).
+    f_tail_ms: f64,
     provenance: Provenance,
 }
 
@@ -104,10 +115,10 @@ const DECIDED_SPEC: &str = "Pi 4";
 /// The bracket rows are `x86 × k` and say so. The **Pi 4 row is not**: it is
 /// the spec machine's own genesis-depth cells, the door's whole sequence
 /// (§72.2, amended 2026-11-08). The scaled stand-ins §80.2/§80.3 priced the
-/// decision with — `23.182 × 5.56 = 128.9` and `73.481 × 5.56 = 408.6` — were
-/// 3.5 % and 2.4 % above §85.3's masks-and-proof term (124.5 and 399.2 ms):
-/// small, and in the over-provisioning direction, which is exactly why the
-/// shortcut survives review.
+/// decision with — `23.182 × 5.56 = 128.9` and `73.481 × 5.56 = 408.6` at the
+/// then-cap of 8 — were 3.5 % and 2.4 % above §85.3's masks-and-proof term
+/// (124.5 and 399.2 ms): small, and in the over-provisioning direction, which
+/// is exactly why the shortcut survives review.
 ///
 /// The x86 arm times the masks-and-proof term alone, so the bracket rows
 /// price that term and the Pi 4 row prices the door's sequence. The bracket
@@ -116,31 +127,31 @@ const SPECS: [SpecRow; 5] = [
     SpecRow {
         label: "x86 reference",
         f_1in_ms: F_X86_MS[0],
-        f_8in_ms: F_X86_MS[7],
+        f_tail_ms: F_X86_TAIL_MS,
         provenance: Provenance::MeasuredX86,
     },
     SpecRow {
         label: "2x slower",
         f_1in_ms: F_X86_MS[0] * 2.0,
-        f_8in_ms: F_X86_MS[7] * 2.0,
+        f_tail_ms: F_X86_TAIL_MS * 2.0,
         provenance: Provenance::ScaledFromX86,
     },
     SpecRow {
         label: DECIDED_SPEC,
         f_1in_ms: F_PI4_1IN_MS,
-        f_8in_ms: F_PI4_8IN_MS,
+        f_tail_ms: F_PI4_TAIL_MS,
         provenance: Provenance::MeasuredPi4,
     },
     SpecRow {
         label: "8x slower",
         f_1in_ms: F_X86_MS[0] * 8.0,
-        f_8in_ms: F_X86_MS[7] * 8.0,
+        f_tail_ms: F_X86_TAIL_MS * 8.0,
         provenance: Provenance::ScaledFromX86,
     },
     SpecRow {
         label: "12x slower",
         f_1in_ms: F_X86_MS[0] * 12.0,
-        f_8in_ms: F_X86_MS[7] * 12.0,
+        f_tail_ms: F_X86_TAIL_MS * 12.0,
         provenance: Provenance::ScaledFromX86,
     },
 ];
@@ -151,28 +162,29 @@ const SPECS: [SpecRow; 5] = [
 const TRANSIT_MS: [f64; 3] = [25.0, 50.0, 100.0];
 
 /// The pinned reading of the chart at the decided spec (§80.2): the embargo at
-/// the modal 1-input shape and at the 8-input tail, at each swept transit —
-/// `(transit_ms, e_1in_secs, e_8in_secs)`.
+/// the modal 1-input shape and at the consensus-maximum tail, at each swept
+/// transit — `(transit_ms, e_1in_secs, e_tail_secs)`.
 ///
 /// These are the numbers the decision was priced with, so they are the ones a
 /// change to `derive_embargo`, to `DandelionParams::inherited()`, or to the
 /// measured `f` must be forced to restate.
 ///
-/// The 1-input→8-input spread they give (58 / 53 / 55 s) is what §80.2 reads
-/// as *"a scalar leaves ~56 s uncovered across the whole legal shape domain"*,
-/// and §80.3's choice of a per-shape table over a scalar rests on that gap
-/// being large; it does not move.
+/// At the then-cap of 8 inputs, the 1-input→8-input spread (58 / 53 / 55 s)
+/// is what §80.2 read as *"a scalar leaves ~56 s uncovered across the whole
+/// legal shape domain"*, and §80.3's choice of a per-shape table over a
+/// scalar rests on that gap being large. At the derived cap of 22 the gap is
+/// about 240 s (238 / 240 / 243 s): a modal-shape embargo leaves the largest
+/// legal spend's 434 s embargo less than half covered at the shipped transit.
 ///
-/// **Re-priced 2026-11-08 (BA-Q9)**: each cell is the pool door's whole
-/// sequence (§72.2), so the modal cell is 144.31 ms and the 8-input cell
-/// 425.86 ms (the lone range proof measured after `Â` was folded into the
-/// batch). The input landed in its own commit and these pins moved in the
-/// next, as `DAEMON_RELAY_PRIVACY.md` §94.10 requires: `derive_embargo` is
-/// high-gain near a step (`derive::next_embargo_step`), so a few
-/// milliseconds of hop can move the embargo by seconds, and the re-derivation
-/// calls it at the actual hop rather than interpolating.
+/// **Re-priced 2026-11-27 (`ICD-R5`)**: every cell is the floor session's,
+/// so the modal cell is 147.99 ms and the 22-input cell 1 332.34 ms (each the
+/// door's whole sequence, §72.2). The input landed with the floor session's
+/// fold and these pins moved with it: `derive_embargo` is high-gain near a
+/// step (`derive::next_embargo_step`), so a few milliseconds of hop can move
+/// the embargo by seconds, and the re-derivation calls it at the actual hop
+/// rather than interpolating (`DAEMON_RELAY_PRIVACY.md` §94.10).
 const DECIDED_SPEC_PRICE_LIST: [(f64, u64, u64); 3] =
-    [(25.0, 190, 246), (50.0, 194, 250), (100.0, 200, 263)];
+    [(25.0, 190, 428), (50.0, 194, 434), (100.0, 200, 443)];
 
 fn embargo_secs(hop_ms: u32) -> u64 {
     let mut p = DandelionParams::inherited();
@@ -203,7 +215,7 @@ fn spec_decision_matrix() {
         println!("\n\n=== transit = {transit_ms:.0} ms (ASSUMED — the unmeasured term) ===");
         println!(
             "\n  {:<18} {:>9} {:>9} {:>9} {:>10} {:>9}  provenance",
-            "spec", "f(1-in)", "f(8-in)", "hop(1)", "embargo", "vs x86"
+            "spec", "f(1-in)", "f(tail)", "hop(1)", "embargo", "vs x86"
         );
 
         let base = embargo_for(F_X86_MS[0], transit_ms);
@@ -215,7 +227,7 @@ fn spec_decision_matrix() {
                 "  {:<18} {:>7.0}ms {:>7.0}ms {:>7}ms {:>8}s {:>+8.0}%  {:?}",
                 row.label,
                 row.f_1in_ms,
-                row.f_8in_ms,
+                row.f_tail_ms,
                 hop,
                 e,
                 100.0 * (e as f64 / base as f64 - 1.0),
@@ -223,17 +235,19 @@ fn spec_decision_matrix() {
             );
         }
 
-        // What the tail costs at each spec: the 8-input cell is the consensus
+        // What the tail costs at each spec: the tail cell is the consensus
         // maximum, so this is the WHOLE range, not an extrapolation.
-        println!("\n  tail spread at each spec (1-in vs 8-in embargo, the §75 sorting):");
+        println!(
+            "\n  tail spread at each spec (1-in vs {MAX_TABLE_INPUTS}-in embargo, the §75 sorting):"
+        );
         for row in &SPECS {
             let e1 = embargo_for(row.f_1in_ms, transit_ms);
-            let e8 = embargo_for(row.f_8in_ms, transit_ms);
+            let et = embargo_for(row.f_tail_ms, transit_ms);
             println!(
-                "    {:<18} {e1:>4}s -> {e8:>4}s   spread {:>4}s ({:>+3.0}%)",
+                "    {:<18} {e1:>4}s -> {et:>4}s   spread {:>4}s ({:>+3.0}%)",
                 row.label,
-                e8 - e1,
-                100.0 * (e8 as f64 / e1 as f64 - 1.0)
+                et - e1,
+                100.0 * (et as f64 / e1 as f64 - 1.0)
             );
         }
     }
@@ -253,12 +267,12 @@ fn spec_decision_matrix() {
     // `derive_embargo`, to the inherited params, or to the measured `f` moves
     // them and owes that reading a re-derivation.
     let row = decided_row();
-    for (transit_ms, want_e1, want_e8) in DECIDED_SPEC_PRICE_LIST {
+    for (transit_ms, want_e1, want_et) in DECIDED_SPEC_PRICE_LIST {
         let got_e1 = embargo_for(row.f_1in_ms, transit_ms);
-        let got_e8 = embargo_for(row.f_8in_ms, transit_ms);
+        let got_et = embargo_for(row.f_tail_ms, transit_ms);
         assert_eq!(
-            (got_e1, got_e8),
-            (want_e1, want_e8),
+            (got_e1, got_et),
+            (want_e1, want_et),
             "the embargo priced at the decided spec ({DECIDED_SPEC}) moved at \
              transit = {transit_ms} ms; §80.2's sorting cost and §80.3's \
              D-over-B choice were read off these values"
@@ -296,124 +310,211 @@ fn scaling_the_spec_row_from_x86_would_underprovision_the_tail() {
     const RATIO: f64 = 5.56;
     assert!(
         (row.f_1in_ms - F_X86_MS[0] * RATIO).abs() > 1.0
-            && (row.f_8in_ms - F_X86_MS[7] * RATIO).abs() > 1.0,
+            && (row.f_tail_ms - F_X86_TAIL_MS * RATIO).abs() > 1.0,
         "measured Pi cells coincide with x86 × {RATIO} to within 1 ms; if that \
          is ever true the assertion above stops discriminating and this test \
          needs a sharper instrument, not a waiver"
     );
 }
 
-/// The table claims to be exhaustive over the legal input domain. This is what
-/// makes that claim falsifiable.
+/// The table covers every legal shape and refuses everything else.
 ///
-/// `F_X86_MS` is `[f64; 8]`, so its length is a compile-time constant — an
-/// assertion against the literal `8` could never fail, and would go on
-/// reporting "the whole range, not an extrapolation" after the cap moved. The
-/// comparison has to be against the cap **as the code enforces it**:
-/// [`shekyl_fcmp::MAX_INPUTS`] is checked by `proof::verify` itself, which is
-/// the call the surface times. Its consensus twin is
-/// `FCMP_MAX_INPUTS_PER_TX` (`cryptonote_config.h`).
+/// Its input domain is the cap the wire enforces, the diagnostic arm covers
+/// the same domain, and each depth's row is exactly as long as the number of
+/// inputs the weight limit admits at that depth (`max_inputs_at`, the one
+/// legal-shape function). A count consensus refuses everywhere is
+/// `InputCountOutsideDomain`; a count a deeper tree cannot carry is
+/// `NoLegalShapeAtDepth`. Neither is filled from a neighbouring cell.
 #[test]
-fn the_measured_surface_covers_the_whole_consensus_domain() {
+fn the_table_covers_every_legal_shape_and_refuses_the_rest() {
+    use shekyl_relay_privacy::verify_cost::{VerifyCostRefusal, MAX_TABLE_DEPTH};
+    use shekyl_tx_weight::{max_inputs_at, NonCoinbaseOutputs, SpendLayers};
+
+    let cap = shekyl_wire::transaction::MAX_FCMP_INPUTS;
     assert_eq!(
-        MAX_TABLE_INPUTS,
-        shekyl_fcmp::MAX_INPUTS,
-        "the production table's input domain must be the consensus domain; if \
-         the cap moves, `MAX_TABLE_INPUTS` moves with it and the new cells are \
-         measured on the spec machine, never extrapolated (§84.2) — otherwise \
-         `f_ms` refuses consensus-legal shapes as `InputCountOutsideDomain`, \
-         which reads as designed behaviour rather than a stale cap"
+        MAX_TABLE_INPUTS, cap,
+        "the table's input domain is the consensus cap"
     );
     assert_eq!(
         F_X86_MS.len(),
-        shekyl_fcmp::MAX_INPUTS,
-        "the measured surface must cover the whole consensus domain; if the \
-         cap moves, re-measure the new cells rather than extrapolating into \
-         them — the tail is where §75's sorting lives"
+        MAX_TABLE_INPUTS,
+        "the diagnostic array covers the production domain"
     );
+    let two_outputs = NonCoinbaseOutputs::new(2).expect("2 outputs are mineable");
+    for depth in GENESIS_TREE_DEPTH..=MAX_TABLE_DEPTH {
+        let layers = SpendLayers::new(u8::try_from(depth).expect("a table depth is small"))
+            .expect("a table depth is a spend depth");
+        let legal = max_inputs_at(two_outputs, layers);
+        for n_in in 1..=legal {
+            assert!(
+                SPEC_VERIFY_COST.f_ms(n_in, depth).is_ok(),
+                "the legal shape ({n_in} inputs, depth {depth}) is not priced"
+            );
+        }
+        for n_in in legal + 1..=cap {
+            assert_eq!(
+                SPEC_VERIFY_COST.f_ms(n_in, depth),
+                Err(VerifyCostRefusal::NoLegalShapeAtDepth { n_in, depth }),
+                "a count the weight limit refuses at depth {depth} is not priced"
+            );
+        }
+        assert_eq!(
+            SPEC_VERIFY_COST.f_ms(cap + 1, depth),
+            Err(VerifyCostRefusal::InputCountOutsideDomain { n_in: cap + 1 }),
+        );
+    }
 }
 
-/// Every cell the production table publishes, restated from its sources: the
-/// spec machine's masks-and-proof term (§85.3), the hybrid signature per input
-/// (the 2026-09-05 floor capture,
-/// `docs/benchmarks/gap7_block_verify_pi4_rust_20260905T181144Z.txt`,
-/// `pqc_per_input`) and the lone range proof at 2 outputs (the 2026-11-08
-/// floor capture,
-/// `docs/benchmarks/gap7_block_verify_pi4_rust_20261108T232442Z.txt`,
-/// `bp_lone`, the verifier that folds `Â` into the batch; §72.2).
+/// The floor session's capture, committed beside the other floor captures.
+/// Every operand in `verify_cost/door.rs` is a point estimate from this file.
+const FLOOR_CAPTURE: &str =
+    include_str!("../../../docs/benchmarks/relay_admission_verify_pi4_rust_20261127T144430Z.txt");
+
+/// Criterion's point estimates in a capture, in milliseconds, keyed by the
+/// benchmark id: the id line, then the first `time:` line after it (the
+/// middle of its three figures). A `change:` line's percentages carry no
+/// unit and are skipped.
+fn point_estimates_ms(capture: &str) -> std::collections::BTreeMap<String, f64> {
+    let mut out = std::collections::BTreeMap::new();
+    let mut id: Option<String> = None;
+    for line in capture.lines() {
+        let mut trimmed = line.trim();
+        if trimmed.starts_with("relay_admission_verify/")
+            || trimmed.starts_with("block_connect_terms/")
+        {
+            id = trimmed.split_whitespace().next().map(str::to_owned);
+            // A short id shares its line with its `time:` figures.
+            match trimmed.find("time:") {
+                Some(at) => trimmed = &trimmed[at..],
+                None => continue,
+            }
+        }
+        let Some(rest) = trimmed.strip_prefix("time:") else {
+            continue;
+        };
+        let figures: Vec<&str> = rest
+            .trim()
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .split_whitespace()
+            .collect();
+        if figures.len() != 6 {
+            continue;
+        }
+        let scale = match figures[3] {
+            "s" => 1_000.0,
+            "ms" => 1.0,
+            "µs" => 0.001,
+            _ => continue,
+        };
+        let Ok(value) = figures[2].parse::<f64>() else {
+            continue;
+        };
+        if let Some(id) = id.take() {
+            out.insert(id, value * scale);
+        }
+    }
+    out
+}
+
+/// Every cell the production table publishes, recomputed from the committed
+/// floor capture: its masks-and-proof term, `n_in` times the hybrid
+/// signature, and the lone range proof, in that order. The signature and the
+/// range proof each take the larger of their two readings (1 and 22 inputs),
+/// as `door.rs` states.
 ///
 /// This is the gate `verify_cost.rs` delegates to when it says its own
-/// structural tests do "NOT check the numbers are *correct* Pi measurements —
-/// that is what pinning them against §85.3 in the price-list gate is for".
+/// structural tests do "NOT check the numbers are *correct* Pi measurements".
 /// Nothing else pins the values: `adopted_hop_ms` adds 50 ms and rounds to
-/// `u32`, so the modal hop holds for anything within half a millisecond of the
-/// cell — an operand mis-transcribed by a tenth of a millisecond would enter
-/// the shipped `DandelionParams` with every test still green.
+/// `u32`, so the modal hop holds for anything within half a millisecond of
+/// the cell — an operand mis-transcribed by a tenth of a millisecond would
+/// enter the shipped `DandelionParams` with every test still green.
 ///
-/// Columns: `(n_in, depth, masks_and_proof_ms, signature_per_input_ms,
-/// range_proof_lone_ms, basis)`. The cell is `masks_and_proof + n_in ×
-/// signature + range_proof`, in that order.
-///
-/// The comparison is set-exhaustive rather than cell-by-cell so the 44 owed
-/// cells cannot land unpinned: a populated cell with no row here fails, and a
-/// row here with no populated cell fails.
-const SPEC_CELLS: [(usize, u32, f64, f64, f64, TreeBasis); 4] = [
-    (1, 2, 124.5, 0.971_86, 18.838, TreeBasis::Genesis),
-    (
-        1,
-        7,
-        143.3,
-        0.971_86,
-        18.838,
-        TreeBasis::SynthesizedProjection,
-    ),
-    (8, 2, 399.2, 0.972_28, 18.882, TreeBasis::Genesis),
-    (
-        8,
-        7,
-        791.9,
-        0.972_28,
-        18.882,
-        TreeBasis::SynthesizedProjection,
-    ),
-];
-
+/// The comparison is set-exhaustive: a published cell with no measurement in
+/// the capture fails, and a measured cell the table does not publish fails.
+/// Depth 2 reads the spread layout (`d2spread`), the production arrangement;
+/// depths 3 to 7 read the synthesized trees (`d{depth}proj`).
 #[test]
-#[allow(clippy::cast_precision_loss)] // n_in <= 8
-fn every_published_cell_is_its_pinned_door_sequence() {
-    let published: Vec<(usize, u32, f64, TreeBasis)> = SPEC_VERIFY_COST
-        .populated()
-        .map(|(n_in, depth, cell)| {
-            assert_eq!(
-                cell.provenance,
-                Provenance::MeasuredPi4,
-                "a published cell ({n_in}-in, depth {depth}) is not a spec-machine \
-                 measurement; rule 176.4 forbids a scaled or reference-machine \
-                 number standing in the spec table"
-            );
-            (n_in, depth, cell.millis, cell.basis)
-        })
-        .collect();
+#[allow(clippy::cast_precision_loss)] // n_in <= 22
+fn every_published_cell_is_its_floor_capture() {
+    let measured = point_estimates_ms(FLOOR_CAPTURE);
+    let term = |name: &str| -> f64 {
+        let readings: Vec<f64> = measured
+            .iter()
+            .filter(|(id, _)| id.starts_with(&format!("block_connect_terms/{name}/")))
+            .map(|(_, ms)| *ms)
+            .collect();
+        assert_eq!(readings.len(), 2, "{name} is read at 1 and 22 inputs");
+        readings.into_iter().fold(f64::MIN, f64::max)
+    };
+    let signature = term("pqc_per_input");
+    let range_proof = term("bp_lone");
 
-    let pinned: Vec<(usize, u32, f64, TreeBasis)> = SPEC_CELLS
-        .iter()
-        .map(
-            |&(n_in, depth, masks_and_proof, signature, range_proof, basis)| {
+    let mut from_capture = std::collections::BTreeMap::new();
+    for depth in 2u32..=7 {
+        let family = if depth == GENESIS_TREE_DEPTH {
+            "d2spread".to_owned()
+        } else {
+            format!("d{depth}proj")
+        };
+        let prefix = format!("relay_admission_verify/{family}_in");
+        for (id, masks_and_proof) in &measured {
+            let Some(n_in) = id
+                .strip_prefix(&prefix)
+                .and_then(|rest| rest.strip_suffix("_out2"))
+                .and_then(|n| n.parse::<usize>().ok())
+            else {
+                continue;
+            };
+            let basis = if depth == GENESIS_TREE_DEPTH {
+                TreeBasis::Genesis
+            } else {
+                TreeBasis::SynthesizedProjection
+            };
+            from_capture.insert(
+                (n_in, depth),
                 (
-                    n_in,
-                    depth,
                     masks_and_proof + n_in as f64 * signature + range_proof,
                     basis,
-                )
-            },
-        )
-        .collect();
+                ),
+            );
+        }
+    }
+
+    let mut published = std::collections::BTreeMap::new();
+    for (n_in, depth, cell) in SPEC_VERIFY_COST.populated() {
+        assert_eq!(
+            cell.provenance,
+            Provenance::MeasuredPi4,
+            "a published cell ({n_in}-in, depth {depth}) is not a spec-machine \
+             measurement; rule 176.4 forbids a scaled or reference-machine \
+             number standing in the spec table"
+        );
+        published.insert((n_in, depth), (cell.millis, cell.basis));
+    }
+
     assert_eq!(
-        published, pinned,
-        "the production verification-cost table no longer matches its sources \
-         (§85.3, the 2026-09-05 and 2026-11-08 floor captures). If an operand moved, it is a \
-         re-measurement: update its source and this pin together. If a cell \
-         appeared, transcribe its measured operands here — an unpinned cell is \
-         a number nobody checked feeding the shipped `hop`."
+        published.keys().collect::<Vec<_>>(),
+        from_capture.keys().collect::<Vec<_>>(),
+        "the table's shapes and the capture's shapes differ"
+    );
+    let mut moved = Vec::new();
+    for (shape, (millis, basis)) in &published {
+        let (want, want_basis) = from_capture[shape];
+        // Relative: a literal such as 1_221.2 and the capture's "1.2212 s"
+        // scaled to milliseconds can differ in the last bit.
+        if (millis - want).abs() > want * 1e-12 || *basis != want_basis {
+            moved.push(format!(
+                "{shape:?}: the table has {millis} ms ({basis:?}), the capture gives {want} ms \
+                 ({want_basis:?})"
+            ));
+        }
+    }
+    assert!(
+        moved.is_empty(),
+        "the production verification-cost table no longer matches its floor capture. \
+         If an operand moved, it is a re-measurement: commit the new capture and \
+         update door.rs together.\n{}",
+        moved.join("\n")
     );
 }

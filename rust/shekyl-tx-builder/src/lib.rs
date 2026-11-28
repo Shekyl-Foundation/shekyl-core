@@ -117,31 +117,19 @@ pub use wire::{
     tx_prefix_hash_from_parts_with_extra, WireEncodeInput,
 };
 
-/// Maximum number of inputs per transaction (consensus limit, matches `shekyl-fcmp::MAX_INPUTS`).
-pub const MAX_INPUTS: usize = shekyl_fcmp::MAX_INPUTS;
-
-// The prover's cap (`shekyl_fcmp::MAX_INPUTS`, what `sign_transaction`
-// refuses past) and the validator's (`shekyl_wire::transaction::
-// MAX_FCMP_INPUTS`, what CEN-I4 refuses past) are two declarations of one
-// inherited figure, in two crates with no dependency edge between their
-// production halves (`shekyl-wire` dev-depends on `shekyl-fcmp` only). This
-// crate depends on both, so the equality is pinned here so the two cannot
-// part company silently when the CEN-I4 derivation round moves one (E6
-// slice 6 §5.4; #853 review).
-//
-// What the equality does NOT say: that every provable shape is admissible.
-// The two operands differ. The prover counts FCMP++ **spend** inputs; CEN-I4
-// counts the **whole `vin`**, and every retention-family transaction carries
-// one vin that is not a spend (the bond post's bond vin, the exit's `Release`
-// vin, the claim's emission vin). A provable `MAX_INPUTS`-spend bond post is
-// a `MAX_INPUTS + 1`-vin transaction the chain refuses. That headroom is the
-// archival builder's to reserve — `bond_assembly::MAX_RETENTION_FUNDING_INPUTS
-// = MAX_INPUTS - 1` — and a transfer-shaped spend, with no extra vin, is the
-// only shape for which "provable" and "admissible" coincide at this bound.
-const _: () = assert!(
-    MAX_INPUTS == shekyl_wire::transaction::MAX_FCMP_INPUTS,
-    "shekyl_fcmp::MAX_INPUTS (the prover's spend cap) must equal shekyl_wire::transaction::MAX_FCMP_INPUTS (CEN-I4's whole-vin cap); archival shapes reserve one vin of headroom on top",
-);
+/// Maximum number of inputs per transaction: the consensus cap, computed in
+/// `shekyl-wire` from the weight limit (CEN-I4, `ICD-R1`).
+///
+/// It counts the **whole `vin`**, and every retention-family transaction
+/// carries one vin that is not a spend (the bond post's bond vin, the exit's
+/// `Release` vin, the claim's emission vin). A `MAX_INPUTS`-spend bond post
+/// is a `MAX_INPUTS + 1`-vin transaction the chain refuses. That headroom is
+/// the archival builder's to reserve (`bond_assembly::
+/// MAX_RETENTION_FUNDING_INPUTS = MAX_INPUTS - 1`), and a transfer-shaped
+/// spend, with no extra vin, is the only shape for which this bound and
+/// admissibility coincide. The limit at a given tree depth can be lower:
+/// [`shekyl_wire::transaction::weight::max_inputs_at`].
+pub const MAX_INPUTS: usize = shekyl_wire::transaction::MAX_FCMP_INPUTS;
 
 /// Maximum curve-tree depth a membership proof spans (consensus limit,
 /// re-exported from `shekyl-fcmp` so engine-side consumers that depend on

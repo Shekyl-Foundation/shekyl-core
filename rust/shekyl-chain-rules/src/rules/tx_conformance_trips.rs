@@ -8,12 +8,12 @@
 //! live in `tx_conformance_tests`.
 
 use crate::harness::fixture::{
-    bp_plus_layout_for, coinbase, coinbase_extra, listed, persona, point, pqc_auth_filler,
-    pqc_extra, G, TWO_G,
+    bp_plus_layout_for, coinbase, coinbase_extra, listed, persona, point, point_at,
+    pqc_auth_filler, pqc_extra, G, TWO_G,
 };
 use shekyl_types::KeyImage;
 use shekyl_wire::transaction::{
-    MAX_TX_EXTRA, MAX_TX_SIZE, PQC_HYBRID_SINGLE_KEY_LEN, PQC_MAX_PUBLIC_KEY_BLOB,
+    MAX_FCMP_INPUTS, MAX_TX_EXTRA, MAX_TX_SIZE, PQC_HYBRID_SINGLE_KEY_LEN, PQC_MAX_PUBLIC_KEY_BLOB,
     UNLOCK_TIME_BLOCK_SENTINEL,
 };
 use shekyl_wire::tx_extra::{self, conforming_pqc_leaf_blob, TxExtraField, HYBRID_KEM_CT_BYTES};
@@ -107,7 +107,12 @@ pub(super) fn emission_input() -> Input {
 }
 
 pub(super) fn spend_input(k: usize) -> Input {
-    Input::fcmp_spend(KeyImage::from_bytes(point(k)))
+    // `point_at`, not the pinned `point`: the I4 trip spends one past the
+    // cap, more than the sixteen pinned points, and the two agree on those
+    // sixteen (`fixture_points_are_what_they_claim`).
+    Input::fcmp_spend(KeyImage::from_bytes(point_at(
+        u64::try_from(k).expect("a fixture's input index fits u64"),
+    )))
 }
 
 /// `spend2()` with `input` appended and an auth for it.
@@ -291,9 +296,9 @@ pub(super) fn h16_the_sentinel() -> Transaction {
     tx
 }
 
-pub(super) fn i4_nine_inputs() -> Transaction {
+pub(super) fn i4_one_past_the_cap() -> Transaction {
     let mut tx = spend2();
-    tx.prefix.inputs = (1..=9).map(spend_input).collect();
+    tx.prefix.inputs = (1..=MAX_FCMP_INPUTS + 1).map(spend_input).collect();
     tx
 }
 

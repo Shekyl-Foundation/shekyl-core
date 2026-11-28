@@ -512,6 +512,7 @@ impl crate::engine::output_selector::OutputSelector for OutOfSetSelector {
         &self,
         _candidates: &[crate::engine::output_selector::OutputCandidate],
         target: AtomicUnits,
+        _max_inputs: usize,
     ) -> Result<crate::engine::output_selector::SelectedOutputs, Self::Error> {
         Ok(crate::engine::output_selector::SelectedOutputs {
             indices: crate::engine::output_selector::SelectedInputs::within_cap(vec![usize::MAX])
@@ -607,7 +608,8 @@ async fn a_send_past_the_input_cap_is_refused_with_the_cap_named() {
     assert!(
         matches!(
             err,
-            SendError::Sign(SignFault::TooManyInputs { count }) if count == MAX_INPUTS + 1
+            SendError::Sign(SignFault::TooManyInputs { count, limit })
+                if count == MAX_INPUTS + 1 && limit == MAX_INPUTS
         ),
         "the send needs one input past the cap: {err:?}"
     );
@@ -1566,7 +1568,7 @@ async fn build_then_submit_places_awaiting_confirmation_lock() {
         crate::engine::tx_fee_model::predict_weight(
             InputCount::clamped(tx.prefix.inputs.len()),
             OutputCount::clamped(tx.prefix.outputs.len()),
-            depth,
+            shekyl_tx_weight::ProofLayers::known(depth),
             fee,
         ),
         tx.weight(),
@@ -3996,7 +3998,12 @@ async fn build_then_submit_via_test_daemon_uses_daemon_fee() {
     // Real tree depth for the 2-leaf consistent fixture is 2.
     let seed = fee_from_weight(
         &rate,
-        predict_weight(InputCount::clamped(n_in), OutputCount::clamped(n_out), 2, 0),
+        predict_weight(
+            InputCount::clamped(n_in),
+            OutputCount::clamped(n_out),
+            shekyl_tx_weight::ProofLayers::known(2),
+            0,
+        ),
     );
     let expected_fee = converge_fee(
         &rate,
@@ -4032,8 +4039,8 @@ async fn build_then_submit_via_test_daemon_uses_daemon_fee() {
         predict_weight(
             InputCount::clamped(n_in),
             OutputCount::clamped(n_out),
-            depth,
-            fee
+            shekyl_tx_weight::ProofLayers::known(depth),
+            fee,
         ),
         tx.weight(),
         "predict_weight must equal the built tx's canonical weight"
@@ -4307,7 +4314,12 @@ async fn a_solo_wallet_pays_a_three_of_five_group() {
         "the group-aware weight is the built transaction's"
     );
     assert!(
-        predict_weight(n_in, n_out, depth, fee) < tx.weight(),
+        predict_weight(
+            n_in,
+            n_out,
+            shekyl_tx_weight::ProofLayers::known(depth),
+            fee
+        ) < tx.weight(),
         "a solo shape underweighs a payment to a group"
     );
     let snapshot =

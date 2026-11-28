@@ -21,6 +21,7 @@
 //! The type names of the stripped-away fields are deliberately absent from
 //! this file; the import-check arm (`tests`) greps for their reappearance.
 
+use super::stake_engine::split_across_minimum_outputs;
 use shekyl_types::{BlockHeight, GlobalOutputIndex};
 use shekyl_units::AtomicUnits;
 
@@ -89,9 +90,8 @@ impl std::fmt::Debug for DrainSelection {
 pub(crate) enum DrainSelectError {
     /// The provable (mature) candidate set cannot cover the drain amount.
     Insufficient,
-    /// The amount is coverable, but not within the
-    /// [`shekyl_tx_builder::MAX_INPUTS`] inputs one FCMP++ transaction can
-    /// spend. [`cover_largest_first`] is largest-first, so a cover longer
+    /// The amount is coverable, but not within the inputs one FCMP++
+    /// transaction can spend at the reference tree's depth. [`cover_largest_first`] is largest-first, so a cover longer
     /// than the cap means no legal selection sums to the amount. A pool that
     /// cannot cover the amount at any length is [`Self::Insufficient`],
     /// including when that pool is itself longer than the cap. Refused here
@@ -133,18 +133,20 @@ fn ranked_mature(
 /// Selection reads only `{amount, spendable_height, output_id}` off each
 /// candidate. Ranking is [`ranked_mature`]; the cover is
 /// [`cover_largest_first`], the same shortest-cover function the wallet's
-/// send selector uses, bounded by [`shekyl_tx_builder::MAX_INPUTS`].
+/// send selector uses, bounded by `max_inputs`, the limit at the reference
+/// tree's depth.
 pub(crate) fn select_for_drain(
     candidates: &[DrainCandidate],
     amount: DrainAmount,
     reference_height: BlockHeight,
+    max_inputs: usize,
 ) -> Result<DrainSelection, DrainSelectError> {
     let mature = ranked_mature(candidates, reference_height);
     let cover = cover_largest_first(
         mature,
         |candidate| candidate.amount,
         amount.get(),
-        shekyl_tx_builder::MAX_INPUTS,
+        max_inputs,
     )
     .map_err(|fault| match fault {
         LargestFirstFault::Short { .. } => DrainSelectError::Insufficient,
@@ -220,7 +222,7 @@ pub(crate) enum SweepSelectError {
 }
 
 /// Select one terminal-sweep pass: **all** mature candidates, largest-first
-/// (ties by output id ascending), capped at [`shekyl_tx_builder::MAX_INPUTS`];
+/// (ties by output id ascending), capped at `max_inputs`;
 /// the payment is what they fund after the fee.
 ///
 /// This is the one selection arm whose payment is an **output of selection**
@@ -261,6 +263,7 @@ pub(crate) fn select_for_sweep(
     candidates: &[DrainCandidate],
     fee: AtomicUnits,
     reference_height: BlockHeight,
+    max_inputs: usize,
 ) -> Result<SweepSelection, SweepSelectError> {
     let mature = ranked_mature(candidates, reference_height);
     if mature.is_empty() {
@@ -270,7 +273,7 @@ pub(crate) fn select_for_sweep(
     let mut chosen = Vec::new();
     let mut input_total = AtomicUnits::ZERO;
     for candidate in mature {
-        if chosen.len() == shekyl_tx_builder::MAX_INPUTS {
+        if chosen.len() == max_inputs {
             break;
         }
         chosen.push(candidate.output_id);
@@ -279,14 +282,14 @@ pub(crate) fn select_for_sweep(
             .ok_or(SweepSelectError::Overflow)?;
     }
 
-    // Net below 2 is dust, not merely net zero: the zero-change assembly
-    // must split the payment into two nonzero principal outputs (T-DS-6),
-    // so 1 atomic unit is as unpayable as 0 — refuse it here as the named
+    // A net that cannot give every required output one atomic unit is dust,
+    // not merely net zero: the zero-change assembly splits the payment into
+    // nonzero principal outputs (T-DS-6) — refuse it here as the named
     // dust condition rather than let the assembly's PaymentUnsplittable
     // surface a user-reachable state as an internal fault.
     let payment = input_total
         .checked_sub(fee)
-        .filter(|p| p.to_raw() >= 2)
+        .filter(|p| split_across_minimum_outputs(p.to_raw()).is_some())
         .ok_or(SweepSelectError::DustPool)?;
 
     Ok(SweepSelection {
@@ -377,7 +380,13 @@ mod tests {
             candidate(2, 100, 10),
             candidate(3, 7, 10),
         ];
-        let sel = select_for_drain(&candidates, amount(90, 112), REFERENCE).expect("covers");
+        let sel = select_for_drain(
+            &candidates,
+            amount(90, 112),
+            REFERENCE,
+            shekyl_tx_builder::MAX_INPUTS,
+        )
+        .expect("covers");
         assert_eq!(sel.chosen, vec![GlobalOutputIndex::from_raw(2)]);
         assert_eq!(sel.input_total, AtomicUnits::from_raw(100));
     }
@@ -389,7 +398,13 @@ mod tests {
             candidate(2, 40, 10),
             candidate(3, 40, 10),
         ];
-        let sel = select_for_drain(&candidates, amount(70, 120), REFERENCE).expect("covers");
+        let sel = select_for_drain(
+            &candidates,
+            amount(70, 120),
+            REFERENCE,
+            shekyl_tx_builder::MAX_INPUTS,
+        )
+        .expect("covers");
         // Two 40s cover 70; the third is not consumed.
         assert_eq!(sel.chosen.len(), 2);
         assert_eq!(sel.input_total, AtomicUnits::from_raw(80));
@@ -399,8 +414,13 @@ mod tests {
     fn immature_outputs_are_not_selected() {
         // Only the immature output could cover; selection must refuse.
         let candidates = [candidate(1, 10, 10), candidate(2, 1000, 999)];
-        let err = select_for_drain(&candidates, amount(500, 1010), REFERENCE)
-            .expect_err("immature excluded");
+        let err = select_for_drain(
+            &candidates,
+            amount(500, 1010),
+            REFERENCE,
+            shekyl_tx_builder::MAX_INPUTS,
+        )
+        .expect_err("immature excluded");
         assert_eq!(err, DrainSelectError::Insufficient);
     }
 
@@ -414,14 +434,25 @@ mod tests {
             candidate(2, 50, 10),
             candidate(5, 50, 10),
         ];
-        let sel = select_for_drain(&candidates, amount(40, 150), REFERENCE).expect("covers");
+        let sel = select_for_drain(
+            &candidates,
+            amount(40, 150),
+            REFERENCE,
+            shekyl_tx_builder::MAX_INPUTS,
+        )
+        .expect("covers");
         assert_eq!(sel.chosen, vec![GlobalOutputIndex::from_raw(2)]);
     }
 
     #[test]
     fn insufficient_mature_total_refuses() {
         let candidates = [candidate(1, 10, 10), candidate(2, 20, 10)];
-        let err = select_for_drain(&candidates, amount(31, 31), REFERENCE);
+        let err = select_for_drain(
+            &candidates,
+            amount(31, 31),
+            REFERENCE,
+            shekyl_tx_builder::MAX_INPUTS,
+        );
         // 31 > affordable 31? affordable is 31, target 31 ok at amount stage,
         // but mature total is 30 < 31 → select refuses.
         assert_eq!(err, Err(DrainSelectError::Insufficient));
@@ -435,15 +466,17 @@ mod tests {
     /// still selects: the cap refuses one past itself, not its own count.
     #[test]
     fn selection_caps_at_max_inputs_with_an_exact_refusal() {
-        // Nine mature candidates of 10 each: the eight largest sum to 80.
+        // The selector stops at the limit it is handed. Nine mature candidates
+        // of 10 each under a limit of eight: the eight largest sum to 80.
+        const CAP: usize = 8;
         let candidates: Vec<_> = (1..=9).map(|i| candidate(i, 10, 10)).collect();
 
-        let over = select_for_drain(&candidates, amount(90, 90), REFERENCE);
+        let over = select_for_drain(&candidates, amount(90, 90), REFERENCE, CAP);
         assert_eq!(over, Err(DrainSelectError::InputCapExceeded));
 
-        let at_cap = select_for_drain(&candidates, amount(80, 90), REFERENCE)
+        let at_cap = select_for_drain(&candidates, amount(80, 90), REFERENCE, CAP)
             .expect("eight inputs cover 80");
-        assert_eq!(at_cap.chosen.len(), shekyl_tx_builder::MAX_INPUTS);
+        assert_eq!(at_cap.chosen.len(), CAP);
         assert_eq!(at_cap.input_total, AtomicUnits::from_raw(80));
     }
 
@@ -460,8 +493,13 @@ mod tests {
             candidate(2, 200, 10),
             candidate(3, 400, 99),
         ];
-        let sel = select_for_sweep(&candidates, AtomicUnits::from_raw(50), REFERENCE)
-            .expect("two mature candidates fund a 50 fee");
+        let sel = select_for_sweep(
+            &candidates,
+            AtomicUnits::from_raw(50),
+            REFERENCE,
+            shekyl_tx_builder::MAX_INPUTS,
+        )
+        .expect("two mature candidates fund a 50 fee");
         assert_eq!(
             sel.chosen,
             vec![
@@ -489,11 +527,13 @@ mod tests {
     /// sequencing (the one-live-drain gate's).
     #[test]
     fn sweep_caps_at_max_inputs_and_takes_a_full_pass() {
-        // Nine mature candidates of 10 each: one pass spends the cap (80).
+        // Nine mature candidates of 10 each under a limit of eight: one pass
+        // spends the limit (80).
+        const CAP: usize = 8;
         let candidates: Vec<_> = (1..=9).map(|i| candidate(i, 10, 10)).collect();
-        let sel = select_for_sweep(&candidates, AtomicUnits::from_raw(5), REFERENCE)
+        let sel = select_for_sweep(&candidates, AtomicUnits::from_raw(5), REFERENCE, CAP)
             .expect("a full pass fits the cap");
-        assert_eq!(sel.chosen.len(), shekyl_tx_builder::MAX_INPUTS);
+        assert_eq!(sel.chosen.len(), CAP);
         assert_eq!(sel.input_total, AtomicUnits::from_raw(80));
         assert_eq!(sel.payment, AtomicUnits::from_raw(75));
     }
@@ -510,6 +550,7 @@ mod tests {
             &[candidate(1, 100, 99)],
             AtomicUnits::from_raw(5),
             REFERENCE,
+            shekyl_tx_builder::MAX_INPUTS,
         );
         assert_eq!(
             none,
@@ -521,6 +562,7 @@ mod tests {
             &[candidate(1, 50, 10)],
             AtomicUnits::from_raw(50),
             REFERENCE,
+            shekyl_tx_builder::MAX_INPUTS,
         );
         assert_eq!(dust, Err(SweepSelectError::DustPool));
 
@@ -528,6 +570,7 @@ mod tests {
             &[candidate(1, 51, 10)],
             AtomicUnits::from_raw(50),
             REFERENCE,
+            shekyl_tx_builder::MAX_INPUTS,
         );
         assert_eq!(
             one_over,
@@ -539,6 +582,7 @@ mod tests {
             &[candidate(1, 52, 10)],
             AtomicUnits::from_raw(50),
             REFERENCE,
+            shekyl_tx_builder::MAX_INPUTS,
         )
         .expect("net 2 is the smallest splittable sweep");
         assert_eq!(two_over.payment, AtomicUnits::from_raw(2));
