@@ -818,7 +818,7 @@ async fn apply_scan_result_adopts_a_cached_slot_and_advances_the_tip() {
 /// is `fee_policy::tests`).
 #[test]
 fn bond_fee_refuses_what_the_send_path_refuses() {
-    use super::{bond_fee_from_estimates, FirstStakeError};
+    use super::{bond_fee_estimates, FirstStakeError};
     use crate::engine::fee_policy::{CeilingViolation, ValidatedFeeEstimates};
     use crate::engine::traits::FeeEstimates;
     use shekyl_rpc_client::FeeRate;
@@ -829,17 +829,12 @@ fn bond_fee_refuses_what_the_send_path_refuses() {
         high: FeeRate::new(p).expect("high"),
     };
 
-    // Honest served-ladder KAT row: accepted, and the fee is the shared
-    // formula over the bond ceiling — not a number this path invents.
+    // Honest served-ladder KAT row: accepted, and handed on unchanged for
+    // the sweep to price the post's own weight from.
     let honest = snapshot(333, 1_332, 66_666);
-    let fee = bond_fee_from_estimates(honest).expect("an honest snapshot funds a bond");
     assert_eq!(
-        fee.to_raw(),
-        shekyl_rpc_client::tx_fee::fee_from_weight(
-            &FeeRate::new(333).expect("rate"),
-            shekyl_wire::transaction::TX_WEIGHT_LIMIT
-        ),
-        "the interim bond fee is economy over the weight limit, via the shared formula"
+        bond_fee_estimates(honest).expect("an honest snapshot funds a bond"),
+        honest
     );
 
     // Economy itself over the absolute cap: refused as a REFUSAL, not
@@ -849,7 +844,7 @@ fn bond_fee_refuses_what_the_send_path_refuses() {
     // must gouge relative to the real bound, not a era-local one).
     let cap = crate::engine::fee_policy::absolute_fee_rate_cap();
     let gouging = snapshot(cap + 1, cap + 1, cap + 1);
-    match bond_fee_from_estimates(gouging) {
+    match bond_fee_estimates(gouging) {
         Err(FirstStakeError::FeeUnreasonable(CeilingViolation::AboveAbsoluteCap { rate })) => {
             assert_eq!(rate, cap + 1);
         }
@@ -858,7 +853,7 @@ fn bond_fee_refuses_what_the_send_path_refuses() {
 
     // An inverted band is refused here for the same reason it is on the
     // send path, even though only `economy` is read.
-    match bond_fee_from_estimates(snapshot(50, 20, 100)) {
+    match bond_fee_estimates(snapshot(50, 20, 100)) {
         Err(FirstStakeError::FeeUnreasonable(CeilingViolation::NonMonotonic { .. })) => {}
         other => panic!("bond must not be more permissive than send: {other:?}"),
     }
@@ -876,7 +871,7 @@ fn bond_fee_refuses_what_the_send_path_refuses() {
         let raw = snapshot(e, s, p);
         assert_eq!(
             ValidatedFeeEstimates::try_new(raw).is_ok(),
-            bond_fee_from_estimates(raw).is_ok(),
+            bond_fee_estimates(raw).is_ok(),
             "send and bond disagree on ({e}, {s}, {p})"
         );
     }
@@ -904,4 +899,43 @@ fn the_reserve_pays_the_quoted_release_fee_at_the_headroom_rate() {
     )
     .expect("the headroom rate is a valid estimate");
     assert_eq!(quoted.to_raw(), EXIT_FEE_RESERVE_ATOMIC);
+}
+
+/// The JoinMarket input the bond post's fee prices before any key is at hand
+/// is the length of the one a persona's real keys build: over a shard set
+/// whose ids span one- to four-byte varints, and over the complete tree.
+/// Bites against the placeholder vin drifting from `build_join_market_vin`
+/// (a key, the receipt key or the endpoint changing length, or a field
+/// added).
+#[test]
+fn the_priced_join_market_input_is_the_built_ones_length() {
+    use super::join_market_input_len;
+    use crate::engine::bond_assembly::wire_bond_post_input;
+    use crate::engine::stake_engine::test_fixtures::derive_bundle;
+    use shekyl_archival_bond_builder::build_join_market_vin;
+
+    let keys = derive_bundle(3);
+    for holdings in [
+        HoldingsDescriptor {
+            kind: HoldingsKind::ShardSetCompact,
+            shard_ids: ShardSet::new(vec![0, 127, 128, 70_000]).expect("a shard set"),
+        },
+        HoldingsDescriptor {
+            kind: HoldingsKind::CompleteTree,
+            shard_ids: ShardSet::empty(),
+        },
+    ] {
+        let built = build_join_market_vin(
+            keys.bond_post_keys(),
+            holdings.clone(),
+            keys.onion_keypair().public_key(),
+        )
+        .expect("a bond over these holdings builds");
+        let input = wire_bond_post_input(built.vin()).expect("a JoinMarket maps to the wire");
+        assert_eq!(
+            join_market_input_len(&holdings).expect("these holdings price a bond"),
+            input.serialized_len().expect("a written input"),
+            "{holdings:?}"
+        );
+    }
 }

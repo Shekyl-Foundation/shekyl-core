@@ -466,7 +466,7 @@ mod tests {
         assert!(
             code.contains("ValidatedFeeEstimates::try_new(fee_estimates)")
                 && !code.contains("fee_from_weight")
-                && !code.contains("p_lane_ceiling_fee"),
+                && !code.contains("p_lane_floor_fee("),
             "the façade validates the fee snapshot and prices nothing itself: the drain \
              pays the shared P-lane floor fee on its own weight (`p_lane_spend_fee` in \
              the pipeline), never a fee of the façade's own"

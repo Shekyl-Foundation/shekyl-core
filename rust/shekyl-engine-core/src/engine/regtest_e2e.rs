@@ -4887,26 +4887,22 @@ async fn plan_persona_stake(
         None => staker_wallet(daemon.wallet_rpc(), seed, slot).await,
     };
 
-    // The bond fee is caller-chosen at this seam (the RPC stake entry's
-    // contract), but a hardcoded constant is wrong on regtest: the daemon's
-    // per-byte floor tracks the block reward, which is enormous on a young
-    // chain (~69 000/byte at these heights ⇒ ~1.55e9 for a 22.5 KB post).
-    // Derive the fee from the daemon's live estimate over the size ceiling;
-    // the reward only decays as the test mines, so an early estimate stays
-    // sufficient, and overpaying is harmless (the fee is a miner transfer,
-    // not a conservation term).
-    let bond_fee = {
-        let estimates = arc
-            .read()
-            .await
-            .daemon()
-            .get_fee_estimates()
-            .await
-            .expect("daemon fee estimates");
-        estimates
-            .economy
-            .calculate_fee_from_weight(shekyl_wire::transaction::TX_WEIGHT_LIMIT)
-    };
+    // The persona is funded for its bond post's fee at the weight limit:
+    // an upper bound on any post's own weight, so the funding covers the fee
+    // the plan prices on the post's own weight however many inputs it
+    // sweeps. The daemon's per-byte floor tracks the block reward, which is
+    // enormous on a young chain, and the reward only decays as the test
+    // mines, so an early estimate stays sufficient.
+    let fee_estimates = arc
+        .read()
+        .await
+        .daemon()
+        .get_fee_estimates()
+        .await
+        .expect("daemon fee estimates");
+    let bond_fee = fee_estimates
+        .economy
+        .calculate_fee_from_weight(shekyl_wire::transaction::TX_WEIGHT_LIMIT);
     eprintln!("bond fee from daemon estimate: {bond_fee}");
 
     // Fund the principal past the persona's needs (2×: the transfer's own fee
@@ -5037,7 +5033,6 @@ async fn plan_persona_stake(
         // handle alone; `persist_bond_record` is idempotent, so each retry
         // re-mints a fresh ticket.
         FixtureStake::MarketBond(holdings) => {
-            let fee = AtomicUnits::from_raw(bond_fee);
             let mut sealed = false;
             for _ in 0..MAX_MINE_BATCHES {
                 // Fill first (WSS-Q4): the persona body store holds every
@@ -5079,7 +5074,7 @@ async fn plan_persona_stake(
                     handle,
                     ticket,
                     market,
-                    fee,
+                    fee_estimates,
                     &SpentRecordsDurablyPruned::for_test(),
                 )
                 .await
@@ -5232,6 +5227,33 @@ async fn stake_persona_and_submit_bond(
             covered.expect("first_stake's confirmed seal covers the pending records"),
         )
     };
+    // The post pays the floor rate on its own weight (the P-lane fee
+    // ruling, 2026-11-23). Nothing has been mined since it was signed, so the
+    // daemon's rate now is the rate it was priced at.
+    {
+        use super::traits::DaemonEngine;
+        use shekyl_wire::{Ct, Transaction};
+        let mut cursor: &[u8] = &post.tx_bytes;
+        let post_tx = Transaction::read(&mut cursor).expect("the signed post parses");
+        assert!(
+            cursor.is_empty(),
+            "the signed post's bytes are consumed whole"
+        );
+        let Ct::Fcmp { fee: post_fee, .. } = post_tx.ct else {
+            panic!("the bond post is an FCMP++ spend")
+        };
+        let economy = { arc.read().await.daemon().clone() }
+            .get_fee_estimates()
+            .await
+            .expect("daemon fee estimates")
+            .economy;
+        assert_eq!(
+            post_fee,
+            shekyl_economics::quantized_fee(post_tx.weight() as u64, economy.per_weight())
+                .expect("the post's fee fits"),
+            "the bond post pays the economy rate on its own weight"
+        );
+    }
     let bound = PBoundBytes::from_pending(&post, covered);
     let persona_id = *bound.persona();
     let swept_gindexes: Vec<u64> = post.funding_gindexes.iter().map(|g| g.to_raw()).collect();

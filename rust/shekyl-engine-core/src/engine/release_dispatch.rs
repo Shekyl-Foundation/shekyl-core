@@ -899,7 +899,7 @@ mod tests {
 
         let fee_quote = "p_lane_fee_from_build(";
         assert!(
-            code.contains(fee_quote) && !code.contains("p_lane_ceiling_fee"),
+            code.contains(fee_quote) && !code.contains("p_lane_floor_fee("),
             "the fee must be the shared P-lane floor fee on the exit's own weight"
         );
 

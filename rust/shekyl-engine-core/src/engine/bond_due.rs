@@ -26,7 +26,7 @@ use tokio::sync::RwLock;
 use super::bond_assembly::{
     BondAssemblyError, FundingInputContext, FundingSelection, SpentRecordsDurablyPruned,
 };
-use super::bond_orchestrator::{p_lane_ceiling_fee, planned_holdings, SweepReference};
+use super::bond_orchestrator::{p_lane_estimates, planned_holdings, BondFunding, SweepReference};
 use super::bond_plan::{canonical_reference, PlanAttempt};
 use super::curve_tree_actor::{CurveTreeHandle, CurveTreeHandleError};
 use super::drain_orchestrator::{DrainIntent, NoExitOwed};
@@ -236,13 +236,13 @@ where
         };
         let canonical = canonical_reference(tip).ok_or(DueBlock::Wait(PlanWait::WalletBehind))?;
 
-        // The fee at the live rate (the P-lane floor; PR A moves it to the
-        // post's own weight).
+        // The live fee snapshot, refused by name when unusable; the sweep
+        // prices the post on its own weight from it.
         let estimates = daemon
             .get_fee_estimates()
             .await
             .map_err(|_| DueBlock::Wait(PlanWait::NodeUnreachable))?;
-        let fee = p_lane_ceiling_fee(estimates).map_err(|e| match e {
+        let estimates = p_lane_estimates(estimates).map_err(|e| match e {
             FeeEstimatorError::DaemonFeeUnreasonable(_) => {
                 DueBlock::Wait(PlanWait::FeeAboveFunding)
             }
@@ -287,15 +287,20 @@ where
         // The funding, swept at this block's reference. The plan's own
         // reservation is its to spend, so it does not count against it.
         let witness = SpentRecordsDurablyPruned::arm1_watch_pruning_live();
-        let (selection, reference, snapshot_generation) = Self::sweep_bond_funding(
+        let BondFunding {
+            selection,
+            reference,
+            snapshot_generation,
+            fee,
+        } = Self::sweep_bond_funding(
             self_arc.clone(),
             &store,
             &curve_tree,
             SweepReference::At(canonical),
             tip_hash_at,
             p_slot,
-            &holdings,
-            fee,
+            filled.descriptor(),
+            estimates,
             &witness,
             &own,
         )
