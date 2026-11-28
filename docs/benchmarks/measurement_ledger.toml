@@ -1563,6 +1563,7 @@ cleared = [
   { through = "12bd06df77dadaad90ee68e61d503e1197dd67a4", reason = "Rustdoc only: the workspace rustdoc gate's link fixes (#1445, this commit and its parent a5e9d05d66) change doc and plain comment lines and no code; nothing the measurement ran is added, removed or reordered. HASH_CPU_NANOS is unchanged." },
   { through = "08ee35aaef58304227340e0bda03d8ccf5b31db3", reason = "The rules sweep (structural PR 4a) rewrites rule-number citations in comments on these paths, the core-class rules having moved to 101-199. No code line changed; no cost moved." },
   { through = "8a6cd32c9657495f6ba24a02954f5f78a69f2ea9", reason = "After the capture's build (2d5f7e1367): fpu_rounding.rs's x86_64 fixed words become promoted constants in place of a static. x86_64 only; the aarch64 code the capture timed is unchanged." },
+  { through = "3fd14496b7021fc271aab1dc3730efa84543efd2", reason = "Sets HASH_CPU_NANOS from this capture (1,526,655,460, the header CPU p99 at 2d5f7e1367) and the test of the interval it implies (6,107 ms). The instrument the capture timed is unchanged." },
 ]
 
 [[constant]]
