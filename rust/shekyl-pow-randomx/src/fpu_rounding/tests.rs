@@ -270,3 +270,16 @@ fn blocks_restore_the_callers_word() {
         });
     }
 }
+
+/// [`FpEnv::DEFAULT`]'s premise: a new thread starts at the fixed
+/// nearest word, so nearest-mode instructions run as plain Rust. On an
+/// OS where this fails, hashes stay correct (every instruction goes
+/// through a block) and get slower; this test is what says so.
+#[test]
+fn a_new_thread_starts_at_the_fixed_nearest_word() {
+    let (bits, plain) = std::thread::spawn(|| (control_bits(), FpEnv::capture().plain_nearest()))
+        .join()
+        .expect("the probe thread");
+    assert_eq!(bits, FIXED_WORDS[0], "a new thread's control bits");
+    assert!(plain, "a new thread runs nearest as plain Rust");
+}
