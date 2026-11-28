@@ -140,6 +140,31 @@ pub const fn spend_weight(
     )
 }
 
+/// The weight of a solo spend of `n_in` FCMP++ inputs that also carries one
+/// input of another kind, `extra_input_len` bytes as [`Input::write`] emits
+/// it (tag included): a bond post's [`Input::BondPost`] or a claim's
+/// [`Input::ArchivalRewardEmission`]. That input adds its bytes to the vin,
+/// one to the vin count and one solo `PqcAuth` slot (`pqc_auths` has one
+/// slot per input), and nothing to the proof or the pseudo-outs, which cover
+/// the FCMP++ inputs alone (the module header of `transaction.rs`).
+///
+/// [`Input::write`]: super::Input::write
+/// [`Input::BondPost`]: super::Input::BondPost
+/// [`Input::ArchivalRewardEmission`]: super::Input::ArchivalRewardEmission
+#[must_use]
+pub const fn spend_weight_with_extra_input(
+    n_in: usize,
+    n_out: usize,
+    layers: ProofLayers,
+    fee: u64,
+    extra_input_len: usize,
+) -> usize {
+    spend_weight(n_in, n_out, layers, fee, pqc_auth_weight(), 0) - varint_len(n_in as u64)
+        + varint_len((n_in + 1) as u64)
+        + extra_input_len
+        + pqc_auth_weight()
+}
+
 /// The field sum, with the depth byte and the proof length supplied. Public
 /// callers go through [`spend_weight`]. The depth derivation also calls this
 /// one step past [`SpendLayers`], which is how it learns where that type ends.

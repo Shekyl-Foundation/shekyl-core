@@ -481,6 +481,17 @@ impl Input {
         matches!(self, Input::ToKey { .. })
     }
 
+    /// The input's length as [`Self::write`] emits it, tag included: the
+    /// `extra_input_len` of [`weight::spend_weight_with_extra_input`], which
+    /// prices a bond post or a claim before it is built. `None` for an input
+    /// `write` refuses (a `BondPostKind::Other` carrying the JoinMarket tag).
+    #[must_use]
+    pub fn serialized_len(&self) -> Option<usize> {
+        let mut counter = CountingWriter::default();
+        self.write(&mut counter).ok()?;
+        Some(counter.bytes)
+    }
+
     /// Write the input.
     pub fn write<W: Write>(&self, w: &mut W) -> io::Result<()> {
         match self {
