@@ -195,7 +195,18 @@ def code(text, suffix):
     return strip_comments(text, suffix)
 
 
+def may_launch(text):
+    """Whether `text` holds the tokens a regtest spawn needs, before any
+    comment is stripped. Stripping only removes comments, and a comment
+    cannot split a string literal or a shell word, so a file without both
+    tokens in its raw text cannot match SPAWN once stripped. Most files
+    fail here, so the stripper runs on the few that might launch."""
+    return "--network" in text and "regtest" in text
+
+
 def is_launcher(text, suffix):
+    if not may_launch(text):
+        return False
     stripped = code(text, suffix)
     return SPAWN.search(stripped) is not None and LEVER.search(stripped) is not None
 

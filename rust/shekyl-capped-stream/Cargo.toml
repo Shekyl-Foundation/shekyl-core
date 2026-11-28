@@ -15,7 +15,7 @@ publish = false
 
 [dependencies]
 shekyl-transport-layer = { path = "../shekyl-transport-layer" }
-tokio = { version = "1", default-features = false, features = ["io-util", "macros", "rt", "sync", "time"] }
+tokio = { version = "1", default-features = false, features = ["io-util", "macros", "net", "rt", "sync", "time"] }
 
 [lints]
 workspace = true

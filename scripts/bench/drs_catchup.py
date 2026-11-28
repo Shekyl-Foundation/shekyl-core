@@ -161,7 +161,7 @@ def run(args):
     subj_dir = os.path.join(work, "subject")
     for directory in (seed_dir, subj_dir):
         shutil.rmtree(directory, ignore_errors=True)
-        os.makedirs(directory)
+        B.owner_dir(directory)
     addr = B.mining_address(args.cargo_timeout)
 
     def sync_subject(target, timed):
