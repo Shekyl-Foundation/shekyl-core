@@ -80,20 +80,25 @@ use shekyl_curve_tree::{
 use shekyl_engine_state::pscan_state::{BondPostRecord, PFundingOutputRecord};
 #[cfg(test)]
 use shekyl_types::BlockCount;
-use shekyl_types::{BlockHeight, ChainCount, GlobalOutputIndex, PCanonicalId};
+use shekyl_types::{BlockHeight, ChainCount, GlobalOutputIndex, PCanonicalId, PSlot};
 use shekyl_units::AtomicUnits;
 
 use super::backing_set::{BackingSet, ClaimFundingError, InsufficientBacking, MembershipPath};
 use super::bond_assembly::SpentRecordsDurablyPruned;
+use super::bond_orchestrator::{p_lane_fee_from_build, p_lane_spend_fee, MEASURED_FEE_BUILDS};
 use super::curve_tree_actor::{CurveTreeHandle, CurveTreeHandleError};
 use super::daemon::synced_chain_facts::TimelineBreak;
 use super::emission_source::{fetch_vouched_claim_source, EmissionSourceError};
+use super::fee_policy::FeeEstimatorError;
+use super::output_selector::selection_layers;
 use super::prpc::WalletChainReader;
 use super::signing_assembly::{leaf_entry_from_chunk, tree_context_from};
 use super::stake_engine::{
     AssembleEmissionClaim, AssembledEmissionClaim, PersonaHandle, StakeEngineError,
     StakeEngineHandle,
 };
+use super::traits::FeeEstimates;
+use super::tx_fee_model::{InputCount, OutputCount, ProofLayers};
 
 /// Why the claim pipeline refused before (or at) the actor hand-off. Every
 /// arm is caller-recoverable state, not a defect: refetch/resync/refund and
@@ -129,6 +134,11 @@ pub(crate) enum ClaimOrchestrationError {
     /// The actor refused or failed the assembly itself.
     #[error(transparent)]
     Stake(#[from] StakeEngineError),
+    /// The claim could not be priced on its own weight: the fee snapshot
+    /// was refused, the fee does not fit, or the fee did not settle within
+    /// [`MEASURED_FEE_BUILDS`] builds. Nothing was sealed.
+    #[error("the claim's fee: {0}")]
+    Fee(FeeEstimatorError),
     /// The OS's random source failed while drawing the claim's transaction
     /// key; nothing was assembled.
     #[error(transparent)]
@@ -168,20 +178,6 @@ pub(crate) struct ClaimAssemblyContext<'a> {
     /// The claimant persona's canonical id — the fetch's single query field
     /// and the bond-post ownership filter.
     pub p_canonical_id: PCanonicalId,
-    /// The fee the claim tx must fund from swept `ToKey` inputs (fee inputs
-    /// are structurally mandatory — the reward is fully consumed by the loud
-    /// vout, so it cannot pay its own fee).
-    pub fee: u64,
-    /// The hold (`ENGINE_CADENCE_DRIVER.md` §4): policy, threaded — the
-    /// production choke point ([`Engine::submit_emission_claim`]) names the
-    /// relay policy's [`EMISSION_CLAIM_FEE_FLOOR`]. The assembly's value
-    /// gate is [`claim_value_floor`](super::emission_claim::claim_value_floor)
-    /// of it and [`Self::fee`]; tests exercising other properties pass `0`,
-    /// which leaves the gate at the live fee.
-    ///
-    /// [`Engine::submit_emission_claim`]: super::Engine::submit_emission_claim
-    /// [`EMISSION_CLAIM_FEE_FLOOR`]: shekyl_economics::EMISSION_CLAIM_FEE_FLOOR
-    pub fee_floor: u64,
 }
 
 /// The last **confirmed** sweep height for `persona`: the highest bond-post
@@ -247,16 +243,107 @@ fn provable_records(
 /// actor's reply — the signed, wire-encoded claim plus its public facts —
 /// **unbroadcast** (CB-3).
 ///
+/// The claim pays the `P`-lane floor rate on its own weight (the P-lane fee
+/// ruling, 2026-11-23; `ENGINE_CADENCE_DRIVER.md` §4, 2026-11-28). Its fee
+/// sweep takes every eligible output and its size bound keeps the same
+/// epochs at any fee, so only the fee varint moves the weight: the claim is
+/// built at a fee below its own (a one-input spend of its outputs with no
+/// emission input), its weight read from the build
+/// ([`p_lane_fee_from_build`]), and built again at that fee, which settles.
+/// The value gate runs at each build's fee, so a claim whose reward does not
+/// cover its own fee is refused ([`EmissionClaimError::ValueDeferred`]),
+/// never sealed.
+///
 /// `block_hash_at` resolves the reference-height block hash from the caller's
 /// ledger (the orchestrator has no ledger access of its own; the engine owns
 /// the header window). `handle` is the operation-scoped slot capability; its
 /// slot also names the sweep's record filter.
+///
+/// [`EmissionClaimError::ValueDeferred`]: super::emission_claim::EmissionClaimError::ValueDeferred
 pub(crate) async fn orchestrate_emission_claim<R: WalletChainReader>(
     rpc: &R,
     handle: PersonaHandle,
     ctx: ClaimAssemblyContext<'_>,
+    estimates: FeeEstimates,
     block_hash_at: impl Fn(BlockHeight) -> Option<BlockHash>,
 ) -> Result<OrchestratedClaim, ClaimOrchestrationError> {
+    let p_slot = handle.p_slot();
+    let anchored = anchor_claim(rpc, &ctx, p_slot, &block_hash_at).await?;
+    let mut fee = p_lane_spend_fee(
+        estimates,
+        InputCount::clamped(1),
+        OutputCount::clamped(CLAIM_OUTPUTS),
+        anchored.layers,
+    )
+    .map_err(ClaimOrchestrationError::Fee)?;
+    let mut handle = Some(handle);
+    for _ in 0..MEASURED_FEE_BUILDS {
+        let handle = match handle.take() {
+            Some(handle) => handle,
+            None => ctx.stake.mint_handle(p_slot).await?,
+        };
+        let assembled = build_claim(&anchored, handle, &ctx, fee, fee.to_raw()).await?;
+        let built_fee = fee;
+        fee = p_lane_fee_from_build(estimates, assembled.bound_tx.bytes(), built_fee)
+            .map_err(ClaimOrchestrationError::Fee)?;
+        if fee == built_fee {
+            return Ok(OrchestratedClaim {
+                assembled,
+                reference_height: anchored.reference.height,
+            });
+        }
+    }
+    Err(ClaimOrchestrationError::Fee(
+        FeeEstimatorError::DaemonResponseInvalid {
+            reason: "the claim's fee did not settle on its own weight",
+        },
+    ))
+}
+
+/// The claim's outputs: the loud reward vout and the change split across the
+/// consensus minimum of outputs.
+const CLAIM_OUTPUTS: usize = 1 + shekyl_tx_weight::MIN_NON_COINBASE_OUTPUTS;
+
+/// One build of the pipeline at a named `fee` and value-gate fee, for a test
+/// whose subject is not the fee: the same stages
+/// [`orchestrate_emission_claim`] runs, built once.
+#[cfg(test)]
+pub(crate) async fn orchestrate_emission_claim_at<R: WalletChainReader>(
+    rpc: &R,
+    handle: PersonaHandle,
+    ctx: ClaimAssemblyContext<'_>,
+    fee: AtomicUnits,
+    gate_fee: u64,
+    block_hash_at: impl Fn(BlockHeight) -> Option<BlockHash>,
+) -> Result<OrchestratedClaim, ClaimOrchestrationError> {
+    let anchored = anchor_claim(rpc, &ctx, handle.p_slot(), &block_hash_at).await?;
+    let assembled = build_claim(&anchored, handle, &ctx, fee, gate_fee).await?;
+    Ok(OrchestratedClaim {
+        assembled,
+        reference_height: anchored.reference.height,
+    })
+}
+
+/// What a claim is built on, read once per request: the vouched source, its
+/// gather tip, the reference every path is proved against, its proof
+/// layers, and the persona's last confirmed sweep height.
+struct AnchoredClaim {
+    source: super::emission_source::EmissionClaimSource,
+    gather_tip: BlockHeight,
+    reference: ReferenceBlock,
+    layers: ProofLayers,
+    last_sweep: BlockHeight,
+}
+
+/// Steps 1–2 and the reference snapshot of step 5: fetch the vouched claim
+/// source, anchor the gather tip and the reference height, and read the
+/// reference's root, depth and block hash.
+async fn anchor_claim<R: WalletChainReader>(
+    rpc: &R,
+    ctx: &ClaimAssemblyContext<'_>,
+    p_slot: PSlot,
+    block_hash_at: &impl Fn(BlockHeight) -> Option<BlockHash>,
+) -> Result<AnchoredClaim, ClaimOrchestrationError> {
     // 1+2a. Fetch the claim source (single-field query over the persona's
     //    OWN transport — the `WalletChainReader` bound is the §7.4
     //    structural pin; decode enforces the settled/height invariant at
@@ -299,19 +386,66 @@ pub(crate) async fn orchestrate_emission_claim<R: WalletChainReader>(
     //    derivation.
     let (gather_tip, reference_height) = claim_reference_height(source.chain_height, ingested)?;
 
+    // 3, refused early. A persona with no backing-eligible output is refused
+    // here, before any tree or ledger read, as it always was; each build
+    // designates its own (the designation moves into the build's seal).
+    let last_sweep = last_confirmed_sweep_height(ctx.bond_posts, &ctx.p_canonical_id);
+    BackingSet::from_spendable(
+        provable_records(ctx.funding_records, reference_height)
+            .iter()
+            .copied(),
+        p_slot,
+        gather_tip,
+        last_sweep,
+    )
+    .designate_backing()?;
+
+    // 5 (the snapshot). One reference, every membership path against it;
+    // its depth prices the claim.
+    let (curve_tree_root, depth) = ctx
+        .tree
+        .reference_root_and_depth(reference_height)
+        .await
+        .map_err(ClaimOrchestrationError::Tree)?;
+    let block_hash =
+        block_hash_at(reference_height).ok_or(ClaimOrchestrationError::MissingBlockHash {
+            height: reference_height.to_raw(),
+        })?;
+    Ok(AnchoredClaim {
+        source,
+        gather_tip,
+        reference: ReferenceBlock {
+            height: reference_height,
+            curve_tree_root: CurveTreeRoot::from_bytes(curve_tree_root),
+            block_hash,
+        },
+        layers: selection_layers(depth).as_proof(),
+        last_sweep,
+    })
+}
+
+/// Steps 3–6 at `fee`: designate the backing, sweep the fee inputs, assemble
+/// every membership path, and hand the sealed operands to the actor, whose
+/// value gate reads `gate_fee`.
+async fn build_claim(
+    anchored: &AnchoredClaim,
+    handle: PersonaHandle,
+    ctx: &ClaimAssemblyContext<'_>,
+    fee: AtomicUnits,
+    gate_fee: u64,
+) -> Result<AssembledEmissionClaim, ClaimOrchestrationError> {
     // Provability pre-filter (module docs): only outputs drained into the
     // tree at the reference height can carry a membership proof.
-    let provable = provable_records(ctx.funding_records, reference_height);
+    let provable = provable_records(ctx.funding_records, anchored.reference.height);
 
     // 3. Designate the backing — the claimant slot's records only, anchored
     //    at the gather tip — so the handler's same-tip operand holds by
     //    construction (`backing_set.rs` stores ONE height).
-    let last_sweep = last_confirmed_sweep_height(ctx.bond_posts, &ctx.p_canonical_id);
     let backing = BackingSet::from_spendable(
         provable.iter().copied(),
         handle.p_slot(),
-        gather_tip,
-        last_sweep,
+        anchored.gather_tip,
+        anchored.last_sweep,
     )
     .designate_backing()?;
 
@@ -321,36 +455,22 @@ pub(crate) async fn orchestrate_emission_claim<R: WalletChainReader>(
     //    into the [`SweptFeeInputs`] witness together, and the item-6
     //    same-tip check fires here, once.
     let swept = backing.fee_sweep(
-        source,
+        anchored.source.clone(),
         ctx.pruning_landed,
         provable.iter().copied(),
         handle.p_slot(),
         ctx.reserved,
-        AtomicUnits::from_raw(ctx.fee),
+        fee,
     )?;
 
-    // 5. One reference snapshot, every membership path against it.
-    let (curve_tree_root, _depth) = ctx
-        .tree
-        .reference_root_and_depth(reference_height)
-        .await
-        .map_err(ClaimOrchestrationError::Tree)?;
-    let block_hash =
-        block_hash_at(reference_height).ok_or(ClaimOrchestrationError::MissingBlockHash {
-            height: reference_height.to_raw(),
-        })?;
-    let reference = ReferenceBlock {
-        height: reference_height,
-        curve_tree_root: CurveTreeRoot::from_bytes(curve_tree_root),
-        block_hash,
-    };
+    // 5. Every membership path against the one reference.
     let assemble_inputs: Vec<AssembleInput> = swept
         .path_records()
         .map(crate::engine::ownership::p_assemble_input)
         .collect();
     let paths = ctx
         .tree
-        .assemble_tx(reference, assemble_inputs)
+        .assemble_tx(anchored.reference, assemble_inputs)
         .await
         .map_err(ClaimOrchestrationError::Tree)?;
 
@@ -372,21 +492,16 @@ pub(crate) async fn orchestrate_emission_claim<R: WalletChainReader>(
 
     // 6. Hand the sealed operands to the actor (CB-2: derivation, proving,
     //    and signing stay inside it) and return the reply unbroadcast.
-    let assembled = ctx
+    Ok(ctx
         .stake
         .assemble_emission_claim(AssembleEmissionClaim {
             handle,
             operands,
             tree_ctx,
-            // Ruling 9: the set clears the live fee, floored by the hold.
-            fee_floor: super::emission_claim::claim_value_floor(ctx.fee, ctx.fee_floor),
+            gate_fee,
             tx_key: shekyl_crypto_pq::TxKey::random()?,
         })
-        .await?;
-    Ok(OrchestratedClaim {
-        assembled,
-        reference_height,
-    })
+        .await?)
 }
 
 /// What [`orchestrate_emission_claim`] returns: the actor's unbroadcast reply
@@ -774,7 +889,7 @@ mod tests {
                     .mint_handle(PSlot::from_raw(0))
                     .await
                     .expect("slot 0 held");
-                let err = orchestrate_emission_claim(
+                let err = orchestrate_emission_claim_at(
                     &syncing,
                     bite_handle,
                     ClaimAssemblyContext {
@@ -785,9 +900,9 @@ mod tests {
                         bond_posts: &bond_posts,
                         reserved: &reserved,
                         p_canonical_id: p_id,
-                        fee,
-                        fee_floor: 0,
                     },
+                    AtomicUnits::from_raw(fee),
+                    0,
                     |_| panic!("a refused lane must not reach the block-hash lookup"),
                 )
                 .await
@@ -804,7 +919,7 @@ mod tests {
 
             let rpc = ClaimSourceDaemon::synced(canned);
 
-            let reply = orchestrate_emission_claim(
+            let reply = orchestrate_emission_claim_at(
                 &rpc,
                 handle,
                 ClaimAssemblyContext {
@@ -815,14 +930,13 @@ mod tests {
                     bond_posts: &bond_posts,
                     reserved: &reserved,
                     p_canonical_id: p_id,
-                    fee,
-                    // Value gate stood down: the KAT fixture's budget is
-                    // genesis-scale-small by design, and this test's subject
-                    // is the pipeline substrate, not the §4 floor policy
-                    // (which has its own gate-can-fail test in
-                    // `emission_claim`).
-                    fee_floor: 0,
                 },
+                AtomicUnits::from_raw(fee),
+                // Value gate stood down: the KAT fixture's budget is
+                // genesis-scale-small by design, and this test's subject is
+                // the pipeline substrate, not the §4 value policy (which has
+                // its own gate-can-fail test in `emission_claim`).
+                0,
                 |height| {
                     assert_eq!(height, expected_reference, "anchor per the two-sided gate");
                     Some(BlockHash::from_bytes([0xB1u8; 32]))

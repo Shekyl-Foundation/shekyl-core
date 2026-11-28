@@ -1492,7 +1492,7 @@ mod emission_claim_assembly {
                 // fixture-family rewards sit below the production floor by
                 // construction; the gate has its own boundary test in
                 // `emission_claim.rs`).
-                fee_floor: 0,
+                gate_fee: 0,
                 tx_key: shekyl_crypto_pq::TxKey::random().expect("the OS draws a key"),
             })
             .await
@@ -1717,7 +1717,7 @@ mod emission_claim_assembly {
                 handle: h,
                 operands: shape.operands(),
                 tree_ctx: shape.tree_ctx.clone(),
-                fee_floor: 0,
+                gate_fee: 0,
                 tx_key: shekyl_crypto_pq::TxKey::seeded(TX_KEY),
             })
             .await

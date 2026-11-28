@@ -34,10 +34,7 @@ pub use floor::{
     correction_factors_at, fee_correction_at, fee_ladder_from, relay_floor_from, CorrectionFactors,
     FeeOperands, RELAY_FLOOR_REFERENCE_TX_WEIGHT,
 };
-pub use ladder::{
-    corrected_fee_ladder, FeeLadder, FeePriority, EMISSION_CLAIM_FEE_FLOOR,
-    STANDARD_RUNG_OVER_ECONOMY,
-};
+pub use ladder::{corrected_fee_ladder, FeeLadder, FeePriority, STANDARD_RUNG_OVER_ECONOMY};
 pub use quantization::{quantized_fee, FEE_DECIMAL_PLACES, FEE_QUANTIZATION_MASK};
 pub use relay::{
     relay_fee_floor, relay_floor_admits, RELAY_ADMISSION_SLACK_BP, RELAY_FLOOR_LOOKBACK,

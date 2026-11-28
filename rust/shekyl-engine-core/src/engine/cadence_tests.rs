@@ -593,7 +593,7 @@ fn claim_classify_maps_the_refusal_taxonomy() {
     let deferred = E::Claim(O::Stake(SE::EmissionClaim(C::ValueDeferred {
         value_deferred: vec![(7, 100), (8, 200)],
         total_reward: 300,
-        fee_floor: 1_000,
+        fee: 1_000,
     })));
     match deferred.tick_outcome() {
         ClaimTickOutcome::Deferred(held) => assert_eq!(held, vec![(7, 100), (8, 200)]),

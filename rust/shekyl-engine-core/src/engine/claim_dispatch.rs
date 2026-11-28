@@ -67,7 +67,6 @@ use shekyl_engine_state::pending_post_block::{
 use super::pscan::dispatch::terminal_cause;
 use shekyl_engine_state::pscan_state::{BondPostRecord, PFundingOutputRecord};
 use shekyl_types::BlockHeight;
-use shekyl_units::AtomicUnits;
 use tokio::sync::RwLock;
 
 use super::bond_assembly::SpentRecordsDurablyPruned;
@@ -80,7 +79,9 @@ use super::pscan::seal_basis::{load_seal_basis, SealBasisError};
 use super::pscan::start::pending_post_store_for_engine;
 use super::signer::EngineSignerKind;
 use super::stake_engine::{AssembledEmissionClaim, PSlot, StakeEngineError};
-use super::traits::{DaemonEngine, EconomicsEngine, LedgerEngine, PendingTxEngine, RefreshEngine};
+use super::traits::{
+    DaemonEngine, EconomicsEngine, FeeEstimates, LedgerEngine, PendingTxEngine, RefreshEngine,
+};
 use super::transaction_submitter::{BroadcastSubmitError, BroadcastSubmitter, SubmitSuccess};
 use super::Engine;
 
@@ -258,9 +259,11 @@ where
     ///
     /// `claim_rpc` is the persona-isolated transport the claim-source fetch
     /// rides (§7.4 pin: the principal's daemon session cannot be passed
-    /// here — it does not implement the marker). `fee` is the claim tx's
-    /// fee, funded from swept `ToKey` inputs (structurally mandatory: the
-    /// reward is fully consumed by the loud vout). Go-live remains
+    /// here — it does not implement the marker). `estimates` is the live fee
+    /// snapshot the claim is priced from, on its own weight
+    /// ([`orchestrate_emission_claim`]); the fee is funded from swept `ToKey`
+    /// inputs (structurally mandatory: the reward is fully consumed by the
+    /// loud vout). Go-live remains
     /// compile-blocked on a production [`SpentRecordsDurablyPruned`] mint
     /// (SP-R0), exactly as the bond path; tests pass
     /// `SpentRecordsDurablyPruned::for_test`.
@@ -272,7 +275,7 @@ where
         self_arc: Arc<RwLock<Self>>,
         claim_rpc: &T,
         p_slot: PSlot,
-        fee: AtomicUnits,
+        estimates: FeeEstimates,
         pruning_landed: &SpentRecordsDurablyPruned,
     ) -> Result<EmissionClaimReceipt, EmissionClaimRequestError> {
         // Brief read: clone the actor handles + the ledger snapshot the
@@ -357,12 +360,8 @@ where
                 bond_posts,
                 reserved,
                 p_canonical_id,
-                fee: fee.to_raw(),
-                // The production hold (`ENGINE_CADENCE_DRIVER.md` §4):
-                // every production claim rides this choke point, so the
-                // shipped policy's hold is named exactly once.
-                fee_floor: shekyl_economics::relay_policy().emission_claim_fee_floor,
             },
+            estimates,
             block_hash_at,
         )
         .await?;

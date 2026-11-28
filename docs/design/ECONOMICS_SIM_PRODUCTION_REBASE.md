@@ -507,7 +507,7 @@ it is fixed.
 | A scenario that starts mid-chain starts with an empty volume window and empty median windows | A fold's heights are its own; `genesis_height_offset` scenarios carry no history before their first block, so their medians start at the zone as a genesis chain's do | Stated in `volume_window.rs` and `median_window.rs` | Behaviour (the scenario's world: history the sim does not have) |
 | Budget disposition (b) is unpenalised | (b) is the unmodulated subsidy, a counterfactual of the release multiplier. The penalty in (a) is bounded by the fees of the transactions that crossed the median, since the fill rule admits no other | Stated in `budget.rs` | Arm (a counterfactual) |
 | A transaction keeps the rung it was built on | No wallet escalates its rung under congestion; the user chooses | Stated at `RungMix`. Demand is inelastic as well (below) | Behaviour (users) |
-| A claim is one ordinary transaction at the admission rate | The claim's own envelope (51 200 weight priced) and the wallet's value gate, `Σreward ≥ max(live fee, hold)` with the hold `RelayPolicy::emission_claim_fee_floor` (1 398 068 000 atomic, the genesis Economy fee at that weight), are not modelled | Stated here | **Defect.** The claim's priced weight and its value gate are production (`shekyl-engine-core`'s `CLAIM_PRICED_WEIGHT`, crate-private, and the cadence gate), which the sim cannot reach. Blocker: the weight moves to a crate the sim can call, which is the wallet lane's. It re-bases with the A3 base path (FOLLOWUPS, EUP-4 prep) |
+| A claim is one ordinary transaction at the admission rate | The claim's own weight and the wallet's value gate, the claim's reward ≥ its own fee at the current rate (`ENGINE_CADENCE_DRIVER.md` §4, 2026-11-28), are not modelled | Stated here | **Defect.** The claim's weight and its value gate are production (`shekyl-engine-core`'s claim orchestrator, which prices the claim on its built weight, and the cadence gate), which the sim cannot reach. Blocker: the weight moves to a crate the sim can call, which is the wallet lane's. It re-bases with the A3 base path (FOLLOWUPS, EUP-4 prep) |
 | Fee floor enforced in consensus | Not the current system: the floor is relay policy (C2-R2 Q9, reopened 2026-10-02) | Second arm of ESR-7 | Arm (ESR-7's second) |
 | Traffic schedules, opportunity-cost band, SKL price band, storage and Kryder terms, replica target `R = 6` | No production owner exists | Exogenous; each declared at its definition | Behaviour (the world) |
 | The fee-floor instrument's floor at `SCALE` resolution | FL-E1–E3 measure the floor's per-block slew, which is finer than one atomic unit per byte; the owner rounds to whole units | `fee_floor.rs`; pinned to `relay_fee_floor` and the ladder's `4F` by `the_floor_is_the_owners_at_scale_resolution` | Arm (an instrument, pinned to the owner) |
@@ -2366,31 +2366,13 @@ lattice-size ruling's question (`FOLLOWUPS.md`, with the EUP-5 row).
 | Standard over Economy | `STANDARD_RUNG_OVER_ECONOMY` (4) | `checked_corrected_fee_ladder`; the sim | Field, same line. |
 | Priority's factor | the `2` in `2RC/M` | `checked_corrected_fee_ladder` | Field, same line. |
 | lookback `G`, slack, fee decimals | `RELAY_FLOOR_LOOKBACK`, `RELAY_ADMISSION_SLACK_BP`, `FEE_DECIMAL_PLACES`, assembled into `RelayPolicy::SHIPPED` by hand | chain-rules, daemon-rpc, FFI, the wallet | Fields; generated (G3). `quantized_fee` stays as the shipped spelling, defined as `RelayPolicy::SHIPPED.quantize`. |
-| claim hold | `EMISSION_CLAIM_FEE_FLOOR`, the literal 3 600 000 000 | engine-core's claim leg | Field, derived (below). |
+| claim hold | `EMISSION_CLAIM_FEE_FLOOR`, the literal 3 600 000 000 | engine-core's claim leg | **Deleted 2026-11-28** (below). |
 
-*The claim hold.* Economy is the relay floor by construction
-(`ladder.rs`), so the brief's "Economy rung" and ruling 9's "relay floor"
-are one number. The hold is the chain's real genesis floor: at height 0
-the volume window is empty (`TxVolume::ZERO`), `M_r` is at its low rail,
-`C` = 0.8, and the floor is 27 306 atomic per weight unit. The weight is
-the one the claim leg prices, `EMISSION_NON_CLAIMS_RESERVE_BYTES` (49 152)
-plus `CLAIM_VIN_ALLOWANCE_BYTES` (2 048), 51 200. The hold is that fee on
-the shipped lattice, about 1.40 SKL. The literal 3.6 SKL matched no
-operands (it implies a weight of about 105 000 at the baseline floor of
-34 133). Both byte constants live in `shekyl-engine-core`, above
-`shekyl-economics`, so the hold is a generated value with its derivation
-in the JSON comment, and the recomputing test lives in engine-core and
-reads the same weight the leg prices. "Covers the fee" means a claim at
-the gate nets zero or more.
-
-Ruling 9's other half is built here too. The value gate compared
-`Σreward` against the hold alone. It becomes `Σreward ≥ max(live fee,
-hold)`, where the live fee is the one the leg already prices the claim at.
-Both operands are chain state and a uniform constant, so every wallet
-reaches the same decision. The weight is an allowance, not the claim's
-predicted weight; the predictor is an unbuilt mechanism and is a
-`FOLLOWUPS` row. When it lands, the hold's test reads its weight and the
-hold follows with no second edit.
+*The claim hold* is deleted (Rick, 2026-11-28; `ENGINE_CADENCE_DRIVER.md`
+§4). A claim is made when its reward covers its own fee at the current
+rate, the `P`-lane floor rate on the claim's own weight; the fixed hold,
+1.398 SKL at the genesis Economy rung, never bound early and would force
+late-chain forfeits while the real fee was a small fraction of it.
 
 *The cover rung.* `shekyl-standoff`'s default build depends on nothing:
 it is the float-free path a wallet ships, and `shekyl-archival-retention`
@@ -2465,7 +2447,7 @@ the placement ruling and before any completion code.
   narration, and is pinned by its own test.
 - **E16-7.** One test per promoted field mutates it on a test set and
   observes its reading function change, so a missed reader fails loudly.
-- **E16-8.** The derived claim hold equals the shipped lattice's fee for
+- **E16-8 (RETIRED 2026-11-28: the hold is deleted, `ENGINE_CADENCE_DRIVER.md` §4).** The derived claim hold equals the shipped lattice's fee for
   51 200 weight at the genesis floor of 27 306: 1 398 068 000 atomic,
   against the literal 3 600 000 000 (61.2 % lower). A test recomputes it
   from `relay_floor_from` at the genesis operands and the leg's weight.
@@ -2479,7 +2461,7 @@ the placement ruling and before any completion code.
 - **E16-11.** The penalty at the limit multiple equals today's body on
   every existing vector and on a randomised `(R, M, w)` set at the
   shipped multiple.
-- **E16-12.** A claim whose `Σreward` clears the hold but not the live
+- **E16-12 (RETIRED 2026-11-28: the hold is deleted; the gate is the claim's own fee).** A claim whose `Σreward` clears the hold but not the live
   fee defers; one that clears both is assembled.
 - **E16-13.** The shipped `ArchivalParams` passes `try_new`. A set with
   `m = 0`, with `n < m`, with an anchor lag below 2, or with an epoch no
@@ -2530,7 +2512,7 @@ and `project_at_tip` read that set's schedule: the paid reward, the
 fee correction's `σ` and the tip's reported share. The shipped
 callers pass `economic_params()`, whose schedule is
 `emission_share_at`. `RelayPolicy` is the admission
-lattice, the slack, the lookback and the claim hold, outside the
+lattice, the slack and the lookback, outside the
 digest. The shipped wrappers read `relay_policy()`. A fold passes its
 own policy to `admits`, `quantize` and `admitted_floor`. The median
 and volume folds take the window length as a const generic
@@ -2684,10 +2666,11 @@ so these are thresholds a chain would have to grow past, refused the way
 the shipped arithmetic refuses them; no arithmetic is widened and the
 maximum `k` stands.
 
-*The relay label.* `relay_policy_digest`: Blake2b-256 over a 57-byte
-preimage (format byte `0x01`, the seven fields as little-endian `u64`),
-`5f19950d8d031d0efa1f8e09f06d92c3b9a357175a9685ab7bd7fd49b45cc6b2` at the
-shipped policy. A report label only; no block, peer or wallet compares
+*The relay label.* `relay_policy_digest`: Blake2b-256 over a 49-byte
+preimage (format byte `0x02`, the six fields as little-endian `u64`),
+`ac865b99bf2914f7087fe8d9b96b7ffc2d53a42e32e1d645e7b75de6bc3eac85` at the
+shipped policy (format `0x02` since the claim hold's deletion,
+2026-11-28). A report label only; no block, peer or wallet compares
 it.
 
 *Where an override reaches.* `--set set.field=value` is read by

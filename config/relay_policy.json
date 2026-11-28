@@ -7,7 +7,5 @@
   "_comment_ladder": "relay_floor_reference_tx_weight: w_ref, the weight the floor and every rung fold in (FL-R13; inherited 3000 until EUP-5 G derives it from a Shekyl ordinary transaction). standard_rung_over_economy: Standard is this multiple of the Economy rung, the relay floor. high_rung_factor: High is max(factor·R·C/M, Standard). All three are relay policy until EUP-5 D rules on the floor; if D puts the floor into consensus, D's PR moves them into EconomicParams with a digest bump.",
   "relay_floor_reference_tx_weight": 3000,
   "standard_rung_over_economy": 4,
-  "high_rung_factor": 2,
-  "_comment_claim_hold": "emission_claim_fee_floor_atomic: the wallet's emission-claim hold (ENGINE_CADENCE_DRIVER.md §4; ruling 9, 2026-10-24). Derived, not chosen: the fee on the shipped lattice for the claim leg's priced weight (EMISSION_NON_CLAIMS_RESERVE_BYTES 49152 + CLAIM_VIN_ALLOWANCE_BYTES 2048 = 51200) at the chain's genesis Economy rung (an empty volume window, C = 0.8: 27306 atomic per weight unit). 51200 × 27306 = 1398067200, rounded up to the 1000-atomic lattice. shekyl-engine-core recomputes it from relay_floor_from at the genesis operands and the leg's weight; a change to either fails that test. The value gate is Σreward ≥ max(live fee, hold).",
-  "emission_claim_fee_floor_atomic": 1398068000
+  "high_rung_factor": 2
 }

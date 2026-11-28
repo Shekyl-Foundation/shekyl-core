@@ -478,8 +478,8 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: [`ENGINE_CADENCE_DRIVER.md`](design/ENGINE_CADENCE_DRIVER.md) (§3 leg 4)
   - Target: pre-genesis
 
-- **The claim leg prices an allowance, not the claim's weight.** The fee it pays and the relay policy's emission-claim hold are both taken at `CLAIM_PRICED_WEIGHT` (49 152 + 2 048 = 51 200, `cadence/claim.rs`), a static reserve for the non-claims part plus one vin row, not the weight of the claim being built. A predictor from the assembled claim's shape replaces the allowance; the hold's test reads the same constant, so the hold follows with no second edit (`ECONOMICS_SIM_PRODUCTION_REBASE.md` §5.26, ruling 9).
-  - Owner: [`ENGINE_CADENCE_DRIVER.md`](design/ENGINE_CADENCE_DRIVER.md) (§4)
+- **The claim's value gate rests on the fee floor following the block reward (ruled 2026-11-28).** A claim is made when its reward covers its own fee at the current rate (`ENGINE_CADENCE_DRIVER.md` §4); the fixed hold is deleted. That fee stays a small share of the reward only while the floor is reward-proportional, `F = R·C·w_ref/M²`. The floor's decoupling from the reward is ruled in direction and open in derivation (`ECONOMY_UMBRELLA_PLAN.md` §3.2 item 4, FL-R13's round). When the decoupled basis is chosen, the claim rule is re-checked against it: the claim's fee as a share of a late-chain staker's per-epoch reward, and how often the window floor forfeits. Falsify by: the decoupled-basis ruling, stating the claim rule's re-check and its result.
+  - Owner: [`ECONOMY_UMBRELLA_PLAN.md`](design/ECONOMY_UMBRELLA_PLAN.md) §1 — EUP-5 G (FL-R13's round)
   - Target: pre-genesis
 
 - **Q11 zero-fee-input emission claim has no settlement evidence** (destitute mint-pays-fee; named blocker: accrual has no claim-match set).

@@ -4,9 +4,9 @@
 // BSD-3-Clause
 
 //! Relay policy: the admission lookback, its slack, the fee lattice's
-//! decimal places, the ladder's reference weight and rung ratios, and the
-//! emission-claim hold, generated from `config/relay_policy.json` (its own
-//! file: the file boundary is the digest boundary, ruled 2026-10-29).
+//! decimal places, and the ladder's reference weight and rung ratios,
+//! generated from `config/relay_policy.json` (its own file: the file
+//! boundary is the digest boundary, ruled 2026-10-29).
 //!
 //! These select what a node relays. They are not chain identity
 //! ([`crate::params::EconomicParams`] is), so they stay out of the
@@ -24,7 +24,7 @@ use shekyl_units::DISPLAY_DECIMAL_POINT;
 
 use crate::fee::quantization::quantize_to_mask;
 use crate::fee::{
-    EMISSION_CLAIM_FEE_FLOOR, FEE_DECIMAL_PLACES, RELAY_ADMISSION_SLACK_BP, RELAY_FLOOR_LOOKBACK,
+    FEE_DECIMAL_PLACES, RELAY_ADMISSION_SLACK_BP, RELAY_FLOOR_LOOKBACK,
     RELAY_FLOOR_REFERENCE_TX_WEIGHT, STANDARD_RUNG_OVER_ECONOMY,
 };
 use crate::params::GENERATED_HIGH_RUNG_FACTOR;
@@ -48,9 +48,6 @@ pub struct RelayPolicy {
     pub admission_slack_bp: u32,
     /// Decimal places the fee lattice keeps.
     pub fee_decimal_places: u32,
-    /// The emission-claim hold, in atomic units: the claim leg's priced
-    /// weight at the genesis Economy rung, on the shipped lattice.
-    pub emission_claim_fee_floor: u64,
     /// `w_ref`, the weight the relay floor and every rung fold in
     /// (`F = R·C·w_ref/M²`). Relay policy until EUP-5 D rules on the floor;
     /// if D puts the floor into consensus, D's PR moves it into
@@ -76,7 +73,6 @@ impl RelayPolicy {
         lookback: RELAY_FLOOR_LOOKBACK as u64,
         admission_slack_bp: RELAY_ADMISSION_SLACK_BP,
         fee_decimal_places: FEE_DECIMAL_PLACES,
-        emission_claim_fee_floor: EMISSION_CLAIM_FEE_FLOOR,
         ref_tx_weight: RELAY_FLOOR_REFERENCE_TX_WEIGHT,
         standard_over_economy: STANDARD_RUNG_OVER_ECONOMY,
         high_factor: GENERATED_HIGH_RUNG_FACTOR,
@@ -210,7 +206,6 @@ struct RelayPolicyWire {
     lookback: u64,
     admission_slack_bp: u32,
     fee_decimal_places: u32,
-    emission_claim_fee_floor: u64,
     ref_tx_weight: u64,
     standard_over_economy: u64,
     high_factor: u64,
@@ -224,7 +219,6 @@ impl TryFrom<RelayPolicyWire> for RelayPolicy {
             lookback: w.lookback,
             admission_slack_bp: w.admission_slack_bp,
             fee_decimal_places: w.fee_decimal_places,
-            emission_claim_fee_floor: w.emission_claim_fee_floor,
             ref_tx_weight: w.ref_tx_weight,
             standard_over_economy: w.standard_over_economy,
             high_factor: w.high_factor,
@@ -242,11 +236,11 @@ impl Default for RelayPolicy {
 
 /// Format byte of [`relay_policy_digest`]'s preimage. A change to the
 /// preimage's layout moves it.
-pub const RELAY_DIGEST_FORMAT_VERSION: u8 = 0x01;
+pub const RELAY_DIGEST_FORMAT_VERSION: u8 = 0x02;
 
 /// Length of [`relay_policy_digest`]'s preimage: the format byte and the
-/// seven fields, each as a little-endian `u64`, in declaration order.
-pub const RELAY_DIGEST_PREIMAGE_LEN: usize = 1 + 7 * 8;
+/// six fields, each as a little-endian `u64`, in declaration order.
+pub const RELAY_DIGEST_PREIMAGE_LEN: usize = 1 + 6 * 8;
 
 fn relay_preimage(policy: &RelayPolicy) -> [u8; RELAY_DIGEST_PREIMAGE_LEN] {
     let mut buf = [0u8; RELAY_DIGEST_PREIMAGE_LEN];
@@ -259,7 +253,6 @@ fn relay_preimage(policy: &RelayPolicy) -> [u8; RELAY_DIGEST_PREIMAGE_LEN] {
     put(policy.lookback);
     put(u64::from(policy.admission_slack_bp));
     put(u64::from(policy.fee_decimal_places));
-    put(policy.emission_claim_fee_floor);
     put(policy.ref_tx_weight);
     put(policy.standard_over_economy);
     put(policy.high_factor);
@@ -295,9 +288,6 @@ mod tests {
         assert_eq!(policy.admission_slack_bp, 0);
         assert_eq!(BASIS_POINTS, 10_000);
         assert_eq!(policy.fee_decimal_places, 6);
-        // Derived (E16-8; recomputed by shekyl-engine-core's
-        // `the_claim_hold_is_the_genesis_economy_fee_at_the_priced_weight`).
-        assert_eq!(policy.emission_claim_fee_floor, 1_398_068_000);
         assert_eq!(policy.ref_tx_weight, 3_000);
         assert_eq!(policy.standard_over_economy, 4);
         assert_eq!(policy.high_factor, 2);
@@ -393,10 +383,10 @@ mod tests {
             .collect();
         assert_eq!(hex, RELAY_DIGEST_PIN);
         let pre = relay_preimage(&shipped);
-        assert_eq!(pre.len(), 57);
+        assert_eq!(pre.len(), 49);
         assert_eq!(pre[0], RELAY_DIGEST_FORMAT_VERSION);
         assert_eq!(&pre[1..9], &5u64.to_le_bytes());
-        assert_eq!(&pre[49..57], &2u64.to_le_bytes());
+        assert_eq!(&pre[41..49], &2u64.to_le_bytes());
         let moved = [
             RelayPolicy {
                 lookback: 6,
@@ -408,10 +398,6 @@ mod tests {
             },
             RelayPolicy {
                 fee_decimal_places: 7,
-                ..shipped
-            },
-            RelayPolicy {
-                emission_claim_fee_floor: 1,
                 ..shipped
             },
             RelayPolicy {
@@ -437,7 +423,7 @@ mod tests {
     }
 
     const RELAY_DIGEST_PIN: &str =
-        "5f19950d8d031d0efa1f8e09f06d92c3b9a357175a9685ab7bd7fd49b45cc6b2";
+        "ac865b99bf2914f7087fe8d9b96b7ffc2d53a42e32e1d645e7b75de6bc3eac85";
 
     #[test]
     fn an_alternative_policy_changes_the_lattice_and_the_slack() {

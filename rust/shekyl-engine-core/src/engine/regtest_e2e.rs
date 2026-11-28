@@ -5774,7 +5774,6 @@ async fn e2e_emission_claim_accepted_and_applied() {
     use super::traits::DaemonEngine;
     use shekyl_curve_tree::reference::REF_ANCHOR_AGE;
     use shekyl_engine_state::pscan_state::MintLineageOutput;
-    use shekyl_units::AtomicUnits;
 
     const SLOT: u32 = 0;
     // The wait after each block while a drawn block's read window is open:
@@ -6191,17 +6190,19 @@ async fn e2e_emission_claim_accepted_and_applied() {
     );
 
     // (A3) Build and dispatch the claim through the production CB-3 path.
-    // The fee rides swept `ToKey` inputs; derive it from the daemon's live
-    // estimate over the claim's own production envelope — the ~48 KiB
-    // `EMISSION_NON_CLAIMS_RESERVE_BYTES` (two fee-side FCMP++ proofs +
-    // hybrid PQC auths + 16-vout worst case + Bp+ clawback) plus a small
-    // vin allowance for the single claim row. The bond's 32 KiB ceiling is
-    // too small here — a claim carries TWO input proofs where the bond
-    // carries one (live run 4's daemon-side `FeeTooLow`); overpaying is a
-    // miner transfer, never a conservation term.
-    use super::emission_claim::EMISSION_NON_CLAIMS_RESERVE_BYTES;
+    // The claim pays the floor rate on its own weight, from the daemon's live
+    // fee snapshot, read fresh each attempt (a retry mines a block, which can
+    // move the rate); the fee rides swept `ToKey` inputs.
     refresh(&fixture.arc).await;
-    let claim_fee = {
+    let claim_rpc = open_chain_reader(&daemon.target(), Duration::from_secs(10))
+        .await
+        .expect("loopback claim transport");
+    let pruning_landed = SpentRecordsDurablyPruned::for_test();
+    let mut receipt = None;
+    let mut tip_before_claim = 0;
+    let mut claim_estimates = None;
+    for attempt in 0..4 {
+        tip_before_claim = daemon.height().await;
         let estimates = fixture
             .arc
             .read()
@@ -6210,29 +6211,18 @@ async fn e2e_emission_claim_accepted_and_applied() {
             .get_fee_estimates()
             .await
             .expect("daemon fee estimates");
-        estimates
-            .economy
-            .calculate_fee_from_weight(EMISSION_NON_CLAIMS_RESERVE_BYTES + 2048)
-    };
-    let claim_rpc = open_chain_reader(&daemon.target(), Duration::from_secs(10))
-        .await
-        .expect("loopback claim transport");
-    let pruning_landed = SpentRecordsDurablyPruned::for_test();
-    let mut receipt = None;
-    let mut tip_before_claim = 0;
-    for attempt in 0..4 {
-        tip_before_claim = daemon.height().await;
         match super::Engine::submit_emission_claim(
             fixture.arc.clone(),
             &claim_rpc,
             slot,
-            AtomicUnits::from_raw(claim_fee),
+            estimates,
             &pruning_landed,
         )
         .await
         {
             Ok(r) => {
                 receipt = Some(r);
+                claim_estimates = Some(estimates);
                 break;
             }
             // Resync-and-retry arms (the wallet's own docs): the tree or
@@ -6257,6 +6247,23 @@ async fn e2e_emission_claim_accepted_and_applied() {
         receipt.claim.total_reward,
         receipt.claim.fee_gindexes.len(),
     );
+    // The claim paid the economy rate on its own weight (ruled 2026-11-28).
+    {
+        let mut cursor: &[u8] = receipt.claim.bound_tx.bytes();
+        let claim_tx = shekyl_wire::Transaction::read(&mut cursor).expect("the claim parses");
+        let shekyl_wire::Ct::Fcmp { fee: claim_fee, .. } = claim_tx.ct else {
+            panic!("the claim is an FCMP++ spend")
+        };
+        let economy = claim_estimates
+            .expect("the accepted attempt's snapshot")
+            .economy;
+        assert_eq!(
+            claim_fee,
+            shekyl_economics::quantized_fee(claim_tx.weight() as u64, economy.per_weight())
+                .expect("the claim's fee fits"),
+            "the claim pays the economy rate on its own weight"
+        );
+    }
 
     // (A4/A6) The dispatched claim's shape: `J + 1` claimed, real ToKey fee
     // inputs (not the Q11 zero-fee form), and the loud vout equal to the

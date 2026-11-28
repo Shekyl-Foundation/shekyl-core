@@ -289,12 +289,13 @@ pub enum EmissionClaimError {
     /// compiled constants, const-asserted above).
     #[error("epoch {epoch} shard {shard_id}: recomputed scarcity exceeds the u32 wire field")]
     ScarcityConversion { epoch: u64, shard_id: u64 },
-    /// The whole candidate set is held below the value floor — **a policy
-    /// outcome, not a fault** (`ENGINE_CADENCE_DRIVER.md` §4 value-defer:
-    /// claiming rewards worth less than the sweep fee converts a zero into
-    /// a negative). The hold is all-or-nothing by construction — one claim
-    /// tx carries every held epoch, so the floor gates the set's Σreward,
-    /// never a per-epoch cut — which is why deferral surfaces as this
+    /// The whole candidate set is held because the claim's reward does not
+    /// cover its own fee — **a policy outcome, not a fault**
+    /// (`ENGINE_CADENCE_DRIVER.md` §4 value-defer: claiming rewards worth
+    /// less than the claim's fee converts a zero into a negative). The hold
+    /// is all-or-nothing by construction — one claim tx carries every kept
+    /// epoch, so the fee gates the kept set's reward, never a per-epoch cut
+    /// — which is why deferral surfaces as this
     /// typed refusal rather than an [`AssembledClaims`] field: an
     /// all-deferred assembly has no vin to build (an empty claims leg is
     /// unrepresentable on the wire).
@@ -304,20 +305,20 @@ pub enum EmissionClaimError {
     /// price a later forfeit honestly (the expired epoch's reward is no
     /// longer derivable once the window drops it).
     #[error(
-        "claim value-deferred: Σreward {total_reward} across {} held epoch(s) is below the \
-         fee floor {fee_floor}; holding until the accumulated set clears it",
+        "claim value-deferred: the claim's reward {total_reward} across {} held epoch(s) is \
+         below its own fee {fee}; holding until the accumulated set covers it",
         value_deferred.len()
     )]
     ValueDeferred {
         /// `(settlement_epoch, recomputed reward)` per held epoch, in
         /// window order — the §4 `value_deferred` surface.
         value_deferred: Vec<(u64, u64)>,
-        /// `checked_add` Σ of the held rewards (below the floor).
+        /// `checked_add` Σ of the rewards the claim would carry (the epochs
+        /// the size bound keeps), below its fee.
         total_reward: u64,
-        /// The floor the set failed to clear ([`claim_value_floor`] of the
-        /// live fee and the hold in production; a parameter so the gate is
-        /// testable at exact boundaries).
-        fee_floor: u64,
+        /// The claim's own fee at the current rate, which the reward did not
+        /// cover.
+        fee: u64,
     },
     /// A single epoch's claim alone exceeds the claims-leg size budget —
     /// nothing further to split (§2 step 5 bound-or-split's terminal
@@ -640,66 +641,24 @@ pub struct AssembledClaims {
 /// ([`EMISSION_CLAIMS_SIZE_BUDGET`] is the documented default; the
 /// parameter exists so the bound is testable at exact boundaries).
 ///
-/// `fee_floor` is the value gate (`ENGINE_CADENCE_DRIVER.md` §4:
-/// [`claim_value_floor`] of the live fee and the relay policy's hold in
-/// production, a parameter for the same boundary-testability reason):
-/// Σreward across
-/// the **whole** candidate set below the floor refuses
-/// [`EmissionClaimError::ValueDeferred`] — all-or-nothing, before the
-/// size loop, because the floor prices the one claim tx the set would
-/// share, and a set that cannot pay for that tx has no subset that
-/// should. Deterministic by construction: the same derived set and floor
-/// produce the same inclusion decision on every wallet (the §4
-/// uniformity claim — policy, not timing).
-/// The value an assembled claim set's Σreward must clear: the live fee the
-/// claim pays, and at least the relay policy's hold (ruling 9, 2026-10-24:
-/// "the ladder at the claim's real weight, floored by the hold"). A set
-/// that clears the hold but not the live fee would pay more in fee than it
-/// claims, so it holds. Both operands are chain state and a uniform
-/// constant, so every wallet reaches the same decision (FL-R18;
-/// `ENGINE_CADENCE_DRIVER.md` §4's uniformity).
-#[must_use]
-pub const fn claim_value_floor(live_fee: u64, hold: u64) -> u64 {
-    if live_fee > hold {
-        live_fee
-    } else {
-        hold
-    }
-}
-
+/// `fee` is the value gate (`ENGINE_CADENCE_DRIVER.md` §4): the claim's
+/// own fee at the current rate, priced on its own weight by the caller. The
+/// reward the claim would carry — the epochs the size bound keeps — below it
+/// refuses [`EmissionClaimError::ValueDeferred`], all-or-nothing: one claim
+/// tx carries the kept set, and a claim that pays more in fee than it claims
+/// is never made. The gate follows the size loop because the fee is the kept
+/// set's. Deterministic by construction: the same derived set and fee produce
+/// the same inclusion decision on every wallet (the §4 uniformity claim —
+/// policy, not timing).
 pub fn assemble_claims(
     derived: &ClaimableEpochs<'_>,
     claims_size_budget: usize,
-    fee_floor: u64,
+    fee: u64,
 ) -> Result<AssembledClaims, EmissionClaimError> {
     debug_assert!(
         !derived.claimable.is_empty(),
         "derive_claimable_epochs never returns an empty batch"
     );
-
-    // Value gate (§4) — over the full candidate Σ, checked (budgets are
-    // daemon-supplied; an overflowing sum is malformed source, not
-    // arithmetic to saturate through).
-    let mut candidate_sum: u64 = 0;
-    for c in &derived.claimable {
-        candidate_sum =
-            candidate_sum
-                .checked_add(c.reward)
-                .ok_or(EmissionClaimError::SourceInvalid {
-                    epoch: c.settlement_epoch,
-                })?;
-    }
-    if candidate_sum < fee_floor {
-        return Err(EmissionClaimError::ValueDeferred {
-            value_deferred: derived
-                .claimable
-                .iter()
-                .map(|c| (c.settlement_epoch, c.reward))
-                .collect(),
-            total_reward: candidate_sum,
-            fee_floor,
-        });
-    }
 
     // Step 5 sizing — bound or split (GF-4b item 5) over **one** vin
     // ([`claims_vin`], the single construction site), built once with the
@@ -755,6 +714,21 @@ pub fn assemble_claims(
         total_reward = total_reward
             .checked_add(reward)
             .ok_or(EmissionClaimError::SourceInvalid { epoch })?;
+    }
+
+    // Value gate (§4): the kept set's reward covers the claim's own fee, or
+    // every candidate holds — the size-deferred epochs too, since nothing is
+    // claimed this close.
+    if total_reward < fee {
+        return Err(EmissionClaimError::ValueDeferred {
+            value_deferred: derived
+                .claimable
+                .iter()
+                .map(|c| (c.settlement_epoch, c.reward))
+                .collect(),
+            total_reward,
+            fee,
+        });
     }
 
     // The emitted content is moved out of the measured vin itself: the
