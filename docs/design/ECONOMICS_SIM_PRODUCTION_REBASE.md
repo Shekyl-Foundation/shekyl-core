@@ -5807,7 +5807,7 @@ All figures below are A-honest, gross, N = 90 unless named; seed 1.
 - At y100 the rung is between 2 and 3. Some blocks step down and some do not, so the year's mean falls 8.4 %.
 - A-stuffed's y100 rung steps from 3 to 2, and its Standard fee falls a third (0.000 18 to 0.000 12 SKL). Its p95 tail ratio rises 28 %, where A-honest's falls 14 %.
 
-So the fees sit at the floor's integer grain, not where `C` puts them. In the tail era, the share reaches the miner's tail and not the fees. This bears on the fee design's lattice row (`FEE_LADDER_DERIVATION.md` §12, owed to EUP-5): it holds regardless of σ, because production's own late fee is set by the integer grain.
+So the fees sit at the floor's integer grain, not where `C` puts them. In the tail era, the share reaches the miner's tail and not the fees. It holds regardless of σ, because production's own late fee is set by the integer grain. The floor of one atomic unit per weight unit is its own open item for EUP-5, separate from the lattice step ([`FEE_LADDER_DERIVATION.md`](FEE_LADDER_DERIVATION.md) §12, "The rate's minimum of one atomic unit per weight unit").
 
 **The other arms at y30 (`SS-7`).** Stakers' pay per GB-year rises 20.8-fold for A-honest, B, C1 and C2. It rises less where the pool's fee part is a larger share of the stakers' income, because that part shrinks by r instead of growing:
 - the C3 knees and the together arms, 18.3 to 20.0-fold;
