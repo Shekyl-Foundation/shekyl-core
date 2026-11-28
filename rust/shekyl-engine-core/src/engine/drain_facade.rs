@@ -45,11 +45,10 @@ use shekyl_units::AtomicUnits;
 use tokio::sync::RwLock;
 
 use super::bond_assembly::SpentRecordsDurablyPruned;
-use super::bond_orchestrator::p_lane_floor_fee;
 use super::drain_dispatch::DrainRequestError;
 use super::drain_orchestrator::DrainIntent;
 use super::drain_orchestrator::{DrainError, DrainOrchestrationError};
-use super::fee_policy::FeeEstimatorError;
+use super::fee_policy::{FeeEstimatorError, ValidatedFeeEstimates};
 use super::fee_snapshot::map_daemon_engine_fee_error;
 use super::pending::TxHash;
 use super::pending_post_gate::{ForegroundSession, UserPendingPost};
@@ -359,15 +358,15 @@ where
             return Err(DrainToPrincipalError::InFlight);
         }
 
-        // Canonical P-lane floor fee — the same function the bond post
-        // quotes, preserving the -29109 vs -29102 remedy split.
-        let fee = p_lane_floor_fee(
-            daemon
-                .get_fee_estimates()
-                .await
-                .map_err(|e| DrainToPrincipalError::FeeEstimate(map_daemon_engine_fee_error(e)))?,
-        )
-        .map_err(|e| match e {
+        // The daemon's fee snapshot, validated here so a refused answer and a
+        // failed query keep their remedies (-29109 vs -29102). The drain is
+        // priced from it on its own weight once its selection is known
+        // (`p_lane_spend_fee`, `p_lane_floor_fee`'s transfer-shaped form).
+        let fee_estimates = daemon
+            .get_fee_estimates()
+            .await
+            .map_err(|e| DrainToPrincipalError::FeeEstimate(map_daemon_engine_fee_error(e)))?;
+        ValidatedFeeEstimates::try_new(fee_estimates).map_err(|e| match e {
             FeeEstimatorError::DaemonFeeUnreasonable(v) => DrainToPrincipalError::FeeUnreasonable {
                 reason: v.reason(),
                 rate: v.rate(),
@@ -384,7 +383,7 @@ where
             self_arc,
             identity.p_slot,
             DrainIntent::Payment(payment),
-            fee,
+            fee_estimates,
             &witness,
         )
         .await?;
@@ -458,8 +457,17 @@ mod tests {
             "the SP-R0 production witness mint"
         );
         assert!(
-            code.contains("p_lane_floor_fee("),
-            "the fee must be the shared canonical P-lane floor quote"
+            code.contains("ValidatedFeeEstimates::try_new(fee_estimates)")
+                && !code.contains("fee_from_weight")
+                && !code.contains("p_lane_ceiling_fee"),
+            "the façade validates the fee snapshot and prices nothing itself: the drain \
+             pays the shared P-lane floor fee on its own weight (`p_lane_spend_fee` in \
+             the pipeline), never a fee of the façade's own"
+        );
+        let orchestrator = include_str!("drain_orchestrator.rs");
+        assert!(
+            orchestrator.contains("p_lane_spend_fee("),
+            "the drain pipeline prices the drain through the shared P-lane fee"
         );
         assert!(
             code.contains("Engine::submit_drain("),

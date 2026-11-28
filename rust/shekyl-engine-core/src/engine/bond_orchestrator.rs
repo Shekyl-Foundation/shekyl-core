@@ -45,6 +45,9 @@ use super::pscan::seal_basis::{load_seal_basis, SealBasisError};
 use super::pscan::start::{
     load_pscan_state_for_engine, pending_post_store_for_engine, WalletFilePendingSealStore,
 };
+use super::tx_fee_model::{
+    converge_spend_fee_by, InputCount, OutputCount, ProofLayers, Signer, SpendShape,
+};
 
 /// Bond fee for the first-stake post, from one daemon fee snapshot.
 ///
@@ -74,22 +77,37 @@ use super::pscan::start::{
 fn bond_fee_from_estimates(
     estimates: super::traits::FeeEstimates,
 ) -> Result<AtomicUnits, FirstStakeError> {
-    p_lane_floor_fee(estimates).map_err(|e| match e {
+    p_lane_ceiling_fee(estimates).map_err(|e| match e {
         FeeEstimatorError::DaemonFeeUnreasonable(v) => FirstStakeError::FeeUnreasonable(v),
         other => FirstStakeError::FeeEstimate(other),
     })
 }
 
-/// The canonical `P`-lane floor fee from one daemon fee snapshot: validated
-/// economy tier over [`P_LANE_WEIGHT_CEILING`], the weight limit. **The single fee decision for every `P`-lane spend** — the bond
-/// post (via [`bond_fee_from_estimates`]) and the WI-RPC-5 drain façade
-/// ([`drain_to_principal`](super::drain_facade)) both quote this function, so
-/// the P-lane fee-uniformity CONTRACT PIN is one body, not two derivations
-/// that can drift. Callers map [`FeeEstimatorError`] onto their own error
-/// surface, preserving the `-29109` (refused answer) vs `-29102` (failed
-/// query) remedy split.
+/// The `P`-lane fee at the weight ceiling: the interim every leg still on it
+/// pays until it prices its own weight (P-lane fee ruling, 2026-11-23). Each
+/// leg moves to [`p_lane_floor_fee`] in this PR, and this function goes with
+/// the last of them.
+pub(crate) fn p_lane_ceiling_fee(
+    estimates: super::traits::FeeEstimates,
+) -> Result<AtomicUnits, FeeEstimatorError> {
+    p_lane_floor_fee(estimates, P_LANE_WEIGHT_CEILING)
+}
+
+/// The `P`-lane floor fee for a transaction of `weight`: the validated
+/// economy tier's rate on that transaction's own weight (the 2026-07-19
+/// decision "P-lane fees", priced on the transaction's own weight as ruled
+/// 2026-11-23). **The single fee decision for every `P`-lane spend**: every
+/// leg prices through this function, so the lane's fee uniformity is one
+/// body, not several derivations that can drift. "Uniform" is one rule for
+/// every wallet, not one amount for every shape.
+///
+/// The whole snapshot is validated, not just `economy`: a non-monotonic band
+/// is a defect or a lie whichever tier is read. Callers map
+/// [`FeeEstimatorError`] onto their own error surface, preserving the
+/// `-29109` (refused answer) vs `-29102` (failed query) remedy split.
 pub(crate) fn p_lane_floor_fee(
     estimates: super::traits::FeeEstimates,
+    weight: usize,
 ) -> Result<AtomicUnits, FeeEstimatorError> {
     let estimates = ValidatedFeeEstimates::try_new(estimates)?;
     // `tx_fee::fee_from_weight`, not `FeeRate::calculate_fee_from_weight`:
@@ -99,8 +117,98 @@ pub(crate) fn p_lane_floor_fee(
     // daemon-supplied number.
     Ok(AtomicUnits::from_raw(super::tx_fee_model::fee_from_weight(
         &estimates.economy(),
-        P_LANE_WEIGHT_CEILING,
+        weight,
     )))
+}
+
+/// The `P`-lane fee of a transfer-shaped spend (`n_in` inputs, `n_out`
+/// outputs, at `layers`, no group payee): [`p_lane_floor_fee`] on the spend's
+/// own predicted weight, converged the way the send path converges a fee
+/// (`converge_spend_fee_by`, the weight's fee varint included). It is what
+/// an ordinary transfer of that shape pays at the economy rate, which is
+/// what a drain must pay to look like one (`ARCHIVAL_DRAIN_SEND_FD2.md`,
+/// T-DS-6/7).
+///
+/// # Errors
+///
+/// [`p_lane_floor_fee`]'s, and `DaemonResponseInvalid` for a fee that does
+/// not fit in `u64`, as the send path's estimator answers it.
+pub(crate) fn p_lane_spend_fee(
+    estimates: super::traits::FeeEstimates,
+    n_in: InputCount,
+    n_out: OutputCount,
+    layers: ProofLayers,
+) -> Result<AtomicUnits, FeeEstimatorError> {
+    // Refuse an unreasonable snapshot by name before converging on it.
+    ValidatedFeeEstimates::try_new(estimates)?;
+    let shape = SpendShape {
+        n_in,
+        n_out,
+        tree_depth: layers.get(),
+        signer: Signer::Solo,
+        group_payees: &[],
+    };
+    converge_spend_fee_by(&shape, 0, |weight| {
+        let weight = usize::try_from(weight).ok()?;
+        p_lane_floor_fee(estimates, weight)
+            .ok()
+            .map(AtomicUnits::to_raw)
+    })
+    .map(AtomicUnits::from_raw)
+    .ok_or(FeeEstimatorError::DaemonResponseInvalid {
+        reason: "the fee does not fit in u64",
+    })
+}
+
+/// How many times a `P`-lane spend priced from a measured build
+/// ([`p_lane_fee_from_build`]) may be built. Two settle every shape (the fee
+/// moves the weight only through its varint); the third is the bound that
+/// keeps a defect from looping, not a pass any spend needs.
+pub(crate) const MEASURED_FEE_BUILDS: usize = 3;
+
+/// The `P`-lane fee of a built transaction the weight predictor does not
+/// model (the bond post, the exit and the claim each carry a vin that is not
+/// an FCMP++ spend): [`p_lane_floor_fee`] on the transaction's own weight,
+/// read from `built` (which paid `built_fee`) and converged on the fee varint
+/// the way the send path converges a measured build (`converge_fee_by`,
+/// `weight_at_fee`). The caller builds again when the answer differs from
+/// `built_fee`; the fee moves the weight only through its varint, so the
+/// second build settles.
+///
+/// # Errors
+///
+/// [`p_lane_floor_fee`]'s; `DaemonResponseInvalid` for a fee that does not
+/// fit in `u64`, as the send path's estimator answers it, and for bytes of
+/// the wallet's own build that do not parse, named as such.
+pub(crate) fn p_lane_fee_from_build(
+    estimates: super::traits::FeeEstimates,
+    built: &[u8],
+    built_fee: AtomicUnits,
+) -> Result<AtomicUnits, FeeEstimatorError> {
+    ValidatedFeeEstimates::try_new(estimates)?;
+    let mut cursor = std::io::Cursor::new(built);
+    let weight = shekyl_wire::Transaction::read(&mut cursor)
+        .map(|tx| tx.weight())
+        .map_err(|_| FeeEstimatorError::DaemonResponseInvalid {
+            reason: "the wallet's own built transaction does not parse",
+        })?;
+    let weight = u64::try_from(weight).map_err(|_| FeeEstimatorError::DaemonResponseInvalid {
+        reason: "the fee does not fit in u64",
+    })?;
+    shekyl_tx_weight::converge_fee_by(
+        |fee| shekyl_tx_weight::weight_at_fee(weight, built_fee.to_raw(), fee),
+        0,
+        |weight| {
+            let weight = usize::try_from(weight).ok()?;
+            p_lane_floor_fee(estimates, weight)
+                .ok()
+                .map(AtomicUnits::to_raw)
+        },
+    )
+    .map(AtomicUnits::from_raw)
+    .ok_or(FeeEstimatorError::DaemonResponseInvalid {
+        reason: "the fee does not fit in u64",
+    })
 }
 
 /// What a completed first-stake reports back to the stake entry (public

@@ -186,6 +186,9 @@ pub(crate) struct SweepSelection {
     /// construction, so the assembly's change is zero and its drain-all arm
     /// (the T-DS-6 two-output principal split) is the shape that fires.
     pub(crate) payment: AtomicUnits,
+    /// The pass's fee: the `P`-lane floor fee on its own weight at the swept
+    /// count.
+    pub(crate) fee: AtomicUnits,
 }
 
 impl std::fmt::Debug for SweepSelection {
@@ -196,6 +199,7 @@ impl std::fmt::Debug for SweepSelection {
             .field("chosen", &"<redacted spend-set>")
             .field("input_total", &self.input_total)
             .field("payment", &self.payment)
+            .field("fee", &self.fee)
             .finish()
     }
 }
@@ -261,7 +265,7 @@ pub(crate) enum SweepSelectError {
 /// remainder), not an error.
 pub(crate) fn select_for_sweep(
     candidates: &[DrainCandidate],
-    fee: AtomicUnits,
+    fee_for: impl Fn(usize) -> Option<AtomicUnits>,
     reference_height: BlockHeight,
     max_inputs: usize,
 ) -> Result<SweepSelection, SweepSelectError> {
@@ -282,6 +286,11 @@ pub(crate) fn select_for_sweep(
             .ok_or(SweepSelectError::Overflow)?;
     }
 
+    // The pass's own fee: its swept count's weight, priced once the count is
+    // known (the sweep takes every mature input it can, so the count does
+    // not depend on the fee).
+    let fee = fee_for(chosen.len()).ok_or(SweepSelectError::Overflow)?;
+
     // A net that cannot give every required output one atomic unit is dust,
     // not merely net zero: the zero-change assembly splits the payment into
     // nonzero principal outputs (T-DS-6) — refuse it here as the named
@@ -296,6 +305,7 @@ pub(crate) fn select_for_sweep(
         chosen,
         input_total,
         payment,
+        fee,
     })
 }
 
@@ -495,7 +505,7 @@ mod tests {
         ];
         let sel = select_for_sweep(
             &candidates,
-            AtomicUnits::from_raw(50),
+            |_| Some(AtomicUnits::from_raw(50)),
             REFERENCE,
             shekyl_tx_builder::MAX_INPUTS,
         )
@@ -531,8 +541,13 @@ mod tests {
         // spends the limit (80).
         const CAP: usize = 8;
         let candidates: Vec<_> = (1..=9).map(|i| candidate(i, 10, 10)).collect();
-        let sel = select_for_sweep(&candidates, AtomicUnits::from_raw(5), REFERENCE, CAP)
-            .expect("a full pass fits the cap");
+        let sel = select_for_sweep(
+            &candidates,
+            |_| Some(AtomicUnits::from_raw(5)),
+            REFERENCE,
+            CAP,
+        )
+        .expect("a full pass fits the cap");
         assert_eq!(sel.chosen.len(), CAP);
         assert_eq!(sel.input_total, AtomicUnits::from_raw(80));
         assert_eq!(sel.payment, AtomicUnits::from_raw(75));
@@ -548,7 +563,7 @@ mod tests {
     fn sweep_dust_and_nothing_spendable_refuse_distinctly() {
         let none = select_for_sweep(
             &[candidate(1, 100, 99)],
-            AtomicUnits::from_raw(5),
+            |_| Some(AtomicUnits::from_raw(5)),
             REFERENCE,
             shekyl_tx_builder::MAX_INPUTS,
         );
@@ -560,7 +575,7 @@ mod tests {
 
         let dust = select_for_sweep(
             &[candidate(1, 50, 10)],
-            AtomicUnits::from_raw(50),
+            |_| Some(AtomicUnits::from_raw(50)),
             REFERENCE,
             shekyl_tx_builder::MAX_INPUTS,
         );
@@ -568,7 +583,7 @@ mod tests {
 
         let one_over = select_for_sweep(
             &[candidate(1, 51, 10)],
-            AtomicUnits::from_raw(50),
+            |_| Some(AtomicUnits::from_raw(50)),
             REFERENCE,
             shekyl_tx_builder::MAX_INPUTS,
         );
@@ -580,7 +595,7 @@ mod tests {
 
         let two_over = select_for_sweep(
             &[candidate(1, 52, 10)],
-            AtomicUnits::from_raw(50),
+            |_| Some(AtomicUnits::from_raw(50)),
             REFERENCE,
             shekyl_tx_builder::MAX_INPUTS,
         )

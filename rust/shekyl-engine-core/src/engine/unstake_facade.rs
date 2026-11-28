@@ -95,14 +95,13 @@ use shekyl_units::AtomicUnits;
 use tokio::sync::RwLock;
 
 use super::bond_assembly::SpentRecordsDurablyPruned;
-use super::bond_orchestrator::p_lane_floor_fee;
 use super::drain_dispatch::DrainRequestError;
 use super::drain_orchestrator::{
     DrainError, DrainIntent, DrainMoved, DrainOrchestrationError, TerminalExitObserved,
 };
 use super::emission_source::EmissionSourceError;
 use super::error::PersistenceError;
-use super::fee_policy::FeeEstimatorError;
+use super::fee_policy::{FeeEstimatorError, ValidatedFeeEstimates};
 use super::fee_snapshot::map_daemon_engine_fee_error;
 use super::pending::TxHash;
 use super::pending_post_gate::{ForegroundSession, UserPendingPost};
@@ -112,6 +111,7 @@ use super::signer::EngineSignerKind;
 use super::stake_engine::StakeEngineError;
 use super::stake_facade::StakeFacade;
 use super::staking_read::live_bonded_personas;
+use super::traits::FeeEstimates;
 use super::traits::{DaemonEngine, EconomicsEngine, PendingTxEngine, RefreshEngine};
 use super::transaction_submitter::{BroadcastSubmitError, SubmitSuccess};
 use super::{Engine, LocalLedger, StakingReadError};
@@ -773,10 +773,11 @@ where
                     context: "exit evidence",
                     detail: e.to_string(),
                 })?;
-        // The fee is the canonical P-lane floor — persona-independent, so it
-        // is quoted once and reused across the loop. It is memoised (quoted on
-        // first need) so a `PassInFlight` answer still lands before any fee I/O.
-        let mut fee: Option<AtomicUnits> = None;
+        // The fee snapshot is the P-lane rate's source — persona-independent, so it
+        // is fetched once and reused across the loop. It is memoised (fetched
+        // on first need) so a `PassInFlight` answer still lands before any
+        // fee I/O.
+        let mut fee_estimates: Option<FeeEstimates> = None;
         // Exited slots proven permanently unsweepable this call — a dust pool
         // with no maturing rows. Skipping them lets a lower stuck slot fall
         // through to a higher collectable pool instead of stranding it.
@@ -829,26 +830,29 @@ where
                 return Err(CollectUnstakedError::PassInFlight);
             }
 
-            // Canonical P-lane floor fee — quoted once, memoised, no override.
-            let fee = match fee {
-                Some(f) => f,
+            // The daemon's fee snapshot — fetched and validated once,
+            // memoised, no override. It is the rate every slot's sweep is
+            // priced from, each on its own weight (`p_lane_spend_fee` in the
+            // drain pipeline); a fee would be wrong for every slot but the
+            // first, whose weight it was quoted for.
+            let fee_estimates = match fee_estimates {
+                Some(estimates) => estimates,
                 None => {
                     let daemon = { engine.read().await.daemon().clone() };
-                    let quoted =
-                        p_lane_floor_fee(daemon.get_fee_estimates().await.map_err(|e| {
-                            CollectUnstakedError::FeeEstimate(map_daemon_engine_fee_error(e))
-                        })?)
-                        .map_err(|e| match e {
-                            FeeEstimatorError::DaemonFeeUnreasonable(v) => {
-                                CollectUnstakedError::FeeUnreasonable {
-                                    reason: v.reason(),
-                                    rate: v.rate(),
-                                    bound: v.bound(),
-                                }
+                    let quoted = daemon.get_fee_estimates().await.map_err(|e| {
+                        CollectUnstakedError::FeeEstimate(map_daemon_engine_fee_error(e))
+                    })?;
+                    ValidatedFeeEstimates::try_new(quoted).map_err(|e| match e {
+                        FeeEstimatorError::DaemonFeeUnreasonable(v) => {
+                            CollectUnstakedError::FeeUnreasonable {
+                                reason: v.reason(),
+                                rate: v.rate(),
+                                bound: v.bound(),
                             }
-                            other => CollectUnstakedError::FeeEstimate(other),
-                        })?;
-                    fee = Some(quoted);
+                        }
+                        other => CollectUnstakedError::FeeEstimate(other),
+                    })?;
+                    fee_estimates = Some(quoted);
                     quoted
                 }
             };
@@ -858,7 +862,7 @@ where
                 engine.clone(),
                 slot,
                 DrainIntent::TerminalSweep(witness),
-                fee,
+                fee_estimates,
                 &pruning,
             )
             .await

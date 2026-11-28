@@ -105,12 +105,15 @@ use super::bond_assembly::{
     sweep_funding_outputs, BondAssemblyError, FundingInputContext, SpentRecordsDurablyPruned,
     SweepOverflowPolicy,
 };
-use super::bond_orchestrator::{anchored_reference_block, p_lane_floor_fee};
+use super::bond_orchestrator::{
+    anchored_reference_block, p_lane_fee_from_build, p_lane_spend_fee, MEASURED_FEE_BUILDS,
+};
 use super::curve_tree_actor::CurveTreeHandleError;
 use super::daemon::synced_chain_facts::TimelineBreak;
 use super::emission_source::{fetch_claim_source_for, ClaimSourceFor, EmissionSourceError};
-use super::fee_policy::FeeEstimatorError;
+use super::fee_policy::{FeeEstimatorError, ValidatedFeeEstimates};
 use super::fee_snapshot::map_daemon_engine_fee_error;
+use super::output_selector::selection_layers;
 use super::prpc::PersonaIsolatedTransport;
 use super::pscan::block_source::daemon_claimed_tip;
 use super::pscan::seal_basis::{load_seal_basis, SealBasisError};
@@ -122,6 +125,7 @@ use super::stake_engine::{
 };
 use super::traits::{DaemonEngine, EconomicsEngine, LedgerEngine, PendingTxEngine, RefreshEngine};
 use super::transaction_submitter::{BroadcastSubmitError, BroadcastSubmitter, SubmitSuccess};
+use super::tx_fee_model::{InputCount, OutputCount};
 use super::Engine;
 
 /// What one dispatched terminal exit did: the assembled exit's public facts
@@ -393,18 +397,15 @@ where
         let block_hash_at = move |h: BlockHeight| snapshot.block_hash_at(h);
         let store = pending_post_store_for_engine(self_arc.clone(), pending_gate);
 
-        // Canonical P-lane floor fee — the shared single fee decision (doc
-        // comment). BOTH halves stay typed through the `Fee` arm so the RPC
-        // layer keeps the -29109 (refused answer) vs -29102 (failed query)
-        // remedy split: the query-transport failure was previously wrapped
-        // as a `State` read error, which routed a reachable daemon-down
-        // condition to -32603.
-        let fee = p_lane_floor_fee(
-            daemon
-                .get_fee_estimates()
-                .await
-                .map_err(|e| ReleaseRequestError::Fee(map_daemon_engine_fee_error(e)))?,
-        )?;
+        // The daemon's fee snapshot, validated here so the RPC layer keeps the
+        // -29109 (refused answer) vs -29102 (failed query) remedy split. The
+        // exit is priced from it on its own weight below (`p_lane_floor_fee`
+        // through `p_lane_fee_from_build`).
+        let fee_estimates = daemon
+            .get_fee_estimates()
+            .await
+            .map_err(|e| ReleaseRequestError::Fee(map_daemon_engine_fee_error(e)))?;
+        ValidatedFeeEstimates::try_new(fee_estimates)?;
 
         // Two independent reads, joined: the persona canonical id (a pure
         // actor projection over the resident keys — never a caller-supplied
@@ -508,78 +509,105 @@ where
         // without that, a record within those units of the fee passes
         // every named check and then fails in the builder as a zero-amount
         // vout, an unnamed refusal on the one path rule 82 most cares about.
-        let (reference, _tree_depth) =
+        let (reference, tree_depth) =
             anchored_reference_block(&curve_tree, chain_tip, block_hash_at)
                 .await
                 .map_err(StakeEngineError::from)?;
         let reference_height = reference.height;
-        let required = AtomicUnits::from_raw(
-            fee.to_raw()
-                .saturating_add(shekyl_tx_weight::MIN_NON_COINBASE_OUTPUTS as u64)
-                .saturating_sub(record.bonded_total_atomic()),
-        );
-        // CapLargest: the exit owes no consume-everything invariant, so a
-        // pool fragmented past the vin headroom caps to the largest subset
-        // (see `SweepOverflowPolicy`) instead of refusing — leftovers go to
-        // the retired persona's drain.
-        let selection = sweep_funding_outputs(
-            pruning_landed,
-            funding_records,
-            p_slot,
-            reserved,
-            required,
-            reference_height,
-            SweepOverflowPolicy::CapLargest,
-        )
-        .map_err(StakeEngineError::from)?;
 
-        let assemble_inputs: Vec<AssembleInput> = selection
-            .records
-            .iter()
-            .map(crate::engine::ownership::p_assemble_input)
-            .collect();
-        let paths = curve_tree
-            .assemble_tx(reference, assemble_inputs)
-            .await
-            .map_err(|e| match e {
-                // The one retryable path-assembly refusal, kept typed across
-                // the boundary (same as the bond path).
-                CurveTreeHandleError::Client(ClientError::OutputNotDrained { gindex, .. }) => {
-                    BondAssemblyError::OutputNotYetDrained {
-                        gindex: gindex.to_raw(),
-                    }
-                }
-                other => BondAssemblyError::build("assemble_tx", format!("{other:?}")),
-            })
+        // The exit's fee is the `P`-lane floor fee on its own weight. It
+        // carries a `Release` vin the weight predictor does not model, so it
+        // is built, its weight read, and built again if the fee moved
+        // (`p_lane_fee_from_build`); the fee moves the weight only through
+        // its varint, so the second build settles. The seed is the fee of a
+        // one-input two-output transfer at this depth.
+        let mut fee = p_lane_spend_fee(
+            fee_estimates,
+            InputCount::clamped(1),
+            OutputCount::clamped(shekyl_tx_weight::MIN_NON_COINBASE_OUTPUTS),
+            selection_layers(tree_depth).as_proof(),
+        )?;
+        let mut settled = None;
+        for _ in 0..MEASURED_FEE_BUILDS {
+            let required = AtomicUnits::from_raw(
+                fee.to_raw()
+                    .saturating_add(shekyl_tx_weight::MIN_NON_COINBASE_OUTPUTS as u64)
+                    .saturating_sub(record.bonded_total_atomic()),
+            );
+            // CapLargest: the exit owes no consume-everything invariant, so a
+            // pool fragmented past the vin headroom caps to the largest subset
+            // (see `SweepOverflowPolicy`) instead of refusing — leftovers go to
+            // the retired persona's drain.
+            let selection = sweep_funding_outputs(
+                pruning_landed,
+                funding_records,
+                p_slot,
+                reserved,
+                required,
+                reference_height,
+                SweepOverflowPolicy::CapLargest,
+            )
             .map_err(StakeEngineError::from)?;
-        // One path per input asked for, in that order, all to one tree: the
-        // batch's own properties (R-26), so the records zip with its paths.
-        let tree_ctx = tree_context_from(&paths.tree());
-        let funding: Vec<FundingInputContext> = selection
-            .records
-            .into_iter()
-            .zip(paths.into_paths().map(|(_, path)| path.into_parts()))
-            .map(|(record, path)| FundingInputContext {
-                record,
-                leaf_chunk: path.leaf_chunk.iter().map(leaf_entry_from_chunk).collect(),
-                c1_layers: path.c1_layers,
-                c2_layers: path.c2_layers,
-            })
-            .collect();
 
-        // Assemble inside the actor — the reply comes back unbroadcast; the
-        // handler re-proves the record↔handle persona binding and re-runs
-        // the readiness predicates before anything is built.
-        let handle = stake.mint_handle(p_slot).await?;
-        let assembled = stake
-            .assemble_release(AssembleRelease {
-                handle,
-                record,
-                funding,
-                tree_ctx,
-                fee: fee.to_raw(),
-            })
-            .await?;
+            let assemble_inputs: Vec<AssembleInput> = selection
+                .records
+                .iter()
+                .map(crate::engine::ownership::p_assemble_input)
+                .collect();
+            let paths = curve_tree
+                .assemble_tx(reference, assemble_inputs)
+                .await
+                .map_err(|e| match e {
+                    // The one retryable path-assembly refusal, kept typed across
+                    // the boundary (same as the bond path).
+                    CurveTreeHandleError::Client(ClientError::OutputNotDrained {
+                        gindex, ..
+                    }) => BondAssemblyError::OutputNotYetDrained {
+                        gindex: gindex.to_raw(),
+                    },
+                    other => BondAssemblyError::build("assemble_tx", format!("{other:?}")),
+                })
+                .map_err(StakeEngineError::from)?;
+            // One path per input asked for, in that order, all to one tree: the
+            // batch's own properties (R-26), so the records zip with its paths.
+            let tree_ctx = tree_context_from(&paths.tree());
+            let funding: Vec<FundingInputContext> = selection
+                .records
+                .into_iter()
+                .zip(paths.into_paths().map(|(_, path)| path.into_parts()))
+                .map(|(record, path)| FundingInputContext {
+                    record,
+                    leaf_chunk: path.leaf_chunk.iter().map(leaf_entry_from_chunk).collect(),
+                    c1_layers: path.c1_layers,
+                    c2_layers: path.c2_layers,
+                })
+                .collect();
+
+            // Assemble inside the actor — the reply comes back unbroadcast; the
+            // handler re-proves the record↔handle persona binding and re-runs
+            // the readiness predicates before anything is built.
+            let handle = stake.mint_handle(p_slot).await?;
+            let assembled = stake
+                .assemble_release(AssembleRelease {
+                    handle,
+                    record,
+                    funding,
+                    tree_ctx,
+                    fee: fee.to_raw(),
+                })
+                .await?;
+            let built_fee = fee;
+            fee = p_lane_fee_from_build(fee_estimates, assembled.bound_tx.bytes(), built_fee)?;
+            if fee == built_fee {
+                settled = Some(assembled);
+                break;
+            }
+        }
+        let assembled = settled.ok_or(ReleaseRequestError::Fee(
+            FeeEstimatorError::DaemonResponseInvalid {
+                reason: "the exit's fee did not settle on its own weight",
+            },
+        ))?;
 
         // Persist-before-dispatch (module docs; pin P-2's sibling): seal the
         // exit record — bytes and funding reservation — and its Dispatched
@@ -831,10 +859,10 @@ mod tests {
             "the bare fetch loses the persona binding the exit path requires"
         );
 
-        let fee_quote = "p_lane_floor_fee(";
+        let fee_quote = "p_lane_fee_from_build(";
         assert!(
-            code.contains(fee_quote),
-            "the fee must be the shared canonical P-lane floor quote"
+            code.contains(fee_quote) && !code.contains("p_lane_ceiling_fee"),
+            "the fee must be the shared P-lane floor fee on the exit's own weight"
         );
 
         let sweep = "sweep_funding_outputs(";

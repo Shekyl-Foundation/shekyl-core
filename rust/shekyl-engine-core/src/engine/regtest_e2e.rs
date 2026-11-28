@@ -5983,22 +5983,21 @@ async fn e2e_drain_wire_shape_matches_a_real_transfer() {
     refresh(&fixture.arc).await;
 
     // ── A real 1-in/2-out drain: assemble + dispatch through submit_drain ──
-    // Caller-priced fee over a generous envelope (overpay is a miner transfer,
-    // never a conservation term); the daemon's acceptance at submit is the
-    // real-bytes proof. Payment + fee + reserve < record ⇒ change > 0 and ≥
-    // the exit-fee reserve (live persona), so the drain stays a partial
+    // The engine prices the drain at the floor rate × its own converged
+    // weight; the daemon's acceptance at submit is the real-bytes proof.
+    // `drain_fee` is an upper bound (a 32 KiB envelope at the same rate) the
+    // fixture check uses: payment + fee + reserve < record ⇒ change > 0 and
+    // ≥ the exit-fee reserve (live persona), so the drain stays a partial
     // 1-in/2-out sweep.
-    let drain_fee = {
-        let estimates = fixture
-            .arc
-            .read()
-            .await
-            .daemon()
-            .get_fee_estimates()
-            .await
-            .expect("daemon fee estimates");
-        estimates.economy.calculate_fee_from_weight(32_768)
-    };
+    let fee_estimates = fixture
+        .arc
+        .read()
+        .await
+        .daemon()
+        .get_fee_estimates()
+        .await
+        .expect("daemon fee estimates");
+    let drain_fee = fee_estimates.economy.calculate_fee_from_weight(32_768);
     let drain_payment = AtomicUnits::from_raw(2_000_000_000);
     // The 1-input guarantee: the LARGER change half (≥ cushion/2) must alone
     // cover payment + fee (+ the reserve headroom the whole pool keeps).
@@ -6015,7 +6014,7 @@ async fn e2e_drain_wire_shape_matches_a_real_transfer() {
             fixture.arc.clone(),
             slot,
             super::drain_orchestrator::DrainIntent::Payment(drain_payment),
-            AtomicUnits::from_raw(drain_fee),
+            fee_estimates,
             &super::bond_assembly::SpentRecordsDurablyPruned::for_test(),
         )
         .await

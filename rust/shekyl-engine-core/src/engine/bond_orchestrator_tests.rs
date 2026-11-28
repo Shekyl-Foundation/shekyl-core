@@ -892,11 +892,14 @@ fn the_reserve_pays_the_quoted_release_fee_at_the_headroom_rate() {
     use shekyl_standoff::{EXIT_FEE_HEADROOM_RATE, EXIT_FEE_RESERVE_ATOMIC};
 
     let rate = FeeRate::new(EXIT_FEE_HEADROOM_RATE).expect("rate");
-    let quoted = p_lane_floor_fee(FeeEstimates {
-        economy: rate,
-        standard: rate,
-        high: rate,
-    })
+    let quoted = p_lane_floor_fee(
+        FeeEstimates {
+            economy: rate,
+            standard: rate,
+            high: rate,
+        },
+        shekyl_standoff::P_LANE_WEIGHT_CEILING,
+    )
     .expect("the headroom rate is a valid estimate");
     assert_eq!(quoted.to_raw(), EXIT_FEE_RESERVE_ATOMIC);
 }
