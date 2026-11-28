@@ -380,7 +380,7 @@ impl RegtestDaemon {
     ///
     /// Only A covers its own origins in the pool wait. The relays do not
     /// originate. A short mesh during the walk fails that wait; propagation
-    /// is a rerun (`docs/FOLLOWUPS.md`, the emission walk).
+    /// is a rerun.
     pub(super) async fn start_tor_mesh(
         seed: &[u8; shekyl_crypto_pq::account::SEED_BYTES],
         schedule: Option<RegtestSchedule>,

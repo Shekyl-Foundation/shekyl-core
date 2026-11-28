@@ -54,13 +54,13 @@
 #           consensus gates.
 #   acceptance — ACCEPTANCE, run by hand on a quiet fleet VM under a
 #           USAGE.md claim (Rick, 2026-11-14): the emission walk over Tor,
-#           about six hours, on the public Tor network with the pinned
+#           about thirteen hours, on the public Tor network with the pinned
 #           managed Tor. It WAITS on a healthy public onion network: run it
 #           when the Tor lane reports the network healthy, and rerun a
-#           failure on propagation (docs/FOLLOWUPS.md, the emission walk).
-#           Then it runs before each release cut and whenever the recapture
-#           check says the emission-claim vector is stale. Per PR its
-#           coverage is the vector's replay in the Rust job. Needs
+#           failure on propagation. Then it runs before each release cut.
+#           It has no per-PR coverage: its capture is a run record, never a
+#           committed corpus (CHAIN_FORGE.md CF-R6), and the corpus role
+#           passes to Chain L. Needs
 #           SHEKYL_TEST_TOR_BINARY, the pinned bundle's tor
 #           (scripts/release/tor_bundle.py stage).
 # Every lane name-checks ALL lists, so a rename is caught in every run.
@@ -440,11 +440,12 @@ DECIDED_DARK=(
 # The acceptance lane's walks: over live Tor, hours long, run by hand (the
 # lane note above).
 #   e2e_emission_claim_accepted_and_applied — the emission walk (SO-D12 4b):
-#     three daemons on the pinned managed Tor, the persona's wallet serving
-#     its shard on an onion, the mining daemon's producer reading it, the
-#     served epoch's bundles admitted and settled, the claim accepted and
-#     paid. Its green run captures the emission-claim vector. Prior reds:
-#     sabotage 2026-09-08 (was ARMED_SLOW).
+#     five daemons on the pinned managed Tor, each connected to the others,
+#     the persona's wallet serving its shard on an onion, the mining
+#     daemon's producer reading it, the served epoch's bundles admitted and
+#     settled, the claim accepted and paid, and the reward re-discovered by
+#     the wallet's P-scan.
+#     Prior reds: sabotage 2026-09-08 (was ARMED_SLOW).
 ACCEPTANCE=(
   engine::regtest_e2e::e2e_emission_claim_accepted_and_applied
 )
