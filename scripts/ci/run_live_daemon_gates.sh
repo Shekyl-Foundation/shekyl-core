@@ -328,12 +328,16 @@ ARMED=(
 #   e2e_a_plan_signed_at_its_due_block_lands_at_reference_age_six — the
 #     bond-post delay round's falsifier: the production stake entry, the
 #     driver signs at the due block, the first send carries reference age
-#     6, and the bond lands, its swept funding pruned and its change found
-#     again. It mines out the plan's real draw (0–600 blocks at the box's
-#     block pace), so its time moves with the draw: green 1 727 s. The
-#     draw is logged; SHEKYL_TEST_REPLAY_PLAN_DRAW replays one. Red with
+#     6 and comes within 8 blocks of the latest the due can be (the
+#     request plus the draw), and the bond lands, its swept funding pruned
+#     and its change found again. It mines toward the plan's real draw
+#     (0–600 blocks at the box's block pace) and stops at that bound so the
+#     driver can prove, so its time moves with the draw. The draw is
+#     logged; SHEKYL_TEST_REPLAY_PLAN_DRAW replays one. Green at the
+#     replayed draw 20 in 392 s (2026-11-28). Red with
 #     `select_reference_height` one block older: the first send carried
-#     age 7.
+#     age 7. Red before 4b6d7370b6 (mining every round): first sent at
+#     count 450, due by 118.
 #   e2e_a_withdrawn_plan_is_drained_to_the_principal_and_retired — a
 #     withdrawn plan, a reopen between its ending's save and the drain,
 #     one drain to the principal, the persona retired: green 358 s. Red
