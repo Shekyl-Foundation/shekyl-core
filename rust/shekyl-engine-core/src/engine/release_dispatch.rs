@@ -524,7 +524,8 @@ where
         // fee, within `MEASURED_FEE_BUILDS`, so a model defect costs a
         // second proof and never an underpaid exit.
         let layers = selection_layers(tree_depth).as_proof();
-        let release_len = release_input_len(record.bonded_total_atomic())?;
+        let release_len =
+            shekyl_wire::transaction::weight::release_input_len(record.bonded_total_atomic());
         let payout_outputs = OutputCount::clamped(shekyl_tx_weight::MIN_NON_COINBASE_OUTPUTS);
         // What the sources must cover beyond the released collateral at
         // `fee`: see the paragraph above `anchored_reference_block`.
@@ -768,35 +769,6 @@ fn admit_exit_record(fetched: &ClaimSourceFor) -> Result<(), ReleaseRequestError
             format!("{why:?}"),
         )),
     }
-}
-
-/// The wire length of the `Release` input an exit of `bonded_total` carries,
-/// for the fee to price before the exit is built. The vin is
-/// `build_release_vin`'s at its fixed fields — the empty end-state holdings,
-/// a zero post-connect total and credit, the whole balance as the debit —
-/// over a placeholder identity key of the canonical length, which is all the
-/// writer reads of the key. The build's measured weight checks it
-/// ([`p_lane_fee_from_build`]).
-pub(crate) fn release_input_len(bonded_total: u64) -> Result<usize, ReleaseRequestError> {
-    let vin = shekyl_archival_retention::bond_wire::ArchivalBondPostVin::release(
-        vec![0; shekyl_wire::transaction::PQC_HYBRID_SINGLE_KEY_LEN],
-        [0; 32],
-        shekyl_archival_retention::HoldingsDescriptor {
-            kind: shekyl_archival_retention::HoldingsKind::ShardSetCompact,
-            shard_ids: shekyl_archival_retention::ShardSet::empty(),
-        },
-        0,
-        0,
-        bonded_total,
-    );
-    super::bond_assembly::wire_bond_post_input(&vin)
-        .map_err(|e| ReleaseRequestError::from(StakeEngineError::from(e)))?
-        .serialized_len()
-        .ok_or(ReleaseRequestError::Fee(
-            FeeEstimatorError::DaemonResponseInvalid {
-                reason: "the exit's Release input does not encode",
-            },
-        ))
 }
 
 #[cfg(test)]
