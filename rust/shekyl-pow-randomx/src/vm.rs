@@ -1797,7 +1797,7 @@ impl VmState {
                     fdiv_m[fp_reg(ins.dst)] += 1;
                 }
             }
-            crate::fpu_rounding::census::note_iteration(
+            crate::fpu_rounding::fp_census::note_iteration(
                 runs.iter().copied().max().unwrap_or(0),
                 fdiv_m.iter().copied().max().unwrap_or(0),
             );
@@ -3969,7 +3969,7 @@ mod fp_control_word_tests {
 #[cfg(test)]
 mod subnormal_tests {
     use super::tests::shared_prepared_cache;
-    use crate::fpu_rounding::census;
+    use crate::fpu_rounding::fp_census as census;
 
     /// Hash `inputs_per_seedhash` inputs under each prepared cache and
     /// check the census.

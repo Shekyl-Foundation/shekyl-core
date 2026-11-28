@@ -52,7 +52,7 @@
 compile_error!("shekyl-pow-randomx FPU rounding is implemented only for x86_64 and aarch64");
 
 #[cfg(test)]
-pub(crate) mod census;
+pub(crate) mod fp_census;
 #[cfg(test)]
 pub(crate) mod oracle;
 #[cfg(test)]
@@ -154,7 +154,7 @@ impl FpEnv {
             hw::add(self.fixed(mode), &self.caller, a, b)
         };
         #[cfg(test)]
-        census::note(census::Op::Add, mode, a, b, r);
+        fp_census::note(fp_census::Op::Add, mode, a, b, r);
         r
     }
 
@@ -167,7 +167,7 @@ impl FpEnv {
             hw::sub(self.fixed(mode), &self.caller, a, b)
         };
         #[cfg(test)]
-        census::note(census::Op::Sub, mode, a, b, r);
+        fp_census::note(fp_census::Op::Sub, mode, a, b, r);
         r
     }
 
@@ -180,7 +180,7 @@ impl FpEnv {
             hw::mul(self.fixed(mode), &self.caller, a, b)
         };
         #[cfg(test)]
-        census::note(census::Op::Mul, mode, a, b, r);
+        fp_census::note(fp_census::Op::Mul, mode, a, b, r);
         r
     }
 
@@ -193,7 +193,7 @@ impl FpEnv {
             hw::div(self.fixed(mode), &self.caller, a, b)
         };
         #[cfg(test)]
-        census::note(census::Op::Div, mode, a, b, r);
+        fp_census::note(fp_census::Op::Div, mode, a, b, r);
         r
     }
 
@@ -206,7 +206,7 @@ impl FpEnv {
             hw::sqrt(self.fixed(mode), &self.caller, a)
         };
         #[cfg(test)]
-        census::note(census::Op::Sqrt, mode, a, a, r);
+        fp_census::note(fp_census::Op::Sqrt, mode, a, a, r);
         r
     }
 }
