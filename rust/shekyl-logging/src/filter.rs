@@ -42,7 +42,7 @@ impl Directive {
             return Err(FilterError::RetiredTarget {
                 target,
                 origin,
-                subsystems: subsystem::names(),
+                subsystems: subsystem::joined_names(),
             });
         }
         EnvFilter::try_new(spec).map_err(|source| FilterError::Parse { origin, source })?;

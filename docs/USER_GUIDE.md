@@ -1276,10 +1276,14 @@ environment:
 
 - `log-level` is the base level: `error`, `warn` (the default), `info`,
   `debug` or `trace`.
-- `log-category` sets a level for one subsystem, as `subsystem=level`:
-  `daemon`, `p2p`, `sync`, `chain`, `store`, `txpool`, `relay`, `rpc`,
-  `tor`, `miner`, `notify` or `archival`. Another key is refused when the
-  configuration is read. For example, in `shekyld-<network>.toml`:
+- `log-category` sets a level for one subsystem, as `subsystem=level`.
+  Each binary takes the subsystems it writes lines under. `shekyld` takes
+  `daemon`, `p2p`, `sync`, `chain`, `txpool`, `relay`, `rpc`, `tor`,
+  `miner` and `notify`. A subsystem the binary writes nothing under, such
+  as `wallet` on `shekyld`, is refused with the binary's name; any other
+  word is refused too. Both refusals come when the configuration is read,
+  and both list the keys the binary takes. For example, in
+  `shekyld-<network>.toml`:
 
   ```toml
   log-level = "info"
@@ -1303,8 +1307,11 @@ shekyl-wallet-rpc --log-level info --log-category rpc=debug \
     --log-file /srv/shekyl/logs/wallet-rpc.log
 ```
 
-`log-category` takes the daemon's subsystems and `wallet`, which covers the
-wallet's own crates. The default level is `warn`.
+`log-category` takes each binary's own subsystems: `shekyl-cli` takes
+`daemon`, `p2p`, `chain`, `rpc` and `wallet`, and `shekyl-wallet-rpc`
+takes `daemon`, `chain`, `rpc` and `wallet`. `wallet` covers the wallet's
+own crates. The default level is `warn`. `shekyl-rpc-tunnel` takes the
+same four options, and its `log-category` takes `daemon` and `rpc`.
 
 **Neither wallet binary writes a log file unless you name one with
 `--log-file`.** A wallet's log can say which wallet ran and when, so it is

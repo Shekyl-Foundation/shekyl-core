@@ -8,12 +8,26 @@
 //! (`shekyl_daemon_config::logging_to_named_file`), and the daemon-connection
 //! rows mean what they mean in `shekyl-cli`.
 
-use shekyl_daemon_config::{BYTES, LEVEL, LOG_CATEGORY, NETWORKS};
+use shekyl_daemon_config::{log_category, BYTES, LEVEL, NETWORKS};
+use shekyl_logging::subsystem::{names, Subsystem};
 use shekyl_options::{
     Default, EndpointRule, Grant, Kind, PeerRule, Row, Surface, Table, Visibility,
 };
 
 use crate::server::TOR_FILE_OPTION;
+
+/// The subsystems `shekyl-wallet-rpc` logs under: the wallet's crates, `shekyl-
+/// fcmp`'s proof checks (`chain`), the RPC transport (`rpc`) and the process
+/// (`daemon`). The audit of the workspace's source holds this list to the code
+/// (`the_log_category_keys_are_what_it_logs_under`).
+const LOG_SUBSYSTEMS: [Subsystem; 4] = [
+    Subsystem::Daemon,
+    Subsystem::Chain,
+    Subsystem::Rpc,
+    Subsystem::Wallet,
+];
+const LOG_KEYS: [&str; LOG_SUBSYSTEMS.len()] = names(LOG_SUBSYSTEMS);
+const LOG_CATEGORY: Kind = log_category("shekyl-wallet-rpc", &LOG_KEYS);
 
 const fn row(
     name: &'static str,
@@ -92,7 +106,7 @@ mod tests {
     #[test]
     fn the_table_is_well_formed_and_shares_the_daemons_kinds() {
         assert!(TABLE.defects().is_empty(), "{:?}", TABLE.defects());
-        for name in ["log-level", "log-category", "log-size-max", "network"] {
+        for name in ["log-level", "log-size-max", "network"] {
             let ours = TABLE.row(name).expect("our row");
             let daemons = shekyl_daemon_config::TABLE
                 .row(name)
@@ -103,5 +117,28 @@ mod tests {
                 "{name}"
             );
         }
+    }
+    /// `shekyl-wallet-rpc`'s `log-category` keys are the subsystems its code and its
+    /// dependencies log under, no more and no fewer; a subsystem it writes
+    /// nothing under is refused naming `shekyl-wallet-rpc`. Red edit: add or drop a
+    /// subsystem in `LOG_SUBSYSTEMS`.
+    #[test]
+    fn the_log_category_keys_are_what_it_logs_under() {
+        assert_eq!(TABLE.binary, "shekyl-wallet-rpc");
+        shekyl_logging::audit::assert_keys_are_what_it_logs(TABLE.binary, &LOG_SUBSYSTEMS);
+        let row = TABLE.row("log-category").expect("the row");
+        for key in LOG_KEYS {
+            assert!(
+                row.kind.parse_cli(&[format!("{key}=debug")]).is_ok(),
+                "{key}"
+            );
+        }
+        let refusal = row
+            .kind
+            .parse_cli(&["store=debug".into()])
+            .unwrap_err()
+            .at("log-category", shekyl_options::Source::Cli);
+        assert_eq!(refusal.code, shekyl_options::Code::ValueKeyNotTaken);
+        assert_eq!(refusal.get("binary"), Some("shekyl-wallet-rpc"));
     }
 }

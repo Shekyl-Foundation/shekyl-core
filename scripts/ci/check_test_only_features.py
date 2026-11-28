@@ -180,6 +180,15 @@ TEST_ONLY: dict[tuple[str, str], str] = {
     "which passes the daemon's real ancestor check (Rick, 2026-11-23). Enabled "
     "from the dev edges of the crates whose tests start or lock a daemon",
     (
+        "shekyl-logging",
+        "audit",
+    ): "shekyl_logging::audit: reads each workspace crate's source and runs "
+    "`cargo tree` to learn what a binary logs under, for the tests that hold "
+    "the subsystem map and each binary's log-category keys to the code. A "
+    "shipped binary has no source tree or cargo to read. Enabled from the "
+    "daemon configuration's, the CLI's, the wallet RPC's and the tunnel's dev "
+    "edges",
+    (
         "shekyl-win-sec",
         "test-utils",
     ): "the probe helpers (SID readers, the label reader) and the scratch "
@@ -606,6 +615,9 @@ PERMANENT: dict[tuple[str, str], str] = {
 # `shekyl-os-account` joined 2026-11-23, the commit that declared `test-fixture`
 # for the tests that start or lock a daemon. That is its only feature, and it
 # is test-only.
+# `shekyl-logging` joined 2026-11-28, the commit that declared `audit` for
+# the four binaries' log-category tests. That is its only feature, and it is
+# test-only.
 #
 # This set is opt-in — the crates named below, out of a workspace approaching
 # seventy — so exhaustiveness holds *within* governance. The rule for joining: **a crate
@@ -647,6 +659,7 @@ GOVERNED_OWNERS: frozenset[str] = frozenset(
         "shekyl-ct-balance",
         "shekyl-p-store",
         "shekyl-os-account",
+        "shekyl-logging",
     }
 )
 

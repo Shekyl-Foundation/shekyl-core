@@ -10,9 +10,10 @@
 //! never added here (rule 83). The REJECTED and RESERVED rows are contract
 //! entries (IG-10): never accepted, never in help, and never deleted as dead.
 
+use shekyl_logging::subsystem::{names, Subsystem, NAMES};
 use shekyl_network::{Lever, Staging};
 use shekyl_options::{
-    Default, DevGate, Dimension, EndpointRule, Grant, KeyRule, Kind, NameRule, PeerRule, Row,
+    Default, DevGate, Dimension, EndpointRule, Grant, Kind, MapKeys, NameRule, PeerRule, Row,
     Surface, Table, Visibility,
 };
 
@@ -82,15 +83,44 @@ pub const BYTES: Kind = Kind::Quantity {
     keywords: &[],
 };
 
-/// The kind of `log-category`, which every binary's logging rows share: a
-/// level for each log subsystem.
-pub const LOG_CATEGORY: Kind = Kind::Map {
-    keys: KeyRule {
-        describe: "a log subsystem: daemon, p2p, sync, chain, store, txpool, relay, rpc, tor, miner, notify or archival",
-        check: shekyl_logging::subsystem::is_subsystem,
-    },
-    value: &LEVEL,
-};
+/// The kind of a binary's `log-category` row: a level for each log
+/// subsystem the binary logs under. `taken` is that binary's own keys, built
+/// with [`names`] from its table's list of [`Subsystem`]s. Every subsystem is
+/// known, so one the binary writes nothing under is refused naming the
+/// binary (`config.value.key-not-taken`), and a word that is no subsystem is
+/// refused as a stray word (`config.value.word`); each refusal lists the
+/// binary's keys.
+#[must_use]
+pub const fn log_category(binary: &'static str, taken: &'static [&'static str]) -> Kind {
+    Kind::Map {
+        keys: MapKeys {
+            binary,
+            taken,
+            known: &NAMES,
+        },
+        value: &LEVEL,
+    }
+}
+
+/// The subsystems `shekyld` logs under: those of its own code and of every
+/// workspace crate it depends on. `store` and `archival` are not among them
+/// (their crates log nothing), and `wallet` is the wallet binaries'. The
+/// audit of the workspace's source holds this list to the code
+/// (`the_log_category_keys_are_what_shekyld_logs_under`).
+pub(crate) const LOG_SUBSYSTEMS: [Subsystem; 10] = [
+    Subsystem::Daemon,
+    Subsystem::P2p,
+    Subsystem::Sync,
+    Subsystem::Chain,
+    Subsystem::Txpool,
+    Subsystem::Relay,
+    Subsystem::Rpc,
+    Subsystem::Tor,
+    Subsystem::Miner,
+    Subsystem::Notify,
+];
+const LOG_KEYS: [&str; LOG_SUBSYSTEMS.len()] = names(LOG_SUBSYSTEMS);
+const LOG_CATEGORY: Kind = log_category("shekyld", &LOG_KEYS);
 const COUNT: Kind = Kind::Integer {
     min: 1,
     keywords: &[],
@@ -508,6 +538,53 @@ mod tests {
         assert_eq!(v.render(), "p2p=debug");
         assert!(row.kind.parse_cli(&["net=debug".into()]).is_err());
         assert!(row.kind.parse_cli(&["p2p=loud".into()]).is_err());
+    }
+
+    /// `shekyld`'s keys are the subsystems its code and its dependencies
+    /// log under, no more and no fewer. Red edit: add `Subsystem::Wallet`
+    /// to the list, or drop `Subsystem::Miner`.
+    #[test]
+    fn the_log_category_keys_are_what_shekyld_logs_under() {
+        assert_eq!(TABLE.binary, "shekyld");
+        shekyl_logging::audit::assert_keys_are_what_it_logs(TABLE.binary, &LOG_SUBSYSTEMS);
+    }
+
+    /// Each key `shekyld` takes is admitted. A subsystem it writes nothing
+    /// under is refused naming `shekyld`; a word that is no subsystem is a
+    /// stray word. Both refusals list exactly `shekyld`'s keys.
+    #[test]
+    fn a_log_category_takes_its_subsystems_and_refuses_the_rest_by_kind() {
+        let row = TABLE.row("log-category").unwrap();
+        for name in LOG_KEYS {
+            assert!(
+                row.kind.parse_cli(&[format!("{name}=debug")]).is_ok(),
+                "{name}"
+            );
+        }
+        let listed = LOG_KEYS
+            .iter()
+            .map(|k| format!("`{k}`"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        for (key, code) in [
+            ("wallet", shekyl_options::Code::ValueKeyNotTaken),
+            ("store", shekyl_options::Code::ValueKeyNotTaken),
+            ("net", shekyl_options::Code::ValueWord),
+        ] {
+            let refusal = row
+                .kind
+                .parse_cli(&[format!("{key}=debug")])
+                .unwrap_err()
+                .at("log-category", shekyl_options::Source::Cli);
+            assert_eq!(refusal.code, code, "{key}");
+            assert_eq!(refusal.get("words"), Some(listed.as_str()), "{key}");
+        }
+        let wallet = row
+            .kind
+            .parse_cli(&["wallet=debug".into()])
+            .unwrap_err()
+            .at("log-category", shekyl_options::Source::Cli);
+        assert_eq!(wallet.get("binary"), Some("shekyld"));
     }
 
     #[test]

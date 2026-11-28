@@ -40,6 +40,8 @@ http-body-util = { version = "0.1", default-features = false }
 tracing = "0.1"
 
 [dev-dependencies]
+# The audit that holds `log-category`'s keys to what `shekyl-rpc-tunnel` logs under.
+shekyl-logging = { path = "../shekyl-logging", features = ["audit"] }
 # A test's data directory, where the daemon's real check passes it.
 shekyl-os-account = { path = "../shekyl-os-account", features = ["test-fixture"] }
 # The end-to-end test's node lives in a directory of its own (`LocalTarget::test_override`).

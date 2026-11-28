@@ -15,6 +15,12 @@ license.workspace = true
 name = "shekyl_logging"
 path = "src/lib.rs"
 
+[features]
+# The audit of what the workspace's code logs under (`audit`), for the tests
+# that hold the subsystem map and each binary's `log-category` keys to the
+# code. A binary's crate turns it on in its dev-dependencies; nothing ships it.
+audit = []
+
 [dependencies]
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "ansi"] }

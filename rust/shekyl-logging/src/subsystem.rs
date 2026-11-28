@@ -9,11 +9,15 @@
 //!
 //! A subsystem is an operator-meaningful part of a Shekyl binary. Each maps
 //! to the `tracing` targets that implement it: the Rust crates by module
-//! path, and the few explicit targets the daemon's code names (`global`,
-//! `daemon`, `txpool`, `tor`, `notify`). A crate rename changes a list here,
-//! never a configuration file.
-//! The list is the owner the grammar's `log-category` row validates its
-//! keys against, by reference.
+//! path, and the few explicit targets the code names (`global`, `daemon`,
+//! `txpool`, `tor`, `notify`). A crate rename changes a list here, never a
+//! configuration file.
+//!
+//! Every crate that logs, and every explicit target, belongs to exactly one
+//! subsystem ([`Subsystem::of_target`]); the audit of the workspace's source
+//! holds the map to the code. Each binary's `log-category` row names its own
+//! list of subsystems, the ones its code and its dependencies log under, and
+//! the same audit holds each list to what that binary logs.
 
 use std::io::Write;
 
@@ -106,6 +110,7 @@ impl Subsystem {
                 "daemon",
                 "global",
                 "shekyl_daemon_config",
+                "shekyl_node",
                 "shekyl_runtime",
                 "shekyl_timing_engine",
             ],
@@ -127,18 +132,24 @@ impl Subsystem {
                 "shekyl_chain_sync_runtime",
                 "shekyl_chain_ingest",
             ],
+            // `shekyl_fcmp`'s lines are a membership proof that failed to
+            // verify: validation's.
             Self::Chain => &[
                 "shekyl_chain_rules",
                 "shekyl_consensus",
                 "shekyl_difficulty",
+                "shekyl_fcmp",
             ],
             Self::Store => &["shekyl_chain_store"],
+            // The node's pool lines (`shekyl-node`'s pool door and the pool
+            // file's opening) name this target.
             Self::Txpool => &["txpool"],
             Self::Relay => &["shekyl_relay", "shekyl_relay_privacy"],
             Self::Rpc => &[
                 "shekyl_daemon_rpc",
                 "shekyl_rpc_channel",
                 "shekyl_rpc_transport",
+                "shekyl_rpc_tunnel",
             ],
             // `tor` is the daemon's Tor driver's own target
             // (`shekyl-daemon/src/tor/`): its lines, a stuck round and each
@@ -149,7 +160,11 @@ impl Subsystem {
                 "shekyl_tor_control_daemon",
                 "tor",
             ],
-            Self::Miner => &["shekyl_block_template", "shekyl_pow_randomx"],
+            Self::Miner => &[
+                "shekyl_block_template",
+                "shekyl_miner",
+                "shekyl_pow_randomx",
+            ],
             Self::Notify => &["notify"],
             Self::Archival => &[
                 "shekyl_p_serve",
@@ -173,21 +188,52 @@ impl Subsystem {
     }
 }
 
-/// Whether `name` is a subsystem. Shaped as a plain function so a table's
-/// key rule can point at it.
-#[must_use]
-pub fn is_subsystem(name: &str) -> bool {
-    Subsystem::from_name(name).is_some()
+impl Subsystem {
+    /// The subsystem whose targets cover `target`: one equal to it, or a
+    /// crate or module above it at the `::` boundary. No two subsystems
+    /// cover one target (the map's own tests), so this is the one.
+    #[must_use]
+    pub fn of_target(target: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|s| s.targets().iter().any(|t| covers(t, target)))
+    }
 }
 
-/// The subsystem keys, in [`Subsystem::ALL`] order, comma separated.
-/// The retired-target error names them from here, so the list cannot
-/// drift from the keys the table admits.
+/// Whether the target `listed` covers `target`, as `EnvFilter` reads a
+/// directive: equal, or `target` is a module path below it.
+fn covers(listed: &str, target: &str) -> bool {
+    target == listed
+        || target
+            .strip_prefix(listed)
+            .is_some_and(|rest| rest.starts_with("::"))
+}
+
+/// The keys of a list of subsystems, in its order. A binary's table builds
+/// its `log-category` keys with this from its own list of [`Subsystem`]s.
 #[must_use]
-pub(crate) fn names() -> &'static str {
+pub const fn names<const N: usize>(list: [Subsystem; N]) -> [&'static str; N] {
+    let mut names = [""; N];
+    let mut i = 0;
+    while i < N {
+        names[i] = list[i].name();
+        i += 1;
+    }
+    names
+}
+
+/// Every subsystem's key, in [`Subsystem::ALL`] order: the keys a
+/// `log-category` row knows. A binary takes its own list of them; a known
+/// key outside that list has its own refusal, naming the binary.
+pub const NAMES: [&str; Subsystem::ALL.len()] = names(Subsystem::ALL);
+
+/// [`NAMES`], comma separated. The retired-target error names them from
+/// here, so the list cannot drift from the subsystem set.
+#[must_use]
+pub(crate) fn joined_names() -> &'static str {
     use std::sync::OnceLock;
-    static NAMES: OnceLock<String> = OnceLock::new();
-    NAMES.get_or_init(|| Subsystem::ALL.map(Subsystem::name).join(", "))
+    static JOINED: OnceLock<String> = OnceLock::new();
+    JOINED.get_or_init(|| NAMES.join(", "))
 }
 
 /// Targets no Rust code logs under. A free-form directive naming one, or
@@ -320,18 +366,72 @@ mod tests {
             assert!(seen.insert(n), "{n} twice");
             assert_eq!(Subsystem::from_name(n), Some(s));
         }
-        assert!(!is_subsystem("Net"));
-        assert!(!is_subsystem("shekyl_dialer"));
+        assert_eq!(Subsystem::from_name("Net"), None);
+        assert_eq!(Subsystem::from_name("shekyl_dialer"), None);
     }
 
     #[test]
+    fn the_key_list_is_every_subsystem_in_order() {
+        assert_eq!(NAMES, Subsystem::ALL.map(Subsystem::name));
+    }
+
+    /// No listed target covers another, so no target the code logs under
+    /// can belong to two subsystems. Red edit: list `shekyl_p2p::dial`
+    /// under `sync`.
+    #[test]
     fn no_target_belongs_to_two_subsystems() {
-        let mut seen = BTreeSet::new();
-        for s in Subsystem::ALL {
-            for t in s.targets() {
-                assert!(seen.insert(*t), "{t} is listed twice");
+        let all: Vec<(&str, Subsystem)> = Subsystem::ALL
+            .into_iter()
+            .flat_map(|s| s.targets().iter().map(move |t| (*t, s)))
+            .collect();
+        for (i, (a, sa)) in all.iter().enumerate() {
+            for (b, sb) in &all[i + 1..] {
+                assert!(
+                    !covers(a, b) && !covers(b, a),
+                    "`{a}` ({}) and `{b}` ({}) overlap",
+                    sa.name(),
+                    sb.name()
+                );
             }
         }
+    }
+
+    #[test]
+    fn a_target_resolves_to_the_subsystem_listing_it_or_the_crate_above_it() {
+        assert_eq!(Subsystem::of_target("txpool"), Some(Subsystem::Txpool));
+        assert_eq!(
+            Subsystem::of_target("shekyl_engine_core::pscan"),
+            Some(Subsystem::Wallet)
+        );
+        assert_eq!(
+            Subsystem::of_target("shekyl_p2p_session"),
+            Some(Subsystem::P2p)
+        );
+        assert_eq!(Subsystem::of_target("shekyl_relayx"), None);
+        assert_eq!(Subsystem::of_target("hyper"), None);
+    }
+
+    /// The converse of the map's other checks: every crate that logs, under
+    /// its own name, and every explicit target the code names belongs to a
+    /// subsystem (exactly one, by `no_target_belongs_to_two_subsystems`).
+    /// Without it a crate's lines fall under no key, and no `log-category`
+    /// setting can raise or lower them. Red edit: drop `shekyl_miner`.
+    #[test]
+    fn every_target_the_code_logs_under_belongs_to_a_subsystem() {
+        let logging = crate::audit::workspace_logging().expect("the audit reads the workspace");
+        let mut unmapped = Vec::new();
+        for (package, logged) in &logging {
+            for target in &logged.targets {
+                if Subsystem::of_target(target).is_none() {
+                    unmapped.push(format!("{package}: `{target}`"));
+                }
+            }
+        }
+        assert!(
+            unmapped.is_empty(),
+            "targets no subsystem covers: {unmapped:?}"
+        );
+        assert!(logging.contains_key("shekyl-node"), "{:?}", logging.keys());
     }
 
     /// Every Rust target names a crate of this workspace: a renamed or

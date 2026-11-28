@@ -42,6 +42,11 @@ pub enum Code {
     ValueUnit,
     /// The value is not one of the row's words.
     ValueWord,
+    /// The map key is one its owner knows and this binary does not take:
+    /// a log subsystem the binary writes nothing under. Named apart from
+    /// [`Code::ValueWord`] because the key is real, only not this binary's
+    /// (Rick, 2026-11-28).
+    ValueKeyNotTaken,
     /// A placeholder in a command is not one the row names.
     ValuePlaceholder,
     /// The option needs another option that is not set.
@@ -174,6 +179,7 @@ impl Code {
             Self::ValueRange => "config.value.range",
             Self::ValueUnit => "config.value.unit",
             Self::ValueWord => "config.value.word",
+            Self::ValueKeyNotTaken => "config.value.key-not-taken",
             Self::ValuePlaceholder => "config.value.placeholder",
             Self::ValueRequires => "config.value.requires",
             Self::ValueConflict => "config.value.conflict",
@@ -353,6 +359,12 @@ impl Diagnostic {
             ),
             Code::ValueWord => format!(
                 "the value '{}' for `{opt}` is not one of {}",
+                p("value"),
+                p("words")
+            ),
+            Code::ValueKeyNotTaken => format!(
+                "`{}` does not take '{}' for `{opt}`; it takes {}",
+                p("binary"),
                 p("value"),
                 p("words")
             ),
@@ -614,6 +626,7 @@ mod tests {
             Code::ValueRange,
             Code::ValueUnit,
             Code::ValueWord,
+            Code::ValueKeyNotTaken,
             Code::ValuePlaceholder,
             Code::ValueRequires,
             Code::ValueConflict,
