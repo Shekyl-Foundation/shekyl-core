@@ -189,16 +189,16 @@ Both candidates were byte-identical to the C reference in every differential leg
 | variant | median ms per hash |
 |---|---|
 | the code before this change | 1,474.7 |
-| read once per run, fixed word from a table (as built) | 1,637.5 |
+| read once per run, fixed word from a table (the first build) | 1,637.5 |
 | read once per run, fixed word computed in a register | 1,635.5 |
 | read in every block (`mrs` before the write), fixed word in a register | 1,638.1 |
 
-Reading once per run and reading in every block differ by 0.04 %, inside the rounds' spread: on this core an `mrs` of FPCR costs nothing measurable beside the two `msr` writes. The read stays once per run. The table load costs 0.1 %, also noise, and x86_64 needs the table anyway (`ldmxcsr` takes only a memory operand).
+Reading once per run and reading in every block differ by 0.04 %, inside the rounds' spread: on this core an `mrs` of FPCR costs nothing measurable beside the two `msr` writes. The read stays once per run. In that build the table load cost 0.1 %, also noise; once the instruction loop was split it cost far more (below).
 
 The same rounds put that build 2.5 % behind the comparison's per-instruction prototype (1,598 ms). Two things in it cost time, and they had to go together:
 
 - **The per-instruction test of whether nearest may run as plain Rust** (`mode == NEAREST && plain_nearest`). That fact is fixed for the run, so the VM now picks one of two instruction loops per iteration (`run_instructions::<PLAIN>`), and an instruction tests only its mode.
-- **The table of fixed words on aarch64.** With two loops in one function, the table's address spilled to the stack, and every directed-mode instruction then loaded it and the word before its `msr`. With the loops split and the table kept, the hash measured 1,643 ms, no faster. On aarch64 the fixed word is now computed from the mode in a register (two instructions, no load). x86_64 keeps a table of promoted constants, because `ldmxcsr` takes only a memory operand.
+- **The table of fixed words on aarch64.** With two loops in one function, the table's address spilled to the stack, and every directed-mode instruction then loaded it and the word before its `msr`. With the loops split and the table kept, the hash measured 1,643 ms, no faster. On aarch64 the fixed word is now computed from the mode in a register (two instructions, no load). x86_64 keeps a table, one promoted array, because `ldmxcsr` takes only a memory operand: a block's operand is the table's address plus four times the mode.
 
 Three more interleaved rounds on the floor device, one thread:
 
