@@ -6090,6 +6090,7 @@ async fn e2e_emission_claim_accepted_and_applied() {
         "epoch {target_epoch}: {drawn} draw(s) admitted, {passed} passed; the first pass \
          admitted at {first_pass_height:?}"
     );
+    let alarm_board = fixture.arc.read().await.operator_alarms().board();
     let first_pass_height = first_pass_height.unwrap_or_else(|| {
         daemon.panic_with_log(
             "no draw of the served epoch passed",
@@ -6097,7 +6098,7 @@ async fn e2e_emission_claim_accepted_and_applied() {
                 "{drawn} draw(s) admitted in epoch {target_epoch}; the persona's serving \
                  status {:?} and alarm board {:?}; its tor's log tail:\n{}",
                 serving.status(),
-                serving.alarms().board(),
+                alarm_board,
                 log_tail(&serving_tor_log),
             ),
         )

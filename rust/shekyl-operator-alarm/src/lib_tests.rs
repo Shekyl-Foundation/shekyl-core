@@ -14,10 +14,7 @@ fn degraded(cause: DegradedCause) -> OperatorAlarm {
 }
 
 fn live_for(alarms: &OperatorAlarms, condition: AlarmCondition) -> Option<RaisedAlarm> {
-    alarms
-        .board()
-        .condition(condition)
-        .and_then(ConditionState::live)
+    alarms.board().condition(condition).live()
 }
 
 fn queued(alarms: &OperatorAlarms) -> Vec<OperatorAlarm> {
@@ -191,15 +188,113 @@ fn every_serve_set_alarm_reports_on_one_condition() {
     }
 }
 
+/// A new board holds every condition, each one unreported: never a missing
+/// row a reader could take for "all clear" (rule 43). Red edit: start
+/// `AlarmBoard::default` with no rows, or drop a condition from
+/// `AlarmCondition::ALL`.
 #[test]
-fn an_empty_board_is_not_an_all_clear() {
-    let alarms = OperatorAlarms::new();
-    assert!(alarms
-        .board()
-        .condition(AlarmCondition::TransportLiveness)
-        .is_none());
-    assert_eq!(alarms.board().live().count(), 0);
-    assert!(alarms.board().unacknowledged().is_empty());
+fn a_new_board_reads_every_condition_unreported() {
+    let board = OperatorAlarms::new().board();
+    let rows: Vec<_> = board.conditions().collect();
+    assert_eq!(rows.len(), AlarmCondition::ALL.len());
+    for (at, (condition, state)) in rows.into_iter().enumerate() {
+        assert_eq!(
+            condition,
+            AlarmCondition::ALL[at],
+            "the board's order is ALL's"
+        );
+        assert_eq!(
+            state.arming(),
+            Arming::Disarmed(DisarmedReason::Unreported),
+            "{condition:?} reads unreported until its producer reports",
+        );
+        assert!(state.live().is_none());
+    }
+    assert!(board.unacknowledged().is_empty());
+}
+
+/// `AlarmCondition::ALL` lists every variant once. The match is exhaustive
+/// in this crate, so a new condition does not compile until it has a place;
+/// the loop then checks that the place is its own.
+#[test]
+fn every_condition_is_listed_once() {
+    fn place(condition: AlarmCondition) -> usize {
+        match condition {
+            AlarmCondition::TransportLiveness => 0,
+            AlarmCondition::OnionReachability => 1,
+            AlarmCondition::VanguardIntegrity => 2,
+            AlarmCondition::ServeSetIntegrity => 3,
+            AlarmCondition::ServingDiskHeadroom => 4,
+            AlarmCondition::ServeHealth => 5,
+            AlarmCondition::ChainProgress => 6,
+            AlarmCondition::EpochClaim => 7,
+            AlarmCondition::ClaimForfeiture => 8,
+            AlarmCondition::PendingFundsIntegrity => 9,
+        }
+    }
+    for (at, condition) in AlarmCondition::ALL.into_iter().enumerate() {
+        assert_eq!(
+            place(condition),
+            at,
+            "{condition:?} is listed at its own place"
+        );
+    }
+}
+
+/// The onion's reachability has a row, unreported, before anything checks
+/// it (`TSR-W3` adds the check). Red edit: delete the variant or its place
+/// in `ALL`.
+#[test]
+fn the_onion_row_exists_unreported() {
+    assert_eq!(
+        OperatorAlarms::new()
+            .board()
+            .condition(AlarmCondition::OnionReachability)
+            .arming(),
+        Arming::Disarmed(DisarmedReason::Unreported),
+    );
+}
+
+/// A check that ends without disarming leaves its rows "check stopped",
+/// never armed and quiet; one that disarmed on its way out keeps its own
+/// reason; a live alarm stays. Red edit: make `CheckGuard::drop` a no-op,
+/// or have it disarm rows that are already disarmed.
+#[test]
+fn a_check_that_stops_reads_check_stopped() {
+    let alarms = Arc::new(OperatorAlarms::new());
+    {
+        let _guard = alarms.check_guard(&[
+            AlarmCondition::TransportLiveness,
+            AlarmCondition::VanguardIntegrity,
+            AlarmCondition::ServeHealth,
+        ]);
+        alarms.arm(AlarmCondition::TransportLiveness);
+        alarms.raise(degraded(DegradedCause::Exited));
+        alarms.arm(AlarmCondition::VanguardIntegrity);
+        alarms.disarm(AlarmCondition::ServeHealth, DisarmedReason::NotServing);
+    }
+    let board = alarms.board();
+    assert_eq!(
+        board.condition(AlarmCondition::TransportLiveness).arming(),
+        Arming::Disarmed(DisarmedReason::CheckStopped),
+    );
+    assert_eq!(
+        board
+            .condition(AlarmCondition::TransportLiveness)
+            .live()
+            .map(RaisedAlarm::alarm),
+        Some(degraded(DegradedCause::Exited)),
+        "a check that stopped observed nothing being fixed",
+    );
+    assert_eq!(
+        board.condition(AlarmCondition::VanguardIntegrity).arming(),
+        Arming::Disarmed(DisarmedReason::CheckStopped),
+    );
+    assert_eq!(
+        board.condition(AlarmCondition::ServeHealth).arming(),
+        Arming::Disarmed(DisarmedReason::NotServing),
+        "a clean exit keeps the reason it gave",
+    );
 }
 
 #[test]
@@ -295,8 +390,8 @@ fn a_queued_latch_outlives_its_condition_being_disarmed() {
         alarms
             .board()
             .condition(AlarmCondition::VanguardIntegrity)
-            .map(ConditionState::arming),
-        Some(Arming::Disarmed(DisarmedReason::TransportStopped)),
+            .arming(),
+        Arming::Disarmed(DisarmedReason::TransportStopped),
     );
     assert_eq!(
         queued(&alarms),
@@ -393,7 +488,7 @@ fn a_late_subscriber_sees_the_open_incident_immediately() {
     assert_eq!(
         rx.borrow()
             .condition(AlarmCondition::TransportLiveness)
-            .and_then(ConditionState::live)
+            .live()
             .map(RaisedAlarm::alarm),
         Some(degraded(DegradedCause::BinaryRejected)),
     );

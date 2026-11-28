@@ -184,7 +184,6 @@ pub struct ServingStatus {
 pub struct ServingHandle {
     cancel_token: CancellationToken,
     join: Option<JoinHandle<()>>,
-    alarms: Arc<OperatorAlarms>,
     posture: watch::Receiver<Option<ServingPosture>>,
     priority_failures: PriorityFailures,
 }
@@ -205,32 +204,11 @@ impl ServingHandle {
         self.priority_failures.count()
     }
 
-    /// The operator alarm board this lifecycle reports through.
-    ///
-    /// **Held here because this is what the embedder holds.** The board's
-    /// lifetime is the serving lifetime — the tor-posture producer attaches to
-    /// *this* host's supervisor, and the serve-set conditions describe *this*
-    /// host's pins — so parking it beside the task that feeds it is what keeps
-    /// a wallet's alarms reachable for exactly as long as they mean anything.
-    ///
-    /// Reachable even when the host never started: a start failure is reported
-    /// onto this board and the handle is still returned, so the embedder can
-    /// render *why* rather than seeing a wallet that silently is not serving.
-    ///
-    /// Subscribe with [`OperatorAlarms::subscribe`] for the snapshot stream,
-    /// [`OperatorAlarms::board`] for a one-shot read, and
-    /// [`OperatorAlarms::acknowledge`] to clear a resolved latch.
-    #[must_use]
-    pub fn alarms(&self) -> Arc<OperatorAlarms> {
-        Arc::clone(&self.alarms)
-    }
-
     /// What this persona is serving right now, or `None` when no host is up.
     ///
-    /// **Held here for the same reason [`Self::alarms`] is**: the value's
-    /// lifetime is the serving lifetime, and the embedder that parks this
-    /// handle is the one thing that outlives a refresh tick but not the
-    /// wallet's open. Published by the task at each successful pin and
+    /// **Held here because the value's lifetime is the serving lifetime**,
+    /// and the embedder that parks this handle is the one thing that
+    /// outlives a refresh tick but not the wallet's open. Published by the task at each successful pin and
     /// cleared on teardown, so a read is the last thing the host actually
     /// established rather than an intent someone recorded.
     ///
@@ -327,7 +305,7 @@ where
         serving,
         pinner,
         ServingReporters {
-            alarms: Arc::clone(&alarms),
+            alarms,
             posture: posture_tx,
         },
         ServingSetup {
@@ -343,7 +321,6 @@ where
         posture: posture_rx,
         cancel_token,
         join: Some(join),
-        alarms,
         priority_failures,
     }
 }
@@ -421,9 +398,10 @@ async fn run_serving_task<P>(
     // a wallet sitting in the launch standoff reads "not serving yet"
     // rather than reading nothing at all — including when start fails
     // or cancel fires before the host is up.
-    report(&alarms, ServeSetObservation::NotServing);
-    report_disk(&alarms, DiskObservation::NotServing);
-    report_health(&alarms, ServeHealthObservation::NotServing);
+    // A task that panics cannot disarm these on its way out; the guard does
+    // it for it. Its tor rows have their own guard, in the translator.
+    let _guard = alarms.check_guard(&SERVING_CONDITIONS);
+    report_not_serving(&alarms);
 
     let delay = draw_serving_launch_delay(config.launch_window, &mut OsRngGapAdapter);
     tokio::select! {
@@ -552,6 +530,9 @@ async fn run_serving_task<P>(
     // Reached whether the post-start read finished or cancel won it.
     host.shutdown().await;
     posture.abort();
+    // Awaited, so the translator cannot write after the rows below say the
+    // host is gone. An aborted task's `JoinError` is the expected outcome.
+    let _posture = posture.await;
     // Drain the probes that were spawned, and the priority warning, before
     // disarming. A late measured reading must not overwrite `NotServing`
     // after the host is gone, and a warning already woken must be said
@@ -569,9 +550,7 @@ async fn run_serving_task<P>(
     // Nothing is watched once the host is gone. Disarm rather than clear: a
     // closed wallet is not a healthy serve-set, and a live pruned-bytes report
     // stays live because nothing observed it fixed.
-    report(&alarms, ServeSetObservation::NotServing);
-    report_disk(&alarms, DiskObservation::NotServing);
-    report_health(&alarms, ServeHealthObservation::NotServing);
+    report_not_serving(&alarms);
     // The posture, by contrast, IS cleared: it is a statement about what is
     // being served, and after teardown nothing is. Leaving the last value
     // would have `staking_info` report a posture for a host that has
@@ -580,6 +559,25 @@ async fn run_serving_task<P>(
     // embedder released the handle, which is a wallet closing rather than a
     // serving fault.
     let _sent = serving_posture.send(None);
+}
+
+/// The conditions the serving task watches itself. Its probes and its tor
+/// translator guard their own rows too.
+const SERVING_CONDITIONS: [shekyl_operator_alarm::AlarmCondition; 3] = [
+    shekyl_operator_alarm::AlarmCondition::ServeSetIntegrity,
+    shekyl_operator_alarm::AlarmCondition::ServingDiskHeadroom,
+    shekyl_operator_alarm::AlarmCondition::ServeHealth,
+];
+
+/// Every serving row reads "not serving": before the host starts, and once it
+/// is gone. Disarm rather than clear: a host that is not running is not a
+/// healthy one, and a live pruned-bytes report stays live because nothing
+/// observed it fixed.
+fn report_not_serving(alarms: &OperatorAlarms) {
+    report(alarms, ServeSetObservation::NotServing);
+    report_disk(alarms, DiskObservation::NotServing);
+    report_health(alarms, ServeHealthObservation::NotServing);
+    shekyl_operator_alarm::tor_posture::report_not_serving(alarms);
 }
 
 /// Publish what the host is currently obligated to serve, read from the

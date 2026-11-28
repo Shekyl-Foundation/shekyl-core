@@ -54,6 +54,7 @@ pub(crate) fn spawn_disk_probe(
     cancel: CancellationToken,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
+        let _guard = alarms.check_guard(&shekyl_operator_alarm::disk::CONDITIONS);
         report_disk(&alarms, observe_disk(&path, threshold_bytes));
         let mut ticker = tokio::time::interval(cadence);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);

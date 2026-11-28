@@ -214,7 +214,7 @@ mod tests {
             alarms
                 .board()
                 .condition(AlarmCondition::PendingFundsIntegrity)
-                .and_then(shekyl_operator_alarm::ConditionState::live)
+                .live()
                 .map(shekyl_operator_alarm::RaisedAlarm::alarm)
         }
 
@@ -330,8 +330,12 @@ mod tests {
         leg_on(&after).fire(4).await;
         let row = after
             .board()
-            .condition(AlarmCondition::PendingFundsIntegrity)
-            .expect("a staker's seal still arms the row");
+            .condition(AlarmCondition::PendingFundsIntegrity);
+        assert_eq!(
+            row.arming(),
+            shekyl_operator_alarm::Arming::Armed,
+            "a staker's seal still arms the row"
+        );
         assert!(row.live().is_none(), "acknowledged: armed and quiet");
 
         // A stake reaches its end date (reference 94 + 100) with its one input

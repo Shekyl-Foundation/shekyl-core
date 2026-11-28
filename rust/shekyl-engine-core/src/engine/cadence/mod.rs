@@ -211,25 +211,12 @@ pub struct CadenceHandle {
     // `Option` so [`shutdown`](Self::shutdown) can take the join handle out
     // for `.await` without moving a field out of a `Drop` type.
     join: Option<JoinHandle<()>>,
-    alarms: Arc<OperatorAlarms>,
     serving: ServingSlot,
     /// The body-store leg's shard alarms (`WSS-Q17`), shared with the leg.
     shard_alarms: ShardAlarms,
 }
 
 impl CadenceHandle {
-    /// The operator alarm board the driver reports through
-    /// (`ENGINE_CADENCE_DRIVER.md` §5): chain-progress watchdog, epoch-claim
-    /// backlog, forfeit records, and parked-leg disarms. Held here because
-    /// this is what the embedder holds — the [`ServingHandle::alarms`]
-    /// rationale.
-    ///
-    /// [`ServingHandle::alarms`]: super::stake_engine::serving::ServingHandle::alarms
-    #[must_use]
-    pub fn alarms(&self) -> Arc<OperatorAlarms> {
-        Arc::clone(&self.alarms)
-    }
-
     /// Park an embedder-started serving lifecycle with the driver
     /// (`ENGINE_CADENCE_DRIVER.md` §3 leg 2). The embedder still makes the
     /// first start — wallet-rpc's open stays fail-closed — and then hands
@@ -350,14 +337,13 @@ where
         schedule,
         poll_tip,
         legs,
-        Arc::clone(&alarms),
+        alarms,
         stall_horizon,
         cancel_token.clone(),
     ));
     CadenceHandle {
         cancel_token,
         join: Some(join),
-        alarms,
         serving,
         shard_alarms,
     }
@@ -482,8 +468,9 @@ where
             "Engine::into_shared spawns the cadence driver task and must be \
              called from within a tokio runtime (ENGINE_CADENCE_DRIVER.md §1)",
         ));
+        let alarms = self.operator_alarms();
         let shared = Arc::new(RwLock::new(self));
-        let handle = Self::start_cadence(&shared, daemon, tor_file);
+        let handle = Self::spawn_cadence(&shared, alarms, daemon, tor_file);
         (shared, handle)
     }
 
@@ -495,16 +482,33 @@ where
     /// is already inside its arc). Infallible: the driver polls its way to
     /// health rather than failing to start.
     ///
+    /// The driver reports onto the engine's own board
+    /// ([`Engine::operator_alarms`]), read here under a brief read guard, so a
+    /// re-armed driver writes where the first one did and a fault still
+    /// awaiting acknowledgment survives the re-arm.
+    ///
     /// # Panics
     ///
     /// Same runtime requirement as [`into_shared`](Self::into_shared).
-    pub fn start_cadence(
+    pub async fn start_cadence(
         self_arc: &Arc<RwLock<Self>>,
         daemon: &shekyl_rpc_transport::DaemonTarget,
         tor_file: &crate::TorFile,
     ) -> CadenceHandle {
+        let alarms = self_arc.read().await.operator_alarms();
+        Self::spawn_cadence(self_arc, alarms, daemon, tor_file)
+    }
+
+    /// The one spawn behind [`into_shared`](Self::into_shared) and
+    /// [`start_cadence`](Self::start_cadence). `alarms` is the engine's own
+    /// board, which each caller reads in the way its lock state allows.
+    fn spawn_cadence(
+        self_arc: &Arc<RwLock<Self>>,
+        alarms: Arc<OperatorAlarms>,
+        daemon: &shekyl_rpc_transport::DaemonTarget,
+        tor_file: &crate::TorFile,
+    ) -> CadenceHandle {
         let serving = ServingSlot::default();
-        let alarms = Arc::new(OperatorAlarms::new());
         let shard_alarms = ShardAlarms::default();
         let legs = production_legs(
             Arc::downgrade(self_arc),
@@ -560,6 +564,9 @@ async fn run_cadence_loop<Sched, TipFn, TipFut>(
     TipFn: FnMut() -> TipFut + Send + 'static,
     TipFut: Future<Output = TipPoll> + Send + 'static,
 {
+    // A loop that panics cannot say its rows stopped being watched; the guard
+    // says it for it. A clean exit says it below, with the real reason.
+    let guard = alarms.check_guard(&shekyl_operator_alarm::cadence::CONDITIONS);
     let mut slots: Vec<LegSlot> = legs
         .into_iter()
         .map(|leg| LegSlot { leg, parked: false })
@@ -623,6 +630,10 @@ async fn run_cadence_loop<Sched, TipFn, TipFut>(
     for slot in slots {
         slot.leg.teardown().await;
     }
+    // Nothing watches the driver's conditions now. Said after the teardown so
+    // no leg reports over it.
+    shekyl_operator_alarm::cadence::report_driver_stopped(&alarms);
+    drop(guard);
 }
 
 /// Fire every non-parked leg, in registration order, isolated: each fire

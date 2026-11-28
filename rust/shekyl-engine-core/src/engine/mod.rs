@@ -789,6 +789,14 @@ pub struct Engine<
     /// rather than a third copy of the same primitive.
     open_slots: refresh_slot::OpenTaskSlots,
 
+    /// The wallet's operator alarm board (OA-1): one for the open span, so
+    /// every condition a reader is shown is on it, whichever task reports
+    /// it. The cadence driver and each serving start write to this one
+    /// `Arc`, and a re-armed task writes where its predecessor did, so a
+    /// fault awaiting acknowledgment survives a restart of the task that
+    /// raised it. Read through [`Engine::operator_alarms`].
+    operator_alarms: std::sync::Arc<shekyl_operator_alarm::OperatorAlarms>,
+
     /// Per-wallet coordination gate for the pending-post family
     /// ([`pending_post_gate::PendingPostGate`]): the write lock over the
     /// `.wallet.pending` sibling seal (WI-3 §3.3 writer discipline — the
@@ -1037,6 +1045,17 @@ impl<
             .expect("key-actor projection is a well-formed classical segment + ek")
     }
 
+    /// The wallet's operator alarm board: every condition the wallet watches
+    /// on the operator's behalf, armed or not, and the faults awaiting
+    /// acknowledgment (OA-1). One board for the open span; read it with
+    /// [`OperatorAlarms::board`](shekyl_operator_alarm::OperatorAlarms::board)
+    /// and clear a resolved fault with
+    /// [`OperatorAlarms::acknowledge`](shekyl_operator_alarm::OperatorAlarms::acknowledge).
+    #[must_use]
+    pub fn operator_alarms(&self) -> std::sync::Arc<shekyl_operator_alarm::OperatorAlarms> {
+        std::sync::Arc::clone(&self.operator_alarms)
+    }
+
     /// Borrow the [`PersistenceEngine`] implementor.
     pub fn persistence(&self) -> &F {
         &self.persistence
@@ -1155,6 +1174,7 @@ impl<
             capability,
             refresh_slot,
             open_slots,
+            operator_alarms,
             pending_gate,
             refresh: _old,
             economics,
@@ -1175,6 +1195,7 @@ impl<
             capability,
             refresh_slot,
             open_slots,
+            operator_alarms,
             pending_gate,
             refresh: std::sync::Arc::new(refresh),
             economics,
@@ -1210,6 +1231,7 @@ impl<
             capability,
             refresh_slot,
             open_slots,
+            operator_alarms,
             pending_gate,
             refresh,
             economics,
@@ -1230,6 +1252,7 @@ impl<
             capability,
             refresh_slot,
             open_slots,
+            operator_alarms,
             pending_gate,
             refresh,
             economics,

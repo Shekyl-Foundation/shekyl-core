@@ -8,7 +8,7 @@
 use super::*;
 use shekyl_curve_tree::{BlockHeight, LeafStore};
 use shekyl_onion_key::OnionKeypair;
-use shekyl_operator_alarm::{AlarmCondition, Arming, ConditionState, DisarmedReason};
+use shekyl_operator_alarm::{AlarmCondition, Arming, DisarmedReason};
 use shekyl_p_host::{PinReport as HostPinReport, StoreFacts, StoreIdentity};
 use shekyl_tor_control_wallet::service::OnionIdentity;
 
@@ -265,15 +265,12 @@ async fn the_board_stops_saying_not_serving_as_soon_as_the_host_is_up() {
         claim(),
     );
 
-    // `is_some_and`, not `!=`: the row does not exist until the spawned
-    // task's first write, and `None != Some(..)` is *true* — so a `!=`
-    // predicate is satisfied by the board being empty, before anything has
-    // happened at all. That version passed with the post-start report
-    // deleted, which is the definition of a test that proves nothing.
+    // `== Armed`, not `!= NotServing`: every row starts `Unreported`, so a
+    // `!=` predicate is satisfied before the task has written anything at
+    // all. That version would pass with the post-start report deleted,
+    // which is the definition of a test that proves nothing.
     let armed = settle_until(&alarms, |b| {
-        b.condition(AlarmCondition::ServeSetIntegrity)
-            .map(ConditionState::arming)
-            .is_some_and(|a| a != Arming::Disarmed(DisarmedReason::NotServing))
+        b.condition(AlarmCondition::ServeSetIntegrity).arming() == Arming::Armed
     })
     .await;
     assert!(
@@ -469,9 +466,7 @@ async fn a_started_host_observes_disk_headroom() {
     );
 
     let observed = settle_until(&alarms, |b| {
-        b.condition(AlarmCondition::ServingDiskHeadroom)
-            .map(ConditionState::arming)
-            .is_some_and(|a| a == Arming::Armed)
+        b.condition(AlarmCondition::ServingDiskHeadroom).arming() == Arming::Armed
     })
     .await;
     assert!(
@@ -484,8 +479,8 @@ async fn a_started_host_observes_disk_headroom() {
         alarms
             .board()
             .condition(AlarmCondition::ServingDiskHeadroom)
-            .map(ConditionState::arming),
-        Some(Arming::Disarmed(DisarmedReason::NotServing)),
+            .arming(),
+        Arming::Disarmed(DisarmedReason::NotServing),
         "teardown must disarm the volume check: a host that has \
          stopped is not a healthy disk"
     );
@@ -520,9 +515,7 @@ async fn a_started_host_watches_its_serve_health() {
     );
 
     let armed = settle_until(&alarms, |b| {
-        b.condition(AlarmCondition::ServeHealth)
-            .map(ConditionState::arming)
-            .is_some_and(|a| a == Arming::Armed)
+        b.condition(AlarmCondition::ServeHealth).arming() == Arming::Armed
     })
     .await;
     assert!(
@@ -534,7 +527,7 @@ async fn a_started_host_watches_its_serve_health() {
         alarms
             .board()
             .condition(AlarmCondition::ServeHealth)
-            .and_then(ConditionState::live)
+            .live()
             .is_none(),
         "a host that has answered nothing has refused nothing"
     );
@@ -543,8 +536,8 @@ async fn a_started_host_watches_its_serve_health() {
         alarms
             .board()
             .condition(AlarmCondition::ServeHealth)
-            .map(ConditionState::arming),
-        Some(Arming::Disarmed(DisarmedReason::NotServing)),
+            .arming(),
+        Arming::Disarmed(DisarmedReason::NotServing),
         "teardown must disarm: a stopped host is not a healthy one"
     );
 }
@@ -567,9 +560,8 @@ async fn an_unreadable_disk_path_disarms_without_killing_the_task() {
     );
 
     let disarmed = settle_until(&alarms, |b| {
-        b.condition(AlarmCondition::ServingDiskHeadroom)
-            .map(ConditionState::arming)
-            .is_some_and(|a| a == Arming::Disarmed(DisarmedReason::DiskUnreadable))
+        b.condition(AlarmCondition::ServingDiskHeadroom).arming()
+            == Arming::Disarmed(DisarmedReason::DiskUnreadable)
     })
     .await;
     assert!(
@@ -583,47 +575,17 @@ async fn an_unreadable_disk_path_disarms_without_killing_the_task() {
         alarms
             .board()
             .condition(AlarmCondition::ServeSetIntegrity)
-            .is_some(),
+            .arming()
+            != Arming::Disarmed(DisarmedReason::Unreported),
         "the serving task must keep serving through a broken disk probe"
     );
     handle.shutdown().await;
 }
 
-/// The channel is reachable. Without this the whole of OA-1 is write-only
-/// in production: alarms are raised onto a board nothing can subscribe to.
+/// A start failure is reported on the board, so the embedder can render
+/// why rather than seeing a wallet that silently is not serving.
 #[tokio::test]
-async fn the_handle_exposes_the_board_it_reports_through() {
-    let dir = tempfile::tempdir().expect("tmp");
-    let alarms = Arc::new(OperatorAlarms::new());
-    let handle = spawn_serving_task(
-        churning_tor(&dir),
-        serving_identity(),
-        pinner(false),
-        Arc::clone(&alarms),
-        immediate(),
-        site(store_path()),
-        claim(),
-    );
-
-    // The embedder's only reference is the handle.
-    let from_handle = handle.alarms();
-    let seen = {
-        let board = from_handle.subscribe();
-        let b = board.borrow().clone();
-        b.conditions().count()
-    };
-    assert!(
-        seen > 0 || settle_until(&from_handle, |b| b.conditions().count() > 0).await,
-        "the handle's board must be the one the task writes to",
-    );
-    handle.shutdown().await;
-}
-
-/// A start failure is reported *and* the handle still comes back, so the
-/// embedder can render why rather than seeing a wallet that silently is
-/// not serving.
-#[tokio::test]
-async fn a_failed_start_lands_on_the_board_reachable_from_the_handle() {
+async fn a_failed_start_lands_on_the_board() {
     let dir = tempfile::tempdir().expect("tmp");
     let alarms = Arc::new(OperatorAlarms::new());
     let handle = spawn_serving_task(
@@ -636,20 +598,19 @@ async fn a_failed_start_lands_on_the_board_reachable_from_the_handle() {
         claim(),
     );
 
-    let reported = settle_until(&handle.alarms(), |b| {
+    let reported = settle_until(&alarms, |b| {
         b.condition(AlarmCondition::ServeSetIntegrity)
-            .and_then(ConditionState::live)
+            .live()
             .is_some()
     })
     .await;
     assert!(reported, "a pinner that is down must reach the operator");
     assert_eq!(
-        handle
-            .alarms()
+        alarms
             .board()
             .condition(AlarmCondition::ServingDiskHeadroom)
-            .map(ConditionState::arming),
-        Some(Arming::Disarmed(DisarmedReason::NotServing)),
+            .arming(),
+        Arming::Disarmed(DisarmedReason::NotServing),
         "a host that never started still watches the volume row — \
          unwatched would look like the probe was never wired"
     );

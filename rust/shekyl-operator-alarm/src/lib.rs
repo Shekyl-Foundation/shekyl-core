@@ -35,6 +35,21 @@
 //! the only shape in which "we are not watching this right now" is a value the
 //! operator can be shown rather than an absence they must infer.
 //!
+//! For the same reason the board holds a row for **every** condition from the
+//! moment it exists, disarmed as [`DisarmedReason::Unreported`] until that
+//! condition's producer first reports (rule 43). A reader never meets a missing
+//! row, so it can never render one as "all clear".
+//!
+//! # A check that stops must say so, even when it cannot
+//!
+//! A producer that stops cleanly disarms its rows on the way out. One that
+//! panics or is aborted cannot, and its rows would stay armed and quiet, which
+//! reads as healthy for as long as the board lives. A [`CheckGuard`] closes
+//! that: the producer holds one for its lifetime, and when it drops, every row
+//! it watches that is still armed is disarmed as
+//! [`DisarmedReason::CheckStopped`]. A clean exit has already disarmed its rows
+//! with the real reason, so the guard leaves those alone.
+//!
 //! # Latching is what makes a *coalescing* channel safe
 //!
 //! A [`watch`] keeps only the latest value, so a raise and a clear inside one
@@ -88,6 +103,7 @@ pub mod tor_posture;
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 use tokio::sync::watch;
 
@@ -101,8 +117,22 @@ use tokio::sync::watch;
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum AlarmCondition {
-    /// Whether the wallet's tor transport is up and staying up (§3c).
+    /// Whether the persona's tor transport is up and staying up (§3c).
+    ///
+    /// The persona's, because it is the only Tor a wallet runs: the principal
+    /// has none, and its own traffic goes through its daemon (Rick,
+    /// 2026-11-28).
     TransportLiveness,
+    /// Whether challengers can reach this persona's onion.
+    ///
+    /// Its own condition rather than a [`Self::TransportLiveness`] reading:
+    /// a Tor that is up and staying up can still hold an onion nobody can
+    /// reach — its descriptor gone from the directories, its uploads
+    /// refused, another process publishing the same key — and a persona
+    /// nobody can reach loses its passes and then its bond. Disarmed until
+    /// a producer reports it (`TSR-W3`), so the row reads "not checked"
+    /// rather than reading healthy before the check exists.
+    OnionReachability,
     /// Whether the persona's vanguard set — the guard topology behind every
     /// circuit it builds — is intact and will survive a restart.
     VanguardIntegrity,
@@ -175,6 +205,26 @@ pub enum AlarmCondition {
     PendingFundsIntegrity,
 }
 
+impl AlarmCondition {
+    /// Every condition, in the board's order: the order a reader shows them
+    /// in, and the order [`AlarmBoard::conditions`] yields them.
+    ///
+    /// Kept whole by `every_condition_is_listed_once`, whose exhaustive match
+    /// does not compile until a new variant is given a place here.
+    pub const ALL: [Self; 10] = [
+        Self::TransportLiveness,
+        Self::OnionReachability,
+        Self::VanguardIntegrity,
+        Self::ServeSetIntegrity,
+        Self::ServingDiskHeadroom,
+        Self::ServeHealth,
+        Self::ChainProgress,
+        Self::EpochClaim,
+        Self::ClaimForfeiture,
+        Self::PendingFundsIntegrity,
+    ];
+}
+
 /// Whether a condition's tripwire can currently fire.
 ///
 /// The reason this is on the board at all: a check that cannot fire and a check
@@ -244,6 +294,20 @@ pub enum DisarmedReason {
     /// read as a healthy one). The remedy is a wallet reopen after the
     /// panic's cause is understood.
     DriverLegParked,
+    /// No check is reporting on this condition: its producer has not started,
+    /// stopped cleanly with the wallet's driver, or there is none in this
+    /// build. Every row starts here.
+    ///
+    /// The value that replaces a missing row (rule 43). A non-staker's
+    /// serving rows stay here for the whole session, and so does
+    /// [`AlarmCondition::OnionReachability`] until its producer exists.
+    Unreported,
+    /// The check watching this condition ended without disarming it — a
+    /// panic, or a task aborted mid-flight — so the row was disarmed for it by
+    /// its [`CheckGuard`]. Distinct from [`Self::DriverLegParked`], which the
+    /// driver reports itself for a leg it caught; this one is the backstop for
+    /// a check nothing caught. The remedy is a wallet reopen.
+    CheckStopped,
 }
 
 /// How a raised alarm's **observable** behaves once the condition is raised.
@@ -719,13 +783,13 @@ impl ConditionState {
     }
 }
 
-/// The operator-visible snapshot: every watched condition with its arming and
-/// its live alarm, plus the queue of resolved faults awaiting acknowledgment.
+/// The operator-visible snapshot: every condition with its arming and its live
+/// alarm, plus the queue of resolved faults awaiting acknowledgment.
 ///
-/// An empty board means **nothing is being watched yet**, not that everything
-/// is fine: rows appear when a producer starts reporting. A consumer that
-/// renders "all clear" for a board with no rows has made the mistake this
-/// module exists to prevent.
+/// Every [`AlarmCondition`] has a row from construction, disarmed as
+/// [`DisarmedReason::Unreported`] until its producer first reports, so a
+/// condition nobody has checked reads "not checked" and never reads as a
+/// missing row a consumer could take for "all clear".
 ///
 /// # Why the acknowledgment queue is not a per-condition field
 ///
@@ -742,22 +806,46 @@ impl ConditionState {
 /// condition's row. And [`OperatorAlarms::acknowledge`] cannot be used to
 /// silence a fault that is still happening, because a live alarm is not in the
 /// queue to be acknowledged.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AlarmBoard {
     conditions: BTreeMap<AlarmCondition, ConditionState>,
     unacknowledged: Vec<RaisedAlarm>,
 }
 
+/// A row no producer has reported on.
+const NOT_REPORTED: ConditionState = ConditionState {
+    arming: Arming::Disarmed(DisarmedReason::Unreported),
+    live: None,
+};
+
+impl Default for AlarmBoard {
+    fn default() -> Self {
+        Self {
+            conditions: AlarmCondition::ALL
+                .into_iter()
+                .map(|condition| (condition, NOT_REPORTED))
+                .collect(),
+            unacknowledged: Vec::new(),
+        }
+    }
+}
+
 impl AlarmBoard {
-    /// One condition's row, or `None` if no producer has reported it yet.
+    /// One condition's row. Always a row: one no producer has reported on
+    /// reads [`DisarmedReason::Unreported`].
     #[must_use]
-    pub fn condition(&self, condition: AlarmCondition) -> Option<ConditionState> {
-        self.conditions.get(&condition).copied()
+    pub fn condition(&self, condition: AlarmCondition) -> ConditionState {
+        self.conditions
+            .get(&condition)
+            .copied()
+            .unwrap_or(NOT_REPORTED)
     }
 
-    /// Every reported condition, in a stable order.
+    /// Every condition's row, in [`AlarmCondition::ALL`]'s order.
     pub fn conditions(&self) -> impl Iterator<Item = (AlarmCondition, ConditionState)> + '_ {
-        self.conditions.iter().map(|(c, s)| (*c, *s))
+        AlarmCondition::ALL
+            .into_iter()
+            .map(|condition| (condition, self.condition(condition)))
     }
 
     /// Every currently-live alarm, in a stable order.
@@ -778,19 +866,16 @@ impl AlarmBoard {
         &self.unacknowledged
     }
 
-    /// Nothing live and nothing outstanding. **Not** the same as an empty board
-    /// — see the type docs.
+    /// Nothing live and nothing outstanding. **Not** "everything is fine": a
+    /// disarmed row is quiet too — see the type docs.
     #[must_use]
     pub fn is_quiet(&self) -> bool {
         self.unacknowledged.is_empty() && self.conditions.values().all(|s| s.live.is_none())
     }
 
-    /// The row this condition should have, created armed-and-quiet if absent.
+    /// This condition's row, for writing.
     fn entry(&mut self, condition: AlarmCondition) -> &mut ConditionState {
-        self.conditions.entry(condition).or_insert(ConditionState {
-            arming: Arming::Armed,
-            live: None,
-        })
+        self.conditions.entry(condition).or_insert(NOT_REPORTED)
     }
 }
 
@@ -880,10 +965,33 @@ impl OperatorAlarms {
     /// [`tor_posture`], where a translator attaching mid-episode has no failure
     /// to report but must not leave the board reading healthy.
     pub(crate) fn is_live(&self, condition: AlarmCondition) -> bool {
-        self.board
-            .borrow()
-            .condition(condition)
-            .is_some_and(|s| s.live.is_some())
+        self.board.borrow().condition(condition).live.is_some()
+    }
+
+    /// A guard that disarms `conditions` as [`DisarmedReason::CheckStopped`]
+    /// when it drops, for each one still armed then.
+    ///
+    /// The producer that watches those conditions holds it for as long as it
+    /// runs. Public because the producers that feed this board run in the
+    /// embedder's tasks, not in this crate; it can only ever *disarm*, which
+    /// says "nothing is watching this", and cannot raise or clear anything.
+    pub fn check_guard(self: &Arc<Self>, conditions: &'static [AlarmCondition]) -> CheckGuard {
+        CheckGuard {
+            alarms: Arc::clone(self),
+            conditions,
+        }
+    }
+
+    /// Disarm `condition` for `reason`, unless it is already disarmed.
+    pub(crate) fn disarm_if_armed(&self, condition: AlarmCondition, reason: DisarmedReason) {
+        self.board.send_if_modified(|board| {
+            let state = board.entry(condition);
+            if state.arming != Arming::Armed {
+                return false;
+            }
+            state.arming = Arming::Disarmed(reason);
+            true
+        });
     }
 
     /// Mark a condition's tripwire as able to fire.
@@ -986,6 +1094,28 @@ impl OperatorAlarms {
             state.arming = arming;
             true
         });
+    }
+}
+
+/// Disarms the conditions one check watches when that check ends without
+/// saying so — see the module docs, "A check that stops must say so".
+///
+/// Made by [`OperatorAlarms::check_guard`]. Leaves a disarmed row alone, so a
+/// check that stopped cleanly keeps the reason it gave; and leaves a live
+/// alarm in place, because a check that stopped observed nothing being fixed.
+#[must_use = "the guard disarms its conditions when it drops, so dropping it at once disarms them at once"]
+#[derive(Debug)]
+pub struct CheckGuard {
+    alarms: Arc<OperatorAlarms>,
+    conditions: &'static [AlarmCondition],
+}
+
+impl Drop for CheckGuard {
+    fn drop(&mut self) {
+        for condition in self.conditions {
+            self.alarms
+                .disarm_if_armed(*condition, DisarmedReason::CheckStopped);
+        }
     }
 }
 

@@ -101,6 +101,10 @@ impl TickWindow {
 /// Total and side-effect-free apart from the board writes — the contract
 /// every producer in this crate keeps, so the state machine is testable by
 /// calling it.
+/// The conditions this producer watches, for its
+/// [`CheckGuard`](crate::CheckGuard).
+pub const CONDITIONS: [AlarmCondition; 1] = [AlarmCondition::ServeHealth];
+
 pub fn apply(alarms: &OperatorAlarms, observation: ServeHealthObservation) {
     match observation {
         ServeHealthObservation::NotServing => {
@@ -137,10 +141,7 @@ mod tests {
     use crate::{Arming, RaisedAlarm};
 
     fn state(alarms: &OperatorAlarms) -> crate::ConditionState {
-        alarms
-            .board()
-            .condition(AlarmCondition::ServeHealth)
-            .expect("the condition has a row once observed")
+        alarms.board().condition(AlarmCondition::ServeHealth)
     }
 
     fn window(sign: u64, late: u64, lookup: u64) -> ServeCounters {

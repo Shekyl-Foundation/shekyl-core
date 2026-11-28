@@ -83,10 +83,13 @@ pub use shekyl_address::{format_payment_uri, parse_payment_uri, PaymentUri, Paym
 ///
 /// ```
 /// use shekyl_engine_core::tor_posture::spawn_tor_posture_translator;
-/// use shekyl_engine_core::{AlarmCondition, OperatorAlarms};
+/// use shekyl_engine_core::{AlarmCondition, Arming, DisarmedReason, OperatorAlarms};
 ///
 /// let alarms = OperatorAlarms::new();
-/// assert!(alarms.board().condition(AlarmCondition::TransportLiveness).is_none());
+/// assert_eq!(
+///     alarms.board().condition(AlarmCondition::TransportLiveness).arming(),
+///     Arming::Disarmed(DisarmedReason::Unreported),
+/// );
 /// let _reachable_from_this_root = spawn_tor_posture_translator;
 /// ```
 pub use shekyl_operator_alarm::tor_posture;
@@ -101,8 +104,10 @@ pub use shekyl_operator_alarm::tor_posture;
 /// silently-lossy and restart-amnesiac by design, all of which are wrong for a
 /// condition whose evidence disappears before its consequence does.
 ///
-/// The tor supervisor reports through it today; the serving conditions join in
-/// SH-2b-2. The producer module is re-exported [just below](tor_posture).
+/// A wallet has one board for its open span, [`Engine::operator_alarms`]: the
+/// cadence driver and the serving lifecycle (the persona's tor among it) all
+/// report onto it. The tor producer module is re-exported
+/// [just below](tor_posture).
 pub use shekyl_operator_alarm::{
     AlarmBoard, AlarmCondition, AlarmLifetime, Arming, ConditionState, DegradedCause,
     DisarmedReason, IncidentId, OperatorAlarm, OperatorAlarms, RaisedAlarm,

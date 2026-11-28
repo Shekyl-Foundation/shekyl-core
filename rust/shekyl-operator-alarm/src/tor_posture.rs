@@ -56,11 +56,35 @@ use super::{AlarmCondition, DegradedCause, DisarmedReason, OperatorAlarm, Operat
 /// clean-shutdown signal ("a clean caller-initiated shutdown has no posture
 /// state, deliberately"). On the way out it disarms both conditions rather than
 /// clearing them: a supervisor that is gone is not a transport that is well.
+///
+/// It holds a [`CheckGuard`](super::CheckGuard) over both conditions for its
+/// whole run, so a translator that panics or is aborted leaves them reading
+/// [`DisarmedReason::CheckStopped`] instead of armed and quiet.
 pub fn spawn_tor_posture_translator(
     posture: watch::Receiver<TorPosture>,
     alarms: Arc<OperatorAlarms>,
 ) -> JoinHandle<()> {
-    tokio::spawn(async move { translate(posture, &alarms).await })
+    tokio::spawn(async move {
+        let _guard = alarms.check_guard(&CONDITIONS);
+        translate(posture, &alarms).await;
+    })
+}
+
+/// The conditions this producer watches.
+pub const CONDITIONS: [AlarmCondition; 2] = [
+    AlarmCondition::TransportLiveness,
+    AlarmCondition::VanguardIntegrity,
+];
+
+/// Report that no serving host is running, so there is no tor to watch.
+///
+/// The serving lifecycle reports this before its host starts and after it is
+/// gone. A translator that was attached has been stopped by then, and its
+/// rows say why: the host is not serving, not that the transport failed.
+pub fn report_not_serving(alarms: &OperatorAlarms) {
+    for condition in CONDITIONS {
+        alarms.disarm(condition, DisarmedReason::NotServing);
+    }
 }
 
 async fn translate(mut posture: watch::Receiver<TorPosture>, alarms: &OperatorAlarms) {
@@ -72,14 +96,9 @@ async fn translate(mut posture: watch::Receiver<TorPosture>, alarms: &OperatorAl
             break;
         }
     }
-    alarms.disarm(
-        AlarmCondition::TransportLiveness,
-        DisarmedReason::TransportStopped,
-    );
-    alarms.disarm(
-        AlarmCondition::VanguardIntegrity,
-        DisarmedReason::TransportStopped,
-    );
+    for condition in CONDITIONS {
+        alarms.disarm(condition, DisarmedReason::TransportStopped);
+    }
 }
 
 /// Map one published posture onto the board.
@@ -176,7 +195,7 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
-    use crate::{AlarmLifetime, Arming, ConditionState, IncidentId, RaisedAlarm};
+    use crate::{AlarmLifetime, Arming, IncidentId, RaisedAlarm};
 
     fn socks() -> SocketAddr {
         "127.0.0.1:9050".parse().expect("loopback addr")
@@ -197,10 +216,7 @@ mod tests {
     }
 
     fn live(alarms: &OperatorAlarms, condition: AlarmCondition) -> Option<RaisedAlarm> {
-        alarms
-            .board()
-            .condition(condition)
-            .and_then(ConditionState::live)
+        alarms.board().condition(condition).live()
     }
 
     fn queued(alarms: &OperatorAlarms) -> Vec<OperatorAlarm> {
@@ -212,11 +228,8 @@ mod tests {
             .collect()
     }
 
-    fn arming(alarms: &OperatorAlarms, condition: AlarmCondition) -> Option<Arming> {
-        alarms
-            .board()
-            .condition(condition)
-            .map(ConditionState::arming)
+    fn arming(alarms: &OperatorAlarms, condition: AlarmCondition) -> Arming {
+        alarms.board().condition(condition).arming()
     }
 
     fn transport_incident(alarms: &OperatorAlarms) -> Option<IncidentId> {
@@ -308,7 +321,7 @@ mod tests {
         assert!(transport_incident(&alarms).is_none());
         assert_eq!(
             arming(&alarms, AlarmCondition::TransportLiveness),
-            Some(Arming::Armed),
+            Arming::Armed,
             "the liveness check is running the whole time — that is why it can say nothing",
         );
     }
@@ -328,7 +341,7 @@ mod tests {
             apply(&alarms, &posture);
             assert_eq!(
                 arming(&alarms, AlarmCondition::VanguardIntegrity),
-                Some(Arming::Disarmed(DisarmedReason::TransportNotReady)),
+                Arming::Disarmed(DisarmedReason::TransportNotReady),
                 "no incarnation means the guard topology is unknown, not known-good: {posture:?}",
             );
         }
@@ -340,7 +353,7 @@ mod tests {
         apply(&alarms, &ready(false, None));
         assert_eq!(
             arming(&alarms, AlarmCondition::VanguardIntegrity),
-            Some(Arming::Armed),
+            Arming::Armed,
         );
         assert!(live(&alarms, AlarmCondition::VanguardIntegrity).is_none());
     }
@@ -500,7 +513,7 @@ mod tests {
         ] {
             assert_eq!(
                 arming(&alarms, condition),
-                Some(Arming::Disarmed(DisarmedReason::TransportStopped)),
+                Arming::Disarmed(DisarmedReason::TransportStopped),
                 "a supervisor that is gone is not a transport that is well",
             );
         }
@@ -517,9 +530,12 @@ mod tests {
 
         // The board really was published, not just mutated in place.
         assert!(board.has_changed().expect("channel alive"));
-        assert!(board
-            .borrow_and_update()
-            .condition(AlarmCondition::TransportLiveness)
-            .is_some());
+        assert!(
+            board
+                .borrow_and_update()
+                .condition(AlarmCondition::TransportLiveness)
+                .arming()
+                == Arming::Disarmed(DisarmedReason::TransportStopped)
+        );
     }
 }
