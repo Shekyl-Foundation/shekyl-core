@@ -22,7 +22,6 @@ use shekyl_curve_tree::{
 use shekyl_engine_file::WalletFile;
 use shekyl_engine_state::pending_post_block::{PendingBondPlan, PlannedPosture, SealAdmission};
 use shekyl_rpc_transport::DaemonTarget;
-use shekyl_standoff::P_LANE_WEIGHT_CEILING;
 use shekyl_types::{BlockHeight, GlobalOutputIndex, PSlot};
 use shekyl_units::AtomicUnits;
 use tokio::sync::RwLock;
@@ -34,6 +33,7 @@ use super::bond_assembly::{
 use super::curve_tree_actor::CurveTreeHandle;
 use super::fee_policy::{CeilingViolation, FeeEstimatorError, ValidatedFeeEstimates};
 use super::fee_snapshot::map_daemon_engine_fee_error;
+use super::output_selector::selection_layers;
 use super::pending_post_gate::{ForegroundSession, UserPendingPost};
 use super::pscan::block_source::daemon_claimed_tip;
 use super::pscan::dispatch::PendingPostStore;
@@ -41,26 +41,26 @@ use super::pscan::seal_basis::{load_seal_basis, SealBasisError};
 use super::pscan::start::{
     load_pscan_state_for_engine, pending_post_store_for_engine, WalletFilePendingSealStore,
 };
+use super::tx_fee_model::{
+    converge_spend_fee_by, InputCount, OutputCount, ProofLayers, Signer, SpendShape,
+};
 use shekyl_engine_state::PendingPostBlock;
 
-/// Bond fee for the first-stake post, from one daemon fee snapshot.
+/// The first-stake's fee snapshot, checked before anything is swept: the
+/// bond post pays the `P`-lane floor rate on its own weight
+/// ([`p_lane_bond_post_fee`]), and the sweep prices it once it knows the
+/// funding count, so the snapshot is refused here, under the stake's own
+/// remedy, before the sweep meets it.
 ///
-/// Named and separated from `first_stake`'s body so the gate is
-/// visible and testable: the P-lane's one fee decision (now the shared
-/// [`p_lane_floor_fee`] below, which the drain façade also quotes), and
-/// until 2026-08-17 it was the one production `get_fee_estimates`
-/// consumer that did **not** go through [`ValidatedFeeEstimates`] —
-/// reading `economy` straight off the raw snapshot with no ceiling.
-/// The bond fee is charged to persona working capital and carries no
-/// user-facing control by design (the P-lane pin), so an inflated
-/// economy rate would be paid with nobody positioned to see it. That
-/// makes this the lane that most needs the ceiling, not the one that
-/// can do without it.
-///
-/// The whole snapshot is validated, not just `economy`: a
-/// non-monotonic band is a defect or a lie whichever tier you read,
-/// and a bond path more permissive than the send path would be the
-/// incoherence.
+/// Until 2026-08-17 the bond fee was the one production
+/// `get_fee_estimates` consumer that did **not** go through
+/// [`ValidatedFeeEstimates`]. The bond fee is charged to persona working
+/// capital and carries no user-facing control by design (the P-lane pin),
+/// so an inflated economy rate would be paid with nobody positioned to see
+/// it. That makes this the lane that most needs the ceiling, not the one
+/// that can do without it. The whole snapshot is validated, not just
+/// `economy`: a non-monotonic band is a defect or a lie whichever tier is
+/// read.
 ///
 /// # Errors
 ///
@@ -68,25 +68,30 @@ use shekyl_engine_state::PendingPostBlock;
 /// the ceiling refused it; [`FirstStakeError::FeeEstimate`] when the
 /// reply was malformed. The split is by remedy (rule 82), mirroring
 /// `-29109` vs `-29102` on the send path.
-fn bond_fee_from_estimates(
+fn bond_fee_estimates(
     estimates: super::traits::FeeEstimates,
-) -> Result<AtomicUnits, FirstStakeError> {
-    p_lane_floor_fee(estimates).map_err(|e| match e {
+) -> Result<super::traits::FeeEstimates, FirstStakeError> {
+    p_lane_estimates(estimates).map_err(|e| match e {
         FeeEstimatorError::DaemonFeeUnreasonable(v) => FirstStakeError::FeeUnreasonable(v),
         other => FirstStakeError::FeeEstimate(other),
     })
 }
 
-/// The canonical `P`-lane floor fee from one daemon fee snapshot: validated
-/// economy tier over [`P_LANE_WEIGHT_CEILING`], the weight limit. **The single fee decision for every `P`-lane spend** — the bond
-/// post (via [`bond_fee_from_estimates`]) and the WI-RPC-5 drain façade
-/// ([`drain_to_principal`](super::drain_facade)) both quote this function, so
-/// the P-lane fee-uniformity CONTRACT PIN is one body, not two derivations
-/// that can drift. Callers map [`FeeEstimatorError`] onto their own error
-/// surface, preserving the `-29109` (refused answer) vs `-29102` (failed
-/// query) remedy split.
+/// The `P`-lane floor fee for a transaction of `weight`: the validated
+/// economy tier's rate on that transaction's own weight (the 2026-07-19
+/// decision "P-lane fees", priced on the transaction's own weight as ruled
+/// 2026-11-23). **The single fee decision for every `P`-lane spend**: every
+/// leg prices through this function, so the lane's fee uniformity is one
+/// body, not several derivations that can drift. "Uniform" is one rule for
+/// every wallet, not one amount for every shape.
+///
+/// The whole snapshot is validated, not just `economy`: a non-monotonic band
+/// is a defect or a lie whichever tier is read. Callers map
+/// [`FeeEstimatorError`] onto their own error surface, preserving the
+/// `-29109` (refused answer) vs `-29102` (failed query) remedy split.
 pub(crate) fn p_lane_floor_fee(
     estimates: super::traits::FeeEstimates,
+    weight: usize,
 ) -> Result<AtomicUnits, FeeEstimatorError> {
     let estimates = ValidatedFeeEstimates::try_new(estimates)?;
     // `tx_fee::fee_from_weight`, not `FeeRate::calculate_fee_from_weight`:
@@ -96,8 +101,298 @@ pub(crate) fn p_lane_floor_fee(
     // daemon-supplied number.
     Ok(AtomicUnits::from_raw(super::tx_fee_model::fee_from_weight(
         &estimates.economy(),
-        P_LANE_WEIGHT_CEILING,
+        weight,
     )))
+}
+
+/// The `P`-lane fee of a transfer-shaped spend (`n_in` inputs, `n_out`
+/// outputs, at `layers`, no group payee): [`p_lane_floor_fee`] on the spend's
+/// own predicted weight, converged the way the send path converges a fee
+/// (`converge_spend_fee_by`, the weight's fee varint included). It is what
+/// an ordinary transfer of that shape pays at the economy rate, which is
+/// what a drain must pay to look like one (`ARCHIVAL_DRAIN_SEND_FD2.md`,
+/// T-DS-6/7).
+///
+/// # Errors
+///
+/// [`p_lane_floor_fee`]'s, and `DaemonResponseInvalid` for a fee that does
+/// not fit in `u64`, as the send path's estimator answers it.
+pub(crate) fn p_lane_spend_fee(
+    estimates: super::traits::FeeEstimates,
+    n_in: InputCount,
+    n_out: OutputCount,
+    layers: ProofLayers,
+) -> Result<AtomicUnits, FeeEstimatorError> {
+    // Refuse an unreasonable snapshot by name before converging on it.
+    ValidatedFeeEstimates::try_new(estimates)?;
+    let shape = SpendShape {
+        n_in,
+        n_out,
+        tree_depth: layers.get(),
+        signer: Signer::Solo,
+        group_payees: &[],
+    };
+    converge_spend_fee_by(&shape, 0, |weight| {
+        let weight = usize::try_from(weight).ok()?;
+        p_lane_floor_fee(estimates, weight)
+            .ok()
+            .map(AtomicUnits::to_raw)
+    })
+    .map(AtomicUnits::from_raw)
+    .ok_or(FeeEstimatorError::DaemonResponseInvalid {
+        reason: "the fee does not fit in u64",
+    })
+}
+
+/// The `P`-lane fee of a transaction carrying one input that is not an
+/// FCMP++ spend — a bond post's or a claim's, `extra_input_len` bytes as the
+/// wire writes it — beside `n_in` funding inputs: [`p_lane_floor_fee`] on its
+/// own predicted weight (`predict_weight_with_extra_input`), converged on the
+/// fee varint the way the send path converges a fee. It prices the
+/// transaction before it is built; the build's measured weight then confirms
+/// it ([`p_lane_fee_from_build`]).
+///
+/// # Errors
+///
+/// [`p_lane_floor_fee`]'s, and `DaemonResponseInvalid` for a fee that does
+/// not fit in `u64`, as the send path's estimator answers it.
+pub(crate) fn p_lane_extra_input_fee(
+    estimates: super::traits::FeeEstimates,
+    n_in: InputCount,
+    n_out: OutputCount,
+    layers: ProofLayers,
+    extra_input_len: usize,
+) -> Result<AtomicUnits, FeeEstimatorError> {
+    // Refuse an unreasonable snapshot by name before converging on it.
+    ValidatedFeeEstimates::try_new(estimates)?;
+    shekyl_tx_weight::converge_fee_by(
+        |fee| {
+            u64::try_from(shekyl_tx_weight::predict_weight_with_extra_input(
+                n_in,
+                n_out,
+                layers,
+                fee,
+                extra_input_len,
+            ))
+            .ok()
+        },
+        0,
+        |weight| {
+            let weight = usize::try_from(weight).ok()?;
+            p_lane_floor_fee(estimates, weight)
+                .ok()
+                .map(AtomicUnits::to_raw)
+        },
+    )
+    .map(AtomicUnits::from_raw)
+    .ok_or(FeeEstimatorError::DaemonResponseInvalid {
+        reason: "the fee does not fit in u64",
+    })
+}
+
+/// The wire length of the JoinMarket input a bond over `holdings` carries,
+/// for the fee to price a bond post before it is built — before the persona
+/// is funded, in the `stake_in` gate. The vin is `build_join_market_vin`'s
+/// over placeholder keys of their canonical lengths (the writer reads only
+/// their lengths) and a zero endpoint, bonded at `holdings`'s floor; the
+/// floor's varint and the shard ids are the parts that vary.
+///
+/// # Errors
+///
+/// [`BondAssemblyError::BondFloorZero`] for holdings with no floor, which no
+/// bond post carries.
+pub(crate) fn join_market_input_len(
+    holdings: &HoldingsDescriptor,
+) -> Result<usize, BondAssemblyError> {
+    let floor = bond_floor(holdings, shekyl_archival_retention::archival_params());
+    if floor == 0 {
+        return Err(BondAssemblyError::BondFloorZero);
+    }
+    let key = || vec![0; shekyl_archival_retention::HYBRID_PUBKEY_CANONICAL_BYTES];
+    let vin = shekyl_archival_retention::bond_wire::ArchivalBondPostVin::join_market(
+        key(),
+        [0; 32],
+        key(),
+        shekyl_types::archival::ReceiptSignPk::from_bytes(
+            [0; shekyl_types::archival::RECEIPT_SIGN_PK_LEN],
+        ),
+        [0; shekyl_archival_retention::ENDPOINT_BYTES],
+        holdings.clone(),
+        floor,
+    );
+    shekyl_archival_bond_builder::bond_post_input(&vin)
+        .serialized_len()
+        .ok_or_else(|| BondAssemblyError::build("bond-post input", "does not encode"))
+}
+
+/// The `P`-lane fee of a bond post over `holdings` swept from `n_in` funding
+/// inputs at `layers`: [`p_lane_extra_input_fee`] over its JoinMarket input
+/// ([`join_market_input_len`]), paying change across the consensus minimum of
+/// outputs as the bond post does.
+///
+/// # Errors
+///
+/// [`join_market_input_len`]'s, as a build failure, and
+/// [`p_lane_extra_input_fee`]'s.
+pub(crate) fn p_lane_bond_post_fee(
+    estimates: super::traits::FeeEstimates,
+    holdings: &HoldingsDescriptor,
+    n_in: InputCount,
+    layers: ProofLayers,
+) -> Result<AtomicUnits, BondPostFeeError> {
+    let extra_input_len = join_market_input_len(holdings).map_err(BondPostFeeError::Holdings)?;
+    p_lane_extra_input_fee(
+        estimates,
+        n_in,
+        OutputCount::clamped(shekyl_tx_weight::MIN_NON_COINBASE_OUTPUTS),
+        layers,
+        extra_input_len,
+    )
+    .map_err(BondPostFeeError::Fee)
+}
+
+/// What a `stake_in` must carry for its persona to bond at all
+/// (`ARCHIVAL_BOND_POST_DELAY.md` §3.7, ruled 2026-11-27 and 2026-11-28): the
+/// cheapest bond, its post's fee and the exit's fee, both at today's rate on
+/// their own weight at `layers`.
+///
+/// - **The cheapest bond** is one bond floor: a CompleteTree bond and a
+///   one-shard market bond both post it, and the CompleteTree input, which
+///   carries no shard ids, is the lighter of the two.
+/// - **The post** spends the one output `stake_in` creates.
+/// - **The exit** is a `Release` of that bond, swept with one funding input,
+///   paying the consensus minimum of outputs.
+///
+/// Shard assignment is its own unruled round, so no shard request sizes
+/// this. A persona is funded once: when assignment exists, the requirement
+/// is the whole assigned set's.
+///
+/// # Errors
+///
+/// [`BondPostFeeError::Fee`] for the lane's fee functions' snapshot
+/// refusals, and `DaemonResponseInvalid` for a sum that does not fit in
+/// `u64`, as the fees answer it; [`BondPostFeeError::Holdings`] if the
+/// cheapest bond's input does not encode.
+pub(crate) fn stake_in_requirement(
+    estimates: super::traits::FeeEstimates,
+    layers: ProofLayers,
+) -> Result<AtomicUnits, BondPostFeeError> {
+    let cheapest = HoldingsDescriptor {
+        kind: HoldingsKind::CompleteTree,
+        shard_ids: ShardSet::empty(),
+    };
+    let one_input = InputCount::clamped(1);
+    let bond = AtomicUnits::from_raw(bond_floor(
+        &cheapest,
+        shekyl_archival_retention::archival_params(),
+    ));
+    let post = p_lane_bond_post_fee(estimates, &cheapest, one_input, layers)?;
+    let exit = p_lane_extra_input_fee(
+        estimates,
+        one_input,
+        OutputCount::clamped(shekyl_tx_weight::MIN_NON_COINBASE_OUTPUTS),
+        layers,
+        shekyl_wire::transaction::weight::release_input_len(bond.to_raw()),
+    )
+    .map_err(BondPostFeeError::Fee)?;
+    bond.checked_add(post)
+        .and_then(|sum| sum.checked_add(exit))
+        .ok_or(BondPostFeeError::Fee(
+            FeeEstimatorError::DaemonResponseInvalid {
+                reason: "the fee does not fit in u64",
+            },
+        ))
+}
+
+/// What [`Engine::sweep_bond_funding`] hands back: the funding it took, the
+/// reference it anchored, the seal basis's generation, and the post's fee on
+/// its own weight over that funding.
+pub(crate) struct BondFunding {
+    /// The swept funding.
+    pub(crate) selection: FundingSelection,
+    /// The reference the sweep anchored.
+    pub(crate) reference: ReferenceBlock,
+    /// The seal basis's generation, for the seal to check it still holds.
+    pub(crate) snapshot_generation: u64,
+    /// The bond post's fee over `selection` at `reference`'s depth.
+    pub(crate) fee: AtomicUnits,
+}
+
+/// The fee snapshot, refused by name when the `P`-lane cannot price on it:
+/// the check every bond-post caller runs under its own remedy before it
+/// sweeps, so the sweep's own pricing meets only a usable snapshot.
+///
+/// # Errors
+///
+/// [`p_lane_floor_fee`]'s snapshot refusals.
+pub(crate) fn p_lane_estimates(
+    estimates: super::traits::FeeEstimates,
+) -> Result<super::traits::FeeEstimates, FeeEstimatorError> {
+    ValidatedFeeEstimates::try_new(estimates)?;
+    Ok(estimates)
+}
+
+/// Why a bond post could not be priced: its holdings carry no bond, or the
+/// fee snapshot was refused or does not fit.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum BondPostFeeError {
+    /// The holdings price no bond post.
+    #[error("{0}")]
+    Holdings(BondAssemblyError),
+    /// The fee snapshot was refused, or the fee does not fit.
+    #[error("{0}")]
+    Fee(FeeEstimatorError),
+}
+
+/// How many times a `P`-lane spend priced from a measured build
+/// ([`p_lane_fee_from_build`]) may be built. Two settle every shape (the fee
+/// moves the weight only through its varint); the third is the bound that
+/// keeps a defect from looping, not a pass any spend needs.
+pub(crate) const MEASURED_FEE_BUILDS: usize = 3;
+
+/// The `P`-lane fee of a built transaction the weight predictor does not
+/// model (the bond post, the exit and the claim each carry a vin that is not
+/// an FCMP++ spend): [`p_lane_floor_fee`] on the transaction's own weight,
+/// read from `built` (which paid `built_fee`) and converged on the fee varint
+/// the way the send path converges a measured build (`converge_fee_by`,
+/// `weight_at_fee`). The caller builds again when the answer differs from
+/// `built_fee`; the fee moves the weight only through its varint, so the
+/// second build settles.
+///
+/// # Errors
+///
+/// [`p_lane_floor_fee`]'s; `DaemonResponseInvalid` for a fee that does not
+/// fit in `u64`, as the send path's estimator answers it, and for bytes of
+/// the wallet's own build that do not parse, named as such.
+pub(crate) fn p_lane_fee_from_build(
+    estimates: super::traits::FeeEstimates,
+    built: &[u8],
+    built_fee: AtomicUnits,
+) -> Result<AtomicUnits, FeeEstimatorError> {
+    ValidatedFeeEstimates::try_new(estimates)?;
+    let mut cursor = std::io::Cursor::new(built);
+    let weight = shekyl_wire::Transaction::read(&mut cursor)
+        .map(|tx| tx.weight())
+        .map_err(|_| FeeEstimatorError::DaemonResponseInvalid {
+            reason: "the wallet's own built transaction does not parse",
+        })?;
+    let weight = u64::try_from(weight).map_err(|_| FeeEstimatorError::DaemonResponseInvalid {
+        reason: "the fee does not fit in u64",
+    })?;
+    shekyl_tx_weight::converge_fee_by(
+        |fee| shekyl_tx_weight::weight_at_fee(weight, built_fee.to_raw(), fee),
+        0,
+        |weight| {
+            let weight = usize::try_from(weight).ok()?;
+            p_lane_floor_fee(estimates, weight)
+                .ok()
+                .map(AtomicUnits::to_raw)
+        },
+    )
+    .map(AtomicUnits::from_raw)
+    .ok_or(FeeEstimatorError::DaemonResponseInvalid {
+        reason: "the fee does not fit in u64",
+    })
 }
 
 /// What a completed first-stake reports back to the stake entry (public
@@ -569,13 +864,13 @@ where
     /// The SP-R0 witness precondition is **discharged** (arm #1, 2026-07-18):
     /// [`SpentRecordsDurablyPruned::arm1_watch_pruning_live`] is the sole
     /// production mint. Tests pass `SpentRecordsDurablyPruned::for_test`.
-    #[allow(clippy::too_many_arguments)] // the request's whole input: handle, ticket, posture, fee, witness
+    #[allow(clippy::too_many_arguments)] // the request's whole input: handle, ticket, posture, fee snapshot, witness
     pub(crate) async fn seal_bond_plan(
         self_arc: Arc<RwLock<Self>>,
         handle: PersonaHandle,
         ticket: PersistedBondTicket,
         posture: PlannedPosture,
-        fee: AtomicUnits,
+        estimates: super::traits::FeeEstimates,
         pruning_landed: &SpentRecordsDurablyPruned,
     ) -> Result<PlannedStake, StakeEngineError> {
         let p_slot = handle.p_slot();
@@ -630,7 +925,11 @@ where
         // sweep's maturity bar; the post is proved against a fresh one at due.
         let holdings = planned_holdings(&posture)
             .map_err(|e| BondAssemblyError::build("planned holdings", format!("{e:?}")))?;
-        let (selection, _reference, snapshot_generation) = Self::sweep_bond_funding(
+        let BondFunding {
+            selection,
+            snapshot_generation,
+            ..
+        } = Self::sweep_bond_funding(
             self_arc.clone(),
             &store,
             &curve_tree,
@@ -638,7 +937,7 @@ where
             tip_hash_at,
             p_slot,
             &holdings,
-            fee,
+            estimates,
             pruning_landed,
             &[],
         )
@@ -721,11 +1020,11 @@ where
         tip_hash_at: impl FnOnce(BlockHeight) -> Option<BlockHash>,
         p_slot: PSlot,
         holdings: &HoldingsDescriptor,
-        fee: AtomicUnits,
+        estimates: super::traits::FeeEstimates,
         pruning_landed: &SpentRecordsDurablyPruned,
         own: &[GlobalOutputIndex],
-    ) -> Result<(FundingSelection, ReferenceBlock, u64), BondAssemblyError> {
-        let (reference, _tree_depth) = match at {
+    ) -> Result<BondFunding, BondAssemblyError> {
+        let (reference, tree_depth) = match at {
             // Anchored ReferenceBlock via the ordinary procedure (WI-2 F-6).
             SweepReference::FromWalletTip(chain_tip) => {
                 anchored_reference_block(curve_tree, chain_tip, tip_hash_at).await?
@@ -772,24 +1071,49 @@ where
         if floor == AtomicUnits::ZERO {
             return Err(BondAssemblyError::BondFloorZero);
         }
-        let required = floor
-            .checked_add(fee)
-            .ok_or(BondAssemblyError::AmountOverflow)?;
-
         // RefuseTooMany: the bond post's consume-everything semantics
         // (GF-4b structural emptiness) forbid a silent subset, and the post
         // carries its own bond vin inside the consensus vin cap — see
         // `MAX_RETENTION_FUNDING_INPUTS`.
-        let selection = sweep_funding_outputs(
-            pruning_landed,
-            &funding_records,
-            p_slot,
-            &reserved,
-            required,
-            reference_height,
-            SweepOverflowPolicy::RefuseTooMany,
-        )?;
-        Ok((selection, reference, snapshot_generation))
+        let sweep_for = |required: AtomicUnits| {
+            sweep_funding_outputs(
+                pruning_landed,
+                &funding_records,
+                p_slot,
+                &reserved,
+                required,
+                reference_height,
+                SweepOverflowPolicy::RefuseTooMany,
+            )
+        };
+        // The post pays the floor rate on its own weight (P-lane fee ruling,
+        // 2026-11-23). It spends every eligible output, so the count is known
+        // before the fee: sweep at the floor for the count, price that count
+        // at this reference's depth, and sweep again for the floor and fee.
+        let counted = sweep_for(floor)?;
+        let fee = p_lane_bond_post_fee(
+            estimates,
+            holdings,
+            InputCount::clamped(counted.records.len()),
+            selection_layers(tree_depth).as_proof(),
+        )
+        .map_err(|e| match e {
+            BondPostFeeError::Holdings(e) => e,
+            // Every caller refuses an unusable snapshot under its own remedy
+            // before it sweeps (`p_lane_estimates`), so what reaches here is
+            // the fee not fitting in `u64`.
+            BondPostFeeError::Fee(_) => BondAssemblyError::AmountOverflow,
+        })?;
+        let required = floor
+            .checked_add(fee)
+            .ok_or(BondAssemblyError::AmountOverflow)?;
+        let selection = sweep_for(required)?;
+        Ok(BondFunding {
+            selection,
+            reference,
+            snapshot_generation,
+            fee,
+        })
     }
 }
 
@@ -970,12 +1294,10 @@ where
         let planned = posture.planned()?;
         let holdings = planned_holdings(&planned)
             .map_err(|e| FirstStakeError::State(format!("planned holdings: {e:?}")))?;
-        // The bond fee is derived from the daemon's live estimate over the
-        // bond size ceiling (the seam the WI-2 addendum reserved for this
-        // entry — overpaying is a miner transfer, never a conservation
-        // term), gated by the same ceiling the send path applies —
-        // see [`bond_fee_from_estimates`].
-        let fee = bond_fee_from_estimates(
+        // The daemon's live fee snapshot, refused by name when unusable (see
+        // [`bond_fee_estimates`]); the sweep prices the post on its own
+        // weight from it.
+        let estimates = bond_fee_estimates(
             daemon
                 .get_fee_estimates()
                 .await
@@ -996,7 +1318,7 @@ where
             tip_hash_at,
             slot,
             &holdings,
-            fee,
+            estimates,
             &witness,
             &[],
         )
@@ -1029,10 +1351,16 @@ where
         // Post-durable failures render through the amount-free sanitizer:
         // the plan re-runs the funding sweep, and its refusals must not leak
         // the persona figures the preflight arm withholds.
-        let planned =
-            Self::seal_bond_plan(self_arc.clone(), handle, ticket, planned, fee, &witness)
-                .await
-                .map_err(post_assembly_failure)?;
+        let planned = Self::seal_bond_plan(
+            self_arc.clone(),
+            handle,
+            ticket,
+            planned,
+            estimates,
+            &witness,
+        )
+        .await
+        .map_err(post_assembly_failure)?;
 
         Ok(FirstStakeOutcome {
             p_slot: slot.to_raw(),

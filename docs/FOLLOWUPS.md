@@ -11,7 +11,6 @@ There is no V3.1 / V3.2 / V3.x release train.
 
 ## Pre-genesis
 
-- **`stake_in` refuses an amount that cannot bond (ruled 2026-11-27).** The gate tests the user's amount alone, against the bond for the requested shards, the bond post's fee at today's floor and the exit fee, with its own `stake_in` code (`ARCHIVAL_BOND_POST_DELAY.md` §3.7). It reads the fee function PR A lands, so it is built with PR A. Falsify by: a `stake_in` of less than one bond plus its fees that the wallet accepts after PR A merges.
   - Owner: PR A, the fee on each transaction's own weight — [`ARCHIVAL_BOND_POST_DELAY.md`](design/ARCHIVAL_BOND_POST_DELAY.md) §3.7
   - Target: pre-genesis
 
@@ -479,8 +478,8 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: [`ENGINE_CADENCE_DRIVER.md`](design/ENGINE_CADENCE_DRIVER.md) (§3 leg 4)
   - Target: pre-genesis
 
-- **The claim leg prices an allowance, not the claim's weight.** The fee it pays and the relay policy's emission-claim hold are both taken at `CLAIM_PRICED_WEIGHT` (49 152 + 2 048 = 51 200, `cadence/claim.rs`), a static reserve for the non-claims part plus one vin row, not the weight of the claim being built. A predictor from the assembled claim's shape replaces the allowance; the hold's test reads the same constant, so the hold follows with no second edit (`ECONOMICS_SIM_PRODUCTION_REBASE.md` §5.26, ruling 9).
-  - Owner: [`ENGINE_CADENCE_DRIVER.md`](design/ENGINE_CADENCE_DRIVER.md) (§4)
+- **The claim's value gate rests on the fee floor following the block reward (ruled 2026-11-28).** A claim is made when its reward covers its own fee at the current rate (`ENGINE_CADENCE_DRIVER.md` §4); the fixed hold is deleted. That fee stays a small share of the reward only while the floor is reward-proportional, `F = R·C·w_ref/M²`. The floor's decoupling from the reward is ruled in direction and open in derivation (`ECONOMY_UMBRELLA_PLAN.md` §3.2 item 4, FL-R13's round). When the decoupled basis is chosen, the claim rule is re-checked against it: the claim's fee as a share of a late-chain staker's per-epoch reward, and how often the window floor forfeits. Falsify by: the decoupled-basis ruling, stating the claim rule's re-check and its result.
+  - Owner: [`ECONOMY_UMBRELLA_PLAN.md`](design/ECONOMY_UMBRELLA_PLAN.md) §1 — EUP-5 G (FL-R13's round)
   - Target: pre-genesis
 
 - **Q11 zero-fee-input emission claim has no settlement evidence** (destitute mint-pays-fee; named blocker: accrual has no claim-match set).
@@ -732,6 +731,7 @@ Default. Lands before genesis if it should exist at launch.
 
 - **Shard assignment for market staking — the `NoShardsAvailable` stub's discharge.**
   - Target: pre-genesis
+  - Carries: a persona is funded once (decision log 2026-09-20), so when assignment exists the `stake_in` bond gate (`ARCHIVAL_BOND_POST_DELAY.md` §3.7) is sized for the whole assigned set; today it sizes for the cheapest bond, one floor (ruled 2026-11-28).
 
 - **F5 pruning inherits two constraints from the CompleteTree round** (recorded 2026-08-16; `COMPLETETREE_ACTIVATION.md` §10 item 2).
   - Target: pre-genesis

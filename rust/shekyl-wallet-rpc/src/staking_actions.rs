@@ -166,8 +166,9 @@ pub(crate) async fn drain(
     // it into `-29101` would hand out an unsatisfiable remedy ("lower the
     // payment" has no answer at zero — rule 82); the engine façade carries
     // its own `EmptyRequest` arm for direct embedder callers. `stake_in`
-    // deliberately has NO such check: a zero stake is designed-valid (DQ1,
-    // no floor), and `AtomicUnitsString` accepts `"0"` for it.
+    // has NO such check here: its floor is the engine's bond gate (`-29546`,
+    // `ARCHIVAL_BOND_POST_DELAY.md` §3.7), which knows the fee, and
+    // `AtomicUnitsString` keeps accepting `"0"`.
     if payment.is_zero() {
         return Err(WalletRpcError::InvalidParams(
             "the drain amount must be greater than zero".into(),

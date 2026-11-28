@@ -384,6 +384,47 @@ async fn the_exit_authorizes_under_bond_spend_pk_never_the_identity_key() {
     let mut cursor: &[u8] = post.bound_tx.bytes();
     let tx = Transaction::read(&mut cursor).expect("assembled bytes parse whole");
 
+    // The weight the P-lane fee prices before it builds is the built exit's:
+    // the extra-input model over this exit's counts, depth, fee and its own
+    // bond-post input's length, against the proved and signed bytes.
+    {
+        let Ct::Fcmp {
+            prunable: Some(ref prunable),
+            ..
+        } = tx.ct
+        else {
+            panic!("an assembled exit is an FCMP transaction with its proof")
+        };
+        let bond_input = tx
+            .prefix
+            .inputs
+            .iter()
+            .find(|i| matches!(i, Input::BondPost(_)))
+            .expect("the exit carries its bond-post input");
+        let fcmp_inputs = tx.prefix.inputs.iter().filter(|i| i.is_spend()).count();
+        // The wire carries the curve-tree depth, one less than the proof's
+        // layer count (the daemon reads `fcmp_layers = tree_depth + 1`).
+        let layers = u8::try_from(prunable.tree_depth + 1).expect("tree_depth + 1 fits u8");
+        assert_eq!(
+            shekyl_tx_weight::predict_weight_with_extra_input(
+                shekyl_tx_weight::InputCount::clamped(fcmp_inputs),
+                shekyl_tx_weight::OutputCount::clamped(tx.prefix.outputs.len()),
+                shekyl_tx_weight::ProofLayers::new(layers).expect("the exit's layers"),
+                EXIT_FEE,
+                bond_input.serialized_len().expect("a written input"),
+            ),
+            tx.weight(),
+            "the extra-input model must weigh the built exit exactly"
+        );
+        // And the exit's fee reads that input's length before any key
+        // exists, from the record's balance alone.
+        assert_eq!(
+            shekyl_wire::transaction::weight::release_input_len(3 * 750_000_000),
+            bond_input.serialized_len().expect("a written input"),
+            "the wire's Release input length must be the built one's"
+        );
+    }
+
     // The slot the pin reads: the bond post's own index in `vin`.
     let Ct::Fcmp { ref pqc_auths, .. } = tx.ct else {
         panic!("an assembled exit is an FCMP transaction")

@@ -818,7 +818,7 @@ async fn apply_scan_result_adopts_a_cached_slot_and_advances_the_tip() {
 /// is `fee_policy::tests`).
 #[test]
 fn bond_fee_refuses_what_the_send_path_refuses() {
-    use super::{bond_fee_from_estimates, FirstStakeError};
+    use super::{bond_fee_estimates, FirstStakeError};
     use crate::engine::fee_policy::{CeilingViolation, ValidatedFeeEstimates};
     use crate::engine::traits::FeeEstimates;
     use shekyl_rpc_client::FeeRate;
@@ -829,17 +829,12 @@ fn bond_fee_refuses_what_the_send_path_refuses() {
         high: FeeRate::new(p).expect("high"),
     };
 
-    // Honest served-ladder KAT row: accepted, and the fee is the shared
-    // formula over the bond ceiling — not a number this path invents.
+    // Honest served-ladder KAT row: accepted, and handed on unchanged for
+    // the sweep to price the post's own weight from.
     let honest = snapshot(333, 1_332, 66_666);
-    let fee = bond_fee_from_estimates(honest).expect("an honest snapshot funds a bond");
     assert_eq!(
-        fee.to_raw(),
-        shekyl_rpc_client::tx_fee::fee_from_weight(
-            &FeeRate::new(333).expect("rate"),
-            shekyl_standoff::P_LANE_WEIGHT_CEILING
-        ),
-        "the bond fee is economy over the P-lane ceiling, via the shared formula"
+        bond_fee_estimates(honest).expect("an honest snapshot funds a bond"),
+        honest
     );
 
     // Economy itself over the absolute cap: refused as a REFUSAL, not
@@ -849,7 +844,7 @@ fn bond_fee_refuses_what_the_send_path_refuses() {
     // must gouge relative to the real bound, not a era-local one).
     let cap = crate::engine::fee_policy::absolute_fee_rate_cap();
     let gouging = snapshot(cap + 1, cap + 1, cap + 1);
-    match bond_fee_from_estimates(gouging) {
+    match bond_fee_estimates(gouging) {
         Err(FirstStakeError::FeeUnreasonable(CeilingViolation::AboveAbsoluteCap { rate })) => {
             assert_eq!(rate, cap + 1);
         }
@@ -858,7 +853,7 @@ fn bond_fee_refuses_what_the_send_path_refuses() {
 
     // An inverted band is refused here for the same reason it is on the
     // send path, even though only `economy` is read.
-    match bond_fee_from_estimates(snapshot(50, 20, 100)) {
+    match bond_fee_estimates(snapshot(50, 20, 100)) {
         Err(FirstStakeError::FeeUnreasonable(CeilingViolation::NonMonotonic { .. })) => {}
         other => panic!("bond must not be more permissive than send: {other:?}"),
     }
@@ -876,16 +871,16 @@ fn bond_fee_refuses_what_the_send_path_refuses() {
         let raw = snapshot(e, s, p);
         assert_eq!(
             ValidatedFeeEstimates::try_new(raw).is_ok(),
-            bond_fee_from_estimates(raw).is_ok(),
+            bond_fee_estimates(raw).is_ok(),
             "send and bond disagree on ({e}, {s}, {p})"
         );
     }
 }
 
-/// The reserve pays one `Release` at the headroom rate: the fee the lane
-/// actually quotes at that rate, through the wallet's fee path, is what the
-/// computed reserve holds back. Bites against the reserve and the quoted fee
-/// being priced over different weights or rounded differently.
+/// The reserve pays the heaviest legal `Release` at the headroom rate: the
+/// fee the lane quotes for that weight at that rate, through the wallet's fee
+/// path, is what the computed reserve holds back. Bites against the reserve
+/// and the quoted fee being rounded differently.
 #[test]
 fn the_reserve_pays_the_quoted_release_fee_at_the_headroom_rate() {
     use super::p_lane_floor_fee;
@@ -894,11 +889,113 @@ fn the_reserve_pays_the_quoted_release_fee_at_the_headroom_rate() {
     use shekyl_standoff::{EXIT_FEE_HEADROOM_RATE, EXIT_FEE_RESERVE_ATOMIC};
 
     let rate = FeeRate::new(EXIT_FEE_HEADROOM_RATE).expect("rate");
-    let quoted = p_lane_floor_fee(FeeEstimates {
+    let quoted = p_lane_floor_fee(
+        FeeEstimates {
+            economy: rate,
+            standard: rate,
+            high: rate,
+        },
+        shekyl_standoff::EXIT_RESERVE_WEIGHT,
+    )
+    .expect("the headroom rate is a valid estimate");
+    assert_eq!(quoted.to_raw(), EXIT_FEE_RESERVE_ATOMIC);
+}
+
+/// The JoinMarket input the bond post's fee prices before any key is at hand
+/// is the length of the one a persona's real keys build: over a shard set
+/// whose ids span one- to four-byte varints, and over the complete tree.
+/// Bites against the placeholder vin drifting from `build_join_market_vin`
+/// (a key, the receipt key or the endpoint changing length, or a field
+/// added).
+#[test]
+fn the_priced_join_market_input_is_the_built_ones_length() {
+    use super::join_market_input_len;
+    use crate::engine::bond_assembly::wire_bond_post_input;
+    use crate::engine::stake_engine::test_fixtures::derive_bundle;
+    use shekyl_archival_bond_builder::build_join_market_vin;
+
+    let keys = derive_bundle(3);
+    for holdings in [
+        HoldingsDescriptor {
+            kind: HoldingsKind::ShardSetCompact,
+            shard_ids: ShardSet::new(vec![0, 127, 128, 70_000]).expect("a shard set"),
+        },
+        HoldingsDescriptor {
+            kind: HoldingsKind::CompleteTree,
+            shard_ids: ShardSet::empty(),
+        },
+    ] {
+        let built = build_join_market_vin(
+            keys.bond_post_keys(),
+            holdings.clone(),
+            keys.onion_keypair().public_key(),
+        )
+        .expect("a bond over these holdings builds");
+        let input = wire_bond_post_input(built.vin()).expect("a JoinMarket maps to the wire");
+        assert_eq!(
+            join_market_input_len(&holdings).expect("these holdings price a bond"),
+            input.serialized_len().expect("a written input"),
+            "{holdings:?}"
+        );
+    }
+}
+
+/// What a `stake_in` must carry (§3.7) is the cheapest bond, its post's fee
+/// over one funding input and the exit's fee over one funding input and the
+/// `Release`, each the lane's own-weight fee at that rate and depth. Bites
+/// against a term being dropped, the post being priced over a heavier
+/// bond, or the exit being priced on a weight other than its own.
+#[test]
+fn a_stake_in_must_carry_the_cheapest_bond_and_both_fees() {
+    use super::{p_lane_bond_post_fee, p_lane_extra_input_fee, stake_in_requirement};
+    use crate::engine::traits::FeeEstimates;
+    use crate::engine::tx_fee_model::{InputCount, OutputCount, ProofLayers};
+    use shekyl_rpc_client::FeeRate;
+
+    let rate = FeeRate::new(27_306).expect("the genesis floor rate");
+    let estimates = FeeEstimates {
         economy: rate,
         standard: rate,
         high: rate,
-    })
-    .expect("the headroom rate is a valid estimate");
-    assert_eq!(quoted.to_raw(), EXIT_FEE_RESERVE_ATOMIC);
+    };
+    let floor = shekyl_archival_retention::archival_params().bond_floor_atomic;
+    let cheapest = HoldingsDescriptor {
+        kind: HoldingsKind::CompleteTree,
+        shard_ids: ShardSet::empty(),
+    };
+    let one_shard = HoldingsDescriptor {
+        kind: HoldingsKind::ShardSetCompact,
+        shard_ids: ShardSet::new(vec![70_000]).expect("a shard set"),
+    };
+    let one = InputCount::clamped(1);
+    let mut previous = None;
+    for depth in [2u8, 7, 14] {
+        let layers = ProofLayers::new(depth).expect("a legal proof depth");
+        let post = p_lane_bond_post_fee(estimates, &cheapest, one, layers).expect("post fee");
+        let exit = p_lane_extra_input_fee(
+            estimates,
+            one,
+            OutputCount::clamped(shekyl_tx_weight::MIN_NON_COINBASE_OUTPUTS),
+            layers,
+            shekyl_wire::transaction::weight::release_input_len(floor),
+        )
+        .expect("exit fee");
+        let required = stake_in_requirement(estimates, layers).expect("a requirement");
+        assert_eq!(
+            required.to_raw(),
+            floor + post.to_raw() + exit.to_raw(),
+            "depth {depth}"
+        );
+        assert!(
+            post <= p_lane_bond_post_fee(estimates, &one_shard, one, layers).expect("post fee"),
+            "the CompleteTree post is the cheapest at depth {depth}"
+        );
+        if let Some(shallower) = previous {
+            assert!(
+                required > shallower,
+                "a deeper tree costs more at depth {depth}"
+            );
+        }
+        previous = Some(required);
+    }
 }

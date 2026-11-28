@@ -14,16 +14,6 @@ use super::relay::{checked_relay_fee_floor, clamped_median};
 use crate::params::{EconomicParams, SCALE};
 use crate::RelayPolicy;
 
-/// Wallet-side emission-claim hold, atomic units
-/// (`ENGINE_CADENCE_DRIVER.md` §4): hold settled epochs until Σreward
-/// clears it and the live fee. Derived (ruling 9): the claim leg's priced
-/// weight at the chain's genesis Economy rung, on the shipped lattice —
-/// `config/relay_policy.json` `emission_claim_fee_floor_atomic`, recomputed
-/// by `shekyl-engine-core`'s test. Uniform across wallets
-/// (anti-fingerprint). Not consensus. The shipped
-/// [`RelayPolicy::emission_claim_fee_floor`](crate::RelayPolicy::emission_claim_fee_floor).
-pub const EMISSION_CLAIM_FEE_FLOOR: u64 = crate::params::GENERATED_EMISSION_CLAIM_FEE_FLOOR;
-
 /// Standard rung over the economy rung at the shipped policy. The served
 /// ladder is `standard = 4F`. Generated from `config/relay_policy.json`
 /// `standard_rung_over_economy`; a policy's is

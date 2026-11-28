@@ -6,7 +6,7 @@
 //! Leg 3 (`ENGINE_CADENCE_DRIVER.md` §3 leg 3, §4): per-epoch emission claim.
 //!
 //! The scheduler in [`super`] fires this adapter; claim policy — held-epoch
-//! memory, evaluate-and-forfeit, the value floor, the foreground yield —
+//! memory, evaluate-and-forfeit, the value gate, the foreground yield —
 //! lives here, next to the dispatch seam it calls.
 
 use std::future::Future;
@@ -38,24 +38,6 @@ use super::{CadenceLeg, WeakEngine};
 /// operator has been blind to a real refusal for the better part of an
 /// hour.
 pub(crate) const CLAIM_FAULT_ALARM_THRESHOLD: u32 = 3;
-
-/// Byte allowance for the single claim vin row, added to
-/// [`EMISSION_NON_CLAIMS_RESERVE_BYTES`] when pricing the claim envelope —
-/// the regtest-e2e fee model (live run 4: the bond's 32 KiB ceiling
-/// underprices a claim, which carries two input proofs; overpaying is a
-/// miner transfer, never a conservation term).
-///
-/// [`EMISSION_NON_CLAIMS_RESERVE_BYTES`]: super::super::emission_claim::EMISSION_NON_CLAIMS_RESERVE_BYTES
-const CLAIM_VIN_ALLOWANCE_BYTES: usize = 2048;
-
-/// The weight the claim leg prices a claim at: the non-claims reserve plus
-/// one claim vin row. An allowance, not the claim's predicted weight (the
-/// predictor is unbuilt; `docs/FOLLOWUPS.md`). The relay policy's
-/// emission-claim hold is the fee at this weight at the genesis Economy
-/// rung, and its test reads this same constant, so a change to the weight
-/// moves the hold's test, not a second copy.
-pub(crate) const CLAIM_PRICED_WEIGHT: usize =
-    super::super::emission_claim::EMISSION_NON_CLAIMS_RESERVE_BYTES + CLAIM_VIN_ALLOWANCE_BYTES;
 
 /// Request timeout for the claim leg's loopback claim-source transport.
 const CLAIM_RPC_TIMEOUT: Duration = Duration::from_secs(10);
@@ -93,8 +75,8 @@ pub(crate) struct ClaimLegState {
 /// built; this leg is the scheduler, and the schedule is **uniform** —
 /// every staker wallet evaluates at every settlement close (plus its own
 /// poll phase), no per-wallet jitter, no grading. The *inclusion decision*
-/// is value-conditional (the §4 concession): Σreward across held epochs
-/// must clear [`EMISSION_CLAIM_FEE_FLOOR`] or the whole set holds
+/// is value-conditional (the §4 concession): the claim's total reward must
+/// cover its own fee at the current rate, or the whole set holds
 /// ([`EmissionClaimError::ValueDeferred`]), re-evaluated at every close,
 /// **evaluate-and-forfeit** at the window floor — never force a claim whose
 /// fee exceeds its reward.
@@ -114,8 +96,9 @@ pub(crate) struct ClaimLegState {
 ///    seam's seal critical section ([`ForegroundHold`]), where the pending
 ///    write lock totally orders the check against every foreground
 ///    registration.
-/// 4. **Fee + transport:** the daemon's live economy estimate over the
-///    claim envelope. The claim-source fetch rides
+/// 4. **Fee + transport:** the daemon's live fee snapshot, refused by name
+///    when unusable; the claim is priced on its own weight from it
+///    ([`Engine::submit_emission_claim`]). The claim-source fetch rides
 ///    [`open_chain_reader`](super::super::prpc::open_chain_reader): this
 ///    computer, or an enrolled channel. A plaintext address on another
 ///    computer is a named, alarmable refusal.
@@ -123,7 +106,6 @@ pub(crate) struct ClaimLegState {
 ///    seam, persist-before-dispatch and the audited submitter choke point
 ///    included.
 ///
-/// [`EMISSION_CLAIM_FEE_FLOOR`]: shekyl_economics::EMISSION_CLAIM_FEE_FLOOR
 /// [`EmissionClaimError::ValueDeferred`]: super::super::emission_claim::EmissionClaimError::ValueDeferred
 /// [`ForegroundSession`]: super::super::pending_post_gate::ForegroundSession
 /// [`ForegroundHold`]: super::super::claim_dispatch::EmissionClaimRequestError::ForegroundHold
@@ -294,10 +276,8 @@ where
                 return;
             }
 
-            let fee = match daemon.get_fee_estimates().await {
-                Ok(estimates) => estimates
-                    .economy
-                    .calculate_fee_from_weight(CLAIM_PRICED_WEIGHT),
+            let estimates = match daemon.get_fee_estimates().await {
+                Ok(estimates) => estimates,
                 Err(e) => return claim_fault(&state, &alarms, settled, &e.into()),
             };
             let claim_rpc =
@@ -317,7 +297,7 @@ where
                 engine,
                 &claim_rpc,
                 p_slot,
-                shekyl_units::AtomicUnits::from_raw(fee),
+                estimates,
                 &super::super::bond_assembly::SpentRecordsDurablyPruned::arm1_watch_pruning_live(),
             )
             .await
@@ -354,41 +334,5 @@ where
                 },
             }
         })
-    }
-}
-
-#[cfg(test)]
-mod hold_tests {
-    use super::CLAIM_PRICED_WEIGHT;
-    use shekyl_economics::{
-        economic_params, relay_floor_from, relay_policy, CirculatingSupply, FeeOperands, TxVolume,
-    };
-    use shekyl_units::AtomicUnits;
-
-    /// E16-8 (ruling 9): the hold is the fee, on the shipped lattice, for
-    /// the weight the leg prices a claim at, at the chain's genesis
-    /// Economy rung. At height 0 the volume window is empty, so `M_r` is
-    /// at its low rail and `C` = 0.8: 27 306 atomic per weight unit.
-    /// 51 200 × 27 306 = 1 398 067 200, rounded up to the 1 000-atomic
-    /// lattice.
-    #[test]
-    fn the_claim_hold_is_the_genesis_economy_fee_at_the_priced_weight() {
-        let params = economic_params();
-        let policy = relay_policy();
-        let genesis = FeeOperands {
-            height: 0,
-            parent_coins_generated: 0,
-            supply: CirculatingSupply::derive(AtomicUnits::from_raw(0), AtomicUnits::from_raw(0))
-                .expect("nothing burned at genesis"),
-            tx_volume: TxVolume::ZERO,
-            long_term_effective_median: params.full_reward_zone,
-        };
-        let floor = relay_floor_from(genesis, params, policy).expect("the genesis floor prices");
-        assert_eq!(floor, 27_306);
-        assert_eq!(CLAIM_PRICED_WEIGHT, 51_200);
-        let weight = u64::try_from(CLAIM_PRICED_WEIGHT).expect("the weight fits u64");
-        let fee = policy.quantize(weight, floor).expect("the fee fits u64");
-        assert_eq!(fee, 1_398_068_000);
-        assert_eq!(policy.emission_claim_fee_floor, fee);
     }
 }

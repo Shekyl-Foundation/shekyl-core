@@ -254,6 +254,23 @@ pub fn predict_spend_weight(shape: &SpendShape<'_>, fee: u64) -> Option<usize> {
     ))
 }
 
+/// [`predict_weight`] for a spend that also carries one input of another kind
+/// — a bond post's or a claim's — `extra_input_len` bytes long as the wire
+/// writes it (`Input::serialized_len`). That input takes a solo auth slot and
+/// no proof or pseudo-out (`weight::spend_weight_with_extra_input`). It equals
+/// the built post's or claim's `Transaction::weight()`, pinned by
+/// `predict_weight_with_extra_input_matches_wire_weight`.
+#[must_use]
+pub fn predict_weight_with_extra_input(
+    n_in: InputCount,
+    n_out: OutputCount,
+    layers: ProofLayers,
+    fee: u64,
+    extra_input_len: usize,
+) -> usize {
+    weight::spend_weight_with_extra_input(n_in.get(), n_out.get(), layers, fee, extra_input_len)
+}
+
 /// Bytes in the longest `u64` varint. [`varint_len`]`(u64::MAX)` is this;
 /// the test beside [`converge_weight_fee`] pins the equality, so a wider
 /// encoding has to move the iteration bound with it.
@@ -676,6 +693,149 @@ mod tests {
                 ),
                 usize::try_from(tx.archival_len().to_raw()).expect("archival length fits usize"),
                 "predict_archival_len ≠ wire archival_len for n_in={n_in} n_out={n_out} depth={depth}"
+            );
+        }
+    }
+
+    /// [`predict_weight_with_extra_input`] against a hand-built wire
+    /// `Transaction` carrying one bond-post input (a JoinMarket over a shard
+    /// set and over the complete tree, and a Release-kind post) or one
+    /// emission-claim input beside its FCMP++ inputs, with the extra input's
+    /// solo auth slot. The bond floor's varint and the shard ids are carried
+    /// at real widths, so the extra input's length comes from the writer.
+    #[test]
+    fn predict_weight_with_extra_input_matches_wire_weight() {
+        use curve25519_dalek::constants::ED25519_BASEPOINT_POINT;
+        use shekyl_scanner::extra::Extra;
+        use shekyl_types::archival::{ReceiptSignPk, RECEIPT_SIGN_PK_LEN};
+        use shekyl_wire::{
+            BondPost, BondPostKind, BpPlus, Ct, CtBase, Holdings, Input, Output, PqcAuth, Prunable,
+            Transaction, TxPrefix,
+        };
+
+        let join_market = |holdings: Holdings, floor: u64| {
+            Input::BondPost(Box::new(BondPost {
+                hybrid_public_key: vec![0u8; PQC_HYBRID_SINGLE_KEY_LEN],
+                p_canonical_id: shekyl_types::PCanonicalId::from_bytes([0; 32]),
+                kind: BondPostKind::JoinMarket {
+                    bond_spend_pk: vec![0u8; PQC_HYBRID_SINGLE_KEY_LEN],
+                    receipt_sign_pk: ReceiptSignPk::from_bytes([0; RECEIPT_SIGN_PK_LEN]),
+                    endpoint: [0; 32],
+                },
+                holdings,
+                bonded_total_atomic: floor,
+                bond_credit: floor,
+                bond_debit: 0,
+            }))
+        };
+        let release = Input::BondPost(Box::new(BondPost {
+            hybrid_public_key: vec![0u8; PQC_HYBRID_SINGLE_KEY_LEN],
+            p_canonical_id: shekyl_types::PCanonicalId::from_bytes([0; 32]),
+            kind: BondPostKind::Other(2),
+            holdings: Holdings::ShardSetCompact(vec![3, 70_000]),
+            bonded_total_atomic: 9_000_000_000_000,
+            bond_credit: 0,
+            bond_debit: 9_000_000_000_000,
+        }));
+        let claim = Input::ArchivalRewardEmission {
+            canonical_bytes: vec![0x04; 211],
+        };
+        let auth = || PqcAuth {
+            auth_version: PqcAuth::VERSION,
+            scheme_id: shekyl_crypto_pq::signature::HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
+            flags: PqcAuth::NO_FLAGS,
+            hybrid_public_key: vec![0u8; PQC_HYBRID_SINGLE_KEY_LEN],
+            hybrid_signature: vec![0u8; PQC_HYBRID_SINGLE_SIG_LEN],
+        };
+
+        for (extra_input, n_in, n_out, depth, fee) in [
+            (
+                join_market(
+                    Holdings::ShardSetCompact(vec![0, 127, 128, 1 << 20]),
+                    1 << 40,
+                ),
+                1usize,
+                2usize,
+                2u8,
+                103_760u64,
+            ),
+            (join_market(Holdings::CompleteTree, 5), 3, 2, 8, 1),
+            (release.clone(), 2, 2, 12, 9_999_999),
+            (release, 1, 3, 4, 0),
+            (claim, 2, 2, 6, 40_000),
+        ] {
+            let extra_input_len = extra_input.serialized_len().expect("a writable input");
+            let nlr = 6 + weight::padded_outputs(n_out).trailing_zeros() as usize;
+            let bp = BpPlus {
+                a: [0; 32],
+                a1: [0; 32],
+                b: [0; 32],
+                r1: [0; 32],
+                s1: [0; 32],
+                d1: [0; 32],
+                l: vec![[0; 32]; nlr],
+                r: vec![[0; 32]; nlr],
+            };
+            let extra = {
+                let mut e = Extra::for_hybrid_transfer(
+                    ED25519_BASEPOINT_POINT,
+                    (0..n_out).map(|_| vec![0u8; HYBRID_KEM_CT_LEN]),
+                );
+                e.push_pqc_leaf_entries(vec![0u8; n_out * PQC_LEAF_ENTRY_LEN]);
+                e.serialize()
+            };
+            let mut inputs: Vec<Input> = (0..n_in)
+                .map(|_| Input::fcmp_spend(shekyl_types::KeyImage::from_bytes([0; 32])))
+                .collect();
+            inputs.push(extra_input);
+            let tx = Transaction {
+                prefix: TxPrefix {
+                    unlock_time: TxPrefix::NO_UNLOCK_TIME,
+                    inputs,
+                    outputs: (0..n_out)
+                        .map(|_| Output {
+                            amount: 0,
+                            key: [0; 32],
+                            view_tag: 0,
+                        })
+                        .collect(),
+                    extra,
+                },
+                ct: Ct::Fcmp {
+                    fee,
+                    reference_block: shekyl_types::BlockHash::NULL,
+                    base: CtBase {
+                        enc_amounts: vec![[0; 9]; n_out],
+                        enc_labels: vec![[0; 9]; n_out],
+                        commitments: vec![[0; 32]; n_out],
+                    },
+                    // One slot per input, the extra input's included.
+                    pqc_auths: (0..=n_in).map(|_| auth()).collect(),
+                    prunable: Some(Prunable {
+                        bulletproofs: vec![bp],
+                        tree_depth: u64::from(depth),
+                        fcmp_proof: vec![
+                            0u8;
+                            fcmp_proof_size(
+                                InputCount::clamped(n_in),
+                                ProofLayers::known(depth)
+                            )
+                        ],
+                        // The FCMP++ inputs' alone.
+                        pseudo_outs: vec![[0; 32]; n_in],
+                    }),
+                },
+            };
+            assert_eq!(
+                predict_weight_with_extra_input(
+                    InputCount::clamped(n_in),
+                    OutputCount::clamped(n_out),
+                    ProofLayers::known(depth),
+                    fee,
+                    extra_input_len,
+                ),
+                tx.weight(),
+                "n_in={n_in} n_out={n_out} depth={depth} fee={fee} extra={extra_input_len}"
             );
         }
     }

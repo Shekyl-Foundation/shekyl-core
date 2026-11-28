@@ -4887,26 +4887,22 @@ async fn plan_persona_stake(
         None => staker_wallet(daemon.wallet_rpc(), seed, slot).await,
     };
 
-    // The bond fee is caller-chosen at this seam (the RPC stake entry's
-    // contract), but a hardcoded constant is wrong on regtest: the daemon's
-    // per-byte floor tracks the block reward, which is enormous on a young
-    // chain (~69 000/byte at these heights ⇒ ~1.55e9 for a 22.5 KB post).
-    // Derive the fee from the daemon's live estimate over the size ceiling;
-    // the reward only decays as the test mines, so an early estimate stays
-    // sufficient, and overpaying is harmless (the fee is a miner transfer,
-    // not a conservation term).
-    let bond_fee = {
-        let estimates = arc
-            .read()
-            .await
-            .daemon()
-            .get_fee_estimates()
-            .await
-            .expect("daemon fee estimates");
-        estimates
-            .economy
-            .calculate_fee_from_weight(shekyl_standoff::P_LANE_WEIGHT_CEILING)
-    };
+    // The persona is funded for its bond post's fee at the weight limit:
+    // an upper bound on any post's own weight, so the funding covers the fee
+    // the plan prices on the post's own weight however many inputs it
+    // sweeps. The daemon's per-byte floor tracks the block reward, which is
+    // enormous on a young chain, and the reward only decays as the test
+    // mines, so an early estimate stays sufficient.
+    let fee_estimates = arc
+        .read()
+        .await
+        .daemon()
+        .get_fee_estimates()
+        .await
+        .expect("daemon fee estimates");
+    let bond_fee = fee_estimates
+        .economy
+        .calculate_fee_from_weight(shekyl_wire::transaction::TX_WEIGHT_LIMIT);
     eprintln!("bond fee from daemon estimate: {bond_fee}");
 
     // Fund the principal past the persona's needs (2×: the transfer's own fee
@@ -4938,6 +4934,37 @@ async fn plan_persona_stake(
     // production yet — the test helper drives the actor's own activation),
     // then `stake_in`, which pays the active persona's handed-over keys.
     super::test_support::activate_persona(&*arc.read().await, slot_raw).await;
+    // The bond gate (`ARCHIVAL_BOND_POST_DELAY.md` §3.7): an amount that
+    // cannot bond is refused before anything is built, naming what a bond
+    // and its fees need, and the fixture's funding clears it.
+    {
+        use super::principal_stake::StakeInError;
+        let refused = {
+            let g = arc.read().await;
+            g.stake().stake_in(AtomicUnits::from_raw(1)).await
+        };
+        match refused {
+            Err(StakeInError::AmountCannotBond { amount, required }) => {
+                assert_eq!(amount, 1);
+                assert!(
+                    required
+                        > bond_floor(
+                            &floor_holdings,
+                            shekyl_archival_retention::archival_params()
+                        ),
+                    "the requirement carries the bond and its fees"
+                );
+                assert!(
+                    funding.to_raw() >= required,
+                    "the fixture funds at least what a bond needs"
+                );
+            }
+            other => daemon.panic_with_log(
+                "the bond gate refuses one atomic unit",
+                format!("{other:?}"),
+            ),
+        }
+    }
     stake_in_and_confirm(daemon, &arc, funding, MINE_BATCH_BLOCKS, MAX_MINE_BATCHES).await;
 
     // Discovery: push the shallow finality horizon past the funding block,
@@ -5037,7 +5064,6 @@ async fn plan_persona_stake(
         // handle alone; `persist_bond_record` is idempotent, so each retry
         // re-mints a fresh ticket.
         FixtureStake::MarketBond(holdings) => {
-            let fee = AtomicUnits::from_raw(bond_fee);
             let mut sealed = false;
             for _ in 0..MAX_MINE_BATCHES {
                 // Fill first (WSS-Q4): the persona body store holds every
@@ -5079,7 +5105,7 @@ async fn plan_persona_stake(
                     handle,
                     ticket,
                     market,
-                    fee,
+                    fee_estimates,
                     &SpentRecordsDurablyPruned::for_test(),
                 )
                 .await
@@ -5232,6 +5258,33 @@ async fn stake_persona_and_submit_bond(
             covered.expect("first_stake's confirmed seal covers the pending records"),
         )
     };
+    // The post pays the floor rate on its own weight (the P-lane fee
+    // ruling, 2026-11-23). Nothing has been mined since it was signed, so the
+    // daemon's rate now is the rate it was priced at.
+    {
+        use super::traits::DaemonEngine;
+        use shekyl_wire::{Ct, Transaction};
+        let mut cursor: &[u8] = &post.tx_bytes;
+        let post_tx = Transaction::read(&mut cursor).expect("the signed post parses");
+        assert!(
+            cursor.is_empty(),
+            "the signed post's bytes are consumed whole"
+        );
+        let Ct::Fcmp { fee: post_fee, .. } = post_tx.ct else {
+            panic!("the bond post is an FCMP++ spend")
+        };
+        let economy = { arc.read().await.daemon().clone() }
+            .get_fee_estimates()
+            .await
+            .expect("daemon fee estimates")
+            .economy;
+        assert_eq!(
+            post_fee,
+            shekyl_economics::quantized_fee(post_tx.weight() as u64, economy.per_weight())
+                .expect("the post's fee fits"),
+            "the bond post pays the economy rate on its own weight"
+        );
+    }
     let bound = PBoundBytes::from_pending(&post, covered);
     let persona_id = *bound.persona();
     let swept_gindexes: Vec<u64> = post.funding_gindexes.iter().map(|g| g.to_raw()).collect();
@@ -5721,7 +5774,6 @@ async fn e2e_emission_claim_accepted_and_applied() {
     use super::traits::DaemonEngine;
     use shekyl_curve_tree::reference::REF_ANCHOR_AGE;
     use shekyl_engine_state::pscan_state::MintLineageOutput;
-    use shekyl_units::AtomicUnits;
 
     const SLOT: u32 = 0;
     // The wait after each block while a drawn block's read window is open:
@@ -6138,17 +6190,19 @@ async fn e2e_emission_claim_accepted_and_applied() {
     );
 
     // (A3) Build and dispatch the claim through the production CB-3 path.
-    // The fee rides swept `ToKey` inputs; derive it from the daemon's live
-    // estimate over the claim's own production envelope — the ~48 KiB
-    // `EMISSION_NON_CLAIMS_RESERVE_BYTES` (two fee-side FCMP++ proofs +
-    // hybrid PQC auths + 16-vout worst case + Bp+ clawback) plus a small
-    // vin allowance for the single claim row. The bond's 32 KiB ceiling is
-    // too small here — a claim carries TWO input proofs where the bond
-    // carries one (live run 4's daemon-side `FeeTooLow`); overpaying is a
-    // miner transfer, never a conservation term.
-    use super::emission_claim::EMISSION_NON_CLAIMS_RESERVE_BYTES;
+    // The claim pays the floor rate on its own weight, from the daemon's live
+    // fee snapshot, read fresh each attempt (a retry mines a block, which can
+    // move the rate); the fee rides swept `ToKey` inputs.
     refresh(&fixture.arc).await;
-    let claim_fee = {
+    let claim_rpc = open_chain_reader(&daemon.target(), Duration::from_secs(10))
+        .await
+        .expect("loopback claim transport");
+    let pruning_landed = SpentRecordsDurablyPruned::for_test();
+    let mut receipt = None;
+    let mut tip_before_claim = 0;
+    let mut claim_estimates = None;
+    for attempt in 0..4 {
+        tip_before_claim = daemon.height().await;
         let estimates = fixture
             .arc
             .read()
@@ -6157,29 +6211,18 @@ async fn e2e_emission_claim_accepted_and_applied() {
             .get_fee_estimates()
             .await
             .expect("daemon fee estimates");
-        estimates
-            .economy
-            .calculate_fee_from_weight(EMISSION_NON_CLAIMS_RESERVE_BYTES + 2048)
-    };
-    let claim_rpc = open_chain_reader(&daemon.target(), Duration::from_secs(10))
-        .await
-        .expect("loopback claim transport");
-    let pruning_landed = SpentRecordsDurablyPruned::for_test();
-    let mut receipt = None;
-    let mut tip_before_claim = 0;
-    for attempt in 0..4 {
-        tip_before_claim = daemon.height().await;
         match super::Engine::submit_emission_claim(
             fixture.arc.clone(),
             &claim_rpc,
             slot,
-            AtomicUnits::from_raw(claim_fee),
+            estimates,
             &pruning_landed,
         )
         .await
         {
             Ok(r) => {
                 receipt = Some(r);
+                claim_estimates = Some(estimates);
                 break;
             }
             // Resync-and-retry arms (the wallet's own docs): the tree or
@@ -6204,6 +6247,23 @@ async fn e2e_emission_claim_accepted_and_applied() {
         receipt.claim.total_reward,
         receipt.claim.fee_gindexes.len(),
     );
+    // The claim paid the economy rate on its own weight (ruled 2026-11-28).
+    {
+        let mut cursor: &[u8] = receipt.claim.bound_tx.bytes();
+        let claim_tx = shekyl_wire::Transaction::read(&mut cursor).expect("the claim parses");
+        let shekyl_wire::Ct::Fcmp { fee: claim_fee, .. } = claim_tx.ct else {
+            panic!("the claim is an FCMP++ spend")
+        };
+        let economy = claim_estimates
+            .expect("the accepted attempt's snapshot")
+            .economy;
+        assert_eq!(
+            claim_fee,
+            shekyl_economics::quantized_fee(claim_tx.weight() as u64, economy.per_weight())
+                .expect("the claim's fee fits"),
+            "the claim pays the economy rate on its own weight"
+        );
+    }
 
     // (A4/A6) The dispatched claim's shape: `J + 1` claimed, real ToKey fee
     // inputs (not the Q11 zero-fee form), and the loud vout equal to the
@@ -6453,22 +6513,21 @@ async fn e2e_drain_wire_shape_matches_a_real_transfer() {
     refresh(&fixture.arc).await;
 
     // ── A real 1-in/2-out drain: assemble + dispatch through submit_drain ──
-    // Caller-priced fee over a generous envelope (overpay is a miner transfer,
-    // never a conservation term); the daemon's acceptance at submit is the
-    // real-bytes proof. Payment + fee + reserve < record ⇒ change > 0 and ≥
-    // the exit-fee reserve (live persona), so the drain stays a partial
+    // The engine prices the drain at the floor rate × its own converged
+    // weight; the daemon's acceptance at submit is the real-bytes proof.
+    // `drain_fee` is an upper bound (a 32 KiB envelope at the same rate) the
+    // fixture check uses: payment + fee + reserve < record ⇒ change > 0 and
+    // ≥ the exit-fee reserve (live persona), so the drain stays a partial
     // 1-in/2-out sweep.
-    let drain_fee = {
-        let estimates = fixture
-            .arc
-            .read()
-            .await
-            .daemon()
-            .get_fee_estimates()
-            .await
-            .expect("daemon fee estimates");
-        estimates.economy.calculate_fee_from_weight(32_768)
-    };
+    let fee_estimates = fixture
+        .arc
+        .read()
+        .await
+        .daemon()
+        .get_fee_estimates()
+        .await
+        .expect("daemon fee estimates");
+    let drain_fee = fee_estimates.economy.calculate_fee_from_weight(32_768);
     let drain_payment = AtomicUnits::from_raw(2_000_000_000);
     // The 1-input guarantee: the LARGER change half (≥ cushion/2) must alone
     // cover payment + fee (+ the reserve headroom the whole pool keeps).
@@ -6485,7 +6544,7 @@ async fn e2e_drain_wire_shape_matches_a_real_transfer() {
             fixture.arc.clone(),
             slot,
             super::drain_orchestrator::DrainIntent::Payment(drain_payment),
-            AtomicUnits::from_raw(drain_fee),
+            fee_estimates,
             &super::bond_assembly::SpentRecordsDurablyPruned::for_test(),
         )
         .await
@@ -6564,6 +6623,48 @@ async fn e2e_drain_wire_shape_matches_a_real_transfer() {
         super::test_support::whole_tx_wire_bytes(&drain_tx),
         "raw transfer/drain bytes must differ"
     );
+
+    // ── The drain pays what an ordinary transfer of its shape pays ──
+    // (P-lane fee ruling, 2026-11-23.) The fee is cleartext, so a drain priced
+    // off the lane's old ceiling marked itself however identical its bytes.
+    // At the economy rate the drain was quoted from: its fee is the send
+    // path's converged fee for a solo 1-in/2-out spend at its depth, and it
+    // is the rate on the drain's own measured weight.
+    {
+        let Ct::Fcmp {
+            fee: drain_fee_paid,
+            prunable: Some(ref prunable),
+            ..
+        } = drain_tx.ct
+        else {
+            panic!("the drain is an FCMP++ spend with its proof")
+        };
+        // The wire carries the curve-tree depth, one less than the proof's
+        // layer count, which is what the fee model takes.
+        let layers = u8::try_from(prunable.tree_depth + 1).expect("tree_depth + 1 fits u8");
+        let transfer_fee = super::tx_fee_model::converge_fee(
+            &fee_estimates.economy,
+            super::tx_fee_model::InputCount::clamped(1),
+            super::tx_fee_model::OutputCount::clamped(2),
+            layers,
+            &[],
+            0,
+        )
+        .expect("an ordinary transfer's fee converges");
+        assert_eq!(
+            drain_fee_paid, transfer_fee,
+            "a drain pays an ordinary transfer's fee for its shape, depth and rate"
+        );
+        assert_eq!(
+            drain_fee_paid,
+            shekyl_economics::quantized_fee(
+                drain_tx.weight() as u64,
+                fee_estimates.economy.per_weight()
+            )
+            .expect("the drain's fee fits"),
+            "the drain pays the economy rate on its own weight"
+        );
+    }
 
     let mut transfer_norm = transfer_tx;
     let mut drain_norm = drain_tx;

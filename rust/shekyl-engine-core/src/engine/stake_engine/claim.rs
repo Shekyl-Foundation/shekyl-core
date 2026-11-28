@@ -74,14 +74,14 @@ pub(crate) struct AssembleEmissionClaim {
     pub operands: ClaimOperands,
     /// The curve-tree reference context all paths were assembled against.
     pub tree_ctx: TreeContext,
-    /// The §4 value floor the assembly's Σreward must clear
-    /// (`ENGINE_CADENCE_DRIVER.md`): the sole production sender — the
-    /// claim orchestrator — passes
-    /// [`shekyl_economics::EMISSION_CLAIM_FEE_FLOOR`]; a message field
-    /// rather than a handler constant for the same reason
-    /// `assemble_claims` takes its size budget — so the gate is testable
-    /// at exact boundaries without scaling the differential fixtures.
-    pub fee_floor: u64,
+    /// The fee the claim's reward must cover (`ENGINE_CADENCE_DRIVER.md`
+    /// §4): the sole production sender — the claim orchestrator — passes
+    /// the fee it swept the operands against, the claim's own at the
+    /// current rate. A message field rather than read off the operands for
+    /// the same reason `assemble_claims` takes its size budget — so the gate
+    /// is testable at exact boundaries without scaling the differential
+    /// fixtures; a test of other properties passes `0`, which leaves it open.
+    pub gate_fee: u64,
     /// The transaction key that seeds the three vouts' KEM encapsulations
     /// and the tx pubkey. The one input to the assembly that is neither
     /// derived from the persona's bundle nor read from the operands, so it
@@ -166,7 +166,7 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
                     "emission claim derivation: window epochs not selected"
                 );
             }
-            assemble_claims(&derived, EMISSION_CLAIMS_SIZE_BUDGET, msg.fee_floor)?
+            assemble_claims(&derived, EMISSION_CLAIMS_SIZE_BUDGET, msg.gate_fee)?
         };
         let total_reward = claims.total_reward;
 

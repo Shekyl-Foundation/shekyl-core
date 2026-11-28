@@ -32,7 +32,10 @@ use rand_core::RngCore as _;
 use shekyl_standoff::draw_cover_amount;
 use shekyl_units::AtomicUnits;
 
+use super::bond_orchestrator::{stake_in_requirement, BondPostFeeError};
 use super::fee_estimator::FeePriority;
+use super::fee_snapshot::map_daemon_engine_fee_error;
+use super::output_selector::selection_layers;
 use super::pending::{PendingTx, TxDestination, TxRecipient, TxRequest};
 use super::stake_timing::OsRngGapAdapter;
 use super::traits::{
@@ -84,6 +87,21 @@ pub enum StakeInError {
     /// correctness failure, not a rounding one.
     #[error("stake amount {stake} + cover {cover} overflows the money type")]
     CoverOverflow { stake: u64, cover: u64 },
+    /// `amount` cannot bond: it is below the cheapest bond plus its post's
+    /// fee and the exit's fee at today's rate (`ARCHIVAL_BOND_POST_DELAY.md`
+    /// §3.7). A persona funded below that never bonds, and its owner pays
+    /// for the funding and then for the drain. Local: nothing was built.
+    #[error(
+        "stake amount {amount} cannot bond: a bond and its fees need {required} at today's \
+         network fee, {shortfall} more",
+        shortfall = required.saturating_sub(*amount)
+    )]
+    AmountCannotBond {
+        /// The amount the caller asked to stake.
+        amount: u64,
+        /// The cheapest bond, its post's fee and the exit's fee.
+        required: u64,
+    },
 }
 
 // The `dead_code` staging allow retired with WI-RPC-5: the production caller
@@ -112,9 +130,10 @@ where
     ///
     /// The transfer carries **`amount + cover`**, never `amount` verbatim: the
     /// funding-seam cover is applied here (`ARCHIVAL_COVER_DRAW.md`), because
-    /// this is the transaction whose amount is observed. `amount` itself takes
-    /// no floor / minimum / band check (DQ1; `ARCHIVAL_BOND_FLOOR_ATOMIC` is a
-    /// *bond-post* precondition, not a `stake_in` gate).
+    /// this is the transaction whose amount is observed. `amount` must carry
+    /// the cheapest bond and its fees at today's rate
+    /// ([`refuse_unbondable`](Self::refuse_unbondable), §3.7); it takes no
+    /// other floor or band.
     ///
     /// The cover is **system-determined, never a caller parameter** — a
     /// caller-chosen cover is a cross-wallet uniformity break, which is itself
@@ -131,8 +150,9 @@ where
     /// # Errors
     ///
     /// [`StakeInError`]: not staking, no active persona, the actor's handover,
-    /// or the underlying transfer build ([`SendError`] — insufficient funds,
-    /// etc.).
+    /// an amount that cannot bond ([`StakeInError::AmountCannotBond`]), or
+    /// the underlying transfer build ([`SendError`] — insufficient funds, the
+    /// fee snapshot, etc.).
     ///
     /// `&self` (W-B step 1 parity with
     /// [`build_pending_tx`](super::Engine::build_pending_tx), which
@@ -146,9 +166,48 @@ where
     /// build for exclusivity that binds nothing.
     pub async fn stake_in(&self, amount: AtomicUnits) -> Result<PendingTx, StakeInError> {
         let request = self.stake_in_request(amount).await?;
+        self.refuse_unbondable(amount).await?;
         self.build_pending_tx(&request)
             .await
             .map_err(StakeInError::Send)
+    }
+
+    /// Refuse an `amount` that cannot bond (`ARCHIVAL_BOND_POST_DELAY.md`
+    /// §3.7): the gate reads the caller's `amount` alone, never the amount
+    /// plus the cover, so it cannot be retried until a draw passes it. The
+    /// requirement is [`stake_in_requirement`] at today's fee and tree depth.
+    /// It is not a guarantee: the fee can rise before the post comes due,
+    /// and the plan's wait rule covers that.
+    async fn refuse_unbondable(&self, amount: AtomicUnits) -> Result<(), StakeInError> {
+        let estimates = self
+            .daemon()
+            .get_fee_estimates()
+            .await
+            .map_err(|e| StakeInError::Send(SendError::Fee(map_daemon_engine_fee_error(e))))?;
+        let tip = self
+            .curve_tree
+            .ingested_tip_height()
+            .await
+            .ok()
+            .flatten()
+            .ok_or(StakeInError::Send(SendError::NotSynced))?;
+        let (_, depth) = self
+            .curve_tree
+            .reference_root_and_depth(tip)
+            .await
+            .map_err(|_| StakeInError::Send(SendError::NotSynced))?;
+        let required = stake_in_requirement(estimates, selection_layers(depth).as_proof())
+            .map_err(|e| match e {
+                BondPostFeeError::Fee(e) => StakeInError::Send(SendError::Fee(e)),
+                BondPostFeeError::Holdings(e) => StakeInError::StakeEngine(e.to_string()),
+            })?;
+        if amount < required {
+            return Err(StakeInError::AmountCannotBond {
+                amount: amount.to_raw(),
+                required: required.to_raw(),
+            });
+        }
+        Ok(())
     }
 
     /// Resolve the active persona into the single-recipient [`TxRequest`]

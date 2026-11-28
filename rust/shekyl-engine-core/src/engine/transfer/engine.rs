@@ -44,7 +44,7 @@ use super::super::transaction_submitter::{SubmitSuccess, SubmitterError, Transac
 use super::super::tx_counts::{InputCount, OutputCount};
 use super::super::tx_fee_model::build_fee_directive;
 
-use super::super::fee_variant::selection_target;
+use super::super::fee_variant::{converge_selection, selection_target};
 use super::candidates::CandidatePartition;
 use super::dispatch::DispatchFacts;
 use super::support::{
@@ -499,43 +499,31 @@ where
                 .map_err(|err| map_fee_estimator_error(&err.into()))
         };
 
-        let fee_pass_a = estimate(1, payment_count.saturating_add(1))
-            .map_err(|err| fail_build_after_attempted(self.sink.as_ref(), err))?;
-
-        let needed = selection_target(total_amount, fee_pass_a)
-            .map_err(|err| fail_build_after_attempted(self.sink.as_ref(), err))?;
-
-        let mut selected: SelectedOutputs = self
-            .output_selector
-            .select_outputs(candidates, needed, max_inputs)
-            .map_err(|err| {
-                let (mapped, kind) = map_select_err(err.into(), needed.to_raw());
-                emit_pending_tx_diagnostic(
-                    self.sink.as_ref(),
-                    PendingTxDiagnostic::BuildFailed { kind },
-                );
-                mapped
-            })?;
-
-        let fee_pass_b = estimate(selected.indices.len(), payment_count.saturating_add(1))
-            .map_err(|err| fail_build_after_attempted(self.sink.as_ref(), err))?;
-        if fee_pass_b > fee_pass_a {
-            let needed_b = selection_target(total_amount, fee_pass_b)
-                .map_err(|err| fail_build_after_attempted(self.sink.as_ref(), err))?;
-            selected = self
-                .output_selector
-                .select_outputs(candidates, needed_b, max_inputs)
-                .map_err(|err| {
-                    let (mapped, kind) = map_select_err(err.into(), needed_b.to_raw());
-                    emit_pending_tx_diagnostic(
-                        self.sink.as_ref(),
-                        PendingTxDiagnostic::BuildFailed { kind },
-                    );
-                    mapped
-                })?;
-        }
-        let fee = estimate(selected.indices.len(), payment_count.saturating_add(1))
-            .map_err(|err| fail_build_after_attempted(self.sink.as_ref(), err))?;
+        // The send path's convergence (`converge_selection`): one input's fee,
+        // select, the selected count's fee, and once more if it rose.
+        let (selected, fee): (SelectedOutputs, AtomicUnits) = converge_selection(
+            |input_count| {
+                estimate(input_count, payment_count.saturating_add(1))
+                    .map_err(|err| fail_build_after_attempted(self.sink.as_ref(), err))
+            },
+            |fee| {
+                selection_target(total_amount, fee)
+                    .map_err(|err| fail_build_after_attempted(self.sink.as_ref(), err))
+            },
+            |needed| {
+                self.output_selector
+                    .select_outputs(candidates, needed, max_inputs)
+                    .map_err(|err| {
+                        let (mapped, kind) = map_select_err(err.into(), needed.to_raw());
+                        emit_pending_tx_diagnostic(
+                            self.sink.as_ref(),
+                            PendingTxDiagnostic::BuildFailed { kind },
+                        );
+                        mapped
+                    })
+            },
+            |selected| selected.indices.len(),
+        )?;
 
         let required = selection_target(total_amount, fee)
             .map_err(|err| fail_build_after_attempted(self.sink.as_ref(), err))?;

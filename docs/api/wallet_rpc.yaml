@@ -348,7 +348,8 @@
 #   -29400..-29499           transfers / history queries
 #   -29500..-29599           staking (-29500..-29506, -29512,
 #                            -29538..-29544 (the fill, WSS-Q4) and -29545 live on
-#                            `stake`; -29507..-29511 live on `drain`
+#                            `stake`; -29546 lives on `stake_in`;
+#                            -29507..-29511 live on `drain`
 #                            (WI-RPC-5); -29513..-29522 and -29528 live on
 #                            `unstake` and -29523..-29527 and -29529 on
 #                            `collect_unstaked` (PR-C; -29513 is shared by
@@ -623,7 +624,13 @@ info:
   # stake gains -29545 STAKE_FUNDS_RETURNING: while an ended stake's funds
   # are returning, a new stake refuses with that reason, not -29501.
   # api_version stays 1.
-  version: 0.27.0
+  # 0.28.0: stake_in refuses an amount that cannot bond, -29546
+  # STAKE_AMOUNT_CANNOT_BOND, with data.required and data.shortfall: the
+  # cheapest bond, its post's fee and the exit's fee at today's network fee
+  # (ARCHIVAL_BOND_POST_DELAY.md §3.7). Zero is no longer a valid amount.
+  # This supersedes WI-RPC-5 F-2's "stake_in mints no new codes".
+  # api_version stays 1.
+  version: 0.28.0
   description: >
     JSON-RPC 2.0 interface served by `shekyl-wallet-rpc` (Phase 4 of the
     wallet rewrite; replaces the C++ `wallet_rpc_server`). One wallet-bearing
@@ -1039,6 +1046,7 @@ components:
         - -29543   # STAKE_DAEMON_SYNCING
         - -29544   # STAKE_DAEMON_UNREACHABLE
         - -29545   # STAKE_FUNDS_RETURNING
+        - -29546   # STAKE_AMOUNT_CANNOT_BOND
         - -29800   # MSG_SIG_VERIFY_FAILED
         - -29801   # MSG_SIG_CORRUPTED
         - -29802   # MSG_SIG_UNSUPPORTED_SCHEME
@@ -1617,8 +1625,7 @@ components:
                                           amounts). Also stake_in's refusal
                                           when there is no persona to fund
                                           (not a staker, or no active
-                                          persona) — stake_in mints no new
-                                          codes (WI-RPC-5 F-2 pin)
+                                          persona)
           -29501 STAKE_IN_FLIGHT          stake: a stake is in flight, a
                                           plan waiting for its due block or
                                           a signed bond post awaiting its
@@ -1990,6 +1997,14 @@ components:
                                           still returning to the principal
                                           balance; staking again waits until
                                           they arrive
+          -29546 STAKE_AMOUNT_CANNOT_BOND stake_in: the amount is below
+                                          the cheapest bond plus its post's
+                                          fee and the exit's fee at today's
+                                          network fee. data: {"required":
+                                          "...", "shortfall": "..."}, atomic
+                                          units. Local; nothing was built.
+                                          Stake more, or wait for a lower
+                                          fee
           -29800 MSG_SIG_VERIFY_FAILED    verify_message: well-formed,
                                           checksum-intact, and NOT a valid
                                           signature by that address over
@@ -3851,8 +3866,13 @@ components:
             disclose the bounded cover before confirmation — the CLI
             summary does — and the exact per-draw figure is deliberately
             never returned (a rebuild loop could otherwise steer the
-            submitted cover distribution). Zero is a valid amount (no
-            floor, DQ1); the cover still applies on top.
+            submitted cover distribution). The amount must carry the
+            cheapest bond, its bond post's fee and the exit's fee at
+            today's network fee; a smaller amount, zero included, is
+            refused with -29546 STAKE_AMOUNT_CANNOT_BOND, which names the
+            shortfall. The test reads `amount` alone, never the cover
+            (ARCHIVAL_BOND_POST_DELAY.md §3.7). It is not a guarantee: the
+            fee can rise before the bond is posted.
 
     StakeInResult:
       $ref: "#/components/schemas/BuildPendingTxResult"

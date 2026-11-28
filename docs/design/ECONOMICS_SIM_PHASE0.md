@@ -766,7 +766,9 @@ steps below and listed at the end.
 9. **The claim fee:** the ladder at the claim's real weight, floored by the
    hold. The hold moves into `RelayPolicy`, derived from the genesis relay
    floor times the claim's weight, with a test. The sim prices a claim at
-   that maximum.
+   that maximum. **Reversed in part 2026-11-28 (Rick):** the hold is
+   deleted, and a claim is made when its reward covers its own fee at the
+   current rate (`ENGINE_CADENCE_DRIVER.md` §4).
 
 **Also settled by Phase 0's last measurement:** the fee-floor grid edge
 (§P0.1). Every `--fee-floor` figure since ESR-9 is on the exact arm;

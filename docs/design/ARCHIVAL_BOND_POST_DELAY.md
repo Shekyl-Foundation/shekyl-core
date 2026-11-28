@@ -496,7 +496,7 @@ own weight, `CEN_I4_INPUT_CAP_DERIVATION.md`'s P-lane fee ruling,
 2026-11-23) removes that mark. This slice lands ahead of PR A, so until PR
 A lands an ended plan's drain is recognisable by its fee.
 
-### 3.7 The `stake_in` fee gate — RULED 2026-11-27 (Rick); lands with PR A
+### 3.7 The `stake_in` fee gate — RULED 2026-11-27 and 2026-11-28 (Rick); built with PR A
 
 `stake_in` accepts any amount today, zero included (`wallet_rpc.yaml`,
 `stake_in`). A persona funded below what can bond never bonds: the staker
@@ -506,15 +506,24 @@ pays for a funding transfer and then for its drain, and gets nothing.
   A gate that read the cover draw would let a staker retry until it passed,
   which skews the cover distribution; the cover design already guards
   against that.
-- **The amount required** is the bond for the requested shards, the bond
-  post's fee at today's floor, and the exit fee. It reads the fee function
-  PR A lands (the fee on each transaction's own weight), so it is built
-  with PR A, not before it.
+- **The amount required** is the cheapest bond, the bond post's fee at
+  today's floor, and the exit fee (`stake_in_requirement`). The cheapest
+  bond is one floor: a CompleteTree bond and a one-shard market bond both
+  post it, and the CompleteTree input is the lighter. The post spends the
+  one output `stake_in` creates; the exit is a `Release` of that bond swept
+  with one funding input. Both fees are the lane's fee on each
+  transaction's own weight at today's tree depth.
+- **No shard request is added to `stake_in`** (ruled 2026-11-28). Shard
+  assignment is its own unruled round; its `FOLLOWUPS.md` row records that
+  a persona is funded once, so the gate is sized for the whole assigned set
+  when assignment exists.
 - **It is not a guarantee.** The fee can rise before the due block; the
   plan's wait rule and its maximum (one draw window) cover that.
-- **The refusal is local to the wallet** and puts nothing on chain. It is a
-  new `stake_in` code, which supersedes the contract's "stake_in mints no
-  new codes" pin (WI-RPC-5 F-2).
+- **The refusal is local to the wallet** and puts nothing on chain. It is
+  `-29546 STAKE_AMOUNT_CANNOT_BOND` (wallet RPC 0.28.0), with the
+  requirement and the shortfall in its data, and supersedes the contract's
+  "stake_in mints no new codes" pin (WI-RPC-5 F-2). Zero is no longer a
+  valid amount.
 
 ### BD-Q4 — How wide is the window? — OPEN
 

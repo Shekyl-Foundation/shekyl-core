@@ -66,15 +66,17 @@ use shekyl_types::{BlockHeight, GlobalOutputIndex, PCanonicalId};
 use shekyl_units::AtomicUnits;
 
 use super::bond_assembly::{FundingInputContext, SpentRecordsDurablyPruned};
-use super::bond_orchestrator::anchored_reference_block;
+use super::bond_orchestrator::{anchored_reference_block, p_lane_spend_fee};
 use super::curve_tree_actor::{CurveTreeHandle, CurveTreeHandleError};
 use super::drain_amount::{choose_drain_amount, DrainAmountError, DrainRequest};
 use super::drain_assembly::{AssembleDrain, AssembledDrain, DrainDestination};
 use super::drain_select::{
     select_for_drain, select_for_sweep, DrainCandidate, DrainSelectError, SweepSelectError,
 };
+use super::fee_variant::converge_selection;
 use super::output_selector::{input_limit_at, selection_layers};
 use super::stake_engine::{PersonaHandle, StakeEngineError, StakeEngineHandle};
+use super::tx_fee_model::{InputCount, OutputCount};
 use shekyl_tx_weight::NonCoinbaseOutputs;
 
 /// The drain-path `P`-balance surface: a single aggregate spendable scalar
@@ -572,8 +574,12 @@ pub(crate) struct DrainCtx<'a> {
     /// (`Σ selected − fee`), zero change by construction; legal only for a
     /// retired persona (the witness proposes, [`Self::retired`] disposes).
     pub intent: DrainIntent,
-    /// The fee the drain tx must fund from its swept `P` inputs.
-    pub fee: u64,
+    /// The validated daemon fee snapshot the drain is priced from: the
+    /// `P`-lane floor fee on the drain's own weight
+    /// ([`p_lane_spend_fee`]),
+    /// which depends on how many inputs it selects. A transfer-shaped drain so
+    /// pays what an ordinary transfer of its shape pays (T-DS-6/7).
+    pub fee_estimates: super::traits::FeeEstimates,
     /// Whether the persona is **retired** (its terminal `Release` has
     /// confirmed). A live persona is a mid-life constructor and must retain the
     /// exit-fee reserve ([`EXIT_FEE_RESERVE_ATOMIC`], DS-4); a retired persona
@@ -804,29 +810,49 @@ pub(crate) async fn orchestrate_drain(
     let operands = project_drain_operands(&scoped, reference_height, ctx.reserved)?;
     let scoped_spendable = operands.balance.spendable.to_raw();
 
-    let (plan, moved) = match ctx.intent {
+    // The drain's fee for `n_in` inputs: two outputs at the reference depth
+    // (T-DS-6), priced on that shape's own weight.
+    let layers = selection_layers(tree_depth).as_proof();
+    let fee_for = |n_in: usize| {
+        p_lane_spend_fee(
+            ctx.fee_estimates,
+            InputCount::clamped(n_in),
+            OutputCount::clamped(NonCoinbaseOutputs::FEWEST.get()),
+            layers,
+        )
+        .map_err(|_| DrainOrchestrationError::from(DrainError::AmountOverflow))
+    };
+
+    let (plan, moved, fee) = match ctx.intent {
         DrainIntent::Payment(payment) => {
+            // The send path's convergence: the fee is the drain's own, and
+            // it depends on how many inputs the plan selects.
+            let (plan, converged) = converge_selection(
+                fee_for,
+                |fee| {
+                    payment
+                        .checked_add(fee)
+                        .ok_or(DrainOrchestrationError::from(DrainError::AmountOverflow))
+                },
+                |target| {
+                    plan_from_operands(&operands, reference_height, target, max_inputs)
+                        .map_err(DrainOrchestrationError::from)
+                },
+                |plan: &DrainPlan| plan.inputs.len(),
+            )?;
             let target = payment
-                .to_raw()
-                .checked_add(ctx.fee)
+                .checked_add(converged)
                 .ok_or(DrainError::AmountOverflow)?;
 
-            // DS-4 exit-reserve enforcement (before selection): a **live**
-            // persona must leave `EXIT_FEE_RESERVE_ATOMIC` in the pool so its
-            // terminal `Release` stays fundable; a **retired** persona
-            // reserves nothing and may sweep to zero. A reserve breach (the
-            // payment would eat into the reserve) is distinct from plain
-            // unaffordability (`plan_drain`'s `Unaffordable`), so it
-            // surfaces its own arm.
-            enforce_exit_reserve(scoped_spendable, target, ctx.retired)?;
-
-            let plan = plan_from_operands(
-                &operands,
-                reference_height,
-                AtomicUnits::from_raw(target),
-                max_inputs,
-            )?;
-            (plan, DrainMoved::Payment(payment))
+            // DS-4 exit-reserve enforcement, before the plan is used: a
+            // **live** persona must leave `EXIT_FEE_RESERVE_ATOMIC` in the
+            // pool so its terminal `Release` stays fundable; a **retired**
+            // persona reserves nothing and may sweep to zero. A reserve breach
+            // (the payment would eat into the reserve) is distinct from plain
+            // unaffordability (`plan_drain`'s `Unaffordable`), so it surfaces
+            // its own arm.
+            enforce_exit_reserve(scoped_spendable, target.to_raw(), ctx.retired)?;
+            (plan, DrainMoved::Payment(payment), converged)
         }
         DrainIntent::TerminalSweep(_witness) => {
             // The witness proposes; the seam's own basis resolution disposes
@@ -838,7 +864,7 @@ pub(crate) async fn orchestrate_drain(
             }
             let sweep = select_for_sweep(
                 &operands.candidates,
-                AtomicUnits::from_raw(ctx.fee),
+                |n_in| fee_for(n_in).ok(),
                 reference_height,
                 max_inputs,
             )
@@ -861,6 +887,7 @@ pub(crate) async fn orchestrate_drain(
                     payment: sweep.payment,
                     remainder,
                 },
+                sweep.fee,
             )
         }
     };
@@ -933,7 +960,7 @@ pub(crate) async fn orchestrate_drain(
             tree_ctx,
             dest: ctx.dest,
             payment_amount: moved.payment().to_raw(),
-            fee: ctx.fee,
+            fee: fee.to_raw(),
         })
         .await?;
     Ok(OrchestratedDrain {

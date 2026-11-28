@@ -9,7 +9,7 @@
 //! [`orchestrate_drain`] is the production preparer+assembler and deliberately
 //! returns its reply **unbroadcast** (CB-3: the builder never self-schedules).
 //! This module is the other half of that routing: one explicit drain intent in
-//! (a slot, a [`DrainIntent`], a fee), one assembled drain dispatched through the
+//! (a slot, a [`DrainIntent`], a fee snapshot), one assembled drain dispatched through the
 //! audited posture→submitter choke point ([`BroadcastSubmitter::for_wallet`] →
 //! [`submit_bound`]) out. Scheduling policy — when a drain fires, how it is
 //! split, over what cadence — stays external (the GUI drain flow, §12.4); this
@@ -75,7 +75,6 @@ use shekyl_engine_state::pending_post_block::{
 use super::pscan::dispatch::terminal_cause;
 use shekyl_engine_state::pscan_state::PFundingOutputRecord;
 use shekyl_types::BlockHeight;
-use shekyl_units::AtomicUnits;
 use tokio::sync::RwLock;
 
 use super::bond_assembly::SpentRecordsDurablyPruned;
@@ -267,7 +266,9 @@ where
     /// intent is the boundary's, minted from an earlier read; a divergence
     /// refuses in the pipeline rather than trusting the token), and the
     /// witness must name the very persona `p_slot` resolves to. Either way
-    /// `fee` funds the tx from the swept `P` inputs, and the reserve gate
+    /// the fee funds the tx from the swept `P` inputs: the `P`-lane floor fee
+    /// on the drain's own weight, priced from `fee_estimates` once the
+    /// selection is known. The reserve gate
     /// ([`orchestrate_drain`]) refuses a live-persona drain that would spend
     /// the pool below the exit-fee reserve (DS-4). The principal destination
     /// is resolved engine-side (T-DS-3), not caller-supplied.
@@ -286,7 +287,7 @@ where
         self_arc: Arc<RwLock<Self>>,
         p_slot: PSlot,
         intent: DrainIntent,
-        fee: AtomicUnits,
+        fee_estimates: super::traits::FeeEstimates,
         pruning_landed: &SpentRecordsDurablyPruned,
     ) -> Result<DrainReceipt, DrainRequestError> {
         // Brief read: clone the actor handles + the ledger snapshot the pipeline
@@ -408,7 +409,7 @@ where
                 reserved,
                 dest,
                 intent,
-                fee: fee.to_raw(),
+                fee_estimates,
                 retired,
                 chain_tip,
             },

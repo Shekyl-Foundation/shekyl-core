@@ -114,6 +114,38 @@ pub(crate) fn selection_target(
         })
 }
 
+/// The send path's fee convergence over a selection: the one loop every
+/// spend uses whose fee depends on how many inputs it selects (the ordinary
+/// send, and the `P`-lane drain priced on its own weight).
+///
+/// Price one input and select for the target at that fee; price the count
+/// selected, and if the fee rose, select once more at the new target. The
+/// fee returned is the final selection's own. The caller checks that the
+/// selection covers the target at that fee, and names the shortfall in its
+/// own terms.
+///
+/// `fee_for(n)` is the fee of the spend with `n` inputs; `target_for(fee)` is
+/// what a selection must cover at that fee; `select(target)` selects for it.
+///
+/// # Errors
+///
+/// Whatever `fee_for`, `target_for` or `select` returns.
+pub(crate) fn converge_selection<S, E>(
+    fee_for: impl Fn(usize) -> Result<AtomicUnits, E>,
+    target_for: impl Fn(AtomicUnits) -> Result<AtomicUnits, E>,
+    mut select: impl FnMut(AtomicUnits) -> Result<S, E>,
+    selected_count: impl Fn(&S) -> usize,
+) -> Result<(S, AtomicUnits), E> {
+    let fee_a = fee_for(1)?;
+    let mut selected = select(target_for(fee_a)?)?;
+    let fee_b = fee_for(selected_count(&selected))?;
+    if fee_b > fee_a {
+        selected = select(target_for(fee_b)?)?;
+    }
+    let fee = fee_for(selected_count(&selected))?;
+    Ok((selected, fee))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

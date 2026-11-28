@@ -335,9 +335,9 @@ macro_rules! stage2_common {
 
 /// `--stage2` on the production fee arm: the common set, the long-term
 /// clamp, and the relay fields the production ladder prices the fee with
-/// (`w_ref`, the Standard ratio, the lattice). The lookback, the slack, the
-/// claim hold and the High factor are not read: every ordinary
-/// transaction pays Standard and no fold admits against a window.
+/// (`w_ref`, the Standard ratio, the lattice). The lookback, the slack and
+/// the High factor are not read: every ordinary transaction pays Standard
+/// and no fold admits against a window.
 pub const STAGE2_PRODUCTION_READS: &[Reader] = &{
     let common = stage2_common!();
     let more = [
@@ -821,7 +821,7 @@ mod tests {
             header,
             "baseline params digest:    50376bfff9b581026383deb54bc4848541658efc3eb7b12bf22f6f8544dfbf6e\n\
              baseline consensus digest: 92f90c92135177a89c9791059dece31e0357840a09896a655639e878ed3e13de\n\
-             baseline relay digest:     5f19950d8d031d0efa1f8e09f06d92c3b9a357175a9685ab7bd7fd49b45cc6b2\n\
+             baseline relay digest:     ac865b99bf2914f7087fe8d9b96b7ffc2d53a42e32e1d645e7b75de6bc3eac85\n\
              overrides: (none)\n\
              \n"
         );

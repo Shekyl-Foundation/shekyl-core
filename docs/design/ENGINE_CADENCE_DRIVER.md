@@ -399,40 +399,42 @@ empty always (an all-deferred assembly has no vin to build; an empty
 claims leg is unrepresentable on the wire). The gate therefore
 surfaces as a typed refusal, `EmissionClaimError::ValueDeferred
 { value_deferred: Vec<(epoch, reward)>, total_reward, fee_floor }`,
-raised in `assemble_claims` **before** the size loop (a set that
-cannot pay for its one tx has no subset that should). The rewards
+raised in `assemble_claims` **after** the size loop, over the epochs
+the size bound keeps: the fee is the fee of the claim that carries them
+(ruled 2026-11-28). The rewards
 ride the refusal because they are recomputed inside derivation and
 are no longer derivable once the window expires an epoch — the leg
-needs them to price a forfeit honestly. The floor reaches the
-assembly as a field on `AssembleEmissionClaim`, passed by its sole
-production sender (the claim orchestrator) as
-`claim_value_floor(live fee, hold)` — a parameter for the same reason
+needs them to price a forfeit honestly. The fee reaches the
+assembly as a field on `AssembleEmissionClaim` (`gate_fee`), passed by
+its sole production sender (the claim orchestrator) as the fee it swept
+the claim's inputs against — a parameter for the same reason
 `assemble_claims` takes its size budget: testable at exact
 boundaries.
 
 ### The floor and the window
 
-- **Value floor:** `Σreward ≥ max(live fee, hold)` over the candidate
-  set (`claim_value_floor`, ruling 9, 2026-10-24; built in the ESR-16
-  completion). The live fee is the fee the leg prices the claim at, so
-  a claim at the gate nets zero or more. The hold is
-  `RelayPolicy::emission_claim_fee_floor`, generated from
-  `config/relay_policy.json`: the fee on the shipped lattice for the
-  claim leg's priced weight (`EMISSION_NON_CLAIMS_RESERVE_BYTES` +
-  `CLAIM_VIN_ALLOWANCE_BYTES` = 51 200) at the chain's genesis Economy
-  rung (27 306 atomic per weight unit), 1 398 068 000 atomic, about
-  1.40 SKL. `shekyl-engine-core` recomputes it from `relay_floor_from`
-  at the genesis operands and that weight, so a change to either fails
-  a test. Both operands are chain state and a uniform constant, so
-  every wallet reaches the same decision — anti-fingerprint: a
-  per-wallet knob or a config value partitions the anonymity set by
-  fee policy. The hold is **not** in `config/consensus_constants.json`
-  or any digest: freezing a wallet fee-policy threshold into consensus
-  buys nothing and costs a consensus retune to adjust; only a release
-  changes it, after a ruling. Not a per-wallet setting (rule 00 §2:
-  privacy is never a setting). The weight is an allowance, not the
-  claim's predicted weight; the predictor is a `FOLLOWUPS.md` row, and
-  when it lands the hold's test reads its weight.
+- **Value gate:** the claim's reward covers **its own fee at the current
+  rate** (ruled 2026-11-28). The fee is the `P`-lane floor rate on the
+  claim's own weight: the orchestrator builds the claim, reads its weight
+  from the build and builds again at that fee, which settles, since the
+  fee sweep takes every eligible output and the size bound keeps the same
+  epochs at any fee (`orchestrate_emission_claim`). A claim at the gate
+  nets zero or more. The live fee is chain state, so every wallet reaches
+  the same decision — anti-fingerprint: a per-wallet knob or a config
+  value partitions the anonymity set by fee policy. Not a per-wallet
+  setting (rule 00 §2: privacy is never a setting).
+  - **The fixed hold is deleted** (2026-11-28, reversing the "floored by
+    the hold" half of ruling 9, 2026-10-24). It was 1.398 SKL, the fee of
+    a 51 200-weight allowance at the genesis Economy rung. At genesis
+    stakers share about 1.5 million SKL an epoch (1 024 SKL a block ×
+    15 % × 10 000 blocks), so the hold never bound early; fixed in SKL at
+    the genesis rate while the reward shrinks, it would late in the
+    chain's life force forfeits at the window floor while the real fee
+    was a small fraction of it. Ruling 9's record gives it no purpose the
+    live fee does not serve.
+  - **Dependency:** the claim's fee stays a small share of its reward only
+    while the fee floor follows the block reward. When the floor is
+    decoupled (EUP-5 G), this rule is re-checked (`FOLLOWUPS.md`).
 - **At the window floor: evaluate-and-forfeit, never force.** The
   claim window is bounded by the existing prune horizon
   (`prune_below_epoch_at_height`). When held epochs reach the window
