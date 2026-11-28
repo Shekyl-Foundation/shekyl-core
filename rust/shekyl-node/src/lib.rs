@@ -1097,14 +1097,17 @@ fn open_pool(
     .map_err(|error| OpenError::Pool(format!("{error:?}")))?;
     match opened {
         PoolOpen::Recreated { from } => tracing::warn!(
+            target: "txpool",
             %from,
             "the pool file is a layout this release does not speak; it was recreated empty"
         ),
         PoolOpen::Finished => tracing::info!(
+            target: "txpool",
             "the pool file's creation was cut short (a power loss on an earlier start); \
              it was finished empty"
         ),
         PoolOpen::SetAside { to } => tracing::warn!(
+            target: "txpool",
             moved_to = %to.display(),
             "the pool file was a creation cut short before the engine finished it (a power \
              loss on an earlier start); it was moved aside and a fresh pool created"

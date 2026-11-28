@@ -86,6 +86,8 @@
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![warn(missing_docs)]
 
+#[cfg(any(test, feature = "audit"))]
+pub mod audit;
 pub mod config;
 pub mod filter;
 pub mod subsystem;

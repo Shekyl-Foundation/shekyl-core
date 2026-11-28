@@ -118,7 +118,11 @@ impl NodePoolDoor {
         match moved {
             Ok(true) => self.shown.notify_one(),
             Ok(false) => {}
-            Err(error) => tracing::warn!(%error, "the pool could not record a shown transaction"),
+            Err(error) => tracing::warn!(
+                target: "txpool",
+                %error,
+                "the pool could not record a shown transaction"
+            ),
         }
     }
 
