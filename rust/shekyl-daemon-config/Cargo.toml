@@ -50,6 +50,8 @@ libc = "0.2"
 shekyl-win-sec = { path = "../shekyl-win-sec" }
 
 [dev-dependencies]
+# The audit that holds `log-category`'s keys to what `shekyld` logs under.
+shekyl-logging = { path = "../shekyl-logging", features = ["audit"] }
 # A test's data directory, where the daemon's real check passes it.
 shekyl-os-account = { path = "../shekyl-os-account", features = ["test-fixture"] }
 tempfile = "3"

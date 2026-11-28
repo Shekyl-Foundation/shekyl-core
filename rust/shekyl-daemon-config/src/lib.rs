@@ -53,4 +53,4 @@ pub use sections::{
     apply_logging, link_limits, log_location_creatable, log_location_writable, logging,
     logging_to_named_file, Clearnet, DaemonConfig, Logging, Tor,
 };
-pub use table::{runtime_owner, RuntimeOwner, BYTES, LEVEL, LEVELS, LOG_CATEGORY, NETWORKS, TABLE};
+pub use table::{log_category, runtime_owner, RuntimeOwner, BYTES, LEVEL, LEVELS, NETWORKS, TABLE};

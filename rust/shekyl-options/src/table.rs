@@ -207,8 +207,9 @@ impl Table {
     /// twice (IG-5), a grant that does not disclose an option row (RT-O24),
     /// a switch that is on by default (IG-4), a runtime row that is a
     /// secret or has no default value (IG-12), a development lever that
-    /// names no network or names mainnet (IG-8). Empty means the table is
-    /// well formed.
+    /// names no network or names mainnet (IG-8), a map whose keys name
+    /// another binary or take a key their owner does not know. Empty means
+    /// the table is well formed.
     #[must_use]
     pub fn defects(&self) -> Vec<String> {
         let mut out = Vec::new();
@@ -250,6 +251,21 @@ impl Table {
                     out.push(format!(
                         "runtime `{name}` has no default value to return to"
                     ));
+                }
+            }
+            if let Kind::Map { keys, .. } = row.kind {
+                if keys.binary != self.binary {
+                    out.push(format!(
+                        "`{name}`'s keys name the binary `{}`, and the table is `{}`'s",
+                        keys.binary, self.binary
+                    ));
+                }
+                for key in keys.taken {
+                    if !keys.known.contains(key) {
+                        out.push(format!(
+                            "`{name}` takes the key `{key}`, which its owner does not know"
+                        ));
+                    }
                 }
             }
             if !row.kind.cli_allowed() && row.surface != Surface::File {
@@ -475,5 +491,41 @@ mod tests {
         ] {
             assert!(all.contains(needle), "missing '{needle}' in:\n{all}");
         }
+    }
+    /// A map's keys belong to the table's binary, and the keys it takes are
+    /// keys its owner knows: the refusal of a known key names the right
+    /// binary, and the binary takes nothing the owner cannot place. Red
+    /// edit: drop either check from `defects`.
+    #[test]
+    fn a_map_naming_another_binary_or_an_unknown_key_is_a_defect() {
+        const LEVEL: Kind = Kind::OneOf(&["warn", "info"]);
+        const ROWS: &[Row] = &[Row {
+            name: "log-category",
+            kind: Kind::Map {
+                keys: crate::MapKeys {
+                    binary: "elsewhere",
+                    taken: &["net", "wallet"],
+                    known: &["net"],
+                },
+                value: &LEVEL,
+            },
+            default: Default::Value("none"),
+            surface: Surface::Both,
+            runtime: false,
+            grant: Grant::Config,
+            visibility: Visibility::Public,
+            help: "",
+        }];
+        let all = Table {
+            binary: "test",
+            rows: ROWS,
+        }
+        .defects()
+        .join("\n");
+        assert!(all.contains("name the binary `elsewhere`"), "{all}");
+        assert!(
+            all.contains("the key `wallet`, which its owner does not know"),
+            "{all}"
+        );
     }
 }

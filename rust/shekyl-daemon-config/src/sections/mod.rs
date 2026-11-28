@@ -529,8 +529,9 @@ fn read_log_words(r: &mut Reader<'_>) -> Option<(&'static str, Vec<(String, &'st
 
 /// The logging section of another binary's resolved table whose logging
 /// rows are the daemon's (`log-level`, `log-category`, `log-size-max`, of
-/// the kinds [`crate::table::LEVEL`], [`crate::table::LOG_CATEGORY`] and
-/// [`crate::table::BYTES`]), its log at `file`: one mapping to the logging
+/// the kinds [`crate::table::LEVEL`], [`crate::table::log_category`] over
+/// the binary's own subsystems, and [`crate::table::BYTES`]), its log at
+/// `file`: one mapping to the logging
 /// owner for every binary that has these rows (`shekyl-rpc-tunnel`).
 ///
 /// # Errors

@@ -314,7 +314,11 @@ fn a_secret_never_shows_its_text() {
 fn a_map_takes_key_value_pairs_from_its_closed_key_set() {
     const LEVEL: Kind = Kind::OneOf(&["error", "warn", "info"]);
     const CATEGORIES: Kind = Kind::Map {
-        keys: &["net", "rpc"],
+        keys: MapKeys {
+            binary: "shekyl-test",
+            taken: &["net", "rpc"],
+            known: &["net", "rpc", "wallet"],
+        },
         value: &LEVEL,
     };
     let v = CATEGORIES
@@ -325,10 +329,29 @@ fn a_map_takes_key_value_pairs_from_its_closed_key_set() {
         CATEGORIES.parse_cli(&["none".into()]),
         Ok(Value::Map(BTreeMap::new()))
     );
-    assert_eq!(
-        code(CATEGORIES.parse_cli(&["wallet=info".into()])),
-        Code::ValueWord
+    // A key the owner knows and this binary does not take names the binary
+    // and lists what it takes; a key nobody knows is a stray word. Red edit:
+    // drop the `known` check from `insert_key`.
+    let not_taken = CATEGORIES
+        .parse_cli(&["wallet=info".into()])
+        .unwrap_err()
+        .at("log-category", crate::Source::Cli);
+    assert_eq!(not_taken.code, Code::ValueKeyNotTaken);
+    assert_eq!(not_taken.get("binary"), Some("shekyl-test"));
+    assert_eq!(not_taken.get("words"), Some("`net`, `rpc`"));
+    assert!(
+        not_taken
+            .render()
+            .contains("`shekyl-test` does not take 'wallet'"),
+        "{}",
+        not_taken.render()
     );
+    let stray = CATEGORIES
+        .parse_cli(&["store=info".into()])
+        .unwrap_err()
+        .at("log-category", crate::Source::Cli);
+    assert_eq!(stray.code, Code::ValueWord);
+    assert_eq!(stray.get("words"), Some("`net`, `rpc`"));
     assert_eq!(
         code(CATEGORIES.parse_cli(&["net".into()])),
         Code::ValueSyntax

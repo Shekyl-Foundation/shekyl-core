@@ -73,6 +73,25 @@ impl fmt::Debug for NameRule {
     }
 }
 
+/// A map's keys: the closed set this binary's row takes, inside the set its
+/// owner knows (IG-6: "keys are a closed set named in the row").
+///
+/// A key outside both is not a key at all and is refused as a one-of's
+/// stray word is, listing the keys this binary takes. A key the owner knows
+/// and this binary does not take is real, only not this binary's (a log
+/// subsystem it writes nothing under), so it has its own refusal, naming the
+/// binary and listing its keys.
+#[derive(Clone, Copy, Debug)]
+pub struct MapKeys {
+    /// The binary whose row this is, named in the refusal of a known key it
+    /// does not take. [`crate::Table::defects`] holds it to the table's.
+    pub binary: &'static str,
+    /// The keys this binary takes.
+    pub taken: &'static [&'static str],
+    /// Every key the owner knows; [`Self::taken`] is a subset.
+    pub known: &'static [&'static str],
+}
+
 /// A value kind with its row's constraint.
 #[derive(Clone, Copy, Debug)]
 pub enum Kind {
@@ -131,10 +150,9 @@ pub enum Kind {
     List(&'static Kind),
     /// A map from a closed key set to a scalar kind; `none` is the empty map.
     Map {
-        /// The keys the map accepts, named in the row by reference to their
-        /// owner's list (IG-6: "keys are a closed set named in the row"). A
-        /// refused key's refusal lists them, as a one-of's lists its words.
-        keys: &'static [&'static str],
+        /// The keys the map accepts (IG-6: "keys are a closed set named in
+        /// the row").
+        keys: MapKeys,
         /// The values' kind.
         value: &'static Kind,
     },
@@ -425,7 +443,7 @@ impl Kind {
                     let Some((k, val)) = v.split_once('=') else {
                         return Err(syntax(v, "`key=value`"));
                     };
-                    insert_key(&mut out, keys, k, value.parse_text(val)?)?;
+                    insert_key(&mut out, *keys, k, value.parse_text(val)?)?;
                 }
                 Ok(Value::Map(out))
             }
@@ -494,7 +512,7 @@ impl Kind {
                 }
                 let mut out = BTreeMap::new();
                 for (k, v) in t {
-                    insert_key(&mut out, keys, k, value.parse_file(v)?)?;
+                    insert_key(&mut out, *keys, k, value.parse_file(v)?)?;
                 }
                 Ok(Value::Map(out))
             }
@@ -630,14 +648,19 @@ fn check_min(n: u64, min: u64, text: &str) -> Result<(), Fault> {
 
 fn insert_key(
     out: &mut BTreeMap<String, Value>,
-    keys: &'static [&'static str],
+    keys: MapKeys,
     key: &str,
     value: Value,
 ) -> Result<(), Fault> {
-    if keyword(key, keys).is_none() {
-        return Err(Fault::new(Code::ValueWord)
+    if keyword(key, keys.taken).is_none() {
+        let refusal = if keyword(key, keys.known).is_some() {
+            Fault::new(Code::ValueKeyNotTaken).param("binary", keys.binary)
+        } else {
+            Fault::new(Code::ValueWord)
+        };
+        return Err(refusal
             .param("value", key)
-            .param("words", words(keys)));
+            .param("words", words(keys.taken)));
     }
     if out.insert(key.to_owned(), value).is_some() {
         return Err(range(key, "each key once"));
